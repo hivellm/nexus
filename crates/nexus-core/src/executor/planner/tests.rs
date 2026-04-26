@@ -538,6 +538,31 @@ fn test_plan_qpp_multi_hop_body_emits_quantified_expand_with_n_hops() {
 }
 
 #[test]
+fn test_plan_qpp_starting_node_uses_label_scan_upstream() {
+    // Slice-3b §4.2: the QPP operator does not pick its own
+    // source — it consumes whatever upstream operator the
+    // surrounding pattern emits. When the source pattern carries
+    // a label, the planner must emit `NodeByLabel` (or
+    // `IndexScan`, gated on index availability) *before*
+    // `QuantifiedExpand` so the source-side rows are already
+    // narrowed by the time the expansion runs.
+    let operators =
+        parse_and_plan("MATCH (a:Person)( (x:Person)-[:KNOWS]->() ){1,3}(b:Person) RETURN x");
+    let label_scan_idx = operators
+        .iter()
+        .position(|op| matches!(op, Operator::NodeByLabel { .. }))
+        .expect("source-side label scan must be planned");
+    let qpp_idx = operators
+        .iter()
+        .position(|op| matches!(op, Operator::QuantifiedExpand { .. }))
+        .expect("QPP must emit QuantifiedExpand");
+    assert!(
+        label_scan_idx < qpp_idx,
+        "source-side NodeByLabel must precede QuantifiedExpand: {operators:?}",
+    );
+}
+
+#[test]
 fn test_plan_qpp_named_body_target_var_chains_to_following_node() {
     // The QPP planner threads `prev_node_var` so a follow-up
     // pattern element after the QPP gets the right source. When

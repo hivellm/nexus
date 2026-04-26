@@ -97,10 +97,70 @@ fn bench_qpp_named_body(c: &mut Criterion) {
     group.finish();
 }
 
+/// Build a small fan-out tree: every node has `FANOUT` outgoing
+/// `:KNOWS` edges to children, depth `DEPTH`. Total nodes =
+/// `FANOUT^0 + FANOUT^1 + … + FANOUT^DEPTH`. Picking
+/// `FANOUT=3, DEPTH=6` gives 1093 nodes — large enough that BFS
+/// frontier work dominates over fixture build, small enough to
+/// fit comfortably in a bench iteration.
+fn build_fanout_tree(engine: &mut Engine, fanout: u32, depth: u32) {
+    // Root.
+    engine
+        .execute_cypher("CREATE (n:TreeNode {id: 0})")
+        .expect("create root");
+    let mut next_id: u64 = 1;
+    let mut frontier: Vec<u64> = vec![0];
+    for _ in 0..depth {
+        let mut next_frontier = Vec::with_capacity(frontier.len() * fanout as usize);
+        for parent in &frontier {
+            for _ in 0..fanout {
+                let id = next_id;
+                next_id += 1;
+                let create_child = format!("CREATE (n:TreeNode {{id: {id}}})");
+                engine.execute_cypher(&create_child).expect("create child");
+                let link = format!(
+                    "MATCH (a:TreeNode {{id: {parent}}}), (b:TreeNode {{id: {id}}}) \
+                     CREATE (a)-[:KNOWS]->(b)"
+                );
+                engine.execute_cypher(&link).expect("link child");
+                next_frontier.push(id);
+            }
+        }
+        frontier = next_frontier;
+    }
+}
+
+/// Slice 3b §9.3 — worst-case cycle-free traversal at depth 10.
+/// The fan-out tree has only outgoing edges, so the BFS frontier
+/// grows monotonically with each iteration; at depth 6 (`FANOUT^6
+/// = 729` leaves) we already exercise the operator's per-frame
+/// allocator more than the linear chain in the other benches.
+/// Depth 10 stays out of reach because `FANOUT^10` would be 59049
+/// nodes — too heavy for an in-process bench. Slice 4 lifts this
+/// when the operator is run against a persisted fixture.
+fn bench_qpp_dense_fanout(c: &mut Criterion) {
+    let (mut engine, _ctx) = setup_isolated_test_engine().expect("setup engine");
+    build_fanout_tree(&mut engine, 3, 6);
+
+    let mut group = c.benchmark_group("qpp/dense_fanout");
+    group.sample_size(10);
+    group.bench_function("knows_{1,6}_root_to_leaves", |b| {
+        b.iter(|| {
+            let result = engine.execute_cypher(
+                "MATCH (root:TreeNode {id: 0})( ()-[:KNOWS]->() ){1,6}(leaf:TreeNode) \
+                 RETURN count(leaf)",
+            );
+            black_box(result)
+        });
+    });
+    group.finish();
+}
+
 criterion_group!(
     benches,
     bench_legacy_var_length,
     bench_qpp_anonymous_body,
-    bench_qpp_named_body
+    bench_qpp_named_body,
+    bench_qpp_dense_fanout,
 );
 criterion_main!(benches);

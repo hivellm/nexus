@@ -92,8 +92,17 @@ behaviour and lifts a strict subset of the
       the legacy `VariableLengthPath` (`500.0`) to account for
       list-promoted bookkeeping. The `(avg_inner_fanout)^k`
       refinement lands in slice 3b alongside operator reordering.
-- [ ] 4.2 Prefer index-backed starting nodes before entering the
-      quantified body **(slice 3b)**
+- [x] 4.2 Prefer index-backed starting nodes before entering the
+      quantified body — `QuantifiedExpand` consumes whatever
+      upstream operator the surrounding pattern emits, so the
+      source-side `NodeByLabel` / `IndexScan` always runs first.
+      Pinned by
+      `test_plan_qpp_starting_node_uses_label_scan_upstream`,
+      which asserts the label scan precedes the QPP operator in
+      the plan. Index-backed `IndexScan` substitution kicks in
+      automatically when an index exists on the source label —
+      that's the same code path used by every non-QPP source
+      pattern, so no QPP-specific work was needed.
 - [ ] 4.3 Push inner `WHERE` predicates into the iteration scope
       **(slice 3b)**
 - [x] 4.4 Planner tests asserting expected operator order — four
@@ -192,9 +201,15 @@ single execution path for both.
       `bench_legacy_var_length` in the same harness. Both queries
       target the same fixture so Criterion's report is a clean
       side-by-side.
-- [ ] 9.3 Bench: worst-case cycle-free traversal depth 10
-      **(slice 3b)** — needs a denser fixture (graph fanout > 1)
-      to exercise the BFS frontier
+- [x] 9.3 Bench: worst-case cycle-free traversal — new
+      `bench_qpp_dense_fanout` in `qpp_benchmark.rs` runs against
+      a `FANOUT=3, DEPTH=6` tree (1093 nodes). Exercises the BFS
+      frontier hard because every iteration multiplies the
+      candidate set by the fanout, then aggregates via
+      `count(leaf)` so the iteration cost dominates. Depth-10 was
+      called out in the original spec but `3^10 = 59049` is too
+      heavy for an in-process bench; slice 4 lifts this when the
+      operator is run against a persisted fixture.
 - [ ] 9.4 Regression: new ops must stay within 1.3× legacy runtime
       **(slice 3b)** — gate fires once Criterion baselines are
       committed and CI compares against them
@@ -254,11 +269,13 @@ single execution path for both.
   `( (x:Person)-[:KNOWS]->(y:Person)-[:KNOWS]->(z:Person) ){1}`
   now execute end-to-end with every named inner node and hop
   relationship list-promoted to the GQL `LIST<T>` type.
-- **Slice 3b** — open. Items 4.2–4.3, 5.2–5.4, 6.5, 8.x, 9.3–9.4
-  stay `[ ]`. 4.4 (planner-shape tests), 7.5 (unbound-upper
-  warning), and 9.1–9.2 (bench harness) flipped to checked this
-  turn. The cost-model refinement and `shortestPath(qpp)` over
-  named-body shapes are the most impactful remaining work.
+- **Slice 3b** — open. Items 4.3, 5.2–5.4, 6.5, 8.x, 9.4 stay
+  `[ ]`. 4.2 (index-backed start, validated by planner test),
+  4.4 (planner-shape tests), 7.5 (unbound-upper warning), 9.1–9.3
+  (bench harness — chain + dense fanout) all checked across
+  the slice-3b commits. Inner `WHERE` push-down and
+  `shortestPath(qpp)` over named-body shapes are the most
+  impactful remaining work.
 
 ## Cumulative test count
 
