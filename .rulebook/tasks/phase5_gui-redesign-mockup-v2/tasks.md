@@ -16,16 +16,52 @@
 
 ## 2. Foundations (design system + shell)
 
-- [ ] 2.1 Create `gui/src/styles/tokens.css` with CSS variables (`:root` + `[data-theme="light"]`) ported from `gui/assets/styles.css`
-- [ ] 2.2 Create `gui/src/styles/globals.css`: resets, fonts, scrollbar, `::selection`
+- [x] 2.1 Create `gui/src/styles/tokens.css` with CSS variables
+      (`:root` + `[data-theme="light"]`) ported from
+      `gui/assets/styles.css` — every `--bg-*`, `--fg-*`,
+      `--accent*`, `--border*`, `--shadow*`, `--label-*`, `--font-*`
+      lands here.
+- [x] 2.2 Create `gui/src/styles/globals.css`: resets, body font,
+      scrollbar, `::selection`, plus the shell skeleton
+      (titlebar / rail / panel / workspace / right-col /
+      statusbar) so the bootstrap App renders.
 - [ ] 2.3 Self-host Inter + JetBrains Mono fonts (no Google CDN at runtime)
-- [ ] 2.4 Configure Tailwind v4 to consume tokens: `bg-bg-1`, `text-fg-0`, `border-border`, etc.
-- [ ] 2.5 Port `icons.jsx` to `gui/src/icons/*.tsx` (one file per icon, typed `IconProps`)
-- [ ] 2.6 Create `gui/src/main.tsx` (React root + QueryClientProvider + theme bootstrap)
-- [ ] 2.7 Create `gui/src/app/App.tsx` shell: 3-row grid (36 / 1fr / 24) + 4-col body (52 / 260 / 1fr / 320)
-- [ ] 2.8 Create `gui/src/stores/layoutStore.ts` (Zustand): `currentView`, `editorTabs`, `activeTab`, `tweaksVisible`, `theme`
-- [ ] 2.9 Persist `theme` + `tweaksVisible` to localStorage (`nexus_tweaks`)
-- [ ] 2.10 Apply `data-theme` attribute to `<html>` reactively from store
+- [x] 2.4 Configure Tailwind v4 to consume tokens via a `@theme`
+      block in `globals.css` — `bg-bg-1`, `text-fg-0`,
+      `border-border`, `text-accent`, `font-mono`, etc. all
+      resolve to the project palette and switch automatically
+      under `[data-theme="light"]`. PostCSS already wires
+      `@tailwindcss/postcss` (no separate `tailwind.config.js`
+      needed in v4).
+- [x] 2.5 Port `icons.jsx` to `gui/src/icons/index.tsx` with a
+      shared `IconProps` type in `types.ts`. Deviated from
+      one-file-per-icon: the SVG snippets are 1–3 lines each and
+      26 one-line files plus a barrel is import-tax with no
+      encapsulation gain. Every icon is still its own typed
+      named export so call sites get autocomplete and
+      tree-shaking still drops unused glyphs.
+- [x] 2.6 `gui/src/main.tsx`: React root + `QueryClientProvider`
+      + `bindThemeToHtml()` invoked before first render so
+      tokens resolve to the right palette without a flash of
+      unstyled content.
+- [x] 2.7 `gui/src/app/App.tsx` shell ships the 3-row grid
+      (36 / 1fr / 24) + 4-col body (52 / 260 / 1fr / 320) via
+      the `.app` / `.body` rules in `globals.css`.
+- [x] 2.8 `gui/src/stores/layoutStore.ts` (Zustand): typed
+      `ViewKey` / `Theme` / `EditorTab` plus `currentView`,
+      `editorTabs`, `activeTab`, `tweaksVisible`, `theme` and
+      mutators (`setView`, `toggleTweaks`, `setTheme`,
+      `openTab`, `closeTab`, `selectTab`, `setTabBody`).
+- [x] 2.9 Theme + `tweaksVisible` + `editorTabs` persisted to
+      localStorage under key `nexus_tweaks` via Zustand
+      `persist` middleware. Transient runtime state
+      (`currentView`, dirty flags) reloads to defaults so a
+      stale persisted view does not carry over.
+- [x] 2.10 `data-theme` attribute mirrored onto `<html>` via the
+      `bindThemeToHtml()` subscriber in `layoutStore.ts`,
+      called from `main.tsx` before the React root mounts.
+      `setTheme()` flips both the store and the attribute in
+      the same tick.
 
 ## 3. Chrome (titlebar, rail, status, tweaks)
 

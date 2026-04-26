@@ -2,6 +2,40 @@
  * Component-specific styles live with their components.
  */
 
+@import 'tailwindcss';
+
+/* Tailwind v4 reads design tokens from a `@theme` block instead of
+ * a JS config file. Mirror the CSS variables defined in
+ * `tokens.css` so utility classes (`bg-bg-1`, `text-fg-0`,
+ * `border-border`, `text-accent`, `font-mono`, …) resolve to the
+ * project palette. The variables themselves still live in
+ * `tokens.css` so the `[data-theme="light"]` override switches
+ * the underlying value without Tailwind needing a separate
+ * light-mode config.
+ */
+@theme {
+  --color-bg-0: var(--bg-0);
+  --color-bg-1: var(--bg-1);
+  --color-bg-2: var(--bg-2);
+  --color-bg-3: var(--bg-3);
+  --color-bg-4: var(--bg-4);
+  --color-fg-0: var(--fg-0);
+  --color-fg-1: var(--fg-1);
+  --color-fg-2: var(--fg-2);
+  --color-fg-3: var(--fg-3);
+  --color-fg-4: var(--fg-4);
+  --color-border: var(--border);
+  --color-border-strong: var(--border-strong);
+  --color-accent: var(--accent);
+  --color-accent-dim: var(--accent-dim);
+  --color-ok: var(--ok);
+  --color-warn: var(--warn);
+  --color-err: var(--err);
+  --color-info: var(--info);
+  --font-sans: var(--font-ui);
+  --font-mono: var(--font-mono);
+}
+
 * {
   box-sizing: border-box;
 }
