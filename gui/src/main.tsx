@@ -11,11 +11,29 @@ import './styles/globals.css';
 // to the right palette without a flash of unstyled content.
 bindThemeToHtml();
 
+// QueryClient defaults — tuned for a desktop GUI talking to a
+// single graph server: aggressive retry would mask real outages
+// behind exponential backoff, refetch-on-focus would re-poll a
+// busy schema query every alt-tab. Per-hook polling intervals
+// live in `services/queries.ts`.
 const queryClient = new QueryClient({
   defaultOptions: {
     queries: {
-      retry: 1,
+      retry: (failureCount, error) => {
+        // Network-level errors get one retry; HTTP error responses
+        // (NexusApiError carries an HTTP status) surface immediately
+        // so the UI can render the error payload without a delay.
+        const status = (error as { status?: number } | null)?.status;
+        if (typeof status === 'number') return false;
+        return failureCount < 1;
+      },
       refetchOnWindowFocus: false,
+      refetchOnReconnect: true,
+      staleTime: 5_000,
+      gcTime: 5 * 60_000,
+    },
+    mutations: {
+      retry: 0,
     },
   },
 });

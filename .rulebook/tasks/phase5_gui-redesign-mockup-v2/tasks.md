@@ -110,10 +110,39 @@
 
 ## 4. Service layer (REST + TanStack Query)
 
-- [ ] 4.1 Port REST client from `gui/src.vue-archive/services/` to `gui/src/services/api.ts`
-- [ ] 4.2 Create query hooks: `useHealth`, `useStats`, `useReplicationStatus`, `useSchema`, `useExecuteCypher`, `useKnn`, `useAuditLog`
-- [ ] 4.3 Configure QueryClient defaults: `refetchInterval` for live data, retry policy, error boundaries
-- [ ] 4.4 Type all server responses (`types/api.ts`) — match Rust API shape
+- [x] 4.1 `gui/src/services/api.ts` — typed fetch wrappers (no
+      axios dependency), one function per endpoint
+      (`api.health`, `api.stats`, `api.executeCypher`,
+      `api.labels`, `api.relTypes`, `api.indexes`,
+      `api.procedures`, `api.knn`, `api.replicationStatus`,
+      `api.auditLog`). Throws `NexusApiError` carrying the
+      HTTP status + server-supplied `code` so callers can
+      branch on transport vs payload errors.
+- [x] 4.2 `gui/src/services/queries.ts` — TanStack Query hooks
+      `useHealth`, `useStats`, `useReplicationStatus`,
+      `useSchema`, `useExecuteCypher`, `useKnn`, `useAuditLog`.
+      Each hook resolves the active connection's `baseUrl` from
+      `connectionsStore` via `useApiBase()` so a connection
+      switch invalidates the matching query keys cleanly.
+      `useSchema` fans out to four parallel calls (labels +
+      rel-types + indexes + procedures) so the left panel
+      renders from a single subscription. `useExecuteCypher` /
+      `useKnn` are mutations; `useExecuteCypher.onSuccess`
+      invalidates schema + stats so a write that creates a new
+      label refreshes the left panel without a manual reload.
+- [x] 4.3 `QueryClient` defaults in `main.tsx` — retry only on
+      network-level errors (HTTP `NexusApiError` surfaces
+      immediately, no exponential backoff masking real outages),
+      `refetchOnWindowFocus: false` (alt-tab does not re-poll a
+      schema query), `refetchOnReconnect: true`,
+      `staleTime: 5_000`, `gcTime: 5 minutes`. Mutations: zero
+      retries so the editor's Run button surfaces failures
+      immediately.
+- [x] 4.4 `gui/src/types/api.ts` — typed shapes for every
+      response the GUI consumes. Mirrors the Rust API
+      (`crates/nexus-server/src/api/*`) byte for byte where the
+      GUI cares; transient fields the GUI does not read are
+      omitted to keep the type surface small.
 
 ## 5. Left panel (view-driven content)
 
