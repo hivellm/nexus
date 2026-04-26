@@ -52,6 +52,7 @@ impl Executor {
     /// across outer rows. The other fields mirror the
     /// `CallSubqueryClause` AST node and gate which execution path
     /// runs.
+    #[allow(clippy::too_many_arguments)]
     pub(in crate::executor) fn execute_call_subquery(
         &self,
         context: &mut ExecutionContext,
@@ -61,6 +62,7 @@ impl Executor {
         concurrency: Option<usize>,
         on_error: &parser::OnErrorPolicy,
         status_var: Option<&str>,
+        import_list: Option<&[String]>,
     ) -> Result<()> {
         // Multi-worker `IN CONCURRENT TRANSACTIONS` requires per-worker
         // MVCC isolation that today's single-writer storage layer does
@@ -128,6 +130,7 @@ impl Executor {
                 inner_has_return,
                 &outer_columns,
                 &driver_rows,
+                import_list,
             );
         }
 
@@ -142,6 +145,7 @@ impl Executor {
             batch_n,
             on_error,
             status_var,
+            import_list,
         )
     }
 
@@ -179,6 +183,7 @@ impl Executor {
         batch_size: usize,
         on_error: &parser::OnErrorPolicy,
         status_var: Option<&str>,
+        import_list: Option<&[String]>,
     ) -> Result<()> {
         // §2.3 already rejects RETURN inside the inner when REPORT
         // STATUS is set; guard defensively.
@@ -230,14 +235,18 @@ impl Executor {
                 let mut batch_err: Option<Error> = None;
 
                 for outer_row in batch {
-                    let mut inner_ctx =
-                        match self.build_inner_ctx(context, outer_columns, outer_row) {
-                            Ok(c) => c,
-                            Err(e) => {
-                                batch_err = Some(e);
-                                break;
-                            }
-                        };
+                    let mut inner_ctx = match self.build_inner_ctx(
+                        context,
+                        outer_columns,
+                        outer_row,
+                        import_list,
+                    ) {
+                        Ok(c) => c,
+                        Err(e) => {
+                            batch_err = Some(e);
+                            break;
+                        }
+                    };
                     let mut row_err: Option<Error> = None;
                     for op in inner_operators {
                         if let Err(e) = self.execute_operator(&mut inner_ctx, op) {
@@ -347,6 +356,7 @@ impl Executor {
 
     /// Read-only inner: every outer row drives one inner invocation;
     /// inner failures propagate to the outer query.
+    #[allow(clippy::too_many_arguments)]
     fn run_call_subquery_serial(
         &self,
         context: &mut ExecutionContext,
@@ -354,13 +364,15 @@ impl Executor {
         inner_has_return: bool,
         outer_columns: &[String],
         driver_rows: &[Row],
+        import_list: Option<&[String]>,
     ) -> Result<()> {
         let mut joined_columns: Vec<String> = outer_columns.to_vec();
         let mut joined_rows: Vec<Row> = Vec::new();
         let mut inner_columns_seen: Vec<String> = Vec::new();
 
         for outer_row in driver_rows {
-            let mut inner_ctx = self.build_inner_ctx(context, outer_columns, outer_row)?;
+            let mut inner_ctx =
+                self.build_inner_ctx(context, outer_columns, outer_row, import_list)?;
             for op in inner_operators {
                 self.execute_operator(&mut inner_ctx, op)?;
             }
@@ -382,32 +394,52 @@ impl Executor {
     }
 
     /// Construct the inner subquery's `ExecutionContext`, importing
-    /// the outer scope's parameters and variable bindings projected
-    /// from the current outer row.
+    /// the outer scope's parameters and the variable bindings
+    /// projected from the current outer row.
+    ///
+    /// `import_list` controls scope visibility (phase6 §8):
+    ///
+    /// * `Some(&["a", "b"])` — Cypher 25 scoped form. Only `a` and
+    ///   `b` from the outer scope (and only the matching outer-row
+    ///   columns) are visible inside the inner.
+    /// * `Some(&[])` — empty import list. The inner sees a fresh
+    ///   scope with NO outer bindings.
+    /// * `None` — legacy form. Every outer variable + every column
+    ///   of the current outer row is visible (matches the old
+    ///   `WITH … CALL { … }` semantic).
     fn build_inner_ctx(
         &self,
         outer: &ExecutionContext,
         outer_columns: &[String],
         outer_row: &Row,
+        import_list: Option<&[String]>,
     ) -> Result<ExecutionContext> {
         // ExecutionContext is not Clone; manually rebuild it with the
         // outer's params + cache + plan hints, then import variable
-        // bindings.
+        // bindings under the scope-narrowing rule.
         let mut inner = ExecutionContext::new(outer.params.clone(), outer.cache.clone());
         inner.set_plan_hints(outer.plan_hints.clone());
 
-        // Import every outer variable. The lexical-scope tree upgrade
-        // (slice-4) narrows this to a declared import-list per Cypher
-        // 25 scoping; until then we match the legacy `WITH a, b CALL
-        // { … }` semantic where the entire outer scope is visible.
+        let import_filter = |name: &str| -> bool {
+            match import_list {
+                Some(list) => list.iter().any(|v| v == name),
+                None => true,
+            }
+        };
+
         for (k, v) in &outer.variables {
-            inner.set_variable(k, v.clone());
+            if import_filter(k) {
+                inner.set_variable(k, v.clone());
+            }
         }
 
         // Project the current outer row's columns into single-value
         // bindings so the inner sees scalars rather than the outer's
-        // multi-row arrays.
+        // multi-row arrays. Filter through the same import rule.
         for (idx, col) in outer_columns.iter().enumerate() {
+            if !import_filter(col) {
+                continue;
+            }
             if let Some(v) = outer_row.values.get(idx) {
                 inner.set_variable(col, v.clone());
             }
@@ -415,7 +447,11 @@ impl Executor {
 
         // Seed the inner result_set with the single driving outer row
         // so row-driven inner operators (UNWIND, projection) have
-        // somewhere to start.
+        // somewhere to start. The seed always keeps the full row
+        // shape — narrowing happens at the variable-binding layer,
+        // not at the row-buffer layer, so downstream operators that
+        // walk `result_set.rows` (e.g. CREATE) still see a non-empty
+        // driver to iterate over.
         inner.set_columns_and_rows(outer_columns.to_vec(), vec![outer_row.clone()]);
         Ok(inner)
     }

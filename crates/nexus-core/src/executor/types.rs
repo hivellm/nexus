@@ -366,6 +366,12 @@ pub enum Operator {
         on_error: parser::OnErrorPolicy,
         /// `REPORT STATUS AS <var>` target, when present.
         status_var: Option<String>,
+        /// phase6_opencypher-subquery-transactions §8 — Cypher 25
+        /// `CALL (var1, var2, …) { … }` import-list. When `Some`, the
+        /// inner scope sees only the listed outer variables; when
+        /// `None`, every outer binding is visible (legacy `WITH …
+        /// CALL { … }` semantic).
+        import_list: Option<Vec<String>>,
     },
     /// Load CSV file
     LoadCsv {

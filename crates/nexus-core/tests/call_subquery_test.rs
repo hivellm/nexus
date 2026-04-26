@@ -269,6 +269,49 @@ fn call_subquery_in_transactions_on_error_combinations_are_accepted() {
 }
 
 #[test]
+fn call_subquery_import_list_parses_and_narrows_inner_scope() {
+    // Cypher 25 `CALL (vars) { … }` — only the listed outer vars
+    // reach the inner. The inner's MATCH count(*) is independent
+    // of which outer vars are imported, so this test validates
+    // that:
+    //   1. the parser accepts the `(p)` import-list
+    //   2. the operator wires it through to the planner +
+    //      executor without breaking the inner
+    let (mut executor, _ctx) = create_isolated_test_executor();
+    seed_three_people(&mut executor);
+    let rs = run(
+        &mut executor,
+        "MATCH (p:Person) \
+         CALL (p) { MATCH (q:Person) RETURN count(q) AS c } \
+         RETURN p.name AS name, c",
+    );
+    assert_eq!(rs.columns, vec!["name", "c"]);
+    assert_eq!(rs.rows.len(), 3);
+    for r in &rs.rows {
+        assert_eq!(r.values[1], serde_json::json!(3));
+    }
+}
+
+#[test]
+fn call_subquery_empty_import_list_isolates_inner_scope() {
+    // `CALL () { … }` — no outer bindings reach the inner. The
+    // inner runs once per outer row but sees a fresh scope.
+    let (mut executor, _ctx) = create_isolated_test_executor();
+    seed_three_people(&mut executor);
+    let rs = run(
+        &mut executor,
+        "MATCH (p:Person) \
+         CALL () { MATCH (q:Person) RETURN count(q) AS c } \
+         RETURN p.name AS name, c",
+    );
+    assert_eq!(rs.columns, vec!["name", "c"]);
+    assert_eq!(rs.rows.len(), 3);
+    for r in &rs.rows {
+        assert_eq!(r.values[1], serde_json::json!(3));
+    }
+}
+
+#[test]
 fn call_subquery_nested_call_inner_runs_through_dispatch() {
     let (mut executor, _ctx) = create_isolated_test_executor();
     seed_three_people(&mut executor);

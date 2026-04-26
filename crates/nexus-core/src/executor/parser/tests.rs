@@ -2450,4 +2450,26 @@ fn call_subquery_without_in_transactions_still_parses() {
     assert_eq!(c.concurrency, None);
     assert_eq!(c.status_var, None);
     assert_eq!(c.on_error, OnErrorPolicy::Fail);
+    assert_eq!(c.import_list, None);
+}
+
+#[test]
+fn call_subquery_parses_cypher25_import_list() {
+    // phase6 §8 — `CALL (a, b) { … }` Cypher 25 scoped subquery.
+    let mut p = CypherParser::new(
+        "MATCH (a:Person) WITH a, 1 AS b CALL (a, b) { RETURN 42 AS x } RETURN x".to_string(),
+    );
+    let q = p.parse().unwrap();
+    let c = call_tx_clause(&q);
+    assert_eq!(c.import_list, Some(vec!["a".to_string(), "b".to_string()]));
+}
+
+#[test]
+fn call_subquery_parses_empty_import_list() {
+    // `CALL () { … }` — empty list (declares an isolated inner scope).
+    let mut p =
+        CypherParser::new("CALL () { MATCH (n) RETURN count(n) AS c } RETURN c".to_string());
+    let q = p.parse().unwrap();
+    let c = call_tx_clause(&q);
+    assert_eq!(c.import_list, Some(vec![]));
 }

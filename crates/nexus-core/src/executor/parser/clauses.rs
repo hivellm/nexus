@@ -330,8 +330,17 @@ impl CypherParser {
             }
             "CALL" => {
                 self.skip_whitespace();
-                // Check if this is CALL { subquery } or CALL procedure()
-                if self.peek_char() == Some('{') {
+                // Three shapes:
+                //   CALL { … }            → subquery (legacy form)
+                //   CALL (vars) { … }     → Cypher 25 scoped subquery
+                //                           with import list
+                //   CALL proc.name(args)  → procedure call
+                //
+                // The two ambiguous starts are `{` (always subquery)
+                // and `(` (scoped subquery — procedure calls always
+                // start with a name identifier, never an open paren).
+                let next = self.peek_char();
+                if next == Some('{') || next == Some('(') {
                     let call_subquery_clause = self.parse_call_subquery_clause()?;
                     Ok(Clause::CallSubquery(call_subquery_clause))
                 } else {
@@ -1820,8 +1829,43 @@ impl CypherParser {
     }
 
     /// Parse CALL subquery clause
-    /// Syntax: CALL { subquery } [IN TRANSACTIONS [OF n ROWS]]
+    /// Syntax:
+    ///   `CALL [(import_var [, …])] { subquery } [IN TRANSACTIONS [OF n ROWS]]`
+    ///
+    /// The optional parenthesised list is the Cypher 25
+    /// "scoped subquery" import list (phase6 §8): when present, only
+    /// the listed outer variables are visible inside the inner
+    /// subquery. The empty form `CALL () { … }` declares an inner
+    /// scope with NO imports.
     pub(super) fn parse_call_subquery_clause(&mut self) -> Result<CallSubqueryClause> {
+        // Optional import list — `CALL (a, b) { … }`. Note: the
+        // `CALL` keyword has already been consumed by the caller.
+        let import_list: Option<Vec<String>> = if self.peek_char() == Some('(') {
+            self.consume_char();
+            self.skip_whitespace();
+            let mut vars: Vec<String> = Vec::new();
+            // `()` is permitted (no imports).
+            if self.peek_char() != Some(')') {
+                loop {
+                    self.skip_whitespace();
+                    let ident = self.parse_identifier()?;
+                    vars.push(ident);
+                    self.skip_whitespace();
+                    if self.peek_char() == Some(',') {
+                        self.consume_char();
+                        continue;
+                    }
+                    break;
+                }
+            }
+            self.skip_whitespace();
+            self.expect_char(')')?;
+            self.skip_whitespace();
+            Some(vars)
+        } else {
+            None
+        };
+
         // Expect opening brace
         self.expect_char('{')?;
         self.skip_whitespace();
@@ -1988,6 +2032,7 @@ impl CypherParser {
             concurrency,
             on_error,
             status_var,
+            import_list,
         })
     }
 

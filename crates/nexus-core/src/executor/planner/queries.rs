@@ -520,10 +520,12 @@ impl<'a> QueryPlanner<'a> {
                     });
                 }
                 Clause::CallSubquery(call_sub) => {
-                    // phase6_opencypher-subquery-transactions §4 —
-                    // emit a `CallSubquery` operator that runs the
+                    // phase6_opencypher-subquery-transactions §4 / §8
+                    // — emit a `CallSubquery` operator that runs the
                     // inner AST once per outer driver row, with
-                    // optional batched/transactional semantics.
+                    // optional batched/transactional semantics and
+                    // an optional import-list narrowing the inner
+                    // scope to the listed outer variables only.
                     operators.push(Operator::CallSubquery {
                         inner_query: call_sub.query.clone(),
                         in_transactions: call_sub.in_transactions,
@@ -531,6 +533,7 @@ impl<'a> QueryPlanner<'a> {
                         concurrency: call_sub.concurrency,
                         on_error: call_sub.on_error.clone(),
                         status_var: call_sub.status_var.clone(),
+                        import_list: call_sub.import_list.clone(),
                     });
                 }
                 _ => {

@@ -942,6 +942,13 @@ pub struct CallSubqueryClause {
     /// bound to the named variable.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub status_var: Option<String>,
+    /// phase6_opencypher-subquery-transactions §8 — Cypher 25
+    /// `CALL (var1, var2, …) { … }` import-list form. When `Some`,
+    /// only the listed outer variables are visible inside the inner
+    /// scope; every other outer binding is shadowed. When `None`,
+    /// the legacy "everything visible" rule applies.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub import_list: Option<Vec<String>>,
 }
 
 /// phase6_opencypher-subquery-transactions — `ON ERROR` clause

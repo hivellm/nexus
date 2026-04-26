@@ -373,6 +373,7 @@ impl Executor {
                 concurrency,
                 on_error,
                 status_var,
+                import_list,
             } => {
                 self.execute_call_subquery(
                     context,
@@ -382,6 +383,7 @@ impl Executor {
                     *concurrency,
                     on_error,
                     status_var.as_deref(),
+                    import_list.as_deref(),
                 )?;
             }
         }
