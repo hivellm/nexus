@@ -8,16 +8,16 @@
 
 | Status | Task | Progress | Description |
 |--------|------|----------|-------------|
+| 🔄 | phase5_gui-redesign-mockup-v2 | 0/89 | gui redesign mockup v2 |
 | ⬚ | phase5_hub-integration | 0/87 | hub integration |
-| 🔄 | phase5_implement-cluster-mode | 90/125 | implement cluster mode |
+| 🔄 | phase5_implement-cluster-mode | 93/125 | implement cluster mode |
 | ⬚ | phase5_implement-v1-gui | 0/55 | implement v1 gui |
 
 ## phase6
 
 | Status | Task | Progress | Description |
 |--------|------|----------|-------------|
-| 🔄 | phase6_opencypher-quantified-path-patterns | 0/49 | opencypher quantified path patterns |
-| ⬚ | phase6_opencypher-subquery-transactions | 0/52 | opencypher subquery transactions |
+| ⬚ | phase6_opencypher-subquery-transactions | 13/52 | opencypher subquery transactions |
 | ⬚ | phase6_rtree-index-core | 0/36 | rtree index core |
 | 🔄 | phase6_sdk-rust-getnode-listlabels-drift | 22/25 | sdk rust getnode listlabels drift |
 | ⬚ | phase6_spatial-index-autopopulate | 0/28 | spatial index autopopulate |

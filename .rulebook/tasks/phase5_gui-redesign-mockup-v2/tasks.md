@@ -1,0 +1,123 @@
+# Implementation Tasks — GUI rewrite (React + mockup v2)
+
+## 1. Stack pivot (Vue → React)
+
+- [x] 1.1 Archive existing Vue tree: move `gui/src/` → `gui/src.vue-archive/` (keep `gui/electron/`, `gui/package.json`, `gui/vite.config.ts` as base)
+- [x] 1.2 Strip Vue deps from `gui/package.json` (vue, vue-router, pinia, @vueuse/core, vue-chartjs, eslint-plugin-vue, @vitejs/plugin-vue)
+- [x] 1.3 Add React deps: `react@18`, `react-dom@18`, `@vitejs/plugin-react`, `@types/react`, `@types/react-dom`
+- [x] 1.4 Add state + data deps: `zustand`, `@tanstack/react-query`, `@tanstack/react-table`
+- [x] 1.5 Add UI deps: `@monaco-editor/react`, `react-hotkeys-hook`, `clsx`, `lucide-react`
+- [x] 1.6 Add test deps: `vitest`, `@testing-library/react`, `@testing-library/jest-dom`, `jsdom`
+- [x] 1.7 Update `gui/vite.config.ts`: replace vue plugin with react plugin; verify Electron renderer config still loads
+- [x] 1.8 Update `gui/tsconfig.json`: `jsx: "react-jsx"`; remove `shims-vue.d.ts`
+- [x] 1.9 Update `gui/index.html` mount: keep `<div id="root"></div>` and point to `src/main.tsx`
+- [x] 1.10 Update `gui/package.json` scripts: `dev`/`build` unchanged; replace lint config (eslint-plugin-react + react-hooks)
+- [x] 1.11 Verify Electron main + preload still build and load the new renderer (`npm run dev`)
+
+## 2. Foundations (design system + shell)
+
+- [ ] 2.1 Create `gui/src/styles/tokens.css` with CSS variables (`:root` + `[data-theme="light"]`) ported from `gui/assets/styles.css`
+- [ ] 2.2 Create `gui/src/styles/globals.css`: resets, fonts, scrollbar, `::selection`
+- [ ] 2.3 Self-host Inter + JetBrains Mono fonts (no Google CDN at runtime)
+- [ ] 2.4 Configure Tailwind v4 to consume tokens: `bg-bg-1`, `text-fg-0`, `border-border`, etc.
+- [ ] 2.5 Port `icons.jsx` to `gui/src/icons/*.tsx` (one file per icon, typed `IconProps`)
+- [ ] 2.6 Create `gui/src/main.tsx` (React root + QueryClientProvider + theme bootstrap)
+- [ ] 2.7 Create `gui/src/app/App.tsx` shell: 3-row grid (36 / 1fr / 24) + 4-col body (52 / 260 / 1fr / 320)
+- [ ] 2.8 Create `gui/src/stores/layoutStore.ts` (Zustand): `currentView`, `editorTabs`, `activeTab`, `tweaksVisible`, `theme`
+- [ ] 2.9 Persist `theme` + `tweaksVisible` to localStorage (`nexus_tweaks`)
+- [ ] 2.10 Apply `data-theme` attribute to `<html>` reactively from store
+
+## 3. Chrome (titlebar, rail, status, tweaks)
+
+- [ ] 3.1 Build `Titlebar.tsx`: traffic-light dots, brand mark, breadcrumb path
+- [ ] 3.2 Wire `-webkit-app-region: drag` and verify Electron drag works on Win/Mac/Linux
+- [ ] 3.3 Build editor tab strip: per-tab close, "+" new tab, click to switch (uses `layoutStore.editorTabs`)
+- [ ] 3.4 Build search field with ⌘K / Ctrl+K shortcut (placeholder action)
+- [ ] 3.5 Build status pills (epoch, q/s) bound to `metricsStore`
+- [ ] 3.6 Build notification + settings icon buttons
+- [ ] 3.7 Build `ActivityRail.tsx`: 5 view buttons + Tweaks toggle, bound to `layoutStore.currentView`
+- [ ] 3.8 Build `StatusBar.tsx`: connection LED, host, writer epoch, replica state, page cache, WAL, |V|/|E|, cursor pos
+- [ ] 3.9 Build `Tweaks.tsx` floating panel (theme dark/light segmented control), anchored bottom-right
+- [ ] 3.10 Verify both themes (dark / light) render the chrome correctly
+
+## 4. Service layer (REST + TanStack Query)
+
+- [ ] 4.1 Port REST client from `gui/src.vue-archive/services/` to `gui/src/services/api.ts`
+- [ ] 4.2 Create query hooks: `useHealth`, `useStats`, `useReplicationStatus`, `useSchema`, `useExecuteCypher`, `useKnn`, `useAuditLog`
+- [ ] 4.3 Configure QueryClient defaults: `refetchInterval` for live data, retry policy, error boundaries
+- [ ] 4.4 Type all server responses (`types/api.ts`) — match Rust API shape
+
+## 5. Left panel (view-driven content)
+
+- [ ] 5.1 Build `LeftColumn.tsx` dispatcher (switches by `currentView`)
+- [ ] 5.2 Build `ConnectionsPanel.tsx`: status dot, name, url, role badge, "+" new connection
+- [ ] 5.3 Wire `ConnectionsPanel` to connection store (uses Electron IPC for persisted connection list)
+- [ ] 5.4 Build `SchemaPanel.tsx`: collapsible Node Labels / Relationship Types / Indexes / Procedures
+- [ ] 5.5 Wire `SchemaPanel` to `useSchema()` hook with refresh button
+- [ ] 5.6 Build `KnnPanel.tsx`: label select, embedding source textarea, distance, ef_search, k slider, Run
+- [ ] 5.7 Wire `KnnPanel` to `useKnn()`; render scored results with similarity bar
+- [ ] 5.8 Build `ReplicationLeftPanel.tsx`: SVG topology (master + replicas, animated dashed wires)
+- [ ] 5.9 Wire `ReplicationLeftPanel` to `useReplicationStatus()`; verify endpoint exists
+- [ ] 5.10 Build `AuditLeftPanel.tsx`: filters (level/user/action) + query history list
+- [ ] 5.11 Wire `AuditLeftPanel` to `useAuditLog()` + local query history (Zustand)
+
+## 6. Workspace (editor + results)
+
+- [ ] 6.1 Build `EditorHead.tsx`: breadcrumb + Format / Save / Share / History / Run buttons
+- [ ] 6.2 Build `CypherEditor.tsx` using `@monaco-editor/react`: Cypher language config, theme matching mockup tokens
+- [ ] 6.3 Style Monaco gutter, active-line highlight, font (JetBrains Mono) to match mockup
+- [ ] 6.4 Wire Run button + `useHotkeys('mod+enter', run)` to `useExecuteCypher()`
+- [ ] 6.5 Build editor footer: parsed status, plan summary, est. cost, keybind hint
+- [ ] 6.6 Build `ResultsTabs.tsx`: Graph / Table / JSON / Plan + mini-meta strip
+- [ ] 6.7 Build `TableView.tsx` using TanStack Table: typed column headers, row index, monospace, sticky header
+- [ ] 6.8 Build `JsonView.tsx`: pretty-printed result rows, copy button
+- [ ] 6.9 Build `PlanView.tsx`: render plan tree from server response
+- [ ] 6.10 Build `GraphView.tsx` wrapper: vis-network for production, mockup-style SVG for empty state
+- [ ] 6.11 Build `GraphControls.tsx`: zoom in/out, fit, refresh layout (overlaid top-right)
+- [ ] 6.12 Build `GraphLegend.tsx`: label color chips with counts (overlaid bottom-left)
+- [ ] 6.13 Build `NodeInspector.tsx`: label badge, id, name, props, degree, Expand / Cypher buttons
+- [ ] 6.14 Wire selection: clicking a node opens inspector; clicking background closes it
+
+## 7. Right drawer (live metrics)
+
+- [ ] 7.1 Build `Sparkline.tsx` reusable: data prop, color, fill opacity, last-point dot
+- [ ] 7.2 Build `MetricsSection.tsx`: qps / cache hit / p99 / WAL with sparklines + delta % indicator
+- [ ] 7.3 Create `metricsStore.ts` (Zustand): 60-sample ringbuffers per metric, fed by `useStats` polling
+- [ ] 7.4 Build `ReplicationCompact.tsx`: master + replicas mini list (marker, host, lag, ack)
+- [ ] 7.5 Wire `ReplicationCompact` to shared replication store/hook
+- [ ] 7.6 Build `AuditFeed.tsx`: timestamped activity rows (level dot, user, action, detail)
+- [ ] 7.7 Wire `AuditFeed` to SSE stream (with 2s polling fallback)
+
+## 8. Integration & polish
+
+- [ ] 8.1 Hook `currentView` so rail clicks update left panel without remounting workspace
+- [ ] 8.2 Ensure Result Graph view reuses `GraphView.tsx` (no duplicate renderer)
+- [ ] 8.3 Implement keyboard shortcuts: ⌘K (search), ⌘↵ (run), ⌘/ (comment toggle), ⌘S (save tab) via `react-hotkeys-hook`
+- [ ] 8.4 Implement editor tab persistence (open tabs survive reload via localStorage)
+- [ ] 8.5 Verify both themes (dark / light) at every screen
+- [ ] 8.6 Verify scrollbar styling matches mockup
+- [ ] 8.7 Verify `::selection` color
+- [ ] 8.8 a11y: tab order, ARIA labels on icon buttons, keyboard-reachable rail, `prefers-reduced-motion` respect
+- [ ] 8.9 Performance: confirm sparkline + metrics polling don't cause full-tree re-renders (memoize with `React.memo` + selectors)
+- [ ] 8.10 Smoke test: Electron production build runs, connects to local nexus-server, executes a query end-to-end
+
+## 9. Backend gaps surfaced by the mockup
+
+- [ ] 9.1 Verify `/replication/status` returns master + replicas with epoch/lag/ackMs; create endpoint if missing
+- [ ] 9.2 Verify `/stats` returns qps, cache hit rate, p99 latency, WAL size; extend if missing
+- [ ] 9.3 Verify `/audit/log` exists (or wire to existing log stream); spec the SSE format if new
+- [ ] 9.4 Verify `/procedures` lists callable procedures (vector.knn, text.search, db.labels); create if missing
+
+## 10. Cleanup
+
+- [ ] 10.1 Delete `gui/src.vue-archive/` once parity confirmed
+- [ ] 10.2 Move `gui/assets/` to `docs/design/gui-mockup-v2/`
+- [ ] 10.3 Remove `gui/src/App.vue.backup` if present
+- [ ] 10.4 Update `gui/README.md` with new component map and dev workflow
+- [ ] 10.5 Add screenshots of new UI to root `README.md`
+
+## 11. Tail (mandatory — enforced by rulebook v5.3.0)
+
+- [ ] 11.1 Update or create documentation covering the implementation
+- [ ] 11.2 Write tests covering the new behavior (Vitest + RTL: stores, Sparkline math, ResultsTabs switching, Titlebar tab close, Tweaks theme toggle)
+- [ ] 11.3 Run tests and confirm they pass (`npm run lint`, `tsc --noEmit`, `npm test`)

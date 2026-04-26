@@ -1,0 +1,65 @@
+/* Design tokens — ported from gui/assets/styles.css.
+ * Source of truth for theme colors, typography, spacing primitives.
+ * Both themes are surfaced by toggling [data-theme] on <html>.
+ */
+
+:root {
+  --bg-0: #0a0c0f;
+  --bg-1: #0e1114;
+  --bg-2: #141820;
+  --bg-3: #1a1f28;
+  --bg-4: #232a35;
+  --border: #1f242d;
+  --border-strong: #2a313c;
+
+  --fg-0: #e6ebf2;
+  --fg-1: #c8ced6;
+  --fg-2: #8a9199;
+  --fg-3: #5a6169;
+  --fg-4: #3b4049;
+
+  --accent: #00d4ff;
+  --accent-dim: #00a4c4;
+  --accent-bg: rgba(0, 212, 255, 0.09);
+  --accent-border: rgba(0, 212, 255, 0.35);
+
+  --ok: #10b981;
+  --warn: #f59e0b;
+  --err: #ef4444;
+  --info: #60a5fa;
+
+  --label-module: #00d4ff;
+  --label-function: #a78bfa;
+  --label-struct: #10b981;
+  --label-trait: #f59e0b;
+  --label-crate: #ff4d8f;
+
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.4);
+  --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.5);
+  --shadow-lg: 0 16px 40px rgba(0, 0, 0, 0.6);
+
+  --font-ui: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  --font-mono: 'JetBrains Mono', 'SF Mono', Menlo, Consolas, monospace;
+}
+
+[data-theme='light'] {
+  --bg-0: #f4f6f9;
+  --bg-1: #ffffff;
+  --bg-2: #f8fafc;
+  --bg-3: #eef1f6;
+  --bg-4: #e2e8f0;
+  --border: #e2e8f0;
+  --border-strong: #cbd5e1;
+  --fg-0: #0f172a;
+  --fg-1: #1e293b;
+  --fg-2: #475569;
+  --fg-3: #64748b;
+  --fg-4: #94a3b8;
+  --accent: #0284c7;
+  --accent-dim: #0369a1;
+  --accent-bg: rgba(2, 132, 199, 0.08);
+  --accent-border: rgba(2, 132, 199, 0.35);
+  --shadow-sm: 0 1px 2px rgba(15, 23, 42, 0.06);
+  --shadow-md: 0 4px 12px rgba(15, 23, 42, 0.08);
+  --shadow-lg: 0 16px 40px rgba(15, 23, 42, 0.12);
+}

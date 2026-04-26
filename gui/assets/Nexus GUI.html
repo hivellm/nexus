@@ -1,0 +1,116 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="utf-8" />
+<title>Nexus — Graph Database Studio</title>
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+<div id="root"></div>
+
+<script src="https://unpkg.com/react@18.3.1/umd/react.development.js" integrity="sha384-hD6/rw4ppMLGNu3tX5cjIb+uRZ7UkRJ6BPkLpg4hAu/6onKUg4lLsHAs9EBPT82L" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.development.js" integrity="sha384-u6aeetuaXnQ38mYT8rp6sbXaQe3NL9t+IBXmnYxwkUI2Hw4bsp2Wvmx4yRQF1uAm" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js" integrity="sha384-m08KidiNqLdpJqLq95G/LEi8Qvjl/xUYll3QILypMoQ65QorJ9Lvtp2RXYGBFj1y" crossorigin="anonymous"></script>
+
+<script src="data.js"></script>
+<script type="text/babel" src="icons.jsx"></script>
+<script type="text/babel" src="chrome.jsx"></script>
+<script type="text/babel" src="panels.jsx"></script>
+<script type="text/babel" src="workspace.jsx"></script>
+<script type="text/babel" src="right.jsx"></script>
+
+<script type="text/babel" data-presets="env,react">
+const TWEAK_DEFAULTS = /*EDITMODE-BEGIN*/{
+  "theme": "dark"
+}/*EDITMODE-END*/;
+
+function Tweaks({ visible, state, setState, persist }) {
+  if (!visible) return null;
+  const set = (k, v) => { setState(s => ({ ...s, [k]: v })); persist({ [k]: v }); };
+  return (
+    <div className="tweaks" data-screen-label="Tweaks panel">
+      <div className="tw-head"><Icon.Settings /> Tweaks</div>
+      <div className="tw-body">
+        <div className="tw-row">
+          <span>Theme</span>
+          <div className="seg">
+            <button className={state.theme==='dark'?'on':''} onClick={()=>set('theme','dark')}>Dark</button>
+            <button className={state.theme==='light'?'on':''} onClick={()=>set('theme','light')}>Light</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function App() {
+  const [tweakState, setTweakState] = React.useState(() => {
+    try { return { ...TWEAK_DEFAULTS, ...JSON.parse(localStorage.getItem('nexus_tweaks')||'{}') }; }
+    catch { return TWEAK_DEFAULTS; }
+  });
+  const [tweaksVisible, setTweaksVisible] = React.useState(false);
+  const [editTab, setEditTab] = React.useState('cypher-1');
+  const [view, setView] = React.useState('query');
+  const [resultMode, setResultMode] = React.useState('graph');
+  const [selectedNode, setSelectedNode] = React.useState(window.NODES.find(n => n.name === 'executor'));
+  const currentConn = window.CONNECTIONS.find(c => c.current);
+
+  React.useEffect(() => {
+    document.documentElement.setAttribute('data-theme', tweakState.theme);
+    localStorage.setItem('nexus_tweaks', JSON.stringify(tweakState));
+  }, [tweakState]);
+
+  React.useEffect(() => {
+    const handler = (e) => {
+      if (e.data?.type === '__activate_edit_mode') setTweaksVisible(true);
+      if (e.data?.type === '__deactivate_edit_mode') setTweaksVisible(false);
+    };
+    window.addEventListener('message', handler);
+    window.parent.postMessage({ type: '__edit_mode_available' }, '*');
+    return () => window.removeEventListener('message', handler);
+  }, []);
+
+  const persist = (edits) => {
+    window.parent.postMessage({ type: '__edit_mode_set_keys', edits }, '*');
+  };
+
+  return (
+    <div className="app" data-screen-label="Nexus Studio — main workspace">
+      <Titlebar currentTab={editTab} onTabChange={setEditTab} currentConn={currentConn} />
+      <div className="body">
+        <ActivityRail
+          currentView={view}
+          onViewChange={setView}
+          onToggleTweaks={() => setTweaksVisible(v => !v)}
+        />
+        <LeftColumn
+          connections={window.CONNECTIONS}
+          labels={window.NEXUS_LABELS}
+          reltypes={window.NEXUS_RELTYPES}
+          currentView={view}
+        />
+        <div className="workspace">
+          <EditorHead currentConn={currentConn} resultMode={resultMode} onResultMode={setResultMode} />
+          <div className="workspace-body">
+            <CypherEditor />
+            <div className="results">
+              <ResultsTabs mode={resultMode} onMode={setResultMode} rowCount={14} ms={12} />
+              <div className="results-body">
+                {resultMode === 'graph' ? <GraphView selected={selectedNode} setSelected={setSelectedNode} /> : <TableView />}
+              </div>
+            </div>
+          </div>
+        </div>
+        <RightColumn />
+      </div>
+      <StatusBar result={{}} graphStats={{ nodes: 209, edges: 632 }} replLag={847} />
+      <Tweaks visible={tweaksVisible} state={tweakState} setState={setTweakState} persist={persist} />
+    </div>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+</script>
+</body>
+</html>
