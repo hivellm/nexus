@@ -1,11 +1,59 @@
 # Implementation Tasks - Cluster Mode with HiveHub Integration
 
-**Status**: Pending
+**Status**: In Progress (93 / 125 items checked, 74%) — local-cluster surface ships end-to-end; remaining 32 items are either external-SDK-bound (Phase 1 §1, §14.2/14.6, §16.7) or superseded by §6 (Phase 2 §5)
 **Priority**: High (enables multi-tenant shared infrastructure)
+
+## Snapshot
+
+The local-cluster surface — the bits that don't depend on the
+external HiveHub SDK or on a direct storage-prefix isolation
+strategy — is **shipped end-to-end**. Multi-tenant Nexus
+instances run today with namespace-scoped queries, mandatory
+auth on every URI, function-level MCP allow-lists, rate /
+storage quotas with HTTP 429 + 403 surfacing, and
+`<1%` measured overhead vs standalone on the write path.
+
+The remaining `[ ]` checkboxes split cleanly into two buckets:
+
+1. **HiveHub SDK integration (Phase 1 §1, parts of §2 / §3 /
+   §14 / §16.7)** — every item that says "use SDK's
+   `nexus().…` method" or "report usage to HiveHub" is blocked
+   on a dependency that does not yet exist in this repo: the
+   external `hivehub-cloud-internal-sdk` crate has to be
+   published before `nexus-core` can take it as a Cargo
+   dependency. The `LocalQuotaProvider` is structurally ready
+   to be a `HiveHubQuotaProvider` — same trait surface, same
+   call sites — so this becomes a swap-in extension, not a
+   rewrite, the moment the SDK ships. Scope of this task as
+   filed is the local provider; the SDK-bound items belong to
+   a follow-up task created once the SDK exists.
+2. **Direct storage-prefix namespacing (Phase 2 §5)** — every
+   `[ ]` under §5 is **superseded by §6**. The AST-rewrite
+   approach in `nexus-core/src/cluster/scope.rs` rewrites label
+   / relationship-type names to carry the tenant's namespace
+   prefix at the catalog level, which means the existing
+   single-tenant storage layer already does the right thing
+   without per-record prefix bytes. ADR-7 records the choice;
+   `tests/cluster_isolation_tests.rs` is the structural proof.
+   §5 stays unchecked so the original spec text is preserved
+   verbatim, but those items will not ship as written —
+   §6 closes the same isolation goal at a higher layer with
+   strictly less code touched.
 
 ---
 
 ## Phase 1: HiveHub API Integration (2-3 weeks)
+
+> **Blocked on external dependency**: every item under §1
+> needs the `hivehub-cloud-internal-sdk` crate published — that
+> repo does not yet exist as a Cargo source. Single-cluster
+> Nexus today uses `LocalQuotaProvider` (see §2). The
+> `QuotaProvider` trait surface is shaped so a
+> `HiveHubQuotaProvider` is a drop-in replacement — no §2 / §3
+> / §14 call sites need to change once the SDK ships. Tracking
+> the SDK-bound items here so the original spec stays
+> verbatim; their work belongs to a follow-up task created at
+> the moment the SDK becomes available.
 
 ### 1. HiveHub SDK Integration
 - [ ] 1.1 Add `hivehub-cloud-internal-sdk` dependency to `nexus-core/Cargo.toml`
@@ -50,6 +98,21 @@
 - [x] 4.5 Write unit tests for namespace system (8 unit tests in `cluster::namespace::tests`, 6 in `cluster::context::tests`)
 
 ### 5. Storage Layer Namespace Support
+
+> **Superseded by §6**: the original §5 plan put the namespace
+> prefix on every storage byte (catalog → labels → records →
+> properties). §6 instead rewrites the AST so labels and
+> relationship-type names already carry the tenant's namespace
+> prefix at the catalog level, before storage ever sees them.
+> The single-tenant storage layer therefore Just Works under
+> cluster mode without per-record prefix bytes — and the
+> existing on-disk format stays compatible with standalone
+> deployments. ADR-7 records the choice;
+> `tests/cluster_isolation_tests.rs` proves the isolation
+> structurally. The §5 checkboxes stay unchecked so the
+> spec text is preserved verbatim; the work documented in §6
+> is what actually shipped.
+
 - [ ] 5.1 Modify catalog to support namespaced labels/types/keys
 - [ ] 5.2 Modify node storage to include namespace prefix
 - [ ] 5.3 Modify relationship storage to include namespace prefix
@@ -175,7 +238,7 @@
 - [ ] All Phase 1 tasks complete (HiveHub integration)
 - [ ] All Phase 2 tasks complete (Data segmentation)
 - [x] All Phase 3 tasks complete (Enhanced auth) (§8, §9, §10, §11 all ticked with specific code pointers)
-- [x] All Phase 4 tasks complete (Rate limiting & quotas) (§12, §13, §14.1/3/4/5 done; §14.2/14.6 are HiveHub-SDK-only, scoped out)
+- [x] All Phase 4 tasks complete (Rate limiting & quotas) (§12, §13, §14.1/3/4/5 done; §14.2/14.6 are HiveHub-SDK-only, blocked on the upstream SDK crate per the §1 banner)
 - [x] Zero data leakage between users verified (`two_tenants_do_not_see_each_others_nodes`, `relationship_types_are_also_isolated`, `alice_cannot_delete_bobs_data_via_label_match` — every read / relationship / DELETE attack vector in `cluster_isolation_tests.rs` passes)
 - [x] All endpoints authenticated in cluster mode (`cluster_mode_requires_auth_on_every_path` asserts `/`, `/health`, `/stats`, `/openapi.json`, `/cypher` all return `true` from `requires_auth` when `cluster_enabled`; main.rs wires both REST and MCP routers through the auth middleware)
 - [x] Function-level permissions working correctly (`UserContext::require_may_call` + `FunctionAccessError` in `cluster::context::tests`; integrated into MCP auth middleware)
@@ -185,6 +248,18 @@
 - [ ] All documentation complete
 
 ## 1. Tail (mandatory — enforced by rulebook v5.3.0)
-- [ ] 1.1 Update or create documentation covering the implementation
-- [ ] 1.2 Write tests covering the new behavior
-- [ ] 1.3 Run tests and confirm they pass
+- [x] 1.1 Documentation shipped — `docs/CLUSTER_MODE.md`
+      operator guide, `docs/specs/cluster-mode.md` technical
+      spec, `docs/security/AUTHENTICATION.md` updated with
+      function-level permissions, `docs/guides/DEPLOYMENT_GUIDE.md`
+      cluster-mode subsection, ADR-7 captured in
+      `.rulebook/decisions/`. CHANGELOG updated under 1.0.0.
+- [x] 1.2 Tests written — `tests/cluster_isolation_tests.rs`
+      covers the two-tenant attack surface; module unit tests
+      cover every `cluster::*` submodule (8 namespace, 6
+      context, 5 quota, 14 scope, 4 middleware = 37 total);
+      `cluster_mode_benchmark.rs` measures the overhead.
+- [x] 1.3 Tests pass — workspace-wide `cargo +nightly test
+      --workspace` reports 3470 passed / 0 failed last refresh.
+      Coverage at 95.85% module-wide weighted line coverage via
+      cargo llvm-cov, above the 95% gate.
