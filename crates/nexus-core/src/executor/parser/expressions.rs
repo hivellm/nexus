@@ -387,6 +387,27 @@ impl CypherParser {
                 // Check if it's a keyword first
                 if self.peek_keyword("CASE") {
                     self.parse_case_expression()
+                } else if self.peek_keyword("COLLECT") {
+                    // phase6_opencypher-subquery-transactions §9 —
+                    // disambiguate `COLLECT { … }` (subquery) vs
+                    // `collect(expr)` (aggregation function). The
+                    // latter is parsed as a regular FunctionCall so we
+                    // only commit to the subquery branch when the next
+                    // non-whitespace token after the keyword is `{`.
+                    let saved_pos = self.pos;
+                    let saved_line = self.line;
+                    let saved_col = self.column;
+                    self.parse_keyword()?; // consume COLLECT
+                    self.skip_whitespace();
+                    let next_is_brace = self.peek_char() == Some('{');
+                    self.pos = saved_pos;
+                    self.line = saved_line;
+                    self.column = saved_col;
+                    if next_is_brace {
+                        self.parse_collect_subquery_expression()
+                    } else {
+                        self.parse_identifier_expression()
+                    }
                 } else if self.peek_keyword("EXISTS") {
                     // phase6_opencypher-quickwins §7 — disambiguate:
                     //   EXISTS { pattern }     → pattern-existence predicate
@@ -1513,6 +1534,63 @@ impl CypherParser {
             input,
             when_clauses,
             else_clause,
+        })
+    }
+
+    /// Parse `COLLECT { … }` subquery expression
+    /// (phase6_opencypher-subquery-transactions §9).
+    ///
+    /// Reuses the same clause-parsing loop as `CALL { … }` so every
+    /// MATCH / WITH / WHERE / RETURN combination accepted by the
+    /// outer query is also accepted inside the collect subquery.
+    /// The inner MUST terminate with a `RETURN` clause — that's the
+    /// values the LIST is folded over.
+    pub(super) fn parse_collect_subquery_expression(&mut self) -> Result<Expression> {
+        self.expect_keyword("COLLECT")?;
+        self.skip_whitespace();
+        self.expect_char('{')?;
+        self.skip_whitespace();
+
+        let mut clauses = Vec::new();
+        while self.pos < self.input.len() {
+            self.skip_whitespace();
+            if self.peek_char() == Some('}') {
+                self.consume_char();
+                break;
+            }
+            if self.is_clause_boundary() {
+                let clause = self.parse_clause(clauses.last())?;
+                clauses.push(clause);
+            } else {
+                break;
+            }
+        }
+
+        if clauses.is_empty() {
+            return Err(self.error(
+                "ERR_COLLECT_SUBQUERY_EMPTY: COLLECT { … } must contain \
+                 at least one clause",
+            ));
+        }
+
+        // Cypher 25 requires the inner to end in RETURN — that's the
+        // expression the LIST is built over. Reject inputs that drop
+        // the RETURN so we don't silently emit an empty list.
+        let last_is_return = matches!(clauses.last(), Some(Clause::Return(_)));
+        if !last_is_return {
+            return Err(self.error(
+                "ERR_COLLECT_SUBQUERY_NO_RETURN: COLLECT { … } must \
+                 terminate with a RETURN clause",
+            ));
+        }
+
+        let inner = CypherQuery {
+            clauses,
+            params: std::collections::HashMap::new(),
+            graph_scope: None,
+        };
+        Ok(Expression::CollectSubquery {
+            inner: Box::new(inner),
         })
     }
 

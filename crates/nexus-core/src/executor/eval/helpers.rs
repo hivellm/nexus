@@ -639,6 +639,16 @@ impl Executor {
                 map.values().all(|e| self.can_evaluate_without_variables(e))
             }
             parser::Expression::Exists { .. } => false, // EXISTS needs graph context
+            parser::Expression::CollectSubquery { .. } => {
+                // COLLECT { … } evaluates the inner subquery against
+                // the storage layer; when the *outer* row is empty the
+                // synthetic-row gate is the only thing standing
+                // between us and "RETURN COLLECT { … } AS x" silently
+                // emitting zero rows. The inner may reference outer
+                // variables, but in that case a preceding clause has
+                // already populated rows and this gate is irrelevant.
+                true
+            }
             parser::Expression::PatternComprehension { .. } => false, // Pattern needs graph context
             parser::Expression::MapProjection { .. } => false, // Map projection needs variables
             parser::Expression::ListComprehension {

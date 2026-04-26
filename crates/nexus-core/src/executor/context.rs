@@ -86,6 +86,37 @@ impl ExecutionContext {
         self.variables.insert(name.to_string(), value);
     }
 
+    /// Snapshot of the parameter map; used by subquery evaluators that
+    /// need to seed a fresh inner ExecutionContext with the outer
+    /// scope's parameters.
+    pub(in crate::executor) fn params_clone(&self) -> HashMap<String, Value> {
+        self.params.clone()
+    }
+
+    /// Snapshot of the shared cache handle, if one is installed.
+    pub(in crate::executor) fn cache_clone(
+        &self,
+    ) -> Option<Arc<parking_lot::RwLock<crate::cache::MultiLayerCache>>> {
+        self.cache.clone()
+    }
+
+    /// Snapshot of the plan-hint vector. Inner subqueries inherit the
+    /// outer hints so `/*+ … */` directives apply uniformly.
+    pub(in crate::executor) fn plan_hints_clone(&self) -> Vec<PlanHint> {
+        self.plan_hints.clone()
+    }
+
+    /// Snapshot of every (name, value) variable binding currently in
+    /// scope. The receiver gets owned values so it can populate a
+    /// freshly-built inner ExecutionContext without holding a borrow
+    /// on the outer.
+    pub(in crate::executor) fn variables_clone_pairs(&self) -> Vec<(String, Value)> {
+        self.variables
+            .iter()
+            .map(|(k, v)| (k.clone(), v.clone()))
+            .collect()
+    }
+
     pub(super) fn get_variable(&self, name: &str) -> Option<&Value> {
         self.variables.get(name)
     }

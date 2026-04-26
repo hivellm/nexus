@@ -1077,6 +1077,26 @@ pub enum Expression {
         /// Optional WHERE clause for filtering
         where_clause: Option<Box<Expression>>,
     },
+    /// `COLLECT { … }` subquery expression
+    /// (phase6_opencypher-subquery-transactions §9 / Cypher 25).
+    ///
+    /// Runs the inner query against the current outer-row scope and
+    /// folds every emitted row into a LIST value:
+    ///
+    /// - single-column inner → `LIST<T>` of that column's values,
+    /// - multi-column inner  → `LIST<MAP>` keyed by the column names,
+    /// - aggregating inner   → single-element list (the aggregation
+    ///   produces exactly one row).
+    ///
+    /// `Box<CypherQuery>` keeps the AST node sized; the inner query
+    /// re-uses the regular clause vocabulary (MATCH / WHERE / WITH /
+    /// RETURN), so the existing planner + evaluator stack lights it
+    /// up without bespoke recursion machinery.
+    CollectSubquery {
+        /// Inner query AST; must contain at least one clause and
+        /// terminate with a RETURN clause (validated at parse time).
+        inner: Box<CypherQuery>,
+    },
     /// Map projection - projects properties from a node/map
     MapProjection {
         /// Source expression (variable or expression)

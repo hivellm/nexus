@@ -2659,6 +2659,14 @@ impl<'a> QueryPlanner<'a> {
                     Ok(format!("EXISTS {{ {} }}", pattern_str))
                 }
             }
+            Expression::CollectSubquery { inner } => {
+                // The expression-to-string formatter is used for
+                // diagnostic logging (and the projection-alias fallback
+                // when no AS is given), so we render the synthetic
+                // shape `COLLECT { … N clauses }` rather than try to
+                // reconstruct the inner Cypher source.
+                Ok(format!("COLLECT {{ {} clauses }}", inner.clauses.len()))
+            }
             _ => Ok("?".to_string()),
         }
     }

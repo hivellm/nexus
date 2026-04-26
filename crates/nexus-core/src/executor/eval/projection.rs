@@ -3711,6 +3711,9 @@ impl Executor {
                     Ok(Value::Bool(pattern_exists))
                 }
             }
+            parser::Expression::CollectSubquery { inner } => {
+                self.evaluate_collect_subquery(row, context, inner)
+            }
             parser::Expression::MapProjection { source, items } => {
                 // Evaluate the source expression (should be a node/map)
                 let source_value = self.evaluate_projection_expression(row, context, source)?;
@@ -3959,5 +3962,109 @@ impl Executor {
                 }
             }
         }
+    }
+
+    /// Evaluate a `COLLECT { … }` subquery expression
+    /// (phase6_opencypher-subquery-transactions §9).
+    ///
+    /// Plans the inner AST against the current executor, runs every
+    /// operator in turn against an inner [`ExecutionContext`] seeded
+    /// with the outer row's bindings, and folds the inner row stream
+    /// into a single LIST value:
+    ///
+    /// - single-column inner → `Value::Array` of that column's values,
+    /// - multi-column inner  → `Value::Array` of `Value::Object` maps
+    ///   keyed by the column names,
+    /// - empty inner row stream → `Value::Array(vec![])` (NOT NULL,
+    ///   per the §9 spec).
+    pub(in crate::executor) fn evaluate_collect_subquery(
+        &self,
+        row: &HashMap<String, Value>,
+        context: &ExecutionContext,
+        inner: &parser::CypherQuery,
+    ) -> Result<Value> {
+        // Plan the inner subquery once. The AST is owned by the
+        // expression so it doesn't change between successive
+        // evaluations on different outer rows; a single plan is
+        // correct.
+        let inner_operators = self.plan_ast(inner)?;
+
+        // Build a fresh inner ExecutionContext that inherits the
+        // outer's params + cache + plan hints, plus the variable
+        // bindings projected from the current outer row.
+        let mut inner_ctx = ExecutionContext::new(
+            self.collect_subquery_params_for(context),
+            self.collect_subquery_cache_for(context),
+        );
+        inner_ctx.set_plan_hints(self.collect_subquery_hints_for(context));
+        for (k, v) in row.iter() {
+            inner_ctx.set_variable(k, v.clone());
+        }
+        // Also import context-level variables that aren't already
+        // shadowed by the row's projection — Cypher's COLLECT { … }
+        // sees the entire outer scope (the nested-scope tree fix is
+        // tracked under the slice-4 task entry).
+        for (k, v) in self.collect_subquery_outer_vars(context) {
+            if !row.contains_key(&k) {
+                inner_ctx.set_variable(&k, v);
+            }
+        }
+
+        for op in &inner_operators {
+            self.execute_operator(&mut inner_ctx, op)?;
+        }
+
+        let cols = inner_ctx.result_set.columns.clone();
+        let rows = std::mem::take(&mut inner_ctx.result_set.rows);
+
+        // Empty result → empty list (NOT NULL).
+        if rows.is_empty() {
+            return Ok(Value::Array(Vec::new()));
+        }
+
+        let mut out: Vec<Value> = Vec::with_capacity(rows.len());
+        if cols.len() == 1 {
+            // Single column → flat list of scalars.
+            for r in rows {
+                out.push(r.values.into_iter().next().unwrap_or(Value::Null));
+            }
+        } else {
+            // Multi-column → list of maps keyed by column name.
+            for r in rows {
+                let mut m = Map::with_capacity(cols.len());
+                for (idx, col) in cols.iter().enumerate() {
+                    let v = r.values.get(idx).cloned().unwrap_or(Value::Null);
+                    m.insert(col.clone(), v);
+                }
+                out.push(Value::Object(m));
+            }
+        }
+        Ok(Value::Array(out))
+    }
+
+    /// Borrow the outer params for a COLLECT { … } inner subquery.
+    fn collect_subquery_params_for(&self, context: &ExecutionContext) -> HashMap<String, Value> {
+        context.params_clone()
+    }
+
+    /// Borrow the outer cache handle for a COLLECT { … } inner subquery.
+    fn collect_subquery_cache_for(
+        &self,
+        context: &ExecutionContext,
+    ) -> Option<std::sync::Arc<parking_lot::RwLock<crate::cache::MultiLayerCache>>> {
+        context.cache_clone()
+    }
+
+    /// Borrow the outer plan hints for a COLLECT { … } inner subquery.
+    fn collect_subquery_hints_for(
+        &self,
+        context: &ExecutionContext,
+    ) -> Vec<super::super::planner::PlanHint> {
+        context.plan_hints_clone()
+    }
+
+    /// Snapshot of the outer scope's variable bindings.
+    fn collect_subquery_outer_vars(&self, context: &ExecutionContext) -> Vec<(String, Value)> {
+        context.variables_clone_pairs()
     }
 }

@@ -1,14 +1,17 @@
 # Implementation Tasks — Subquery Transactions + Collect + Nesting
 
-## Status — slice-1 (read-only inner)
+## Status — slice-1 (read-only inner) + slice-5 (COLLECT { } subquery)
 
 - Operator `Operator::CallSubquery` wired through planner + dispatch.
 - Inner subquery executes per outer row; outer × inner join produced.
 - IN TRANSACTIONS / ON ERROR / REPORT STATUS / write-bearing inner all
   surface typed errors (`ERR_CALL_IN_TX_PENDING_SLICE2`,
   `ERR_CALL_SUBQUERY_WRITE_INNER_UNSUPPORTED`) until the re-entrant
-  executor lands in slice-2.
-- 7 executor integration tests (`crates/nexus-core/tests/call_subquery_test.rs`).
+  executor lands in the IN TRANSACTIONS slice.
+- `Expression::CollectSubquery` AST + parser disambiguation against
+  `collect(expr)` aggregation + projection-evaluator emit `LIST<T>` /
+  `LIST<MAP>` / aggregating-inner / empty-list semantics.
+- 7 CALL executor tests + 7 COLLECT evaluator tests.
 - Parser §1 / §2 already complete (16 unit tests pass).
 
 ## 1. Grammar — `CALL {} IN TRANSACTIONS`
@@ -75,9 +78,9 @@
 
 ## 9. `COLLECT {}` Subquery Full Semantics
 
-- [ ] 9.1 Support aggregating return: `COLLECT { MATCH (n) RETURN count(n) }`
-- [ ] 9.2 Support structured row returns: `COLLECT { ... RETURN {a, b} }`
-- [ ] 9.3 Tests for empty, single, many rows
+- [x] 9.1 Support aggregating return: `COLLECT { MATCH (n) RETURN count(n) }`
+- [x] 9.2 Support structured row returns: `COLLECT { ... RETURN {a, b} }`
+- [x] 9.3 Tests for empty, single, many rows
 
 ## 10. openCypher TCK + Diff
 
