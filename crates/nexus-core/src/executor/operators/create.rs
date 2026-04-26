@@ -897,6 +897,15 @@ impl Executor {
                                 label_bits,
                                 properties.clone(),
                             )?;
+                            // phase6_opencypher-subquery-transactions §3 —
+                            // register the inverse op so a failing
+                            // `CALL { … } IN TRANSACTIONS` batch can
+                            // unwind this node. No-op when the
+                            // executor is not running inside a
+                            // batch attempt.
+                            context.push_undo(
+                                super::super::context::CompensatingUndoOp::DeleteNode(node_id),
+                            );
                             self.fts_autopopulate_node(node_id, &label_ids, &properties);
                             if !label_ids.is_empty() {
                                 created_nodes_with_labels.push((node_id, label_ids.clone()));
@@ -967,6 +976,9 @@ impl Executor {
                                                             &mut tx, *source_id, *target_id,
                                                             type_id, properties,
                                                         )?;
+                                                    context.push_undo(
+                                                        super::super::context::CompensatingUndoOp::DeleteRelationship(rel_id),
+                                                    );
                                                     tracing::trace!(
                                                         "execute_create_with_context: relationship created successfully, rel_id={}",
                                                         rel_id

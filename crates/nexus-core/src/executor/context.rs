@@ -6,9 +6,37 @@
 use super::planner::PlanHint;
 use super::types::{Direction, ResultSet, Row};
 use crate::{Error, Result};
+use parking_lot::Mutex;
 use serde_json::Value;
 use std::collections::HashMap;
 use std::sync::Arc;
+
+/// Compensating-undo entry recorded by write operators when a
+/// `CALL { … } IN TRANSACTIONS` batch is in flight.
+///
+/// Today's storage layer auto-commits every CREATE / DELETE / SET, so
+/// "atomic rollback at the batch boundary" is delivered by replaying
+/// the inverse op when a batch fails. The CallSubquery operator wraps
+/// each batch attempt in its own [`CompensatingUndoBuffer`]; on
+/// success the buffer is discarded, on failure (and after the retry
+/// budget is exhausted, when `ON ERROR` requires recovery) the buffer
+/// is drained in reverse order to undo the partially-committed
+/// writes.
+#[derive(Debug, Clone, Copy)]
+pub enum CompensatingUndoOp {
+    /// Reverse a node creation by deleting the node id.
+    DeleteNode(u64),
+    /// Reverse a relationship creation by deleting the rel id.
+    DeleteRelationship(u64),
+}
+
+/// Shared, append-only buffer used by the [`Executor`] write paths to
+/// register entities they create while a `CALL { … } IN
+/// TRANSACTIONS` batch attempt is in flight. The buffer is shared
+/// across every per-row inner context spawned within a single batch
+/// attempt; the CallSubquery operator owns the only [`Arc`] reference
+/// and drains it on success / failure.
+pub type CompensatingUndoBuffer = Arc<Mutex<Vec<CompensatingUndoOp>>>;
 
 /// Relationship information for expansion
 #[derive(Debug, Clone)]
@@ -35,6 +63,13 @@ pub struct ExecutionContext {
     /// before dispatching operators; empty for direct-call tests
     /// that construct a context without going through `execute`.
     pub(super) plan_hints: Vec<PlanHint>,
+    /// Compensating-undo buffer. `Some(buf)` when the executor is
+    /// running inside a `CALL { … } IN TRANSACTIONS` batch attempt
+    /// — every CREATE / MERGE / SET that lands an entity registers
+    /// its inverse op so the operator can roll the batch back if it
+    /// fails. `None` for everything else (the storage layer's own
+    /// commit semantics provide durability).
+    pub(super) undo_buffer: Option<CompensatingUndoBuffer>,
 }
 
 impl ExecutionContext {
@@ -51,6 +86,29 @@ impl ExecutionContext {
             },
             cache,
             plan_hints: Vec::new(),
+            undo_buffer: None,
+        }
+    }
+
+    /// Install (or clear) the per-batch compensating-undo buffer used
+    /// by the `CALL { … } IN TRANSACTIONS` operator.
+    pub(in crate::executor) fn set_undo_buffer(&mut self, buffer: Option<CompensatingUndoBuffer>) {
+        self.undo_buffer = buffer;
+    }
+
+    /// Borrow the current compensating-undo buffer, if one is
+    /// installed. Write operators call this to register inverse ops
+    /// for the entities they create.
+    pub(in crate::executor) fn undo_buffer(&self) -> Option<&CompensatingUndoBuffer> {
+        self.undo_buffer.as_ref()
+    }
+
+    /// Append a single compensating-undo entry to the installed
+    /// buffer (no-op when the executor is not running inside a
+    /// CALL-IN-TX batch).
+    pub(in crate::executor) fn push_undo(&self, op: CompensatingUndoOp) {
+        if let Some(buf) = &self.undo_buffer {
+            buf.lock().push(op);
         }
     }
 

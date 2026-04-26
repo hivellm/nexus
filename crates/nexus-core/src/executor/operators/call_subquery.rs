@@ -25,21 +25,35 @@
 //! Multi-worker `IN CONCURRENT TRANSACTIONS` (slice-3) requires
 //! per-worker MVCC isolation that the single-writer storage layer
 //! does not yet provide; the operator refuses worker counts > 1 with
-//! `ERR_CALL_IN_TX_CONCURRENCY_UNSUPPORTED`. The savepoint-bracketed
-//! atomic-rollback behaviour from §3 of the design doc is the next
-//! follow-up — slice-2 ships the ON ERROR + REPORT STATUS surface
-//! that gates the operator's user-visible contract.
+//! `ERR_CALL_IN_TX_CONCURRENCY_UNSUPPORTED`.
+//!
+//! ## Atomic-rollback (§3)
+//!
+//! Each batch attempt installs a per-attempt
+//! [`CompensatingUndoBuffer`] (`Arc<Mutex<Vec<CompensatingUndoOp>>>`)
+//! into every per-row inner [`ExecutionContext`]. The CREATE write
+//! paths register `DeleteNode` / `DeleteRelationship` inverse ops
+//! against that buffer for every entity they mint. On failure (or
+//! before a retry attempt) the operator drains the buffer in
+//! reverse order and replays each inverse op, restoring the catalog
+//! to its pre-batch state. Successful batches discard the buffer
+//! without replay. The mechanism is best-effort: individual undo
+//! failures are logged via `tracing` and do not propagate, since
+//! the user-visible error has already been captured at the batch
+//! level.
 //!
 //! See `phase6_opencypher-subquery-transactions/design.md` for the
 //! full target execution model.
 
-use super::super::context::ExecutionContext;
+use super::super::context::{CompensatingUndoOp, ExecutionContext};
 use super::super::engine::Executor;
 use super::super::parser;
 use super::super::types::{Operator, ResultSet, Row};
 use crate::{Error, Result};
 use chrono::Utc;
+use parking_lot::Mutex;
 use serde_json::Value;
+use std::sync::Arc;
 
 /// Default per-batch row count when the user writes `IN TRANSACTIONS`
 /// without an explicit `OF N ROWS` clause. Mirrors Neo4j 5.x.
@@ -228,11 +242,17 @@ impl Executor {
             // Try-loop: 1 baseline attempt + up to `max_attempts`
             // retries. Buffers are rebuilt on each attempt so a
             // partially populated buffer from a previous attempt does
-            // not leak into a successful retry.
+            // not leak into a successful retry. Each attempt also
+            // gets its own compensating-undo buffer (shared across
+            // every per-row inner context spawned within the
+            // attempt); on failure we replay it in reverse order to
+            // unwind the partially-committed writes.
             for attempt in 0..=max_attempts {
                 let mut batch_rows: Vec<Row> = Vec::new();
                 let mut batch_inner_columns_seen: Vec<String> = inner_columns_seen.clone();
                 let mut batch_err: Option<Error> = None;
+                let undo_buffer: Arc<Mutex<Vec<CompensatingUndoOp>>> =
+                    Arc::new(Mutex::new(Vec::new()));
 
                 for outer_row in batch {
                     let mut inner_ctx = match self.build_inner_ctx(
@@ -247,6 +267,7 @@ impl Executor {
                             break;
                         }
                     };
+                    inner_ctx.set_undo_buffer(Some(undo_buffer.clone()));
                     let mut row_err: Option<Error> = None;
                     for op in inner_operators {
                         if let Err(e) = self.execute_operator(&mut inner_ctx, op) {
@@ -282,6 +303,14 @@ impl Executor {
                     break;
                 }
 
+                // Failed attempt — replay the compensating-undo
+                // buffer so the next attempt (or the final FAIL /
+                // CONTINUE / BREAK branch below) sees a consistent
+                // catalog. Best-effort: any individual undo
+                // failure is logged but not propagated; the
+                // batch-level error already in `batch_err` is the
+                // user-visible reason for the rollback.
+                self.replay_compensating_undo(&undo_buffer);
                 last_err = batch_err;
                 if attempt < max_attempts {
                     tracing::warn!(
@@ -407,6 +436,32 @@ impl Executor {
     /// * `None` — legacy form. Every outer variable + every column
     ///   of the current outer row is visible (matches the old
     ///   `WITH … CALL { … }` semantic).
+    /// Drain the per-attempt compensating-undo buffer in reverse
+    /// order, applying each inverse op against the storage layer.
+    /// Errors from individual undo ops are logged via `tracing` and
+    /// otherwise ignored — the caller has already captured a
+    /// batch-level error and the role of this routine is best-effort
+    /// state restoration.
+    fn replay_compensating_undo(&self, buffer: &Arc<Mutex<Vec<CompensatingUndoOp>>>) {
+        let mut ops = buffer.lock();
+        while let Some(op) = ops.pop() {
+            let outcome = match op {
+                CompensatingUndoOp::DeleteNode(node_id) => self.store_mut().delete_node(node_id),
+                CompensatingUndoOp::DeleteRelationship(rel_id) => {
+                    self.store_mut().delete_rel(rel_id)
+                }
+            };
+            if let Err(e) = outcome {
+                tracing::warn!(
+                    target: "nexus_core::executor::call_in_tx",
+                    op = ?op,
+                    err = %e,
+                    "compensating undo failed; continuing best-effort rollback"
+                );
+            }
+        }
+    }
+
     fn build_inner_ctx(
         &self,
         outer: &ExecutionContext,

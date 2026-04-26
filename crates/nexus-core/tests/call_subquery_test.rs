@@ -143,6 +143,44 @@ fn call_subquery_in_transactions_report_status_emits_one_row_per_batch() {
 }
 
 #[test]
+fn call_subquery_in_transactions_rolls_back_partial_writes_on_failure() {
+    // §3 atomic-rollback — when a batch fails after one of its rows
+    // has already created a node, the compensating-undo buffer
+    // unwinds the partial writes so the catalog reflects "the
+    // failing batch never happened".
+    //
+    // Driver layout: 6 outer rows (i = 1..6). Inner does CREATE
+    // first, then `CALL nonexistent.proc()`. Rows 1, 3, 5 succeed
+    // (the batch's first row); rows 2, 4, 6 fail because each
+    // batch's second row hits the unknown-procedure error after
+    // the CREATE has run for the first row of that batch.
+    //
+    // With ON ERROR CONTINUE, every batch fails (the second row
+    // of each batch hits the procedure-not-found error). The
+    // compensating-undo buffer rolls back the CREATEs from each
+    // failed batch — so on completion the catalog has zero
+    // :Rollback nodes.
+    let (mut executor, _ctx) = create_isolated_test_executor();
+    run(
+        &mut executor,
+        "UNWIND range(1, 6) AS i \
+         CALL { \
+           WITH i CREATE (:Rollback {i: i}) \
+           WITH i CALL nonexistent.proc() YIELD x \
+         } \
+         IN TRANSACTIONS OF 2 ROWS REPORT STATUS AS s \
+         ON ERROR CONTINUE \
+         RETURN s.committed AS committed",
+    );
+    let counts = run(&mut executor, "MATCH (r:Rollback) RETURN count(r) AS c");
+    assert_eq!(
+        counts.rows[0].values[0],
+        serde_json::json!(0),
+        "compensating-undo buffer must unwind every CREATE in a failed batch"
+    );
+}
+
+#[test]
 fn call_subquery_in_transactions_default_fail_propagates_inner_error() {
     // Inner CALL invokes a procedure that doesn't exist — the
     // executor surfaces "Procedure 'nonexistent.proc' not found",

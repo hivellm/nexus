@@ -192,6 +192,19 @@ impl Executor {
                 } else {
                     let (created_nodes, created_rels) =
                         self.execute_create_pattern_with_variables(pattern)?;
+                    // Register inverse ops on the compensating-undo
+                    // buffer (no-op outside a `CALL { … } IN
+                    // TRANSACTIONS` batch). The empty-scope path
+                    // doesn't have a row to thread through, so we
+                    // register from the dispatcher using the IDs the
+                    // create helper just minted.
+                    use super::super::context::CompensatingUndoOp;
+                    for node_id in created_nodes.values() {
+                        context.push_undo(CompensatingUndoOp::DeleteNode(*node_id));
+                    }
+                    for rel_info in created_rels.values() {
+                        context.push_undo(CompensatingUndoOp::DeleteRelationship(rel_info.id));
+                    }
                     // Surface created entities into the inner ctx so a
                     // following RETURN clause can reference them.
                     let mut columns: Vec<String> = Vec::new();

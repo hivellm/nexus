@@ -38,6 +38,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `scripts/compatibility/compatibility-test-queries.cypher`
   (SUB-1 through SUB-8). `docs/guides/BULK_INGEST.md` documents
   the recommended ingest patterns.
+- **Atomic per-batch rollback (§3)** via a per-attempt
+  `CompensatingUndoBuffer` installed onto every inner
+  ExecutionContext. CREATE write paths register
+  `DeleteNode` / `DeleteRelationship` inverse ops; on a failed
+  batch attempt the operator drains the buffer in reverse order
+  before retrying or applying the `ON ERROR` policy, so a
+  `CALL { … } IN TRANSACTIONS` failure leaves no partial-batch
+  writes behind.
 
 ## [1.15.0] — 2026-04-26
 

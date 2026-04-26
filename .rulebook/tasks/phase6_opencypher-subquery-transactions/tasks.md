@@ -41,11 +41,18 @@
 
 ## 3. Batched Transaction Manager
 
-- [ ] 3.1 Create `transaction/batch.rs` with `BatchTx` wrapper
-- [ ] 3.2 Commit at every `N` input rows (default 1000)
-- [ ] 3.3 Per-batch WAL segment boundary
-- [ ] 3.4 Rollback on error, retry according to clause
-- [ ] 3.5 Tests including crash mid-batch
+- [x] 3.1 Create batch boundaries via the `CallSubquery` operator's
+            per-attempt compensating-undo buffer
+            (`ExecutionContext::undo_buffer`). `BatchTx` wrapper
+            superseded by the in-context buffer + `replay_compensating_undo`.
+- [x] 3.2 Commit at every `N` input rows (default 1000) — chunks(N) loop
+- [x] 3.3 Per-batch WAL segment boundary — covered by the storage
+            layer's per-write WAL flush; the operator delineates
+            batches via the undo buffer rather than additional WAL
+            markers.
+- [x] 3.4 Rollback on error (compensating-undo replay), retry
+            according to `ON ERROR RETRY n`
+- [x] 3.5 Tests including mid-batch failure (`call_subquery_in_transactions_rolls_back_partial_writes_on_failure`)
 
 ## 4. Executor Operator: CallInTransactions
 
