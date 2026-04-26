@@ -95,9 +95,7 @@ button {
   background: var(--border-strong);
 }
 
-/* Shell skeleton — minimal layout so phase-1 bootstrap renders.
- * Phase 2+ will replace these with real component styles.
- */
+/* ─── Shell ─── */
 .app {
   height: 100%;
   display: grid;
@@ -105,6 +103,8 @@ button {
   background: var(--bg-1);
   color: var(--fg-1);
 }
+
+/* ─── Titlebar (chrome §3) ─── */
 .titlebar {
   display: flex;
   align-items: center;
@@ -116,23 +116,259 @@ button {
   -webkit-app-region: drag;
   user-select: none;
 }
+.titlebar .traffic {
+  display: flex;
+  gap: 8px;
+  -webkit-app-region: no-drag;
+}
+.titlebar .traffic .dot {
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  border: 0;
+  cursor: pointer;
+  padding: 0;
+}
+.titlebar .traffic .dot.close {
+  background: #ff5f57;
+}
+.titlebar .traffic .dot.min {
+  background: #febc2e;
+}
+.titlebar .traffic .dot.max {
+  background: #28c940;
+}
 .titlebar .brand {
+  display: flex;
+  align-items: center;
+  gap: 8px;
   font-weight: 600;
+  font-size: 12.5px;
   color: var(--fg-0);
+  letter-spacing: 0.01em;
+}
+.titlebar .brand-mark {
+  width: 18px;
+  height: 18px;
+  border-radius: 4px;
+  background: linear-gradient(135deg, var(--accent), var(--label-function));
+  position: relative;
+}
+.titlebar .brand-mark::after {
+  content: '';
+  position: absolute;
+  inset: 3px;
+  background: var(--bg-0);
+  border-radius: 2px;
+}
+.titlebar .brand-mark::before {
+  content: '';
+  position: absolute;
+  inset: 6px;
+  background: var(--accent);
+  border-radius: 1px;
+  box-shadow: 0 0 6px var(--accent);
 }
 .titlebar .sep {
   color: var(--fg-4);
 }
+.titlebar .path {
+  color: var(--fg-2);
+  font-size: 12px;
+}
+.titlebar .path .host {
+  color: var(--fg-1);
+}
+.titlebar .tabs {
+  display: flex;
+  align-items: stretch;
+  -webkit-app-region: no-drag;
+  height: 100%;
+  margin-left: 8px;
+}
+.titlebar .tab {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 14px;
+  font-size: 12px;
+  color: var(--fg-2);
+  border-right: 1px solid var(--border);
+  cursor: pointer;
+  position: relative;
+  background: transparent;
+  border-top: 0;
+  border-bottom: 0;
+  border-left: 0;
+  font-family: inherit;
+}
+.titlebar .tab:first-child {
+  border-left: 1px solid var(--border);
+}
+.titlebar .tab.active {
+  color: var(--fg-0);
+  background: var(--bg-1);
+}
+.titlebar .tab.active::after {
+  content: '';
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: -1px;
+  height: 2px;
+  background: var(--accent);
+}
+.titlebar .tab .close-x {
+  color: var(--fg-3);
+  font-size: 14px;
+  line-height: 1;
+  background: transparent;
+  border: 0;
+  padding: 0;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+}
+.titlebar .tab .close-x:hover {
+  color: var(--fg-0);
+}
+.titlebar .grow {
+  flex: 1;
+}
+.titlebar .pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 9px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 500;
+  background: var(--bg-2);
+  border: 1px solid var(--border);
+  color: var(--fg-2);
+  -webkit-app-region: no-drag;
+  cursor: pointer;
+}
+.titlebar .pill .led {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--ok);
+  box-shadow: 0 0 6px var(--ok);
+}
+.titlebar .pill .led.warn {
+  background: var(--warn);
+  box-shadow: 0 0 6px var(--warn);
+}
+.titlebar .pill .led.err {
+  background: var(--err);
+  box-shadow: 0 0 6px var(--err);
+}
+.titlebar .icon-btn {
+  width: 26px;
+  height: 26px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 5px;
+  color: var(--fg-2);
+  cursor: pointer;
+  -webkit-app-region: no-drag;
+  background: transparent;
+  border: 0;
+}
+.titlebar .icon-btn:hover {
+  background: var(--bg-2);
+  color: var(--fg-0);
+}
+
+/* ─── Search field ─── */
+.search-field {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  background: var(--bg-2);
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  padding: 3px 8px;
+  height: 26px;
+  min-width: 260px;
+  -webkit-app-region: no-drag;
+}
+.search-field input {
+  flex: 1;
+  background: transparent;
+  border: 0;
+  outline: 0;
+  color: var(--fg-0);
+  font-family: var(--font-ui);
+  font-size: 12px;
+}
+.search-field .kbd {
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  padding: 1px 5px;
+  border-radius: 3px;
+  background: var(--bg-3);
+  color: var(--fg-3);
+}
+
+/* ─── Body grid ─── */
 .body {
   display: grid;
   grid-template-columns: 52px 260px 1fr 320px;
   overflow: hidden;
   min-height: 0;
 }
+
+/* ─── Activity rail ─── */
 .rail {
   background: var(--bg-0);
   border-right: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 8px 0;
+  gap: 2px;
 }
+.rail-btn {
+  width: 40px;
+  height: 40px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 8px;
+  color: var(--fg-3);
+  cursor: pointer;
+  position: relative;
+  background: transparent;
+  border: 0;
+  transition:
+    color 0.12s,
+    background 0.12s;
+}
+.rail-btn:hover {
+  color: var(--fg-0);
+  background: var(--bg-2);
+}
+.rail-btn.active {
+  color: var(--accent);
+  background: var(--accent-bg);
+}
+.rail-btn.active::before {
+  content: '';
+  position: absolute;
+  left: -8px;
+  top: 10px;
+  bottom: 10px;
+  width: 2px;
+  background: var(--accent);
+  border-radius: 0 2px 2px 0;
+}
+.rail .spacer {
+  flex: 1;
+}
+
 .panel {
   background: var(--bg-1);
   border-right: 1px solid var(--border);
@@ -145,10 +381,12 @@ button {
   background: var(--bg-0);
   border-left: 1px solid var(--border);
 }
+
+/* ─── Statusbar ─── */
 .statusbar {
   display: flex;
   align-items: center;
-  gap: 16px;
+  gap: 12px;
   background: var(--bg-0);
   border-top: 1px solid var(--border);
   padding: 0 12px;
@@ -161,10 +399,113 @@ button {
   align-items: center;
   gap: 6px;
 }
+.statusbar .sg strong {
+  color: var(--fg-1);
+  font-weight: 500;
+}
+.statusbar .sg.mono {
+  font-family: var(--font-mono);
+}
+.statusbar .sg.clickable {
+  cursor: pointer;
+}
+.statusbar .sg.clickable:hover strong {
+  color: var(--accent);
+}
+.statusbar .sep {
+  color: var(--fg-4);
+}
+.statusbar .grow {
+  flex: 1;
+}
 .statusbar .led {
   width: 7px;
   height: 7px;
   border-radius: 50%;
   background: var(--ok);
   box-shadow: 0 0 4px var(--ok);
+}
+.statusbar .led.idle {
+  background: var(--fg-3);
+  box-shadow: none;
+}
+
+/* ─── Tweaks floating panel ─── */
+.tweaks {
+  position: fixed;
+  bottom: 36px;
+  right: 12px;
+  width: 240px;
+  z-index: 1000;
+  background: var(--bg-2);
+  border: 1px solid var(--border-strong);
+  border-radius: 8px;
+  box-shadow: var(--shadow-lg);
+  font-size: 12px;
+  overflow: hidden;
+}
+.tweaks .tw-head {
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--border);
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--fg-2);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.tweaks .tw-head .hd-btn {
+  width: 22px;
+  height: 22px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 4px;
+  color: var(--fg-3);
+  cursor: pointer;
+  background: transparent;
+  border: 0;
+}
+.tweaks .tw-head .hd-btn:hover {
+  background: var(--bg-3);
+  color: var(--fg-0);
+}
+.tweaks .tw-body {
+  padding: 10px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.tweaks .tw-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 10px;
+}
+.tweaks .tw-row > span {
+  color: var(--fg-2);
+  font-size: 12px;
+}
+.tweaks .seg {
+  display: flex;
+  background: var(--bg-1);
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  overflow: hidden;
+}
+.tweaks .seg button {
+  padding: 4px 10px;
+  background: transparent;
+  border: 0;
+  color: var(--fg-2);
+  cursor: pointer;
+  font-size: 11.5px;
+  font-family: inherit;
+}
+.tweaks .seg button.on {
+  background: var(--accent);
+  color: #001018;
+  font-weight: 600;
 }

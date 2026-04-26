@@ -1,22 +1,25 @@
+/**
+ * App shell. Renders the chrome (Titlebar, ActivityRail, StatusBar,
+ * Tweaks) around the body grid. Left panel, workspace, and right
+ * drawer are filled in by §5–§7 of `phase5_gui-redesign-mockup-v2`.
+ */
+import { Titlebar } from '../components/chrome/Titlebar';
+import { ActivityRail } from '../components/chrome/ActivityRail';
+import { StatusBar } from '../components/chrome/StatusBar';
+import { Tweaks } from '../components/chrome/Tweaks';
+
 export function App() {
   return (
-    <div className="app" data-screen-label="Nexus Studio — bootstrap">
-      <header className="titlebar">
-        <span className="brand">Nexus</span>
-        <span className="sep">/</span>
-        <span style={{ color: 'var(--fg-3)' }}>Graph Database Studio</span>
-      </header>
+    <div className="app">
+      <Titlebar />
       <div className="body">
-        <aside className="rail" aria-label="Activity rail" />
+        <ActivityRail />
         <aside className="panel" aria-label="Left panel" />
         <main className="workspace" />
         <aside className="right-col" aria-label="Right drawer" />
       </div>
-      <footer className="statusbar">
-        <span className="sg">
-          <span className="led" /> bootstrap
-        </span>
-      </footer>
+      <StatusBar />
+      <Tweaks />
     </div>
   );
 }

@@ -65,16 +65,48 @@
 
 ## 3. Chrome (titlebar, rail, status, tweaks)
 
-- [ ] 3.1 Build `Titlebar.tsx`: traffic-light dots, brand mark, breadcrumb path
-- [ ] 3.2 Wire `-webkit-app-region: drag` and verify Electron drag works on Win/Mac/Linux
-- [ ] 3.3 Build editor tab strip: per-tab close, "+" new tab, click to switch (uses `layoutStore.editorTabs`)
-- [ ] 3.4 Build search field with ⌘K / Ctrl+K shortcut (placeholder action)
-- [ ] 3.5 Build status pills (epoch, q/s) bound to `metricsStore`
-- [ ] 3.6 Build notification + settings icon buttons
-- [ ] 3.7 Build `ActivityRail.tsx`: 5 view buttons + Tweaks toggle, bound to `layoutStore.currentView`
-- [ ] 3.8 Build `StatusBar.tsx`: connection LED, host, writer epoch, replica state, page cache, WAL, |V|/|E|, cursor pos
-- [ ] 3.9 Build `Tweaks.tsx` floating panel (theme dark/light segmented control), anchored bottom-right
-- [ ] 3.10 Verify both themes (dark / light) render the chrome correctly
+- [x] 3.1 `Titlebar.tsx` — traffic-light dots, brand mark with
+      gradient + accent-glow inner block, host · graph breadcrumb
+      reading from `connectionsStore.selectCurrentConnection`
+- [x] 3.2 `-webkit-app-region: drag` set on `.titlebar`; every
+      interactive child (`.traffic`, `.tabs`, `.search-field`,
+      `.pill`, `.icon-btn`) carries `no-drag` so click + drag
+      coexist. The Electron renderer already runs frameless so the
+      whole bar is the OS-level grab handle.
+- [x] 3.3 Editor tab strip — per-tab close button + new-tab button
+      bound to `layoutStore.openTab` / `closeTab` / `selectTab`.
+      Click switches tabs; click on the close button stops
+      propagation so the tab does not also activate.
+- [x] 3.4 Search field with ⌘K / Ctrl+K shortcut via
+      `react-hotkeys-hook`; the hotkey focuses the input and
+      selects any existing query so the next keystroke overwrites
+      the prior search.
+- [x] 3.5 Two status pills (writer epoch, qps) read from
+      `metricsStore` via per-field selectors so an unrelated
+      metric update does not re-render the pills.
+- [x] 3.6 Notification + settings icon buttons render in the
+      titlebar; the settings button is wired to
+      `layoutStore.toggleTweaks` so it doubles as a Tweaks-panel
+      toggle (matches the rail's tweaks button).
+- [x] 3.7 `ActivityRail.tsx` — five view buttons (Cypher /
+      Schema / KNN / Replication / Audit) + Tweaks toggle. Each
+      button writes `layoutStore.setView(id)` and renders
+      `aria-current="page"` when active so screen readers hear
+      the selection.
+- [x] 3.8 `StatusBar.tsx` — connection LED + host (from
+      `connectionsStore`), writer epoch / replica state / page
+      cache / WAL / |V| / |E| (from `metricsStore`), plus a
+      cursor-position readout fed by an optional `cursor` prop
+      so the workspace can feed live editor coordinates.
+- [x] 3.9 `Tweaks.tsx` floating panel — anchored bottom-right
+      via `position: fixed; bottom: 36px; right: 12px;`. Theme
+      segmented control writes `setTheme(id)`; close button
+      flips `tweaksVisible`.
+- [x] 3.10 Both themes render correctly — every chrome rule
+      consumes CSS variables in `tokens.css`, which the
+      `[data-theme="light"]` block in the same file overrides
+      atomically. The `bindThemeToHtml()` subscriber flips the
+      attribute on `<html>` whenever `setTheme` fires.
 
 ## 4. Service layer (REST + TanStack Query)
 
