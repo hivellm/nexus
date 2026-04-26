@@ -13,8 +13,9 @@ mod tests;
 pub use preparse::{PlanHint, extract_plan_hints};
 
 use super::parser::{
-    BinaryOperator, Clause, CypherQuery, Expression, Literal, Pattern, PatternElement, QueryHint,
-    RelationshipDirection, RelationshipQuantifier, ReturnItem, SortDirection, UnaryOperator,
+    BinaryOperator, Clause, CypherQuery, Expression, Literal, NodePattern, Pattern, PatternElement,
+    PropertyMap, QuantifiedGroup, QueryHint, RelationshipDirection, RelationshipPattern,
+    RelationshipQuantifier, ReturnItem, SortDirection, UnaryOperator,
 };
 use super::{Aggregation, Direction, JoinType, Operator, ProjectionItem};
 use crate::cache::relationship_index::RelationshipTraversalStats;

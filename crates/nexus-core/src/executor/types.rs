@@ -274,6 +274,61 @@ pub enum Operator {
         /// Quantifier specifying path length constraints
         quantifier: parser::RelationshipQuantifier,
     },
+    /// Cypher 25 / GQL Quantified Path Pattern with a single-relationship
+    /// body. Drives BFS over a parenthesised fragment
+    /// `(node)-[rel]->(node)` between `source_var` and `target_var`,
+    /// emitting one row per accepted iteration count `k` in
+    /// `[min_length, max_length]`. Inner boundary nodes and the inner
+    /// relationship are list-promoted to `LIST<NODE>` /
+    /// `LIST<RELATIONSHIP>` in the outer scope per the GQL type
+    /// rules.
+    ///
+    /// This is the slice-2 entry point for QPP shapes that the
+    /// slice-1 lowering rejects (named or labelled inner nodes,
+    /// relationship-property filters that cannot live on the legacy
+    /// `*m..n` form). Bodies with more than one inner relationship
+    /// or with a `WHERE` clause are still planned-side rejected with
+    /// `ERR_QPP_NOT_IMPLEMENTED` until the slice-2 fanout is widened.
+    QuantifiedExpand {
+        /// Outer variable holding the source node before the QPP body.
+        source_var: String,
+        /// Outer variable holding the target node after the QPP body.
+        target_var: String,
+        /// Allowed relationship type IDs (empty = all types).
+        inner_rel_type_ids: Vec<u32>,
+        /// Direction of the inner relationship.
+        inner_rel_direction: Direction,
+        /// Optional relationship variable, list-promoted to
+        /// `LIST<RELATIONSHIP>` on emission.
+        inner_rel_var: Option<String>,
+        /// Optional property-equality filter on the inner relationship.
+        inner_rel_properties: Option<parser::PropertyMap>,
+        /// Optional inner-start-node variable, list-promoted to
+        /// `LIST<NODE>` (one node per iteration). The start node of
+        /// iteration `k` is the node we step *from* on hop `k`.
+        inner_start_node_var: Option<String>,
+        /// Label AND-filter applied to every inner-start node.
+        inner_start_node_labels: Vec<String>,
+        /// Property-equality filter applied to every inner-start node.
+        inner_start_node_properties: Option<parser::PropertyMap>,
+        /// Optional inner-end-node variable, list-promoted to
+        /// `LIST<NODE>`. The end node of iteration `k` is the node
+        /// we land on after hop `k`.
+        inner_end_node_var: Option<String>,
+        /// Label AND-filter applied to every inner-end node.
+        inner_end_node_labels: Vec<String>,
+        /// Property-equality filter applied to every inner-end node.
+        inner_end_node_properties: Option<parser::PropertyMap>,
+        /// Lower bound on iteration count (inclusive).
+        min_length: usize,
+        /// Upper bound on iteration count (inclusive). `usize::MAX` for
+        /// unbounded — the operator caps internally at
+        /// `MAX_QPP_DEPTH` to keep BFS frames tractable.
+        max_length: usize,
+        /// Optional flag carried through from the surrounding
+        /// `OPTIONAL MATCH`; preserves NULLs when no body matches.
+        optional: bool,
+    },
     /// Call a procedure
     CallProcedure {
         /// Procedure name (e.g., "gds.shortestPath.dijkstra")

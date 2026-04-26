@@ -749,29 +749,77 @@ fn test_qpp_single_rel_lowers_to_legacy_var_length() {
     }
 }
 
-/// QPP slice-1 negative path: when the body carries inner state that
-/// the slice-1 lowering cannot handle (named/labelled boundary
-/// nodes, multi-hop bodies), execution must surface a clean
-/// `ERR_QPP_NOT_IMPLEMENTED` error rather than panicking. This
-/// guarantees forward-compatibility with the upcoming
-/// `QuantifiedExpand` operator without leaving end users with a 500.
+/// QPP slice-2: named + labelled inner boundary node executes via
+/// the dedicated `QuantifiedExpand` operator. The body
+/// `(x:Person)-[:KNOWS]->()` requires list promotion, so the
+/// slice-1 lowering rejects it; the slice-2 operator carries `x`
+/// as a `LIST<NODE>` in the outer scope.
 #[test]
-fn test_qpp_unsupported_shape_returns_clean_error() {
+fn test_qpp_named_labelled_inner_node_executes() {
     let (mut executor, _ctx) = create_test_executor();
     setup_test_data(&mut executor);
 
-    // Named inner boundary node forces list-promotion semantics.
     let query = Query {
-        cypher: "MATCH (a:Person)( (x:Person)-[:KNOWS]->() ){1,3}(b:Person) RETURN a.name"
+        cypher: "MATCH (a:Person)( (x:Person)-[:KNOWS]->() ){1,3}(b:Person) RETURN a.name, x"
+            .to_string(),
+        params: HashMap::new(),
+    };
+    let result = executor
+        .execute(&query)
+        .expect("named-inner-node QPP must execute via the slice-2 operator");
+
+    assert_eq!(
+        result.columns,
+        vec!["a.name".to_string(), "x".to_string()],
+        "slice-2 must return both the outer projection and the list-promoted inner var"
+    );
+
+    // At minimum we expect Alice to satisfy the body — Alice is
+    // labelled :Person and has an outgoing :KNOWS to Bob.
+    let names: Vec<String> = result
+        .rows
+        .iter()
+        .filter_map(|r| {
+            r.values
+                .first()
+                .and_then(|v| v.as_str().map(str::to_string))
+        })
+        .collect();
+    assert!(
+        names.contains(&"Alice".to_string()),
+        "expected Alice in the result set, got names={names:?}"
+    );
+
+    // Every emitted `x` value must be a JSON array (list-promoted).
+    for row in &result.rows {
+        let x_value = row.values.get(1).expect("missing list-promoted x column");
+        assert!(
+            x_value.is_array(),
+            "list-promoted variable must be a JSON array, got {x_value:?}"
+        );
+    }
+}
+
+/// QPP slice-2 still defers multi-hop bodies. When the body has
+/// more than one relationship (`(x)-[:A]->()-[:B]->()`) the
+/// planner surfaces a clean `ERR_QPP_NOT_IMPLEMENTED` rather than
+/// silently producing wrong rows.
+#[test]
+fn test_qpp_multi_hop_body_returns_clean_error() {
+    let (mut executor, _ctx) = create_test_executor();
+    setup_test_data(&mut executor);
+
+    let query = Query {
+        cypher: "MATCH (a:Person)( ()-[:KNOWS]->()-[:KNOWS]->() ){1,3}(b:Person) RETURN a.name"
             .to_string(),
         params: HashMap::new(),
     };
     let err = executor
         .execute(&query)
-        .expect_err("unsupported QPP shape must surface an error, not silently match");
+        .expect_err("multi-hop QPP body must surface an error in slice 2");
     assert!(
         err.to_string().contains("ERR_QPP_NOT_IMPLEMENTED"),
-        "expected ERR_QPP_NOT_IMPLEMENTED, got: {err}"
+        "expected ERR_QPP_NOT_IMPLEMENTED for multi-hop body, got: {err}"
     );
 }
 

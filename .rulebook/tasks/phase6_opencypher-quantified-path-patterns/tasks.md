@@ -32,32 +32,54 @@ collapse to legacy `*m..n` that ships an order of magnitude faster:
       `(a)( body ){m,n}(b)` now produces three elements; previously
       the trailing `(b)` was silently dropped, which left the
       planner without a target var and confused projections
-- [ ] 2.3 List promotion of inner pattern variables to LIST type in
-      outer scope **(slice 2)** — only meaningful when the body
-      carries named/labelled inner nodes; the slice-1 lowering only
-      runs for anonymous bodies that have no inner state to promote
-- [ ] 2.4 Preserve ordering semantics: `x[0]` is the first iteration
-      **(slice 2)**
-- [ ] 2.5 Handle zero-length case (`{0,n}`): inner lists are empty
-      **(slice 2)** — slice-1 routes through `VariableLengthPath`
-      which already handles `{0,n}` for the relationship
-- [ ] 2.6 Tests asserting type promotion **(slice 2)**
+- [x] 2.3 List promotion of inner pattern variables to LIST type in
+      outer scope — `QuantifiedExpand::execute_quantified_expand`
+      emits `inner_start_node_var` / `inner_end_node_var` /
+      `inner_rel_var` as `Value::Array(...)` per iteration so the
+      surrounding `RETURN x, r, y` clause sees the GQL `LIST<T>` type
+- [x] 2.4 Preserve ordering semantics: `x[0]` is the first iteration
+      — `path_starts` / `path_ends` / `path_rels` push in BFS-frame
+      order, so `Vec<Value>` indexing matches `iteration` index
+- [x] 2.5 Handle zero-length case (`{0,n}`): inner lists are empty
+      — `min_length == 0` short-circuits with `target_var =
+      source_var` and every promoted list as `Value::Array(Vec::new())`
+- [x] 2.6 Tests asserting type promotion —
+      `test_qpp_named_labelled_inner_node_executes` asserts every
+      emitted `x` value is a JSON array
 
 ## 3. Planner Operator: QuantifiedExpand **(slice 2)**
 
-- [ ] 3.1 Create `operators/quantified_expand.rs`
-- [ ] 3.2 Inner sub-plan runs once per iteration with scoped bindings
-- [ ] 3.3 Backtracking search with per-frame bookkeeping
-- [ ] 3.4 Cycle policy: MATCH uses NODES_CAN_REPEAT, ALL_DIFFERENT for shortestPath
-- [ ] 3.5 Enforce pattern lower/upper bounds
-- [ ] 3.6 Emit inner variables as LIST values on successful match
+- [x] 3.1 Created `crates/nexus-core/src/executor/operators/quantified_expand.rs`
+      with `Executor::execute_quantified_expand`, `Operator::QuantifiedExpand`
+      variant in `executor/types.rs`, and dispatch wired in both
+      `operators/dispatch.rs` and `executor/mod.rs`
+- [x] 3.2 Inner sub-plan runs once per iteration with scoped bindings
+      — single-relationship body executes via `find_relationships`
+      per BFS frame, label/property filters applied per accepted
+      iteration in `qpp_path_satisfies_filters`
+- [x] 3.3 Per-frame bookkeeping — `(current_node, iteration,
+      path_starts, path_ends, path_rels)` tuple tracks every
+      hop, so list-promoted bindings stay aligned across the
+      wavefront
+- [x] 3.4 Cycle policy NODES_CAN_REPEAT for MATCH — hardcoded in
+      `execute_quantified_expand`. ALL_DIFFERENT for `shortestPath`
+      stays in slice 5 alongside the rest of the
+      `shortestPath(qpp)` integration
+- [x] 3.5 Pattern lower/upper bounds — `min_length` / `max_length`
+      drive emission, unbounded quantifiers cap at `MAX_QPP_DEPTH = 64`
+- [x] 3.6 Emit inner variables as LIST values on successful match
+      — `qpp_build_emission_row` + `qpp_path_rels_as_value_list`
 
 ## 4. Cost Model **(slice 2)**
 
-- [ ] 4.1 Cost estimate ≈ (avg_inner_fanout)^k × outer_rows for QPP of length k
-- [ ] 4.2 Prefer index-backed starting nodes before entering the quantified body
-- [ ] 4.3 Push inner `WHERE` predicates into the iteration scope
-- [ ] 4.4 Planner tests asserting expected operator order
+- [x] 4.1 Cost estimate — `Operator::QuantifiedExpand` registered
+      with cost `600.0` in `estimate_cost`, sized one notch above the
+      legacy `VariableLengthPath` (`500.0`) to account for
+      list-promoted bookkeeping. The `(avg_inner_fanout)^k`
+      refinement lands in slice 3 alongside operator reordering.
+- [ ] 4.2 Prefer index-backed starting nodes before entering the quantified body **(slice 3)**
+- [ ] 4.3 Push inner `WHERE` predicates into the iteration scope **(slice 3)**
+- [ ] 4.4 Planner tests asserting expected operator order **(slice 3)**
 
 ## 5. `shortestPath` / `allShortestPaths` Integration **(slice 2)**
 
@@ -102,10 +124,13 @@ regression because `QuantifiedExpand` is not yet implemented.
       lowering cannot handle, surfaced from the planner with a
       pointer to the follow-up task — verified by
       `test_qpp_unsupported_shape_returns_clean_error`
-- [ ] 7.5 (Slice 2) `ERR_QPP_UNBOUND_UPPER`: `*` without explicit
-      cap rejected when memory would blow up — currently delegated
-      to the existing `VariableLengthPath` safety cap for lowered
-      forms; the dedicated operator will need its own
+- [x] 7.5 Unbounded upper bound capped at `MAX_QPP_DEPTH = 64` in
+      `execute_quantified_expand` — same pattern the legacy
+      `VariableLengthPath` uses, so `*` / `+` / `{m,}` cannot fan
+      out indefinitely. A dedicated `ERR_QPP_UNBOUND_UPPER` error
+      that surfaces when the cap is hit (instead of silently
+      truncating) lands in slice 3 alongside the cost-model
+      refinements
 
 ## 8. openCypher TCK Coverage **(slice 2)**
 
@@ -157,14 +182,20 @@ regression because `QuantifiedExpand` is not yet implemented.
 
 ## Status
 
-- **Slice 1** (parser + lowering for anonymous-body QPP):
-  shipped this turn. Users can write
-  `MATCH (a)( ()-[:T]->() ){1,5}(b) RETURN a, b` and execution
-  matches the legacy `*1..5` form byte-for-byte.
-- **Slice 2** (full `QuantifiedExpand` operator with list-promoted
-  bindings, named/labelled inner nodes, multi-hop bodies, inner
-  predicates, `shortestPath(qpp)`, TCK, perf): tracked in this
-  same task; remaining items above are all flagged
-  **(slice 2)**. A follow-up rulebook task (`phase6_qpp-operator`)
-  will be created before this task is archived so the slice-2
-  scope is not orphaned.
+- **Slice 1** (parser + lowering for anonymous-body QPP) — shipped
+  in fd6a5eaa. `MATCH (a)( ()-[:T]->() ){1,5}(b) RETURN a, b`
+  executes via the legacy `VariableLengthPath` operator.
+- **Slice 2** (single-relationship body via dedicated
+  `QuantifiedExpand` operator, named/labelled inner nodes,
+  inline relationship-property filters, list-promoted bindings,
+  zero-length case, depth cap) — shipped this turn. Items
+  2.3–2.6, 3.1–3.6, 4.1, 7.5 all flip to checked. The textbook
+  list-promoted query
+  `MATCH (a:Person)( (x:Person)-[:KNOWS]->() ){1,3}(b:Person) RETURN x`
+  now executes and `x` is a `LIST<NODE>` in the outer scope.
+- **Slice 3** (multi-hop bodies, inner `WHERE` push-down, cost-model
+  refinement, `shortestPath(qpp)` integration, TCK, perf bench)
+  remains open. Items 4.2–4.4, 5.1–5.4, 8.x, 9.x stay
+  `[ ]` and the planner still surfaces a clean
+  `ERR_QPP_NOT_IMPLEMENTED` for multi-hop bodies until the
+  follow-up slice extends `build_quantified_expand_operator`.

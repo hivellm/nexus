@@ -2452,13 +2452,24 @@ impl<'a> QueryPlanner<'a> {
                             });
                         }
                     }
-                    PatternElement::QuantifiedGroup(_) => {
-                        return Err(Error::CypherExecution(
-                            "ERR_QPP_NOT_IMPLEMENTED: quantified path patterns \
-                             are parsed but not yet executable — the planner \
-                             operator lands in phase6_fulltext-qpp-operator"
-                                .to_string(),
-                        ));
+                    PatternElement::QuantifiedGroup(group) => {
+                        // Slice-2 entry point. The slice-1 lowering
+                        // already handled groups with anonymous
+                        // boundary nodes; whatever lands here has
+                        // either a named/labelled boundary, an
+                        // inner property filter the lowering cannot
+                        // attach, or a multi-hop body the slice-2
+                        // operator cannot drive yet.
+                        let qpp = build_quantified_expand_operator(
+                            group,
+                            &mut prev_node_var,
+                            &pattern.elements,
+                            idx,
+                            is_optional,
+                            &mut tmp_var_counter,
+                            &self.catalog,
+                        )?;
+                        operators.push(qpp);
                     }
                 }
             }
@@ -2922,6 +2933,12 @@ impl<'a> QueryPlanner<'a> {
                 Operator::VariableLengthPath { .. } => {
                     // Variable-length paths are expensive (BFS traversal)
                     total_cost += 500.0;
+                }
+                Operator::QuantifiedExpand { .. } => {
+                    // Quantified path patterns drive BFS plus list-promoted
+                    // bookkeeping per frame — a touch more than the legacy
+                    // var-length operator.
+                    total_cost += 600.0;
                 }
                 Operator::CallProcedure { .. } => {
                     // Procedure calls are moderately expensive (depends on procedure)
@@ -3394,3 +3411,166 @@ impl<'a> QueryPlanner<'a> {
         Ok(result)
     }
 }
+
+/// Build a `QuantifiedExpand` operator from a `QuantifiedGroup`
+/// that survived the slice-1 lowering. Returns
+/// `ERR_QPP_NOT_IMPLEMENTED` for shapes the slice-2 operator
+/// itself cannot handle yet (multi-hop body, no relationship
+/// inside the body, …) so the user gets a clean recoverable
+/// error instead of silently wrong rows.
+///
+/// `prev_node_var` follows the same convention as the surrounding
+/// `add_relationship_operators` loop: the planner threads it across
+/// pattern elements so each operator knows which outer variable
+/// holds its source node. The function updates it in place to point
+/// at the QPP's target binding before returning, so a follow-up
+/// element in the pattern keeps chaining correctly.
+fn build_quantified_expand_operator(
+    group: &QuantifiedGroup,
+    prev_node_var: &mut Option<String>,
+    pattern_elements: &[PatternElement],
+    idx: usize,
+    is_optional: bool,
+    tmp_var_counter: &mut usize,
+    catalog: &Catalog,
+) -> Result<Operator> {
+    // Body shape: exactly Node, Relationship, Node. Slice-2 widens
+    // to multi-hop in a follow-up; until then anything else surfaces
+    // an explicit error pointing at the task.
+    if group.inner.len() != 3 {
+        return Err(Error::CypherExecution(
+            "ERR_QPP_NOT_IMPLEMENTED: multi-hop QPP bodies are not \
+             yet executable — slice 2 of \
+             phase6_opencypher-quantified-path-patterns lands a \
+             single-relationship operator first; a follow-up slice \
+             extends it to multi-hop bodies"
+                .to_string(),
+        ));
+    }
+    let (start_node, rel, end_node) = match (&group.inner[0], &group.inner[1], &group.inner[2]) {
+        (PatternElement::Node(n0), PatternElement::Relationship(r), PatternElement::Node(n2)) => {
+            (n0, r, n2)
+        }
+        _ => {
+            return Err(Error::CypherExecution(
+                "ERR_QPP_NOT_IMPLEMENTED: QPP body must be Node, \
+                 Relationship, Node — slice 2 does not yet handle \
+                 alternative inner shapes"
+                    .to_string(),
+            ));
+        }
+    };
+
+    if rel.quantifier.is_some() {
+        return Err(Error::CypherExecution(
+            "ERR_QPP_NOT_IMPLEMENTED: stacking a relationship \
+             quantifier inside a QPP body is not yet supported"
+                .to_string(),
+        ));
+    }
+
+    let direction = match rel.direction {
+        RelationshipDirection::Outgoing => Direction::Outgoing,
+        RelationshipDirection::Incoming => Direction::Incoming,
+        RelationshipDirection::Both => Direction::Both,
+    };
+
+    // Resolve the source variable from the pattern context. The
+    // surrounding loop fills `prev_node_var` from the previous
+    // element (a Node), so it is always populated when the QPP
+    // arm fires for a well-formed pattern.
+    let source_var = prev_node_var.clone().ok_or_else(|| {
+        Error::CypherExecution(
+            "ERR_QPP_INTERNAL: quantified path pattern has no \
+                 outer source node — every QPP must follow a node \
+                 pattern"
+                .to_string(),
+        )
+    })?;
+
+    // Resolve the target variable from the next element in the
+    // outer pattern. If the pattern ends with the QPP (no trailing
+    // boundary node), generate a temporary variable so the operator
+    // has somewhere to bind the last reached node.
+    let target_var = if idx + 1 < pattern_elements.len() {
+        if let PatternElement::Node(n) = &pattern_elements[idx + 1] {
+            n.variable.clone().unwrap_or_else(|| {
+                let v = format!("__qpp_target_{}", *tmp_var_counter);
+                *tmp_var_counter += 1;
+                v
+            })
+        } else {
+            let v = format!("__qpp_target_{}", *tmp_var_counter);
+            *tmp_var_counter += 1;
+            v
+        }
+    } else {
+        let v = format!("__qpp_target_{}", *tmp_var_counter);
+        *tmp_var_counter += 1;
+        v
+    };
+
+    // Resolve relationship type ids via the catalog. Match the
+    // legacy expand path: try `get_type_id` first, fall back to
+    // `get_or_create_type` so types referenced before any data
+    // creates them still resolve.
+    let inner_rel_type_ids: Vec<u32> = rel
+        .types
+        .iter()
+        .filter_map(|name| {
+            catalog
+                .get_type_id(name)
+                .ok()
+                .flatten()
+                .or_else(|| catalog.get_or_create_type(name).ok())
+        })
+        .collect();
+
+    // Push the new binding so the next iteration of the surrounding
+    // loop chains onto the QPP's target.
+    *prev_node_var = Some(target_var.clone());
+
+    let (min_length, max_length) = quantifier_to_bounds(&group.quantifier);
+
+    Ok(Operator::QuantifiedExpand {
+        source_var,
+        target_var,
+        inner_rel_type_ids,
+        inner_rel_direction: direction,
+        inner_rel_var: rel.variable.clone(),
+        inner_rel_properties: rel.properties.clone(),
+        inner_start_node_var: node_var_or_none(start_node),
+        inner_start_node_labels: start_node.labels.clone(),
+        inner_start_node_properties: start_node.properties.clone(),
+        inner_end_node_var: node_var_or_none(end_node),
+        inner_end_node_labels: end_node.labels.clone(),
+        inner_end_node_properties: end_node.properties.clone(),
+        min_length,
+        max_length,
+        optional: is_optional,
+    })
+}
+
+/// Convert a parser-side `RelationshipQuantifier` into the
+/// `(min, max)` pair the executor consumes. Matches
+/// `execute_variable_length_path` desugaring so identical
+/// quantifiers behave identically across the two operators.
+fn quantifier_to_bounds(q: &RelationshipQuantifier) -> (usize, usize) {
+    match q {
+        RelationshipQuantifier::ZeroOrMore => (0, usize::MAX),
+        RelationshipQuantifier::OneOrMore => (1, usize::MAX),
+        RelationshipQuantifier::ZeroOrOne => (0, 1),
+        RelationshipQuantifier::Exact(n) => (*n, *n),
+        RelationshipQuantifier::Range(min, max) => (*min, *max),
+    }
+}
+
+/// Pull the user-facing variable off a node pattern, returning
+/// `None` when the node is anonymous. Inner-boundary anonymous
+/// nodes don't list-promote anything; named nodes do.
+fn node_var_or_none(node: &NodePattern) -> Option<String> {
+    node.variable.clone()
+}
+
+#[allow(dead_code)]
+fn _qpp_ensure_propertymap_unused(_: &PropertyMap, _: &RelationshipPattern) {}

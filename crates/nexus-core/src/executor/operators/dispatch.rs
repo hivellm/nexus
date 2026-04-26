@@ -213,6 +213,42 @@ impl Executor {
                     quantifier,
                 )?;
             }
+            Operator::QuantifiedExpand {
+                source_var,
+                target_var,
+                inner_rel_type_ids,
+                inner_rel_direction,
+                inner_rel_var,
+                inner_rel_properties,
+                inner_start_node_var,
+                inner_start_node_labels,
+                inner_start_node_properties,
+                inner_end_node_var,
+                inner_end_node_labels,
+                inner_end_node_properties,
+                min_length,
+                max_length,
+                optional,
+            } => {
+                self.execute_quantified_expand(
+                    context,
+                    source_var,
+                    target_var,
+                    inner_rel_type_ids,
+                    *inner_rel_direction,
+                    inner_rel_var.as_deref(),
+                    inner_rel_properties.as_ref(),
+                    inner_start_node_var.as_deref(),
+                    inner_start_node_labels,
+                    inner_start_node_properties.as_ref(),
+                    inner_end_node_var.as_deref(),
+                    inner_end_node_labels,
+                    inner_end_node_properties.as_ref(),
+                    *min_length,
+                    *max_length,
+                    *optional,
+                )?;
+            }
             Operator::CallProcedure {
                 procedure_name,
                 arguments,

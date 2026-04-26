@@ -14,6 +14,7 @@ pub mod join;
 pub mod path;
 pub mod procedures;
 pub mod project;
+pub mod quantified_expand;
 pub mod scan;
 pub mod union;
 pub mod unwind;
