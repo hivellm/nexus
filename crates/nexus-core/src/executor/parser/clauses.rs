@@ -824,7 +824,35 @@ impl CypherParser {
             if self.peek_char() == Some('(') {
                 match self.try_parse_qpp_group()? {
                     Some(group) => {
-                        elements.push(PatternElement::QuantifiedGroup(group));
+                        // Slice-1 QPP normalisation
+                        // (`phase6_opencypher-quantified-path-patterns`):
+                        // when the group is the textbook
+                        // `( ()-[:T]->() ){m,n}` shape, push it as a
+                        // plain quantified Relationship so every
+                        // downstream consumer (planner, projection,
+                        // EXISTS subqueries, …) treats it exactly
+                        // like a legacy `*m..n` form. Groups that
+                        // carry inner state survive as
+                        // QuantifiedGroup and the planner surfaces
+                        // a clean ERR_QPP_NOT_IMPLEMENTED for them.
+                        if let Some(rel) = group.try_lower_to_var_length_rel() {
+                            elements.push(PatternElement::Relationship(rel));
+                        } else {
+                            elements.push(PatternElement::QuantifiedGroup(group));
+                        }
+                        // The textbook QPP shape `(a)( body ){m,n}(b)`
+                        // is followed by a trailing boundary node.
+                        // Without parsing it here the outer pattern
+                        // ends at the group and `(b)` gets dropped,
+                        // which leaves the planner without a target
+                        // variable and silently breaks projections
+                        // (`RETURN b` returns whatever happened to
+                        // be in the last expand slot).
+                        self.skip_whitespace();
+                        if self.peek_char() == Some('(') {
+                            let node = self.parse_node_pattern()?;
+                            elements.push(PatternElement::Node(node));
+                        }
                         continue;
                     }
                     None => {

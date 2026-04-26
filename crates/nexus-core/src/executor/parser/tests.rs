@@ -2145,6 +2145,123 @@ fn qpp_with_legacy_varlen_coexists() {
     assert!(has_varlen, "legacy *1..3 quantifier was dropped");
 }
 
+// ---------------------------------------------------------------
+// QPP slice-1 lowering — phase6_opencypher-quantified-path-patterns
+// ---------------------------------------------------------------
+
+#[test]
+fn qpp_lowering_anonymous_single_rel_collapses_to_var_length() {
+    // `( ()-[:R]->() ){1,5}` is the textbook QPP shape with a direct
+    // legacy equivalent. The parser lowers it eagerly so every
+    // downstream consumer (planner, projection, EXISTS subqueries,
+    // …) sees a plain quantified Relationship in `pattern.elements`,
+    // identical to what a hand-written `*1..5` would produce.
+    let mut parser = CypherParser::new("MATCH (a)( ()-[:R]->() ){1,5}(b) RETURN a, b".to_string());
+    let q = parser.parse().unwrap();
+    let Clause::Match(mc) = &q.clauses[0] else {
+        panic!("expected MATCH");
+    };
+    assert!(
+        mc.pattern
+            .elements
+            .iter()
+            .all(|e| !matches!(e, PatternElement::QuantifiedGroup(_))),
+        "anonymous single-rel QPP must lower at parse time: {:?}",
+        mc.pattern.elements
+    );
+    let rel = mc
+        .pattern
+        .elements
+        .iter()
+        .find_map(|e| match e {
+            PatternElement::Relationship(r) => Some(r),
+            _ => None,
+        })
+        .expect("lowered pattern must contain a relationship");
+    assert_eq!(
+        rel.quantifier,
+        Some(RelationshipQuantifier::Range(1, 5)),
+        "QPP quantifier must transfer onto the relationship"
+    );
+    assert_eq!(rel.types, vec!["R".to_string()]);
+}
+
+#[test]
+fn qpp_lowering_named_inner_node_stays_as_group() {
+    // Naming the inner boundary node forces list-promotion semantics,
+    // which the slice-1 lowering does not handle. The group must
+    // survive intact so the planner surfaces ERR_QPP_NOT_IMPLEMENTED
+    // until QuantifiedExpand lands.
+    let mut parser = CypherParser::new("MATCH (a)( (x)-[:R]->() ){1,5}(b) RETURN a".to_string());
+    let q = parser.parse().unwrap();
+    let Clause::Match(mc) = &q.clauses[0] else {
+        panic!("expected MATCH");
+    };
+    assert!(
+        mc.pattern
+            .elements
+            .iter()
+            .any(|e| matches!(e, PatternElement::QuantifiedGroup(_))),
+        "named inner node must keep the group intact"
+    );
+}
+
+#[test]
+fn qpp_lowering_labelled_inner_node_stays_as_group() {
+    let mut parser =
+        CypherParser::new("MATCH (a)( (:Person)-[:R]->() ){1,5}(b) RETURN a".to_string());
+    let q = parser.parse().unwrap();
+    let Clause::Match(mc) = &q.clauses[0] else {
+        panic!("expected MATCH");
+    };
+    assert!(
+        mc.pattern
+            .elements
+            .iter()
+            .any(|e| matches!(e, PatternElement::QuantifiedGroup(_))),
+        "labelled inner node must keep the group intact"
+    );
+}
+
+#[test]
+fn qpp_lowering_star_quantifier_collapses() {
+    let mut parser = CypherParser::new("MATCH (a)( ()-[:R]->() )*(b) RETURN a, b".to_string());
+    let q = parser.parse().unwrap();
+    let Clause::Match(mc) = &q.clauses[0] else {
+        panic!("expected MATCH");
+    };
+    let rel = mc
+        .pattern
+        .elements
+        .iter()
+        .find_map(|e| match e {
+            PatternElement::Relationship(r) => Some(r),
+            _ => None,
+        })
+        .expect("lowered pattern must contain a relationship");
+    assert_eq!(rel.quantifier, Some(RelationshipQuantifier::ZeroOrMore));
+}
+
+#[test]
+fn qpp_lowering_preserves_relationship_variable_and_direction() {
+    let mut parser = CypherParser::new("MATCH (a)( ()-[r:R]->() ){2,4}(b) RETURN a, r".to_string());
+    let q = parser.parse().unwrap();
+    let Clause::Match(mc) = &q.clauses[0] else {
+        panic!("expected MATCH");
+    };
+    let rel = mc
+        .pattern
+        .elements
+        .iter()
+        .find_map(|e| match e {
+            PatternElement::Relationship(r) => Some(r),
+            _ => None,
+        })
+        .expect("lowered pattern must contain a relationship");
+    assert_eq!(rel.variable.as_deref(), Some("r"));
+    assert_eq!(rel.direction, RelationshipDirection::Outgoing);
+}
+
 #[test]
 fn qpp_bare_parens_without_quantifier_is_not_qpp() {
     // `(a)(b)` without a trailing quantifier must NOT produce a

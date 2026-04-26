@@ -675,6 +675,106 @@ fn test_variable_length_path() {
     assert!(result.is_ok() || result.is_err());
 }
 
+/// QPP slice-1 (`phase6_opencypher-quantified-path-patterns`):
+/// `( ()-[:T]->() ){m,n}` must execute and produce the same result
+/// set as the legacy `*m..n` form. The lowering pass in
+/// `Pattern::lowered_for_planner` collapses the QuantifiedGroup to
+/// a Relationship + quantifier so the existing
+/// `VariableLengthPath` operator handles it — no new executor
+/// required for this shape.
+#[test]
+fn test_qpp_single_rel_lowers_to_legacy_var_length() {
+    let (mut executor, _ctx) = create_test_executor();
+    setup_test_data(&mut executor);
+
+    let create_chain = Query {
+        cypher: "CREATE (c:Person {name: 'Charlie'}), \
+                 (a:Person {name: 'Alice'})-[:KNOWS]->(c)"
+            .to_string(),
+        params: HashMap::new(),
+    };
+    executor.execute(&create_chain).unwrap();
+
+    let legacy = Query {
+        cypher: "MATCH (a:Person)-[:KNOWS*1..2]->(b:Person) \
+                 RETURN a.name, b.name ORDER BY a.name, b.name"
+            .to_string(),
+        params: HashMap::new(),
+    };
+    let qpp = Query {
+        cypher: "MATCH (a:Person)( ()-[:KNOWS]->() ){1,2}(b:Person) \
+                 RETURN a.name, b.name ORDER BY a.name, b.name"
+            .to_string(),
+        params: HashMap::new(),
+    };
+
+    let legacy_result = executor.execute(&legacy);
+    let qpp_result = executor.execute(&qpp);
+
+    // Both must succeed *or* both must fail with the same error code.
+    // The contract is parity, not "both pass" — the legacy operator
+    // already has gaps (`assert!(result.is_ok() || result.is_err())`
+    // in the test above documents that). What slice-1 guarantees is
+    // that the QPP form takes the same code path as the legacy form,
+    // so whatever the legacy form does the QPP form does too.
+    match (legacy_result, qpp_result) {
+        (Ok(legacy_rows), Ok(qpp_rows)) => {
+            // `Row` does not impl PartialEq, so serialise to JSON for
+            // a structural compare instead. Equality on the JSON
+            // payloads is the user-visible contract anyway — anything
+            // serialising identically is observably the same row set.
+            let legacy_json: Vec<&Vec<serde_json::Value>> =
+                legacy_rows.rows.iter().map(|r| &r.values).collect();
+            let qpp_json: Vec<&Vec<serde_json::Value>> =
+                qpp_rows.rows.iter().map(|r| &r.values).collect();
+            assert_eq!(
+                legacy_json, qpp_json,
+                "QPP and legacy *m..n must produce identical row sets"
+            );
+        }
+        (Err(legacy_err), Err(qpp_err)) => {
+            // Both fail the same way — acceptable, the lowering still
+            // routed QPP through the legacy path.
+            assert_eq!(
+                legacy_err.to_string(),
+                qpp_err.to_string(),
+                "QPP and legacy *m..n must fail with the same error"
+            );
+        }
+        (legacy_outcome, qpp_outcome) => panic!(
+            "QPP and legacy *m..n diverged — legacy: {:?}, QPP: {:?}",
+            legacy_outcome.map(|r| r.rows.len()),
+            qpp_outcome.map(|r| r.rows.len()),
+        ),
+    }
+}
+
+/// QPP slice-1 negative path: when the body carries inner state that
+/// the slice-1 lowering cannot handle (named/labelled boundary
+/// nodes, multi-hop bodies), execution must surface a clean
+/// `ERR_QPP_NOT_IMPLEMENTED` error rather than panicking. This
+/// guarantees forward-compatibility with the upcoming
+/// `QuantifiedExpand` operator without leaving end users with a 500.
+#[test]
+fn test_qpp_unsupported_shape_returns_clean_error() {
+    let (mut executor, _ctx) = create_test_executor();
+    setup_test_data(&mut executor);
+
+    // Named inner boundary node forces list-promotion semantics.
+    let query = Query {
+        cypher: "MATCH (a:Person)( (x:Person)-[:KNOWS]->() ){1,3}(b:Person) RETURN a.name"
+            .to_string(),
+        params: HashMap::new(),
+    };
+    let err = executor
+        .execute(&query)
+        .expect_err("unsupported QPP shape must surface an error, not silently match");
+    assert!(
+        err.to_string().contains("ERR_QPP_NOT_IMPLEMENTED"),
+        "expected ERR_QPP_NOT_IMPLEMENTED, got: {err}"
+    );
+}
+
 // ============================================================================
 // Index Scan Tests
 // ============================================================================

@@ -274,6 +274,42 @@ pub struct Pattern {
     pub path_variable: Option<String>,
 }
 
+impl Pattern {
+    /// Walk `elements` and replace every `QuantifiedGroup` that
+    /// `QuantifiedGroup::try_lower_to_var_length_rel` can lower with
+    /// the resulting `RelationshipPattern`, leaving the rest in place.
+    ///
+    /// This is the slice-1 fast path for QPP execution: any group of
+    /// the shape `( ()-[:T]->() ){m,n}` collapses to the legacy
+    /// `*m..n` form and rides the existing `VariableLengthPath`
+    /// operator, no new operator required. Groups that carry inner
+    /// state (named/labelled boundary nodes, multi-hop bodies, etc.)
+    /// stay as `QuantifiedGroup` and the planner surfaces a clean
+    /// `ERR_QPP_NOT_IMPLEMENTED` for them until the dedicated
+    /// `QuantifiedExpand` operator lands.
+    ///
+    /// Returns a new pattern; the input is not mutated.
+    #[must_use]
+    pub fn lowered_for_planner(&self) -> Self {
+        let elements = self
+            .elements
+            .iter()
+            .map(|el| match el {
+                PatternElement::QuantifiedGroup(group) => match group.try_lower_to_var_length_rel()
+                {
+                    Some(rel) => PatternElement::Relationship(rel),
+                    None => el.clone(),
+                },
+                _ => el.clone(),
+            })
+            .collect();
+        Self {
+            elements,
+            path_variable: self.path_variable.clone(),
+        }
+    }
+}
+
 /// Pattern element (node, relationship, or quantified group)
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum PatternElement {
@@ -300,6 +336,71 @@ pub struct QuantifiedGroup {
     pub inner: Vec<PatternElement>,
     /// Quantifier applied to the whole group.
     pub quantifier: RelationshipQuantifier,
+}
+
+impl QuantifiedGroup {
+    /// Try to lower this QPP group to a single quantified relationship
+    /// pattern, equivalent to the legacy Cypher 9 `*m..n` form.
+    ///
+    /// This is the "fast path" for the common shape
+    /// `( ()-[:T]->() ){m,n}` (anonymous boundary nodes, single
+    /// relationship, no inner predicates). When all of these hold:
+    ///
+    /// - the body is exactly `Node, Relationship, Node`
+    /// - the boundary nodes carry no variable, labels, or properties
+    /// - the inner relationship itself is not already quantified
+    ///
+    /// the QPP collapses to `(outer_a)-[r:T*m..n]->(outer_b)` and
+    /// can be planned by the existing variable-length expand path
+    /// without needing the dedicated `QuantifiedExpand` operator.
+    ///
+    /// Anything else (named/labelled inner nodes, multi-hop bodies,
+    /// inner property maps, intermediate filters that depend on
+    /// list-promoted bindings) returns `None` and is left for the
+    /// `QuantifiedExpand` operator coming in a follow-up slice of
+    /// `phase6_opencypher-quantified-path-patterns`.
+    pub fn try_lower_to_var_length_rel(&self) -> Option<RelationshipPattern> {
+        // Must be exactly Node, Relationship, Node.
+        if self.inner.len() != 3 {
+            return None;
+        }
+        let (start, rel, end) = match (&self.inner[0], &self.inner[1], &self.inner[2]) {
+            (
+                PatternElement::Node(start),
+                PatternElement::Relationship(rel),
+                PatternElement::Node(end),
+            ) => (start, rel, end),
+            _ => return None,
+        };
+
+        // Boundary nodes inside the QPP must be pure glue — they exist
+        // only to anchor the relationship inside the parenthesised
+        // body. Anything carrying user state (variable, labels,
+        // properties) participates in list promotion and forces the
+        // full operator.
+        let is_glue = |np: &NodePattern| {
+            np.variable.is_none() && np.labels.is_empty() && np.properties.is_none()
+        };
+        if !is_glue(start) || !is_glue(end) {
+            return None;
+        }
+
+        // The inner relationship itself must not be quantified — we
+        // are about to fuse the QPP quantifier in, and stacking two
+        // quantifiers (`( ()-[:T*1..3]->() ){1,5}`) is not the
+        // single-rel shorthand this lowering targets.
+        if rel.quantifier.is_some() {
+            return None;
+        }
+
+        Some(RelationshipPattern {
+            variable: rel.variable.clone(),
+            types: rel.types.clone(),
+            direction: rel.direction,
+            properties: rel.properties.clone(),
+            quantifier: Some(self.quantifier.clone()),
+        })
+    }
 }
 
 /// Node pattern

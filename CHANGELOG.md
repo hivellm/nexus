@@ -5,6 +5,91 @@ All notable changes to Nexus will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.15.0] — 2026-04-26
+
+Closes [hivellm/nexus#2][issue-2]. Server-side bug fix + JSON wire
+shape rename for the schema endpoints, with every first-party SDK
+realigned to the new shape and version-bumped to match.
+
+### Fixed
+
+- **`GET /data/nodes?id=0` no longer returns `node: None` for nodes
+  that exist.** `crates/nexus-server/src/api/data.rs::validate_node_id`
+  was rejecting `node_id == 0` before the engine was even consulted,
+  but `0` is a legitimate catalog id (the engine assigns it to the
+  first node ever created in a database). The validator is now a
+  no-op stub kept for forward-compat with future API-boundary
+  invariants; existence is the engine's job. The same fix unblocks
+  `update_node(0, ...)` and `delete_node(0, ...)` which were
+  silently short-circuited the same way.
+- **`GET /data/nodes` distinguishes "missing `id` query parameter"
+  from "id=0".** The previous `params.get("id").unwrap_or(0)` made
+  a missing parameter alias as id `0`, which used to fail validation
+  by accident; with the validator gone it would have succeeded
+  silently against the wrong row. The handler now returns explicit
+  errors for both missing and malformed `id` values.
+- **`/health` self-reported version is now byte-equal to
+  `env!("CARGO_PKG_VERSION")` in CI.** A new
+  `api::health::tests::test_health_endpoint_reports_workspace_version`
+  pins the contract so a future release whose docker image is built
+  before the workspace bump fails the test gate instead of leaking
+  the wrong number to users (the issue reporter's `version=1.13.0`
+  on a `:v1.14.0`-tagged image was caused by exactly that).
+
+### Changed (BREAKING)
+
+- **Wire shape for `GET /schema/labels` and `GET /schema/rel_types`.**
+  Each entry was a JSON tuple `["Person", 0]` and is now a JSON
+  object `{"name": "Person", "id": 0}`. The second member is the
+  catalog id allocated by the engine, not a count — naming the
+  fields removes the ambiguity that had the issue reporter and the
+  Rust SDK rustdoc disagreeing on what `u32` meant. The new shape
+  also leaves room for additive fields (e.g. `count`) without
+  another rename.
+
+  Server types: `LabelInfo` and `RelTypeInfo` in
+  `crates/nexus-server/src/api/schema.rs`. Every first-party SDK
+  follows the rename — see the per-language CHANGELOGs for the
+  matching consumer-side migration.
+
+### SDK realignment
+
+- **Rust** (`sdks/rust/` → crates.io `nexus-graph-sdk` 1.15.0):
+  `ListLabelsResponse.labels` and `ListRelTypesResponse.types`
+  retyped to `Vec<LabelInfo>` / `Vec<RelTypeInfo>`. README +
+  example updated.
+- **Python** (`sdks/python/` → PyPI `hivehub-nexus-sdk` 1.15.0):
+  Pydantic `LabelInfo` / `RelTypeInfo` re-exported from package
+  root. README + CHANGELOG updated.
+- **C#** (`sdks/csharp/` → NuGet `Nexus.SDK` 1.15.0): `LabelInfo`
+  / `RelTypeInfo` POCOs, return types of `ListLabelsAsync` /
+  `ListRelationshipTypesAsync` retyped on both `NexusClient` and
+  `RetryableNexusClient`. **Latent route fix**: the SDK was hitting
+  the non-existent `/schema/relationship-types`; corrected to
+  `/schema/rel_types`.
+- **Go** (`sdks/go/` → tag `v1.15.0`): typed structs, route fix,
+  test fixtures rebuilt to emit the new wire shape. Same route fix
+  applied in `RetryableClient`.
+- **PHP** (`sdks/php/` → tag `v1.15.0`): phpdoc retyped to
+  `array<int, array{name: string, id: int}>`, route fix in both
+  `NexusClient` and the `REL_TYPES` HTTP fallback in
+  `Transport\HttpTransport`.
+
+The TypeScript SDK has no `listLabels` / `listRelTypes` API surface,
+so it is unaffected and stays at 1.14.0 on npm.
+
+### Other
+
+- Workspace version bumped from 1.14.0 to 1.15.0 (every crate
+  inherits via `version.workspace = true`), so a fresh
+  `cargo build --release -p nexus-server` produces a binary that
+  self-reports `1.15.0` on `/health`.
+- Docker image rebuilt and pushed as `hivehub/nexus:1.15.0` and
+  `hivehub/nexus:latest` (multi-arch `linux/amd64` + `linux/arm64`,
+  with SBOM + SLSA provenance attestations).
+
+[issue-2]: https://github.com/hivellm/nexus/issues/2
+
 ## [1.14.0] — 2026-04-22
 
 ### Added — openCypher geospatial predicates + `spatial.*` procedures (slice A)
