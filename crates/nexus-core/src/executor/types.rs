@@ -306,6 +306,13 @@ pub enum Operator {
         /// (for `i == 0` it is the start of every iteration; for
         /// `i == hops.len()` it is the end).
         inner_nodes: Vec<QppNodeSpec>,
+        /// Optional `WHERE` predicate written inside the body
+        /// parentheses. Evaluated against the iteration's snapshot
+        /// (boundary-node vars + relationship var bound to the
+        /// values reached on that hop, *not* their list-promoted
+        /// outer-scope form). An iteration that fails the
+        /// predicate is dropped before emission.
+        inner_where: Option<parser::Expression>,
         /// Lower bound on iteration count (inclusive).
         min_length: usize,
         /// Upper bound on iteration count (inclusive). `usize::MAX`

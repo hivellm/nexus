@@ -434,6 +434,75 @@ fn tck_shortest_path_over_anonymous_body() {
 }
 
 // ---------------------------------------------------------------
+// inner-where/* — slice 3b §4.3 — `WHERE` clauses inside the QPP
+// body filter per iteration before list promotion.
+// ---------------------------------------------------------------
+
+#[test]
+fn tck_inner_where_filters_iterations_by_node_property() {
+    let (mut executor, _ctx) = create_test_executor();
+    setup_chain_4(&mut executor);
+
+    // Inner `WHERE x.age > 27` filters every iteration whose
+    // start node fails the predicate. Alice (30) → Bob (25, drop)
+    // → Charlie (35) — only Alice and Charlie's iterations
+    // survive, so Alice→Bob→Charlie shouldn't fully reach
+    // because Bob's iteration is dropped, but Alice itself
+    // satisfies (k=0 has no start node). Expected: a 1-hop
+    // result from Alice to a `:Person` whose `x.age > 27`.
+    let result = cy(
+        &mut executor,
+        "MATCH (a:Person {name: 'Alice'})\
+         ( (x:Person)-[:KNOWS]->(y:Person) WHERE x.age > 27 ){1,3}\
+         (b:Person) \
+         RETURN b.name ORDER BY b.name",
+    );
+    let names: Vec<String> = result
+        .rows
+        .iter()
+        .filter_map(|r| {
+            r.values
+                .first()
+                .and_then(|v| v.as_str().map(str::to_string))
+        })
+        .collect();
+    // Bob (the 1-hop step from Alice, x=Alice age 30 > 27) — keeps.
+    // Charlie (2-hop: x=Alice age 30 > 27, then x=Bob age 25 ✗) — drop.
+    assert!(names.contains(&"Bob".to_string()), "names={names:?}");
+    assert!(!names.contains(&"Charlie".to_string()), "names={names:?}");
+}
+
+#[test]
+fn tck_inner_where_referencing_relationship_variable() {
+    let (mut executor, _ctx) = create_test_executor();
+    setup_chain_4(&mut executor);
+
+    // The inline `WHERE r.since >= 2021` skips the Alice→Bob
+    // edge (since=2020) so the only reachable iteration from
+    // Alice runs zero times — no result. From Bob (start node)
+    // Bob→Charlie (since=2021) and Charlie→Dave (since=2022)
+    // both pass, so 2 hops from Bob reach Dave.
+    let result = cy(
+        &mut executor,
+        "MATCH (a:Person {name: 'Bob'})\
+         ( (x:Person)-[r:KNOWS]->(y:Person) WHERE r.since >= 2021 ){1,3}\
+         (b:Person) \
+         RETURN b.name ORDER BY b.name",
+    );
+    let names: Vec<String> = result
+        .rows
+        .iter()
+        .filter_map(|r| {
+            r.values
+                .first()
+                .and_then(|v| v.as_str().map(str::to_string))
+        })
+        .collect();
+    assert!(names.contains(&"Charlie".to_string()), "names={names:?}");
+    assert!(names.contains(&"Dave".to_string()), "names={names:?}");
+}
+
+// ---------------------------------------------------------------
 // error-codes/* — every taxonomy error must surface with its
 // stable code prefix.
 // ---------------------------------------------------------------

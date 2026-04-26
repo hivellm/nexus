@@ -948,6 +948,25 @@ impl CypherParser {
         }
 
         self.skip_whitespace();
+
+        // Optional inner `WHERE` clause inside the QPP body
+        // (Cypher 25 §1.4): `( body WHERE predicate ){m,n}`. The
+        // predicate gets evaluated against the per-iteration
+        // bindings, so an iteration that fails it is dropped
+        // before the row is emitted. We only consume `WHERE` if
+        // it sits right before the closing `)` — anything else
+        // means the body itself never closed and we should
+        // backtrack so the outer pattern terminates normally.
+        let where_clause = if self.peek_keyword("WHERE") {
+            self.parse_keyword()?;
+            self.skip_whitespace();
+            let expr = self.parse_expression()?;
+            self.skip_whitespace();
+            Some(expr)
+        } else {
+            None
+        };
+
         if self.peek_char() != Some(')') {
             self.pos = restore_pos;
             self.line = restore_line;
@@ -982,6 +1001,7 @@ impl CypherParser {
         Ok(Some(QuantifiedGroup {
             inner: inner.elements,
             quantifier,
+            where_clause,
         }))
     }
 

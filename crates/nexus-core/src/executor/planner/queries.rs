@@ -3569,6 +3569,7 @@ fn build_quantified_expand_operator(
         target_var,
         hops,
         inner_nodes,
+        inner_where: group.where_clause.clone(),
         min_length,
         max_length,
         optional: is_optional,

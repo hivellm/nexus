@@ -58,6 +58,7 @@ impl Executor {
         target_var: &str,
         hops: &[QppHopSpec],
         inner_nodes: &[QppNodeSpec],
+        inner_where: Option<&parser::Expression>,
         min_length: usize,
         max_length: usize,
         optional: bool,
@@ -213,6 +214,30 @@ impl Executor {
                 }
 
                 for (end_node, hop_nodes_intermediate, hop_rels) in walks {
+                    // Slice 3b §4.3: per-iteration `WHERE` predicate.
+                    // When the body carries `( ... WHERE pred )`, build
+                    // a row binding each named inner-node and named
+                    // rel-var to the iteration's snapshot (NOT their
+                    // list-promoted outer-scope form) and evaluate the
+                    // predicate against it. An iteration that fails
+                    // is dropped — BFS keeps walking past it because
+                    // a later iteration could still satisfy the
+                    // predicate from a different start.
+                    if let Some(predicate) = inner_where {
+                        let row = self.qpp_iteration_row(
+                            current_node,
+                            &hop_nodes_intermediate,
+                            &hop_rels,
+                            inner_nodes,
+                            hops,
+                        )?;
+                        let value =
+                            self.evaluate_projection_expression(&row, context, predicate)?;
+                        if !self.qpp_value_is_truthy(&value) {
+                            continue;
+                        }
+                    }
+
                     let next_iteration = iteration + 1;
                     let mut new_nodes_per_pos = nodes_per_pos.clone();
                     // Position 0 is the START of this iteration.
@@ -366,6 +391,86 @@ impl Executor {
             }
         }
         Ok(true)
+    }
+
+    /// Build the per-iteration row used to evaluate the inner
+    /// `WHERE` predicate (slice 3b §4.3). Each named inner-node
+    /// var binds to the JSON node value at its body position
+    /// (start node is `current_node`, position `i ≥ 1` is
+    /// `intermediates[i - 1]`); each named hop var binds to the
+    /// JSON relationship value reached on that hop. Anonymous
+    /// boundary nodes / hops contribute nothing — the predicate
+    /// can only reference variables the user actually declared.
+    ///
+    /// Bound at the iteration's *snapshot* shape (single
+    /// node / rel objects), not the outer-scope `LIST<T>` shape.
+    /// That matches how Cypher 25 specs the inner-`WHERE`
+    /// scope: each iteration sees its own boundary values, and
+    /// list-promotion only happens once the iteration is
+    /// committed.
+    fn qpp_iteration_row(
+        &self,
+        current_node: u64,
+        intermediates: &[u64],
+        hop_rels: &[u64],
+        inner_nodes: &[QppNodeSpec],
+        hops: &[QppHopSpec],
+    ) -> Result<HashMap<String, Value>> {
+        let mut row: HashMap<String, Value> = HashMap::new();
+
+        // Position 0 = iteration start = `current_node`.
+        if let Some(var) = inner_nodes.first().and_then(|n| n.var.as_ref())
+            && let Ok(v) = self.read_node_as_value(current_node)
+        {
+            row.insert(var.clone(), v);
+        }
+        // Positions 1..n = nodes landed on after each hop.
+        for (i, nid) in intermediates.iter().enumerate() {
+            if let Some(spec) = inner_nodes.get(i + 1)
+                && let Some(var) = &spec.var
+                && let Ok(v) = self.read_node_as_value(*nid)
+            {
+                row.insert(var.clone(), v);
+            }
+        }
+        // Hop relationships.
+        for (i, rid) in hop_rels.iter().enumerate() {
+            if let Some(hop) = hops.get(i)
+                && let Some(var) = &hop.var
+                && let Ok(rel_record) = self.store().read_rel(*rid)
+            {
+                let info = RelationshipInfo {
+                    id: *rid,
+                    source_id: rel_record.src_id,
+                    target_id: rel_record.dst_id,
+                    type_id: rel_record.type_id,
+                };
+                if let Ok(v) = self.read_relationship_as_value(&info) {
+                    row.insert(var.clone(), v);
+                }
+            }
+        }
+
+        Ok(row)
+    }
+
+    /// Cypher truthiness coercion for the inner `WHERE`
+    /// predicate. Nulls and `false` are falsy; every other
+    /// value is truthy. Numeric / string / array values
+    /// short-circuit to truthy because Cypher does not allow
+    /// using them as predicates directly — but the projection
+    /// evaluator already coerces those at evaluation time, so
+    /// by the time we read the result it is either a Bool or
+    /// a Null (the latter only when an upstream operand was
+    /// missing). Treating any non-bool value as truthy keeps
+    /// the operator forward-compatible with future expression
+    /// shapes the evaluator may surface.
+    fn qpp_value_is_truthy(&self, v: &Value) -> bool {
+        match v {
+            Value::Null => false,
+            Value::Bool(b) => *b,
+            _ => true,
+        }
     }
 
     /// Build the JSON list of relationships for an inner-hop

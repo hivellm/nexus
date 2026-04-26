@@ -336,6 +336,24 @@ pub struct QuantifiedGroup {
     pub inner: Vec<PatternElement>,
     /// Quantifier applied to the whole group.
     pub quantifier: RelationshipQuantifier,
+    /// Optional inner `WHERE` predicate evaluated against the
+    /// per-iteration bindings before the iteration's row is
+    /// emitted. The expression can reference any variable
+    /// declared in `inner` (boundary-node vars and the inner
+    /// relationship var) — at evaluation time those names see
+    /// the values from the *current* iteration, not the
+    /// list-promoted outer-scope `LIST<T>` form. An iteration
+    /// that fails the predicate is dropped silently from the
+    /// emitted row set; the BFS keeps walking past it.
+    ///
+    /// `None` for QPP groups without `WHERE`. Anonymous-body
+    /// shapes that get lowered at parse time never carry a
+    /// predicate (the lowering only fires when no inner state
+    /// exists to filter on); the field is preserved across
+    /// `try_lower_to_var_length_rel` only as a check that
+    /// rejects the lowering when a predicate is present.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub where_clause: Option<Expression>,
 }
 
 impl QuantifiedGroup {
@@ -360,6 +378,13 @@ impl QuantifiedGroup {
     /// `QuantifiedExpand` operator coming in a follow-up slice of
     /// `phase6_opencypher-quantified-path-patterns`.
     pub fn try_lower_to_var_length_rel(&self) -> Option<RelationshipPattern> {
+        // Inner WHERE predicates always force the dedicated
+        // operator — the legacy `*m..n` operator has no slot for a
+        // per-iteration predicate, and silently dropping the
+        // predicate would produce wrong rows.
+        if self.where_clause.is_some() {
+            return None;
+        }
         // Must be exactly Node, Relationship, Node.
         if self.inner.len() != 3 {
             return None;

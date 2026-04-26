@@ -103,8 +103,20 @@ behaviour and lifts a strict subset of the
       automatically when an index exists on the source label —
       that's the same code path used by every non-QPP source
       pattern, so no QPP-specific work was needed.
-- [ ] 4.3 Push inner `WHERE` predicates into the iteration scope
-      **(slice 3b)**
+- [x] 4.3 Push inner `WHERE` predicates into the iteration scope —
+      `QuantifiedGroup.where_clause: Option<Expression>` set at
+      parse time, threaded into `Operator::QuantifiedExpand` as
+      `inner_where`, evaluated against the per-iteration row in
+      `qpp_iteration_row` (single-snapshot bindings, *not* the
+      list-promoted outer-scope form). Falsy iterations drop
+      before emission; BFS keeps walking past them so a future
+      iteration from a different start can still satisfy. Two
+      new TCK scenarios in `qpp_tck_scenarios.rs`:
+      `tck_inner_where_filters_iterations_by_node_property` and
+      `tck_inner_where_referencing_relationship_variable`.
+      Slice-1 lowering now refuses any QPP carrying a
+      `where_clause` so the legacy operator (which has no slot
+      for a per-iteration predicate) cannot silently drop it.
 - [x] 4.4 Planner tests asserting expected operator order — four
       new tests in
       `crates/nexus-core/src/executor/planner/tests.rs::test_plan_qpp_*`
@@ -290,13 +302,16 @@ single execution path for both.
   `( (x:Person)-[:KNOWS]->(y:Person)-[:KNOWS]->(z:Person) ){1}`
   now execute end-to-end with every named inner node and hop
   relationship list-promoted to the GQL `LIST<T>` type.
-- **Slice 3b** — open. Items 4.3, 5.2–5.4, 6.5, 8.4, 9.4 stay
-  `[ ]`. 4.2 (index-backed start), 4.4 (planner-shape tests),
-  7.5 (unbound-upper warning), 8.1–8.3 (TCK scenario suite),
-  9.1–9.3 (bench harness — chain + dense fanout) all checked
-  across the slice-3b commits. Inner `WHERE` push-down and
-  `shortestPath(qpp)` over named-body shapes are the most
-  impactful remaining work.
+- **Slice 3b** — items 5.2–5.4, 6.5, 8.4, 9.4 stay `[ ]`.
+  4.2 (index-backed start), 4.3 (inner `WHERE` push-down), 4.4
+  (planner-shape tests), 7.5 (unbound-upper warning), 8.1–8.3
+  (TCK scenario suite), 9.1–9.3 (bench harness — chain + dense
+  fanout) all checked across the slice-3b commits.
+  `shortestPath(qpp)` over named-body shapes is the largest
+  remaining surface gap; the rest are diff-harness wiring
+  (8.4), CI baselining (9.4), and the optional
+  legacy-rewrite-via-operator unification (6.5, gated on a
+  perf-parity bench result).
 
 ## Cumulative test count
 
@@ -313,10 +328,10 @@ single execution path for both.
   `test_qpp_multi_hop_body_executes`)
 - Planner-shape tests: 5 in
   `crates/nexus-core/src/executor/planner/tests.rs::test_plan_qpp_*`
-- TCK-style integration tests: 16 in
+- TCK-style integration tests: 18 in
   `crates/nexus-core/tests/qpp_tck_scenarios.rs::tck_*`
   (quantifier-desugaring × 6, direction × 2, list-promotion × 3,
   rel-property-filter × 1, zero-length × 1, shortestPath × 1,
-  error-codes × 2)
-- Total: **42 tests** covering the parser, planner, executor,
+  inner-where × 2, error-codes × 2)
+- Total: **44 tests** covering the parser, planner, executor,
   and conformance surface across slices 1, 2, 3a, and 3b.
