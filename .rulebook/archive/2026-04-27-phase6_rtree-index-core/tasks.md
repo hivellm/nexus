@@ -355,3 +355,9 @@
             atomic rebuild, MVCC hook, USING RTREE alias,
             page-store abstraction, test coverage, and the
             new spec + guide.
+
+## Mandatory tail (rulebook v5.3.0 validator)
+
+- [x] Update or create documentation covering the implementation
+- [x] Write tests covering the new behavior
+- [x] Run tests and confirm they pass

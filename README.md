@@ -272,6 +272,23 @@ let client = NexusClient::new("nexus://127.0.0.1:15475")?;
 let result = client.execute_cypher("MATCH (n:Person) RETURN n.name LIMIT 10", None).await?;
 ```
 
+## 🖥️ Desktop GUI
+
+A React 18 + TypeScript desktop client lives under [`gui/`](gui/).
+Cypher editor (Monaco), force-directed graph result view
+(`react-force-graph-2d`), live-metrics drawer with sparklines,
+multi-connection management, dark / light theme. Run it against
+any nexus-server with:
+
+```bash
+cd gui
+NEXUS_NO_ELECTRON=1 npx vite      # opens http://localhost:15475/
+```
+
+See [`gui/README.md`](gui/README.md) for the component map and
+the dev workflow. The mockup source files this rewrite mirrors
+live at [`docs/design/gui-mockup-v2/`](docs/design/gui-mockup-v2/).
+
 ## ⚙️ Configuration
 
 ### Environment variables (server)

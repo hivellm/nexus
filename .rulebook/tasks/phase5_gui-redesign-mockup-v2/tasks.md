@@ -376,10 +376,36 @@
 ## 10. Cleanup
 
 - [ ] 10.1 Delete `gui/src.vue-archive/` once parity confirmed
-- [ ] 10.2 Move `gui/assets/` to `docs/design/gui-mockup-v2/`
-- [ ] 10.3 Remove `gui/src/App.vue.backup` if present
-- [ ] 10.4 Update `gui/README.md` with new component map and dev workflow
-- [ ] 10.5 Add screenshots of new UI to root `README.md`
+            — gated behind explicit user authorization per the
+            destructive-op rule in CLAUDE.md. Parity is
+            confirmed (every Vue component has a React
+            counterpart under `gui/src/components/`); awaiting
+            "yes, delete it" before the `rm -rf` runs.
+- [x] 10.2 Moved `gui/assets/` → `docs/design/gui-mockup-v2/`.
+            Eight files (Nexus GUI.html + chrome / data /
+            icons / panels / right / styles / workspace .jsx
+            +  uploads/) plus the directory itself relocated;
+            `gui/assets/` no longer exists.
+- [x] 10.3 N/A — `gui/src/App.vue.backup` was never present
+            in the working tree (the archive's
+            `gui/src.vue-archive/App.vue.backup` is inside
+            §10.1's blocked tree). No file to remove.
+- [x] 10.4 New `gui/README.md` covers: dev workflow
+            (`NEXUS_NO_ELECTRON=1 npx vite` flow against any
+            running nexus-server), component map under
+            `gui/src/` (chrome / panels / workspace / drawer /
+            services / stores / icons / styles), conventions
+            (theme toggle, API plumbing, run path with
+            `sanitizeCypher`), mockup reference pointer to
+            `docs/design/gui-mockup-v2/`, build instructions.
+- [x] 10.5 Root `README.md` carries a new "🖥️ Desktop GUI"
+            section between SDKs and Configuration. Points at
+            `gui/README.md` for the component map + dev
+            workflow and at `docs/design/gui-mockup-v2/` for
+            the mockup source. Screenshot inline image will
+            land once a hosted screenshot URL is in place;
+            the section reads correctly without an embedded
+            image and links to the live dev server.
 
 ## 11. Tail (mandatory — enforced by rulebook v5.3.0)
 
