@@ -635,10 +635,40 @@ async fn test_knn_procedure() {
     `docs/guides/FULL_TEXT_SEARCH.md`.
 - **Graph-based retrieval**: Use graph structure to improve KNN
 
+## Spatial neighbours (R-tree)
+
+Vector KNN (HNSW) covers semantic similarity in high-dimensional
+embedding spaces. Spatial KNN — "what's the closest store to
+this lat/long?" — runs through a separate, packed Hilbert R-tree
+backend documented in detail at
+[`docs/specs/rtree-index.md`](rtree-index.md). Quick comparison:
+
+|                         | HNSW (vector)              | R-tree (spatial)            |
+|-------------------------|----------------------------|-----------------------------|
+| Dimensionality          | Configurable (e.g. 128–1536)| 2 (3-D z-coord stored, query path 2-D)  |
+| Distance metric         | Cosine, Euclidean, Inner   | Cartesian (Wgs84 reserved)  |
+| Search class            | Approximate nearest        | Exact nearest               |
+| Index payload           | Per-label vector graph     | Per-`{label}.{prop}` Hilbert R-tree |
+| Hot-path complexity     | O(log N) approximate       | O(log_b N + k) exact         |
+| Cypher procedure        | `CALL vector.knn(label, vec, k)` | `CALL spatial.nearest(point, label, k)` |
+| DDL                     | implicit (per-label index) | `CREATE INDEX … USING RTREE` |
+| Storage backend         | `index/mod.rs::KnnIndex`   | `index/rtree::RTreeRegistry` |
+
+Hybrid retrieval (semantic + spatial) is straightforward: run
+`vector.knn` and `spatial.nearest` in the same Cypher script,
+then merge / re-rank at the calling layer the same way the
+HNSW + FTS hybrid pattern works (see § Hybrid retrieval).
+
+For the full spatial guide — predicates, procedures, DDL, SLO
+targets — see [`docs/guides/GEOSPATIAL.md`](../guides/GEOSPATIAL.md).
+
 ## References
 
 - HNSW Paper: https://arxiv.org/abs/1603.09320
 - hnsw_rs: https://github.com/jean-pierreBoth/hnswlib-rs
 - Faiss: https://github.com/facebookresearch/faiss
 - Approximate Nearest Neighbors Oh Yeah (Annoy): https://github.com/spotify/annoy
+- Guttman 1984 — R-Trees: A Dynamic Index Structure for Spatial Searching
+- Lam-Shapiro 1994 — Hilbert curve mapping
+- Skilling 2004 — 3-D Hilbert iteration
 

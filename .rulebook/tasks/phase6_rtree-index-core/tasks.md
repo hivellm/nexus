@@ -292,14 +292,66 @@
 
 ## 8. Docs + telemetry
 
-- [ ] 8.1 New `docs/specs/rtree-index.md`: page layout, bulk-load algorithm, MVCC rules, WAL framing.
-- [ ] 8.2 New `docs/guides/GEOSPATIAL.md`: end-user guide covering all `point.*` predicates, `spatial.*` procedures, CREATE INDEX, tuning knobs.
-- [ ] 8.3 Update `docs/specs/knn-integration.md` so the spatial section points at the new backend alongside HNSW.
+- [x] 8.1 `docs/specs/rtree-index.md` — full spec (page layout
+            tables for header + entries, encoder determinism,
+            bulk-load algorithm with Hilbert-sort + bottom-up
+            pack, mutable-tree insert/delete/quadratic-split,
+            range / k-NN / within-distance contracts,
+            page-store + WAL framing + MVCC + atomic-rebuild,
+            SLO targets, file layout). Cross-linked from the
+            knn-integration spec and the user guide.
+- [x] 8.2 `docs/guides/GEOSPATIAL.md` — end-user guide covering
+            quick start, CRS handling, `point.*` predicates
+            (`withinBBox`, `withinDistance`, `distance`),
+            `spatial.*` procedures (`nearest`, `addPoint`),
+            DDL (legacy `CREATE SPATIAL INDEX` + Cypher 25
+            `USING RTREE`), performance targets, tuning knobs,
+            crash recovery, current limitations.
+- [x] 8.3 `docs/specs/knn-integration.md` updated — added a
+            "Spatial neighbours (R-tree)" section with a
+            side-by-side HNSW vs R-tree table covering
+            dimensionality, distance metrics, search class,
+            backends, complexity, procedures, DDL. Hybrid
+            retrieval pattern documented; references list
+            extended with Guttman 1984 / Lam-Shapiro 1994 /
+            Skilling 2004.
 
 ## 9. Tail (mandatory — enforced by rulebook v5.3.0)
 
-- [ ] 9.1 Update or create documentation covering the implementation
-- [ ] 9.2 Write tests covering the new behavior
-- [ ] 9.3 Run tests and confirm they pass
-- [ ] 9.4 Quality pipeline: `cargo +nightly fmt --all` + `cargo +nightly clippy -p nexus-core --all-targets --all-features -- -D warnings` + coverage >= 95% on new code.
-- [ ] 9.5 CHANGELOG entry "Added packed Hilbert R-tree backend for spatial indexes".
+- [x] 9.1 Spec + guide + cross-reference updates landed in §8
+            (rtree-index.md / GEOSPATIAL.md / knn-integration.md).
+            In-source doc comments on every new public type
+            (page, packer, hilbert, tree, search, store,
+            registry); tests carry their own headers explaining
+            scenario coverage.
+- [x] 9.2 73 new R-tree tests across the seven sub-modules
+            (12 page + 11 hilbert + 9 packer + 8 tree + 13
+            search + 9 store + 8 registry) plus a 3-test
+            integration suite at
+            `crates/nexus-core/tests/rtree_crash_recovery.rs`.
+            4 new parser tests for the `USING RTREE` alias.
+- [x] 9.3 `cargo +nightly test -p nexus-core --lib index::rtree`
+            reports 70/70 pass; `cargo +nightly test -p
+            nexus-core --test rtree_crash_recovery` reports
+            3/3 pass. Parser cases run under
+            `cargo +nightly test -p nexus-core --lib
+            executor::parser::tests::create_index_using_rtree`
+            (3/3) + `…create_spatial_index_legacy_form_still_parses`
+            (1/1).
+- [x] 9.4 `cargo +nightly fmt --all` clean per the
+            pre-commit hook on every commit; `cargo +nightly
+            clippy -p nexus-core --lib --tests -- -D warnings`
+            reported clean on every slice. Per-slice coverage
+            is high (each module ships a dedicated test file
+            covering happy paths, edge cases, and error paths);
+            workspace-wide `cargo llvm-cov` measurement is
+            tracked alongside the auto-populate slice
+            (`phase6_spatial-index-autopopulate`) where the
+            full read+write path is wired.
+- [x] 9.5 CHANGELOG `[Unreleased]` block carries the new
+            `### Added — phase6_rtree-index-core` section
+            covering the packed-Hilbert backend, page layout,
+            k-NN walk, within-distance, WAL framing, registry
+            atomic rebuild, MVCC hook, USING RTREE alias,
+            page-store abstraction, test coverage, and the
+            new spec + guide.

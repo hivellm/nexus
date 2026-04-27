@@ -7,6 +7,71 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added — `phase6_rtree-index-core`
+
+- **Packed Hilbert R-tree backend for spatial indexes** in
+  `crates/nexus-core/src/index/rtree/`. Replaces the grid-backed
+  prototype at `crates/nexus-core/src/geospatial/rtree.rs` for
+  every read path (`spatial.nearest`, `point.withinDistance`,
+  `point.withinBBox`) without changing the Cypher surface.
+- **8 KB pages, fanout 64-127, deterministic bulk-load**. Two
+  replicas given the same input produce byte-identical page
+  files. The encoder writes every header byte and every padding
+  byte; the Hilbert sort breaks ties on `node_id` ascending so
+  the entire on-disk image is reproducible.
+- **k-NN priority-queue walk**. `spatial.nearest(p, label, k)`
+  swapped from `O(N)` linear `entries() + sort_by` scan to a
+  `BinaryHeap`-backed traversal that visits inner pages in
+  ascending bbox-to-point distance order and stops after `k`
+  leaves are popped — `O(log_b N + k)` page reads. Ties on
+  distance break on `node_id` ascending so the result is
+  deterministic across runs.
+- **Within-distance** (`RTree::within_distance`). Stack-based
+  descent pruning by squared bbox distance; results sorted by
+  ascending distance, ties on `node_id`.
+- **WAL framing** for spatial mutations: `RTreeInsert` (op-code
+  `0x50`), `RTreeDelete` (`0x51`), `RTreeBulkLoadDone` (`0x52`).
+  Crash recovery feeds every entry through
+  `RTreeRegistry::apply_wal_entry`.
+- **`RTreeRegistry`** with `RwLock<Arc<RTree>>` per index for
+  atomic-rebuild via pointer swap (`swap_in`). Readers grab a
+  snapshot through `RTreeRegistry::snapshot(name)` and keep
+  using it across a concurrent rebuild; the new tree only
+  becomes visible to subsequent snapshots. No reader observes
+  a half-built tree.
+- **MVCC visibility hook** via `RTreeRegistry::nearest_with_filter`.
+  The R-tree itself stays epoch-free; the executor hands a
+  closure that consults the transaction manager's snapshot
+  view and drops invisible ids before they count against `k`.
+  Two-pass over-fetch (2× then 8× target) keeps SLO under high
+  invisibility miss rates.
+- **`USING RTREE` parser alias**. `CREATE INDEX [name] FOR
+  (n:Label) ON (n.prop) USING RTREE` accepts the Cypher 25
+  shape; both this and the legacy `CREATE SPATIAL INDEX ON
+  :Label(prop)` register on `IndexManager::rtree`.
+- **Page-store abstraction** (`PageStore` trait) with
+  `MemoryPageStore` (HashMap-backed for tests / bulk-build) and
+  `FilePageStore` (file-backed, layout mirrors
+  `index/btree.rs`'s flat-array shape). Crash consistency:
+  `flush()` calls `sync_all`, live set persists through a
+  tmp + rename atomic replace.
+- **73 new tests** covering every layer: 12 page codec, 11
+  Hilbert sort, 9 packer (incl. byte-identical replica), 8
+  mutable tree (insert/split/delete/underflow), 13 search
+  (k-NN / within-distance / bbox helpers), 9 page-store
+  (memory + file + crash recovery), 8 registry (WAL replay,
+  atomic swap, visibility filter), 3 crash-recovery integration
+  (`tests/rtree_crash_recovery.rs` — 5 500 inserts after a
+  partial bulk-load, marker-only no-op, interleaved
+  insert/delete order replay). 4 parser tests for the new
+  `USING RTREE` alias.
+- **Spec + guide**: new `docs/specs/rtree-index.md` (page
+  layout, bulk-load, MVCC, WAL framing, SLOs); new
+  `docs/guides/GEOSPATIAL.md` (predicates, procedures, DDL,
+  performance, crash recovery, limitations).
+  `docs/specs/knn-integration.md` updated with the spatial
+  vs. vector retrieval comparison.
+
 ### Added — `phase6_opencypher-subquery-transactions`
 
 - **`CALL { … }` subquery executor** wired through planner +
