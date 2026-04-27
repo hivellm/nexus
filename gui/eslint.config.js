@@ -33,6 +33,8 @@ export default [
         Headers: 'readonly',
         RequestInit: 'readonly',
         Response: 'readonly',
+        navigator: 'readonly',
+        performance: 'readonly',
         setTimeout: 'readonly',
         clearTimeout: 'readonly',
         setInterval: 'readonly',

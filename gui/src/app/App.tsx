@@ -8,6 +8,7 @@ import { ActivityRail } from '../components/chrome/ActivityRail';
 import { StatusBar } from '../components/chrome/StatusBar';
 import { Tweaks } from '../components/chrome/Tweaks';
 import { LeftColumn } from '../components/panels/LeftColumn';
+import { Workspace } from '../components/workspace/Workspace';
 
 export function App() {
   return (
@@ -16,7 +17,7 @@ export function App() {
       <div className="body">
         <ActivityRail />
         <LeftColumn />
-        <main className="workspace" />
+        <Workspace />
         <aside className="right-col" aria-label="Right drawer" />
       </div>
       <StatusBar />

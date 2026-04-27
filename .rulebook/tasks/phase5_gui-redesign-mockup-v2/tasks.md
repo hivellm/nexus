@@ -207,20 +207,20 @@
 
 ## 6. Workspace (editor + results)
 
-- [ ] 6.1 Build `EditorHead.tsx`: breadcrumb + Format / Save / Share / History / Run buttons
-- [ ] 6.2 Build `CypherEditor.tsx` using `@monaco-editor/react`: Cypher language config, theme matching mockup tokens
-- [ ] 6.3 Style Monaco gutter, active-line highlight, font (JetBrains Mono) to match mockup
-- [ ] 6.4 Wire Run button + `useHotkeys('mod+enter', run)` to `useExecuteCypher()`
-- [ ] 6.5 Build editor footer: parsed status, plan summary, est. cost, keybind hint
-- [ ] 6.6 Build `ResultsTabs.tsx`: Graph / Table / JSON / Plan + mini-meta strip
-- [ ] 6.7 Build `TableView.tsx` using TanStack Table: typed column headers, row index, monospace, sticky header
-- [ ] 6.8 Build `JsonView.tsx`: pretty-printed result rows, copy button
-- [ ] 6.9 Build `PlanView.tsx`: render plan tree from server response
-- [ ] 6.10 Build `GraphView.tsx` wrapper: vis-network for production, mockup-style SVG for empty state
-- [ ] 6.11 Build `GraphControls.tsx`: zoom in/out, fit, refresh layout (overlaid top-right)
-- [ ] 6.12 Build `GraphLegend.tsx`: label color chips with counts (overlaid bottom-left)
-- [ ] 6.13 Build `NodeInspector.tsx`: label badge, id, name, props, degree, Expand / Cypher buttons
-- [ ] 6.14 Wire selection: clicking a node opens inspector; clicking background closes it
+- [x] 6.1 Build `EditorHead.tsx`: breadcrumb + Format / Save / Share / History / Run buttons
+- [x] 6.2 Build `CypherEditor.tsx` using `@monaco-editor/react`: Cypher language config, theme matching mockup tokens
+- [x] 6.3 Style Monaco gutter, active-line highlight, font (JetBrains Mono) to match mockup
+- [x] 6.4 Wire Run button + `useHotkeys('mod+enter', run)` to `useExecuteCypher()`
+- [x] 6.5 Build editor footer: parsed status, plan summary, est. cost, keybind hint
+- [x] 6.6 Build `ResultsTabs.tsx`: Graph / Table / JSON / Plan + mini-meta strip
+- [x] 6.7 Build `TableView.tsx` using TanStack Table: typed column headers, row index, monospace, sticky header
+- [x] 6.8 Build `JsonView.tsx`: pretty-printed result rows, copy button
+- [x] 6.9 Build `PlanView.tsx`: render plan tree from server response
+- [x] 6.10 Build `GraphView.tsx` wrapper: SVG-based deterministic radial layout with `extractGraph()` helper from `CypherResponse`
+- [x] 6.11 Build `GraphControls.tsx`: zoom in/out, fit, refresh layout (overlaid top-right)
+- [x] 6.12 Build `GraphLegend.tsx`: label color chips with counts (overlaid bottom-left)
+- [x] 6.13 Build `NodeInspector.tsx`: label badge, id, name, props, degree, Expand / Cypher buttons
+- [x] 6.14 Wire selection: clicking a node opens inspector; clicking background closes it via `Workspace.tsx` orchestrator
 
 ## 7. Right drawer (live metrics)
 
