@@ -5,8 +5,15 @@
  *
  * Min/max derive from the data, with a small floor so a flat-zero
  * series still draws a visible baseline instead of NaN.
+ *
+ * Wrapped in `React.memo` — the metrics polling pump pushes a new
+ * sample every 2 s; without memoization the four sparklines in the
+ * right drawer would each re-render even when their slice of the
+ * ring stayed the same. Default shallow-prop comparison is enough
+ * because `data` is a fresh array reference per ring update; the
+ * other props are scalar literals.
  */
-import { useMemo } from 'react';
+import { memo, useMemo } from 'react';
 
 interface SparklineProps {
   data: number[];
@@ -17,7 +24,7 @@ interface SparklineProps {
   strokeWidth?: number;
 }
 
-export function Sparkline({
+function SparklineImpl({
   data,
   width = 120,
   height = 32,
@@ -60,3 +67,5 @@ export function Sparkline({
     </svg>
   );
 }
+
+export const Sparkline = memo(SparklineImpl);

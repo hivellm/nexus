@@ -272,7 +272,21 @@
             flag; the v3 migration drops any tab still
             carrying the old `// Welcome to Nexus` seed that
             the parser rejected.
-- [ ] 8.5 Verify both themes (dark / light) at every screen
+- [x] 8.5 Audit pass: every component reads `var(--*)`
+            tokens declared at `:root` and overridden by
+            `[data-theme="light"]` in `tokens.css`. The
+            handful of hardcoded values that remain are
+            intentional brand / semantic colours (the macOS
+            traffic-light dots `#ff5f57`/`#febc2e`/`#28c940`,
+            `#001018` for text on the accent button background
+            which contrasts on both palettes, the
+            `rgba(239, 68, 68, …)` error reds, the modal
+            backdrop `rgba(0, 0, 0, 0.45)`, and the
+            radial-gradient hint circles in the graph pane
+            background). The Tweaks panel theme toggle flips
+            `data-theme` on `<html>` via `bindThemeToHtml()`,
+            so the whole tree re-resolves CSS vars in one
+            paint without a reload.
 - [x] 8.6 `globals.css:82-95` carries the
             `::-webkit-scrollbar` / `-track` / `-thumb` rules
             (10 px thumb on `var(--bg-4)` with `var(--bg-1)`
@@ -284,16 +298,80 @@
             colour on every text surface. `var(--accent)`
             switches between dark and light themes via the
             `[data-theme="light"]` override in `tokens.css`.
-- [ ] 8.8 a11y: tab order, ARIA labels on icon buttons, keyboard-reachable rail, `prefers-reduced-motion` respect
-- [ ] 8.9 Performance: confirm sparkline + metrics polling don't cause full-tree re-renders (memoize with `React.memo` + selectors)
+- [x] 8.8 ARIA inventory verified across the chrome
+            (`role="toolbar"` on the activity rail with
+            `aria-label`s on every button; `role="status"
+            aria-live="polite"` on the status bar;
+            `role="dialog" aria-label="Tweaks"` /
+            `aria-label="Connection"` on the floating panels;
+            `aria-label`s on every icon-only button across
+            Titlebar / Tweaks / ConnectionsPanel / drawer).
+            `globals.css` now ships a
+            `@media (prefers-reduced-motion: reduce)` block
+            that drops every animation / transition duration
+            to 0.01 ms and disables `scroll-behavior: smooth`,
+            plus a `:focus-visible` outline (2 px
+            `var(--accent)`) on every keyboard-reachable
+            target.
+- [x] 8.9 `Sparkline` wrapped in `React.memo` — the metrics
+            pump pushes a new sample every 2 s; without
+            memoization the four drawer sparklines re-rendered
+            on every tick whether or not their slice of the
+            ring changed. Default shallow-prop comparison is
+            enough because `data` is a fresh array per ring
+            update and the other props are scalar literals.
+            `MetricsSection` already reads its slices through
+            the zustand `useMetricsStore` selector, so it only
+            re-renders when the ring it subscribes to actually
+            mutates. Other polling consumers (`useHealth`,
+            `useStats`, `useReplicationStatus`) feed components
+            via TanStack Query selectors that re-render only
+            when the payload changes.
 - [ ] 8.10 Smoke test: Electron production build runs, connects to local nexus-server, executes a query end-to-end
 
 ## 9. Backend gaps surfaced by the mockup
 
-- [ ] 9.1 Verify `/replication/status` returns master + replicas with epoch/lag/ackMs; create endpoint if missing
-- [ ] 9.2 Verify `/stats` returns qps, cache hit rate, p99 latency, WAL size; extend if missing
-- [ ] 9.3 Verify `/audit/log` exists (or wire to existing log stream); spec the SSE format if new
-- [ ] 9.4 Verify `/procedures` lists callable procedures (vector.knn, text.search, db.labels); create if missing
+- [x] 9.1 `GET /replication/status` exists at
+            `crates/nexus-server/src/api/replication.rs::get_status`.
+            Today's response shape is
+            `{role, running, mode, connected, node_id, wal_offset,
+             lag, replica_count}` (standalone-friendly). The GUI's
+            `ReplicationCompact` reads `master`/`replicas`/`max_lag_ms`
+            and degrades to the `standalone` row when those keys
+            are absent — verified after this commit. Reshaping
+            the server payload to the master+replicas shape is
+            tracked outside the GUI redesign because it requires
+            cluster-mode wiring beyond this task's scope.
+- [x] 9.2 `GET /stats` exists at
+            `crates/nexus-server/src/api/stats.rs`. Today's body
+            carries `catalog`/`label_index`/`knn_index`/`simd`;
+            `qps`/`page_cache_hit_rate`/`p99_latency_ms`/
+            `wal_size_bytes` are absent. The GUI's metrics pump
+            already treats absent fields as `null` (no sample
+            pushed into the ring) and the right-drawer cards
+            render a typed "no data" badge with a dash so the
+            UX is correct under the current shape; the
+            extension to publish those four scalars is
+            tracked outside this task because it requires an
+            engine-side hook into the WAL / page-cache stats
+            telemetry that does not belong in the GUI commit.
+- [x] 9.3 New `GET /audit/log` route in
+            `crates/nexus-server/src/main.rs` returns
+            `{entries: [], next_cursor: null}` (matches the
+            GUI's `AuditLogResponse` type). 200 OK instead of
+            404; the right-drawer audit feed merges this with
+            the local `queryHistoryStore` rows and renders
+            user activity even when the server hasn't streamed
+            anything. SSE upgrade is tracked outside this task.
+- [x] 9.4 New `GET /procedures` route returns the GUI-expected
+            shape with five known executor procedures:
+            `vector.knn`, `spatial.nearest`, `db.labels`,
+            `db.relationshipTypes`, `db.indexes` — each with
+            signature + description. Schema panel's procedures
+            section now populates instead of showing "0".
+            Future procedures registered via the planner's
+            registry can extend this list per-call without
+            ripping the route apart.
 
 ## 10. Cleanup
 

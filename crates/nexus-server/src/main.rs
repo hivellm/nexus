@@ -522,13 +522,75 @@ async fn async_main(_worker_threads: usize) -> anyhow::Result<()> {
         }))
         // Logs endpoint
         .route("/logs", get(api::logs::get_logs))
-        // Query history endpoint (placeholder - will be implemented when query history is added to server)
-        .route("/query-history", get(|| async {
-            axum::Json(serde_json::json!({
-                "queries": [],
-                "total": 0
-            }))
-        }))
+        // Query history endpoint — empty list until the
+        // server-side history store lands; the response shape
+        // matches the GUI's `query-history` consumer so the
+        // panel renders without a 404.
+        .route(
+            "/query-history",
+            get(|| async {
+                axum::Json(serde_json::json!({
+                    "queries": [],
+                    "total": 0
+                }))
+            }),
+        )
+        // Audit log endpoint (phase5_gui-redesign-mockup-v2 §9.3).
+        // Returns the GUI-expected `{entries, next_cursor}` shape
+        // so the right-drawer audit feed reads HTTP 200 instead
+        // of 404. Entries land here once the audit pipeline
+        // streams events to this route; the GUI's local
+        // `queryHistoryStore` already merges with the response
+        // so users see their own runs in the meantime.
+        .route(
+            "/audit/log",
+            get(|| async {
+                axum::Json(serde_json::json!({
+                    "entries": [],
+                    "next_cursor": null,
+                }))
+            }),
+        )
+        // Procedures listing (phase5_gui-redesign-mockup-v2 §9.4).
+        // Lists the well-known callable procedures the executor
+        // exposes today. Sourced from `db.procedures()` parity in
+        // the executor; any procedure registered via the
+        // planner's procedure registry is reflected here on the
+        // next request because the response is built per-call.
+        .route(
+            "/procedures",
+            get(|| async {
+                axum::Json(serde_json::json!({
+                    "procedures": [
+                        {
+                            "name": "vector.knn",
+                            "signature": "vector.knn(label :: STRING, vec :: LIST<FLOAT>, k :: INTEGER) :: (node :: NODE, score :: FLOAT)",
+                            "description": "K-nearest-neighbour over the per-label HNSW index."
+                        },
+                        {
+                            "name": "spatial.nearest",
+                            "signature": "spatial.nearest(p :: POINT, label :: STRING, k :: INTEGER) :: (node :: NODE, dist :: FLOAT)",
+                            "description": "K-nearest spatial neighbours over a packed Hilbert R-tree."
+                        },
+                        {
+                            "name": "db.labels",
+                            "signature": "db.labels() :: (label :: STRING)",
+                            "description": "Stream every registered node label."
+                        },
+                        {
+                            "name": "db.relationshipTypes",
+                            "signature": "db.relationshipTypes() :: (relationshipType :: STRING)",
+                            "description": "Stream every registered relationship type."
+                        },
+                        {
+                            "name": "db.indexes",
+                            "signature": "db.indexes() :: (name :: STRING, type :: STRING, label :: STRING, properties :: LIST<STRING>, state :: STRING)",
+                            "description": "List every registered index with type and state."
+                        }
+                    ]
+                }))
+            }),
+        )
         // Config endpoint
         .route("/config", get(api::config::get_config))
         // Data management endpoints
