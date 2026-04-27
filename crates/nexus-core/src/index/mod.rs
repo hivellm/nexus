@@ -21,6 +21,7 @@ pub mod fulltext_analyzer;
 pub mod fulltext_registry;
 pub mod fulltext_writer;
 pub mod pending_updates;
+pub mod rtree;
 
 /// Default dimensionality for `KnnIndex` when no per-call override is
 /// supplied.

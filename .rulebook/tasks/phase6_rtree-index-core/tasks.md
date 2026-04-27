@@ -2,14 +2,40 @@
 
 ## 1. Page layout + codec
 
-- [ ] 1.1 Define `RTreePageHeader` (32 B: magic, version, level, flags, count) and `ChildRef` (64 B: bbox [f64; 4], child_ptr u64, pad u32) in `crates/nexus-core/src/index/rtree/page.rs`.
-- [ ] 1.2 Zero-copy page encode / decode against 8 KB page buffers — asserts fanout in `[1, 127]` and header magic on read.
-- [ ] 1.3 Unit tests: round-trip empty, single-entry, full-capacity pages; reject pages with wrong magic or fanout > 127.
+- [x] 1.1 Defined `RTreePageHeader { level, flags, count, page_id }`
+            (32 B header) and `ChildRef { bbox: [f64; 4],
+            child_ptr: u64, extra: u64 }` (64 B entry) in
+            `crates/nexus-core/src/index/rtree/page.rs`. Module
+            constants for magic/version/page-size/fanout live in
+            `index/rtree/mod.rs`.
+- [x] 1.2 `encode_page` / `decode_page` operate on the 8 KB
+            `RTREE_PAGE_SIZE` buffer; asserts `count <= 127`,
+            validates `RTREE_PAGE_MAGIC`, the page version, and
+            zero-reserved bytes on decode. Decode returns a typed
+            `PageDecodeError` for every failure mode.
+- [x] 1.3 Twelve `index::rtree::page::tests` unit tests cover
+            round-trip (empty / single-entry / full-capacity /
+            inner-page / 3-D z-coord), determinism, and the four
+            decode-error paths (bad length, bad magic, bad version,
+            fanout overflow, non-zero reserved bytes).
 
 ## 2. Bulk-load via Hilbert curve
 
-- [ ] 2.1 `hilbert_index_2d(x, y, precision)` and `hilbert_index_3d(x, y, z, precision)` helpers with 48 bits per dimension.
-- [ ] 2.2 Sort every `(node_id, point)` pair by Hilbert index; assert the sort is stable so ties break on `node_id` ascending.
+- [x] 2.1 `hilbert_index_2d` (48 bits/dim, total ≤ 96 bits in
+            `u128`) + `hilbert_index_3d` (32 bits/dim, total
+            96 bits) implemented via Lam-Shapiro 2-D and
+            Skilling 3-D iterations; `normalise_2d` /
+            `normalise_3d` map real-valued coords onto the
+            discrete Hilbert grid with bbox-driven scaling and
+            input clamping.
+- [x] 2.2 `sort_by_hilbert_2d` / `sort_by_hilbert_3d` use
+            `sort_by_cached_key` keyed on `(hilbert_index, node_id)`
+            so ties break stably on node id ascending; eleven
+            `index::rtree::hilbert::tests` cover the d=1 / d=2
+            bijection, high-precision overflow safety, clamping,
+            collapsed-axis handling, locality of sorted
+            neighbours on a 4×4 grid, stability on duplicate
+            coords, and run-to-run determinism.
 - [ ] 2.3 Bottom-up pack: 127 entries per leaf, parent pages hold child bbox unions, recurse to root.
 - [ ] 2.4 Byte-identical-output test across two replicas on the same input.
 
