@@ -19,6 +19,8 @@
 //! configuration error and surfaces at startup instead of at first
 //! API call.
 
+pub mod auth;
 pub mod client;
 
+pub use auth::{UserContext, extract_user_context, headers as auth_headers, hub_auth_middleware};
 pub use client::{HubClient, HubClientError, HubHealthStatus};

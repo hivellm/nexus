@@ -232,7 +232,8 @@ async fn async_main(_worker_threads: usize) -> anyhow::Result<()> {
             return Err(anyhow::anyhow!("Hub integration misconfigured: {e}"));
         }
     };
-    let _ = hub_client; // §2-§7 wiring lands in follow-up commits.
+    // `hub_client` is consumed below by the Hub auth middleware
+    // wiring (§2). §3-§7 wire on top of the same handle.
 
     // Create Nexus server state
     let nexus_server = Arc::new(NexusServer::new(
@@ -834,6 +835,17 @@ async fn async_main(_worker_threads: usize) -> anyhow::Result<()> {
             },
         ));
     }
+
+    // Hub access-key middleware (phase5_hub-integration §2). When the
+    // operator configured Hub integration the middleware enforces the
+    // gateway-set `X-Hivehub-User-Id` header and inserts a
+    // `UserContext` into request extensions; in standalone mode it
+    // is a pass-through so single-tenant deployments keep working.
+    let hub_middleware_state: Arc<Option<nexus_server::hub::HubClient>> = Arc::new(hub_client);
+    app = app.layer(axum_middleware::from_fn_with_state(
+        hub_middleware_state,
+        nexus_server::hub::hub_auth_middleware,
+    ));
 
     // Add GraphQL playground route in debug builds
     #[cfg(debug_assertions)]

@@ -25,11 +25,37 @@
             redaction) all green.
 
 ## 2. Authentication Module
-- [ ] 2.1 Create nexus-server/src/auth/hub_auth.rs
-- [ ] 2.2 Implement Hub access key validation middleware
-- [ ] 2.3 Extract user_id from validated tokens
-- [ ] 2.4 Add UserContext struct to request state
-- [ ] 2.5 Update API routes to require authentication
+- [x] 2.1 Created `crates/nexus-server/src/hub/auth.rs` —
+            colocated with the Hub client wrapper instead of under
+            `auth/` so all Hub plumbing stays in one tree
+- [x] 2.2 `hub_auth_middleware` enforces
+            `Authorization: Bearer <token>` + the gateway-set
+            `X-Hivehub-User-Id` header when `HubClient` is `Some`;
+            standalone mode is a pass-through. The trust model is
+            documented at the top of `hub/auth.rs`: today the Hub
+            gateway verifies the bearer and forwards the resolved
+            user id; when the SDK exposes a
+            `validate_access_key` call we swap header-trust for an
+            SDK round-trip without touching the rest of the
+            wire-up.
+- [x] 2.3 `extract_user_context()` parses
+            `X-Hivehub-User-Id` (required) +
+            `X-Hivehub-Access-Key-Id` (optional) into typed
+            `Uuid`s; malformed values surface as 401 with a JSON
+            error body.
+- [x] 2.4 `pub struct UserContext { user_id, access_key_id }`
+            (Serialize + Clone + Debug); inserted into Axum
+            request extensions by the middleware; handlers read
+            it via `Extension<UserContext>`.
+- [x] 2.5 Wired in `main.rs`: layered after the existing RBAC
+            auth middleware so the bearer/RBAC gates apply first
+            and the Hub layer adds the user context for the
+            request lifetime. Standalone deployments
+            (`HubClient = None`) keep their existing behaviour
+            unchanged. Five hub-auth-middleware integration tests
+            (`hub_mode_*`, `standalone_mode_*`) + five
+            `hub::auth::tests` unit tests all green; clippy
+            `-D warnings` clean.
 
 ## 3. Database-Per-User System
 - [ ] 3.1 Implement automatic database creation on first user access
