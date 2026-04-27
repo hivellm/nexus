@@ -51,8 +51,19 @@ function deltaPct(series: number[]): number | null {
   return ((last - first) / Math.abs(first)) * 100;
 }
 
+function fmt(n: number): string {
+  if (n >= 1e9) return (n / 1e9).toFixed(1) + 'B';
+  if (n >= 1e6) return (n / 1e6).toFixed(1) + 'M';
+  if (n >= 1e3) return (n / 1e3).toFixed(1) + 'k';
+  return String(n);
+}
+
 export function MetricsSection() {
   const rings = useMetricsStore((s) => s.rings);
+  const nodes = useMetricsStore((s) => s.nodes);
+  const edges = useMetricsStore((s) => s.edges);
+  const labelCount = useMetricsStore((s) => s.labelCount);
+  const relTypeCount = useMetricsStore((s) => s.relTypeCount);
 
   return (
     <section className="drawer-section">
@@ -60,10 +71,29 @@ export function MetricsSection() {
         <span>Live metrics</span>
         <span className="drawer-sub">last 60 samples</span>
       </header>
+      <div className="catalog-grid">
+        <div className="catalog-cell">
+          <span className="cv">{fmt(nodes)}</span>
+          <span className="ck">nodes</span>
+        </div>
+        <div className="catalog-cell">
+          <span className="cv">{fmt(edges)}</span>
+          <span className="ck">edges</span>
+        </div>
+        <div className="catalog-cell">
+          <span className="cv">{labelCount}</span>
+          <span className="ck">labels</span>
+        </div>
+        <div className="catalog-cell">
+          <span className="cv">{relTypeCount}</span>
+          <span className="ck">rel types</span>
+        </div>
+      </div>
       <div className="metric-list">
         {ROWS.map((row) => {
           const series = rings[row.key];
-          const last = series.length > 0 ? series[series.length - 1] : 0;
+          const hasData = series.length > 0;
+          const last = hasData ? series[series.length - 1] : 0;
           const delta = deltaPct(series);
           return (
             <div key={row.key} className="metric-row">
@@ -76,9 +106,12 @@ export function MetricsSection() {
                     {delta > 0 ? '+' : ''}{delta.toFixed(0)}%
                   </span>
                 )}
+                {!hasData && <span className="metric-delta flat">no data</span>}
               </div>
               <div className="metric-body">
-                <span className="metric-value">{row.format(last)}</span>
+                <span className="metric-value">
+                  {hasData ? row.format(last) : '—'}
+                </span>
                 <Sparkline data={series} color={row.color} width={140} height={28} />
               </div>
             </div>

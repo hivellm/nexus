@@ -121,13 +121,23 @@ export function useSchema(): UseQueryResult<SchemaSnapshot, NexusApiError> {
     queryKey: ['schema', baseUrl, apiKey],
     queryFn: async ({ signal }) => {
       const url = baseUrl!;
-      const [labels, relTypes, indexes, procedures] = await Promise.all([
+      // Use allSettled so a single 404 (e.g. cortex doesn't expose
+      // /procedures) doesn't kill the whole schema query and leave
+      // the panel in an "error" state. Each sub-section degrades
+      // independently to its empty shape.
+      const [labels, relTypes, indexes, procedures] = await Promise.allSettled([
         api.labels(url, { signal, apiKey }),
         api.relTypes(url, { signal, apiKey }),
         api.indexes(url, { signal, apiKey }),
         api.procedures(url, { signal, apiKey }),
       ]);
-      return { labels, relTypes, indexes, procedures };
+      return {
+        labels: labels.status === 'fulfilled' ? labels.value : { labels: [] },
+        relTypes: relTypes.status === 'fulfilled' ? relTypes.value : { types: [] },
+        indexes: indexes.status === 'fulfilled' ? indexes.value : { indexes: [] },
+        procedures:
+          procedures.status === 'fulfilled' ? procedures.value : { procedures: [] },
+      };
     },
     enabled: baseUrl !== null,
     refetchInterval: POLL_SLOW,

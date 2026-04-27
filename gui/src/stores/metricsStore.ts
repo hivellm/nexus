@@ -27,6 +27,8 @@ export interface MetricsSnapshot {
   p99LatencyMs: number;
   nodes: number;
   edges: number;
+  labelCount: number;
+  relTypeCount: number;
 }
 
 export const RING_SIZE = 60;
@@ -35,10 +37,16 @@ export type RingKey = 'qps' | 'pageCacheHitRate' | 'p99LatencyMs' | 'walSizeMb';
 
 type Rings = Record<RingKey, number[]>;
 
+/** A ring sample is `null` when the server didn't provide that
+ * metric on the latest poll — components that read the ring
+ * should treat consecutive nulls as "no data" and render a dash
+ * instead of a flat-zero sparkline. */
+export type MaybeSample = Partial<Record<RingKey, number | null>>;
+
 interface MetricsState extends MetricsSnapshot {
   rings: Rings;
   setSnapshot: (snap: Partial<MetricsSnapshot>) => void;
-  pushSample: (sample: Pick<MetricsSnapshot, RingKey>) => void;
+  pushSample: (sample: MaybeSample) => void;
 }
 
 const INITIAL: MetricsSnapshot = {
@@ -51,6 +59,8 @@ const INITIAL: MetricsSnapshot = {
   p99LatencyMs: 0,
   nodes: 0,
   edges: 0,
+  labelCount: 0,
+  relTypeCount: 0,
 };
 
 const EMPTY_RINGS: Rings = {
@@ -73,10 +83,19 @@ export const useMetricsStore = create<MetricsState>()((set) => ({
   pushSample: (sample) =>
     set((s) => ({
       rings: {
-        qps: appendCapped(s.rings.qps, sample.qps),
-        pageCacheHitRate: appendCapped(s.rings.pageCacheHitRate, sample.pageCacheHitRate),
-        p99LatencyMs: appendCapped(s.rings.p99LatencyMs, sample.p99LatencyMs),
-        walSizeMb: appendCapped(s.rings.walSizeMb, sample.walSizeMb),
+        qps: typeof sample.qps === 'number' ? appendCapped(s.rings.qps, sample.qps) : s.rings.qps,
+        pageCacheHitRate:
+          typeof sample.pageCacheHitRate === 'number'
+            ? appendCapped(s.rings.pageCacheHitRate, sample.pageCacheHitRate)
+            : s.rings.pageCacheHitRate,
+        p99LatencyMs:
+          typeof sample.p99LatencyMs === 'number'
+            ? appendCapped(s.rings.p99LatencyMs, sample.p99LatencyMs)
+            : s.rings.p99LatencyMs,
+        walSizeMb:
+          typeof sample.walSizeMb === 'number'
+            ? appendCapped(s.rings.walSizeMb, sample.walSizeMb)
+            : s.rings.walSizeMb,
       },
     })),
 }));

@@ -1318,6 +1318,35 @@ button {
 }
 .drawer-sub.error { color: var(--err); }
 
+/* Catalog summary tiles */
+.catalog-grid {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 6px;
+  padding: 0 14px 8px;
+}
+.catalog-cell {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 6px 10px;
+  background: var(--bg-2);
+  border: 1px solid var(--border);
+  border-radius: 5px;
+}
+.catalog-cell .cv {
+  font-family: var(--font-mono);
+  font-size: 14px;
+  color: var(--fg-0);
+  font-weight: 600;
+}
+.catalog-cell .ck {
+  font-size: 10.5px;
+  color: var(--fg-3);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
 /* Metrics rows */
 .metric-list {
   display: flex;

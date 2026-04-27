@@ -30,23 +30,27 @@ export function useMetricsPump(): void {
   useEffect(() => {
     if (!stats.data) return;
     const d = stats.data;
-    const qps = d.qps ?? 0;
-    const cache = d.page_cache_hit_rate ?? 0;
-    const p99 = d.p99_latency_ms ?? 0;
-    const wal = d.wal_size_bytes ? d.wal_size_bytes / 1_048_576 : 0;
     setSnapshot({
-      qps,
-      pageCacheHitRate: cache,
-      p99LatencyMs: p99,
-      walSizeMb: wal,
+      qps: d.qps ?? 0,
+      pageCacheHitRate: d.page_cache_hit_rate ?? 0,
+      p99LatencyMs: d.p99_latency_ms ?? 0,
+      walSizeMb: d.wal_size_bytes ? d.wal_size_bytes / 1_048_576 : 0,
       nodes: d.catalog?.node_count ?? 0,
       edges: d.catalog?.rel_count ?? 0,
+      labelCount: d.catalog?.label_count ?? 0,
+      relTypeCount: d.catalog?.rel_type_count ?? 0,
     });
+    // Only push samples for metrics the server actually emits;
+    // missing fields stay out of the ring so the sparkline can
+    // render a "—" no-data state instead of a misleading flat-zero.
     pushSample({
-      qps,
-      pageCacheHitRate: cache,
-      p99LatencyMs: p99,
-      walSizeMb: wal,
+      qps: typeof d.qps === 'number' ? d.qps : null,
+      pageCacheHitRate:
+        typeof d.page_cache_hit_rate === 'number' ? d.page_cache_hit_rate : null,
+      p99LatencyMs:
+        typeof d.p99_latency_ms === 'number' ? d.p99_latency_ms : null,
+      walSizeMb:
+        typeof d.wal_size_bytes === 'number' ? d.wal_size_bytes / 1_048_576 : null,
     });
   }, [stats.dataUpdatedAt, stats.data, setSnapshot, pushSample]);
 }
