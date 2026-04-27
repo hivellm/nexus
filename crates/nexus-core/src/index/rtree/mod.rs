@@ -25,10 +25,12 @@
 pub mod hilbert;
 pub mod packer;
 pub mod page;
+pub mod tree;
 
 pub use hilbert::{hilbert_index_2d, hilbert_index_3d};
 pub use packer::{PACK_TARGET_FANOUT, PackedTree, bounding_box, bulk_pack};
 pub use page::{ChildRef, PageDecodeError, RTreePageHeader, decode_page, encode_page};
+pub use tree::{RTree, TreeError};
 
 /// Page size used by every R-tree page on disk and in memory.
 /// Mirrors `crate::page_cache::PAGE_SIZE` so the same page cache

@@ -59,9 +59,33 @@
 
 ## 3. Incremental insert / delete
 
-- [ ] 3.1 `RTree::insert(node_id, point)` — tree-descend choosing the child whose bbox expansion is minimal; split on overflow via quadratic split.
-- [ ] 3.2 `RTree::delete(node_id)` — locate + remove; on leaf underflow re-insert orphaned entries (simpler than merging, competitive for read-heavy).
-- [ ] 3.3 Insert / delete unit tests: insert-then-query roundtrip, delete removes from query results, underflow re-insert preserves all surviving entries.
+- [x] 3.1 `RTree::insert(node_id, x, y)` in
+            `index/rtree/tree.rs` descends from the root choosing
+            the child with minimal area expansion (ties on smaller
+            current area), inserts at the leaf, and runs the
+            quadratic-split heuristic (Guttman 1984) on overflow:
+            seeds = pair with maximum union-vs-individual waste,
+            then assign each remaining entry to whichever group it
+            expands less, with a min-fill guard that force-fills
+            the smaller group when it would underflow. Splits
+            propagate to the parent and grow the tree by one
+            level if they reach the root.
+- [x] 3.2 `RTree::delete(node_id)` locates the owning leaf, drops
+            the matching entry, and refreshes the parent-bbox
+            chain. On underflow (count below
+            `RTREE_MIN_FANOUT / 2`) the leaf is detached and its
+            orphans go through the regular insert path; empty
+            parent pages get pruned recursively. Unknown ids
+            surface as `TreeError::NotFound(id)`.
+- [x] 3.3 Eight `index::rtree::tree::tests` cover the contract:
+            lazy root creation on first insert, `query_bbox`
+            roundtrip across 50 entries, overflow → split with
+            height growing to 2, delete shrinks the visible set,
+            unknown-id error, underflow re-insert preserves every
+            surviving entry across 200 inserts + 40 deletes,
+            re-inserting the same node id moves the entry, and
+            `RTree::from_packed` round-trips a 400-leaf bulk-load
+            through the runtime query path.
 
 ## 4. Queries
 
