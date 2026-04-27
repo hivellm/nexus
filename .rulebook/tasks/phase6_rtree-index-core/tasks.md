@@ -36,8 +36,26 @@
             collapsed-axis handling, locality of sorted
             neighbours on a 4×4 grid, stability on duplicate
             coords, and run-to-run determinism.
-- [ ] 2.3 Bottom-up pack: 127 entries per leaf, parent pages hold child bbox unions, recurse to root.
-- [ ] 2.4 Byte-identical-output test across two replicas on the same input.
+- [x] 2.3 `bulk_pack` in `index/rtree/packer.rs` chunks the
+            Hilbert-sorted leaves into 127-entry pages, computes
+            per-chunk bounding-box unions for the parent level,
+            and recurses level-by-level until a single root
+            remains. Page ids are assigned monotonically in pack
+            order; the root id is the last one allocated. Returns
+            `PackedTree { pages, root_page_id, height }` so callers
+            can stream the encoded buffers straight into the page
+            store.
+- [x] 2.4 `pack_is_byte_identical_across_runs` packs a 500-entry
+            input twice and asserts every page byte plus the root
+            id and height match. Combined with the deterministic
+            encoder (§1) and stable Hilbert sort (§2.2), two
+            replicas given the same input produce byte-identical
+            page files. Eight more `index::rtree::packer::tests`
+            cover empty input, single-leaf, below-fanout
+            single-page, full-capacity-no-promote, overflow → two
+            levels, three-level overflow at fanout², parent-bbox
+            covers every leaf, and leaf 3-D z-coord round-tripping
+            through the pack.
 
 ## 3. Incremental insert / delete
 

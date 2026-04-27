@@ -23,9 +23,11 @@
 //! against this same module tree.
 
 pub mod hilbert;
+pub mod packer;
 pub mod page;
 
 pub use hilbert::{hilbert_index_2d, hilbert_index_3d};
+pub use packer::{PACK_TARGET_FANOUT, PackedTree, bounding_box, bulk_pack};
 pub use page::{ChildRef, PageDecodeError, RTreePageHeader, decode_page, encode_page};
 
 /// Page size used by every R-tree page on disk and in memory.
