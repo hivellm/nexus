@@ -14,7 +14,7 @@
  * Selection state lives here too so the inspector + GraphView stay
  * in lock-step without prop-drilling through ResultsTabs.
  */
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useApiBase, useExecuteCypher } from '../../services/queries';
 import { api } from '../../services/api';
 import { sanitizeCypher } from '../../services/cypher';
@@ -30,7 +30,12 @@ import { ResultsTabs, type ResultMode } from './ResultsTabs';
 import { TableView } from './TableView';
 import { JsonView } from './JsonView';
 import { PlanView } from './PlanView';
-import { GraphView, extractGraph, type GraphRelationship } from './GraphView';
+import {
+  GraphView,
+  extractGraph,
+  type GraphRelationship,
+  type GraphViewHandle,
+} from './GraphView';
 import { GraphControls } from './GraphControls';
 import { GraphLegend } from './GraphLegend';
 import { NodeInspector } from './NodeInspector';
@@ -50,8 +55,7 @@ export function Workspace() {
   const [result, setResult] = useState<CypherResponse | null>(null);
   const [extraRels, setExtraRels] = useState<GraphRelationship[]>([]);
   const [selectedNodeId, setSelectedNodeId] = useState<number | null>(null);
-  const [zoom, setZoom] = useState(1);
-  const [layoutSeed, setLayoutSeed] = useState(0);
+  const graphRef = useRef<GraphViewHandle>(null);
 
   // Seed a starter tab with the sample query on first mount so the
   // editor is not a blank screen on a fresh / cleared session.
@@ -188,18 +192,19 @@ export function Workspace() {
             </div>
           )}
           {mode === 'graph' && (
-            <div className="graph-pane" key={layoutSeed} style={{ transform: `scale(${zoom})` }}>
+            <div className="graph-pane">
               <GraphView
+                ref={graphRef}
                 result={result}
                 extraRelationships={extraRels}
                 selectedId={selectedNodeId}
                 onSelect={setSelectedNodeId}
               />
               <GraphControls
-                onZoomIn={() => setZoom((z) => Math.min(2.5, z + 0.15))}
-                onZoomOut={() => setZoom((z) => Math.max(0.5, z - 0.15))}
-                onFit={() => setZoom(1)}
-                onRefreshLayout={() => setLayoutSeed((s) => s + 1)}
+                onZoomIn={() => graphRef.current?.zoomBy(1.4)}
+                onZoomOut={() => graphRef.current?.zoomBy(1 / 1.4)}
+                onFit={() => graphRef.current?.zoomToFit()}
+                onRefreshLayout={() => graphRef.current?.refreshLayout()}
               />
               <GraphLegend nodes={nodes} />
               <NodeInspector

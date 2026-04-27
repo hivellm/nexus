@@ -4,7 +4,7 @@
  * see which palette entries map to which labels at a glance.
  */
 import type { GraphNode } from './GraphView';
-import { LABEL_COLORS } from './GraphView';
+import { colorForLabel } from './GraphView';
 
 interface GraphLegendProps {
   nodes: GraphNode[];
@@ -26,7 +26,7 @@ function summarize(nodes: GraphNode[]): LegendEntry[] {
     .map(([label, count]) => ({
       label,
       count,
-      color: LABEL_COLORS[label] ?? 'var(--accent)',
+      color: colorForLabel(label === '(unlabelled)' ? null : label),
     }))
     .sort((a, b) => b.count - a.count);
 }

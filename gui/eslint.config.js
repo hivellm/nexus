@@ -36,6 +36,7 @@ export default [
         navigator: 'readonly',
         performance: 'readonly',
         URL: 'readonly',
+        ResizeObserver: 'readonly',
         setTimeout: 'readonly',
         clearTimeout: 'readonly',
         setInterval: 'readonly',

@@ -1,16 +1,23 @@
 /**
- * GraphView — SVG renderer matching the mockup's empty/result
- * shape. Real production rendering swaps to `vis-network` once the
- * graph extraction in the workspace is wired through; for now we
- * extract nodes/relationships from a `CypherResponse` and lay them
- * out with a deterministic radial layout so the view is stable
- * across re-renders (no physics jitter on hover).
+ * GraphView — force-directed Cypher result renderer backed by
+ * `react-force-graph-2d` (canvas + d3-force, MIT-licensed). Replaces
+ * the earlier hand-rolled SVG radial layout, which couldn't render
+ * edges between large projections without falling back to a fixed
+ * concentric ring.
  *
- * Selection writes through `onSelect(nodeId)`; the workspace
- * surfaces a `NodeInspector` on the right edge keyed off the
- * selection.
+ * Data flow:
+ *   1. `extractGraph(result)` walks the CypherResponse and pulls
+ *      out `_nexus_id`-tagged nodes + `_nexus_id` + `type` rels.
+ *   2. `extraRelationships` (out-of-band edges fetched by the
+ *      Workspace when the user's projection is nodes-only) merges
+ *      with #1, deduped by id.
+ *   3. The merged set feeds ForceGraph2D's `graphData` prop.
+ *
+ * Node click → `onSelect(id)`; background click → `onSelect(null)`.
+ * Selection highlights the node ring, label, and adjacent edges.
  */
-import { useMemo } from 'react';
+import { forwardRef, useEffect, useImperativeHandle, useMemo, useRef, useState } from 'react';
+import ForceGraph2D, { type ForceGraphMethods } from 'react-force-graph-2d';
 import type { CypherResponse } from '../../types/api';
 
 export interface GraphNode {
@@ -26,6 +33,21 @@ export interface GraphRelationship {
   target: number;
 }
 
+interface RFGNode {
+  id: number;
+  label: string | null;
+  display: string;
+  color: string;
+  properties: Record<string, unknown>;
+}
+
+interface RFGLink {
+  id: number;
+  source: number;
+  target: number;
+  type: string;
+}
+
 const LABEL_COLORS: Record<string, string> = {
   Module: 'var(--label-module)',
   Function: 'var(--label-function)',
@@ -34,9 +56,34 @@ const LABEL_COLORS: Record<string, string> = {
   Crate: 'var(--label-crate)',
 };
 
-function colorFor(label: string | null): string {
-  if (label && LABEL_COLORS[label]) return LABEL_COLORS[label];
-  return 'var(--accent)';
+// CSS variables don't resolve inside <canvas>, so we mirror the
+// token palette as static hex values for use by the renderer.
+const FALLBACK_PALETTE = [
+  '#00d4ff', // accent
+  '#a78bfa', // function
+  '#10b981', // ok
+  '#f59e0b', // warn
+  '#ef4444', // err
+  '#3b82f6', // info
+  '#ec4899',
+  '#22d3ee',
+  '#84cc16',
+  '#f97316',
+];
+
+const UNLABELLED_COLOR = '#7a8290';
+
+/** Stable hash → palette index so the same label always maps to
+ * the same color across remounts and across the legend. */
+function hashLabel(label: string): number {
+  let h = 5381;
+  for (let i = 0; i < label.length; i++) h = ((h << 5) + h + label.charCodeAt(i)) | 0;
+  return Math.abs(h);
+}
+
+export function colorForLabel(label: string | null): string {
+  if (!label) return UNLABELLED_COLOR;
+  return FALLBACK_PALETTE[hashLabel(label) % FALLBACK_PALETTE.length];
 }
 
 function isNexusNode(v: unknown): v is Record<string, unknown> {
@@ -56,8 +103,7 @@ function isNexusRel(v: unknown): v is Record<string, unknown> {
 /** Pull nodes + relationships out of a CypherResponse. The server
  * encodes nodes with `_nexus_id` and rels with `_nexus_id` + `type`;
  * we walk every cell of every row, deduplicate by id, and
- * reconstruct edges from adjacent column positions matching the
- * Vue archive's heuristic. */
+ * reconstruct edges from adjacent column positions. */
 export function extractGraph(result: CypherResponse | null): {
   nodes: GraphNode[];
   relationships: GraphRelationship[];
@@ -106,57 +152,25 @@ export function extractGraph(result: CypherResponse | null): {
   return { nodes: Array.from(nodes.values()), relationships: rels };
 }
 
-interface LaidOutNode extends GraphNode {
-  x: number;
-  y: number;
-}
-
-/**
- * Deterministic layout. For small projections (≤ 60 nodes) a single
- * ring; beyond that we lay nodes out on concentric rings with a
- * fixed angular spacing so neighbours don't pile on top of each
- * other when 1000+ nodes come back from a `MATCH (n) RETURN n`.
- */
-function layoutRadial(nodes: GraphNode[], width: number, height: number): LaidOutNode[] {
-  if (nodes.length === 0) return [];
-  const cx = width / 2;
-  const cy = height / 2;
-  if (nodes.length === 1) return [{ ...nodes[0], x: cx, y: cy }];
-
-  const minDim = Math.min(width, height);
-  if (nodes.length <= 60) {
-    const radius = minDim * 0.36;
-    return nodes.map((n, i) => {
-      const a = (i / nodes.length) * Math.PI * 2 - Math.PI / 2;
-      return { ...n, x: cx + Math.cos(a) * radius, y: cy + Math.sin(a) * radius };
-    });
+function pickDisplay(n: GraphNode): string {
+  const p = n.properties;
+  for (const k of ['name', 'title', 'natural_key', 'path']) {
+    const v = p[k];
+    if (typeof v === 'string') return v.length > 32 ? v.slice(-32) : v;
   }
-
-  // Concentric rings: 60 nodes per ring, each ring ~36px further out.
-  const perRing = 60;
-  const ringStep = Math.max(28, minDim * 0.05);
-  return nodes.map((n, i) => {
-    const ring = Math.floor(i / perRing);
-    const idxInRing = i % perRing;
-    const slots = ring === 0 ? perRing : perRing + ring * 6;
-    const r = minDim * 0.18 + ring * ringStep;
-    const a = (idxInRing / slots) * Math.PI * 2 - Math.PI / 2;
-    return { ...n, x: cx + Math.cos(a) * r, y: cy + Math.sin(a) * r };
-  });
+  return `#${n.id}`;
 }
 
-function nodeRadius(count: number, selected: boolean): number {
-  if (count <= 25) return selected ? 22 : 18;
-  if (count <= 100) return selected ? 14 : 11;
-  if (count <= 400) return selected ? 8 : 6;
-  return selected ? 5 : 3.5;
+export interface GraphViewHandle {
+  zoomToFit: () => void;
+  zoomBy: (factor: number) => void;
+  refreshLayout: () => void;
 }
 
 interface GraphViewProps {
   result: CypherResponse | null;
-  /** Edges fetched out-of-band (e.g. the workspace's auto-fetch
-   *  for queries that project nodes only). Merged with the rels
-   *  extracted from `result` and de-duplicated by id. */
+  /** Edges fetched out-of-band; merged with the rels extracted
+   *  from `result` and deduplicated by id. */
   extraRelationships?: GraphRelationship[];
   selectedId: number | null;
   onSelect: (id: number | null) => void;
@@ -164,46 +178,141 @@ interface GraphViewProps {
   height?: number;
 }
 
-export function GraphView({
-  result,
-  extraRelationships,
-  selectedId,
-  onSelect,
-  width = 720,
-  height = 480,
-}: GraphViewProps) {
+export const GraphView = forwardRef<GraphViewHandle, GraphViewProps>(function GraphView(
+  { result, extraRelationships, selectedId, onSelect, width, height },
+  ref,
+) {
+  const containerRef = useRef<HTMLDivElement | null>(null);
+  const [dims, setDims] = useState<{ w: number; h: number }>({ w: 600, h: 400 });
+
+  // ForceGraph2D defaults to window size when width/height are
+  // omitted, which overflows our flex layout. Watch the wrapper
+  // div and feed the rendered size into the canvas.
+  useEffect(() => {
+    if (typeof width === 'number' && typeof height === 'number') {
+      setDims({ w: width, h: height });
+      return;
+    }
+    const el = containerRef.current;
+    if (!el) return;
+    const apply = () => {
+      const r = el.getBoundingClientRect();
+      setDims({ w: Math.max(1, Math.floor(r.width)), h: Math.max(1, Math.floor(r.height)) });
+    };
+    apply();
+    const ro = new ResizeObserver(apply);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [width, height]);
+
   const { nodes, relationships } = useMemo(() => extractGraph(result), [result]);
-  const mergedRels = useMemo(() => {
-    if (!extraRelationships || extraRelationships.length === 0) return relationships;
-    const seen = new Set(relationships.map((r) => r.id));
-    const merged = [...relationships];
-    for (const r of extraRelationships) {
-      if (!seen.has(r.id)) {
-        merged.push(r);
+
+  const data = useMemo(() => {
+    const seen = new Set<number>();
+    const links: RFGLink[] = [];
+    for (const r of relationships) {
+      if (seen.has(r.id)) continue;
+      seen.add(r.id);
+      links.push({ id: r.id, source: r.source, target: r.target, type: r.type });
+    }
+    if (extraRelationships) {
+      for (const r of extraRelationships) {
+        if (seen.has(r.id)) continue;
         seen.add(r.id);
+        links.push({ id: r.id, source: r.source, target: r.target, type: r.type });
       }
     }
-    return merged;
-  }, [relationships, extraRelationships]);
 
-  // Canvas grows for large projections so the concentric rings
-  // have room to breathe; layout uses the same dimensions.
-  const svgW = nodes.length > 200 ? Math.max(width, 1200) : width;
-  const svgH = nodes.length > 200 ? Math.max(height, 800) : height;
+    const present = new Set(nodes.map((n) => n.id));
+    const padded: RFGNode[] = nodes.map((n) => ({
+      id: n.id,
+      label: n.label,
+      display: pickDisplay(n),
+      color: colorForLabel(n.label),
+      properties: n.properties,
+    }));
+    // Edges may reference nodes outside the projection (the auto-
+    // fetch pulls every (a)-[r]->(b) where both endpoints are in
+    // the set, but if `result` itself contains stray edges we want
+    // their endpoints to render). Add placeholders for any
+    // referenced id that's not already a known node.
+    for (const l of links) {
+      if (!present.has(l.source as number)) {
+        padded.push({
+          id: l.source as number,
+          label: null,
+          display: `#${l.source}`,
+          color: UNLABELLED_COLOR,
+          properties: {},
+        });
+        present.add(l.source as number);
+      }
+      if (!present.has(l.target as number)) {
+        padded.push({
+          id: l.target as number,
+          label: null,
+          display: `#${l.target}`,
+          color: UNLABELLED_COLOR,
+          properties: {},
+        });
+        present.add(l.target as number);
+      }
+    }
+    return { nodes: padded, links };
+  }, [nodes, relationships, extraRelationships]);
 
-  const laidOut = useMemo(
-    () => layoutRadial(nodes, svgW, svgH),
-    [nodes, svgW, svgH],
+  // ForceGraph2D mutates the link source/target props in-place to
+  // hold node *references* instead of ids after the first tick.
+  // Track both forms on the selection set so highlight comparisons
+  // work whether we're looking at the raw or the resolved shape.
+  const selectedNeighbors = useMemo(() => {
+    if (selectedId === null) return new Set<number>();
+    const s = new Set<number>([selectedId]);
+    for (const l of data.links) {
+      const src = typeof l.source === 'object' ? (l.source as RFGNode).id : (l.source as number);
+      const tgt = typeof l.target === 'object' ? (l.target as RFGNode).id : (l.target as number);
+      if (src === selectedId) s.add(tgt);
+      if (tgt === selectedId) s.add(src);
+    }
+    return s;
+  }, [data.links, selectedId]);
+
+  const fgRef = useRef<ForceGraphMethods<RFGNode, RFGLink>>(undefined);
+
+  useImperativeHandle(
+    ref,
+    () => ({
+      zoomToFit: () => {
+        fgRef.current?.zoomToFit(400, 80);
+      },
+      zoomBy: (factor: number) => {
+        const fg = fgRef.current;
+        if (!fg) return;
+        const z = fg.zoom();
+        fg.zoom(Math.min(8, Math.max(0.05, z * factor)), 200);
+      },
+      refreshLayout: () => {
+        fgRef.current?.d3ReheatSimulation();
+      },
+    }),
+    [],
   );
-  const positionById = useMemo(() => {
-    const m = new Map<number, LaidOutNode>();
-    for (const n of laidOut) m.set(n.id, n);
-    return m;
-  }, [laidOut]);
 
-  if (nodes.length === 0) {
+  // Auto-fit after each result change so a fresh query lands
+  // centered. The 400ms delay lets the simulation settle a bit
+  // before measuring node positions.
+  useEffect(() => {
+    if (data.nodes.length === 0) return;
+    const t = setTimeout(() => {
+      fgRef.current?.zoomToFit(400, 80);
+    }, 600);
+    return () => clearTimeout(t);
+  }, [data]);
+
+  if (data.nodes.length === 0) {
     return (
       <div
+        ref={containerRef}
         className="results-graph results-graph-empty"
         onClick={() => onSelect(null)}
       >
@@ -216,92 +325,71 @@ export function GraphView({
     );
   }
 
+  // Auto-tune node radius for very large graphs so 5000 dots don't
+  // pile into a solid blob.
+  const baseSize = data.nodes.length <= 100 ? 5 : data.nodes.length <= 500 ? 3.5 : 2.5;
+
   return (
-    <div className="results-graph">
-      <svg
-        width={svgW}
-        height={svgH}
-        viewBox={`0 0 ${svgW} ${svgH}`}
-        onClick={() => onSelect(null)}
-        role="img"
-        aria-label="Query graph result"
-      >
-        {mergedRels.map((r) => {
-          const a = positionById.get(r.source);
-          const b = positionById.get(r.target);
-          if (!a || !b) return null;
-          return (
-            <g key={r.id}>
-              <line
-                x1={a.x}
-                y1={a.y}
-                x2={b.x}
-                y2={b.y}
-                stroke="var(--fg-3)"
-                strokeWidth={1.2}
-              />
-              <text
-                x={(a.x + b.x) / 2}
-                y={(a.y + b.y) / 2 - 4}
-                textAnchor="middle"
-                fontSize={10}
-                fill="var(--fg-3)"
-                fontFamily="JetBrains Mono"
-              >
-                :{r.type}
-              </text>
-            </g>
-          );
-        })}
-        {laidOut.map((n) => {
-          const isSelected = n.id === selectedId;
-          const r = nodeRadius(nodes.length, isSelected);
-          const showLabels = nodes.length <= 60;
-          return (
-            <g
-              key={n.id}
-              transform={`translate(${n.x},${n.y})`}
-              onClick={(e) => {
-                e.stopPropagation();
-                onSelect(n.id);
-              }}
-              style={{ cursor: 'pointer' }}
-            >
-              <circle
-                r={r}
-                fill={colorFor(n.label)}
-                fillOpacity={0.18}
-                stroke={colorFor(n.label)}
-                strokeWidth={isSelected ? 2.5 : 1.5}
-              />
-              {showLabels && (
-                <text
-                  textAnchor="middle"
-                  y={4}
-                  fontSize={10}
-                  fontFamily="JetBrains Mono"
-                  fill="var(--fg-1)"
-                >
-                  {(n.properties.name as string | undefined) ?? `#${n.id}`}
-                </text>
-              )}
-              {showLabels && n.label && (
-                <text
-                  textAnchor="middle"
-                  y={36}
-                  fontSize={9}
-                  fontFamily="JetBrains Mono"
-                  fill={colorFor(n.label)}
-                >
-                  :{n.label}
-                </text>
-              )}
-            </g>
-          );
-        })}
-      </svg>
+    <div ref={containerRef} className="results-graph">
+      <ForceGraph2D
+        ref={fgRef}
+        graphData={data}
+        width={dims.w}
+        height={dims.h}
+        backgroundColor="#0e1114"
+        nodeRelSize={baseSize}
+        nodeColor={(n) => (n as RFGNode).color}
+        nodeLabel={(n) => {
+          const node = n as RFGNode;
+          const lbl = node.label ? `:${node.label}` : '';
+          return `<div style="font-family:var(--font-mono);font-size:11px"><strong>${node.display}</strong> ${lbl}</div>`;
+        }}
+        linkColor={() => 'rgba(160,170,180,0.45)'}
+        linkDirectionalArrowLength={3}
+        linkDirectionalArrowRelPos={1}
+        linkWidth={(l) => {
+          const link = l as RFGLink;
+          const sId = typeof link.source === 'object' ? (link.source as RFGNode).id : (link.source as number);
+          const tId = typeof link.target === 'object' ? (link.target as RFGNode).id : (link.target as number);
+          if (selectedId !== null && (sId === selectedId || tId === selectedId)) return 2;
+          return 1;
+        }}
+        linkLabel={(l) => `:${(l as RFGLink).type}`}
+        onNodeClick={(n) => onSelect((n as RFGNode).id)}
+        onBackgroundClick={() => onSelect(null)}
+        nodeCanvasObjectMode={() => 'after'}
+        nodeCanvasObject={(n, ctx, scale) => {
+          const node = n as RFGNode & { x?: number; y?: number };
+          const inSel = selectedId !== null && selectedNeighbors.has(node.id);
+          const isFocus = node.id === selectedId;
+          if (typeof node.x !== 'number' || typeof node.y !== 'number') return;
+
+          // Selection ring.
+          if (isFocus) {
+            ctx.beginPath();
+            ctx.arc(node.x, node.y, baseSize + 4, 0, 2 * Math.PI);
+            ctx.strokeStyle = '#00d4ff';
+            ctx.lineWidth = 2 / scale;
+            ctx.stroke();
+          }
+
+          // Label rendering: skip for very large graphs; show
+          // adjacent labels when a focus is selected.
+          if (data.nodes.length > 200 && !inSel) return;
+          const showLabel =
+            data.nodes.length <= 100 || inSel || isFocus;
+          if (!showLabel) return;
+          const text = node.display;
+          const fontSize = Math.max(8 / scale, 2);
+          ctx.font = `${fontSize}px JetBrains Mono, monospace`;
+          ctx.textAlign = 'center';
+          ctx.textBaseline = 'top';
+          ctx.fillStyle = '#cdd3da';
+          ctx.fillText(text, node.x, node.y + baseSize + 2);
+        }}
+      />
     </div>
   );
-}
+});
 
 export { LABEL_COLORS };
