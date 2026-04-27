@@ -100,10 +100,20 @@ function isNexusRel(v: unknown): v is Record<string, unknown> {
   );
 }
 
+function isStringArray(v: unknown): v is string[] {
+  return Array.isArray(v) && v.every((x) => typeof x === 'string');
+}
+
 /** Pull nodes + relationships out of a CypherResponse. The server
  * encodes nodes with `_nexus_id` and rels with `_nexus_id` + `type`;
  * we walk every cell of every row, deduplicate by id, and
- * reconstruct edges from adjacent column positions. */
+ * reconstruct edges from adjacent column positions.
+ *
+ * Labels: Nexus does not embed `_nexus_labels` on the node object,
+ * so the extractor also looks for an adjacent `Array<string>` cell
+ * (the common `RETURN n, labels(n)` pattern) and applies its first
+ * entry as the node's label. The Workspace's label auto-fetch
+ * fills in the rest when no `labels(n)` projection is present. */
 export function extractGraph(result: CypherResponse | null): {
   nodes: GraphNode[];
   relationships: GraphRelationship[];
@@ -132,12 +142,20 @@ export function extractGraph(result: CypherResponse | null): {
         }
       } else if (isNexusNode(cell)) {
         const id = (cell as { _nexus_id: number })._nexus_id;
-        if (!nodes.has(id)) {
-          const labelArr = (cell as { _nexus_labels?: unknown })._nexus_labels;
-          const label =
-            Array.isArray(labelArr) && typeof labelArr[0] === 'string'
-              ? (labelArr[0] as string)
-              : null;
+        // Adjacent `labels(n)` array — apply to this node.
+        const next = i + 1 < row.length ? row[i + 1] : undefined;
+        const adjacentLabel = isStringArray(next) && next.length > 0 ? next[0] : null;
+        const embeddedLabels = (cell as { _nexus_labels?: unknown })._nexus_labels;
+        const embeddedFirst =
+          Array.isArray(embeddedLabels) && typeof embeddedLabels[0] === 'string'
+            ? (embeddedLabels[0] as string)
+            : null;
+
+        const existing = nodes.get(id);
+        const label = adjacentLabel ?? embeddedFirst ?? existing?.label ?? null;
+        if (existing) {
+          if (label && !existing.label) existing.label = label;
+        } else {
           const props: Record<string, unknown> = {};
           for (const [k, v] of Object.entries(cell as Record<string, unknown>)) {
             if (k.startsWith('_nexus_')) continue;
@@ -172,6 +190,9 @@ interface GraphViewProps {
   /** Edges fetched out-of-band; merged with the rels extracted
    *  from `result` and deduplicated by id. */
   extraRelationships?: GraphRelationship[];
+  /** Labels fetched out-of-band keyed by `_nexus_id`. Applied to
+   *  any extracted node whose label was null. */
+  extraLabels?: Record<number, string>;
   selectedId: number | null;
   onSelect: (id: number | null) => void;
   width?: number;
@@ -179,7 +200,7 @@ interface GraphViewProps {
 }
 
 export const GraphView = forwardRef<GraphViewHandle, GraphViewProps>(function GraphView(
-  { result, extraRelationships, selectedId, onSelect, width, height },
+  { result, extraRelationships, extraLabels, selectedId, onSelect, width, height },
   ref,
 ) {
   const containerRef = useRef<HTMLDivElement | null>(null);
@@ -224,13 +245,16 @@ export const GraphView = forwardRef<GraphViewHandle, GraphViewProps>(function Gr
     }
 
     const present = new Set(nodes.map((n) => n.id));
-    const padded: RFGNode[] = nodes.map((n) => ({
-      id: n.id,
-      label: n.label,
-      display: pickDisplay(n),
-      color: colorForLabel(n.label),
-      properties: n.properties,
-    }));
+    const padded: RFGNode[] = nodes.map((n) => {
+      const finalLabel = n.label ?? extraLabels?.[n.id] ?? null;
+      return {
+        id: n.id,
+        label: finalLabel,
+        display: pickDisplay(n),
+        color: colorForLabel(finalLabel),
+        properties: n.properties,
+      };
+    });
     // Edges may reference nodes outside the projection (the auto-
     // fetch pulls every (a)-[r]->(b) where both endpoints are in
     // the set, but if `result` itself contains stray edges we want
@@ -259,7 +283,7 @@ export const GraphView = forwardRef<GraphViewHandle, GraphViewProps>(function Gr
       }
     }
     return { nodes: padded, links };
-  }, [nodes, relationships, extraRelationships]);
+  }, [nodes, relationships, extraRelationships, extraLabels]);
 
   // ForceGraph2D mutates the link source/target props in-place to
   // hold node *references* instead of ids after the first tick.

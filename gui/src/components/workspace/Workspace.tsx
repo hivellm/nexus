@@ -54,6 +54,7 @@ export function Workspace() {
   const [mode, setMode] = useState<ResultMode>('graph');
   const [result, setResult] = useState<CypherResponse | null>(null);
   const [extraRels, setExtraRels] = useState<GraphRelationship[]>([]);
+  const [extraLabels, setExtraLabels] = useState<Record<number, string>>({});
   const [selectedNodeId, setSelectedNodeId] = useState<number | null>(null);
   const graphRef = useRef<GraphViewHandle>(null);
 
@@ -80,6 +81,7 @@ export function Workspace() {
           const elapsed = performance.now() - startedAt;
           setResult(data);
           setExtraRels([]);
+          setExtraLabels({});
           setSelectedNodeId(null);
           pushHistory({
             query: sanitized,
@@ -164,9 +166,59 @@ export function Workspace() {
     [relationships, extraRels],
   );
 
+  // Auto-fetch `labels(n)` for any projected node that came back
+  // without a label. Nexus does not embed labels on the node
+  // object (Cortex returns just `_nexus_id` + properties), so the
+  // graph would otherwise paint every node as "(unlabelled)".
+  useEffect(() => {
+    if (!result || !baseUrl) return;
+    if (nodes.length === 0) return;
+    const missing = nodes.filter((n) => !n.label).map((n) => n.id);
+    if (missing.length === 0) return;
+    const idList = missing.slice(0, 1000).join(', ');
+    const probe = `MATCH (n) WHERE n._nexus_id IN [${idList}] RETURN n._nexus_id AS id, labels(n) AS lbls`;
+    let cancelled = false;
+    api
+      .executeCypher(baseUrl, { query: probe }, { apiKey })
+      .then((data) => {
+        if (cancelled) return;
+        const cols = data.columns;
+        const idIdx = cols.indexOf('id');
+        const lblsIdx = cols.indexOf('lbls');
+        if (idIdx < 0 || lblsIdx < 0) return;
+        const next: Record<number, string> = {};
+        for (const row of data.rows) {
+          const id = row[idIdx];
+          const lbls = row[lblsIdx];
+          if (typeof id === 'number' && Array.isArray(lbls) && typeof lbls[0] === 'string') {
+            next[id] = lbls[0];
+          }
+        }
+        setExtraLabels(next);
+      })
+      .catch(() => {
+        // Best-effort — graph still renders without colors.
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [result, baseUrl, apiKey, nodes]);
+
+  // Merge auto-fetched labels onto the extracted nodes for the
+  // GraphView + GraphLegend.
+  const labeledNodes = useMemo(
+    () =>
+      nodes.map((n) =>
+        n.label ?? extraLabels[n.id]
+          ? { ...n, label: n.label ?? extraLabels[n.id] ?? null }
+          : n,
+      ),
+    [nodes, extraLabels],
+  );
+
   const selectedNode = useMemo(
-    () => nodes.find((n) => n.id === selectedNodeId) ?? null,
-    [nodes, selectedNodeId],
+    () => labeledNodes.find((n) => n.id === selectedNodeId) ?? null,
+    [labeledNodes, selectedNodeId],
   );
 
   const ms = result?.execution_time_ms ?? 0;
@@ -197,6 +249,7 @@ export function Workspace() {
                 ref={graphRef}
                 result={result}
                 extraRelationships={extraRels}
+                extraLabels={extraLabels}
                 selectedId={selectedNodeId}
                 onSelect={setSelectedNodeId}
               />
@@ -206,7 +259,7 @@ export function Workspace() {
                 onFit={() => graphRef.current?.zoomToFit()}
                 onRefreshLayout={() => graphRef.current?.refreshLayout()}
               />
-              <GraphLegend nodes={nodes} />
+              <GraphLegend nodes={labeledNodes} />
               <NodeInspector
                 node={selectedNode}
                 relationships={allRelationships}
