@@ -375,12 +375,13 @@
 
 ## 10. Cleanup
 
-- [ ] 10.1 Delete `gui/src.vue-archive/` once parity confirmed
-            — gated behind explicit user authorization per the
-            destructive-op rule in CLAUDE.md. Parity is
-            confirmed (every Vue component has a React
-            counterpart under `gui/src/components/`); awaiting
-            "yes, delete it" before the `rm -rf` runs.
+- [x] 10.1 `gui/src.vue-archive/` removed via `rm -rf`. User
+            authorized the destructive op ("bora") after
+            React parity was confirmed (every Vue component
+            has a counterpart under `gui/src/components/`).
+            Twelve files (App.vue + .backup, components/,
+            router/, services/, stores/, types/, main.ts,
+            shims-vue.d.ts, style.css) gone.
 - [x] 10.2 Moved `gui/assets/` → `docs/design/gui-mockup-v2/`.
             Eight files (Nexus GUI.html + chrome / data /
             icons / panels / right / styles / workspace .jsx
