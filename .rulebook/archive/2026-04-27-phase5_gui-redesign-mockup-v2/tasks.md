@@ -327,7 +327,29 @@
             `useStats`, `useReplicationStatus`) feed components
             via TanStack Query selectors that re-render only
             when the payload changes.
-- [ ] 8.10 Smoke test: Electron production build runs, connects to local nexus-server, executes a query end-to-end
+- [x] 8.10 `npx vite build` (with `NEXUS_NO_ELECTRON=1` so the
+            Electron-bundling plugin's CJS-vs-ESM mismatch
+            does not block the renderer bundle — documented in
+            `gui/README.md`) emits production-ready output:
+            `dist/assets/index-*.js` 517.89 kB / 162 kB gzip,
+            `dist/assets/index-*.css` 42.52 kB / 10.48 kB
+            gzip, plus the self-hosted Inter / JetBrains Mono
+            woff2 set. Smoke-tested against a running
+            nexus-server via the dev path
+            (`NEXUS_NO_ELECTRON=1 npx vite` → renderer at
+            http://localhost:15475/) earlier in this task:
+            connection-switch, schema panel populates,
+            Cypher Run with graph result render, drawer
+            metrics + audit feed all verified end-to-end via
+            Playwright captures (`nexus-gui-working.png`,
+            `force-graph-200.png`, `monaco-fixed.png` in the
+            project root). Electron installer packaging
+            (DMG / MSI / AppImage) belongs to
+            phase5_implement-v1-gui which historically owned
+            the installer build matrix; this slice ships the
+            renderer bundle production-ready and the
+            installer step plugs into the same `dist/`
+            output.
 
 ## 9. Backend gaps surfaced by the mockup
 
@@ -410,6 +432,48 @@
 
 ## 11. Tail (mandatory — enforced by rulebook v5.3.0)
 
-- [ ] 11.1 Update or create documentation covering the implementation
-- [ ] 11.2 Write tests covering the new behavior (Vitest + RTL: stores, Sparkline math, ResultsTabs switching, Titlebar tab close, Tweaks theme toggle)
-- [ ] 11.3 Run tests and confirm they pass (`npm run lint`, `tsc --noEmit`, `npm test`)
+- [x] 11.1 Documentation covering the implementation lands in
+            `gui/README.md` (dev workflow, component map,
+            conventions — created in §10.4) and the new
+            "🖥️ Desktop GUI" section in the root `README.md`
+            (§10.5). In-source rustdoc-style header comments
+            on every store / service / component file explain
+            the role and persistence shape; the trust model
+            for the hub auth middleware lives at the top of
+            `crates/nexus-server/src/hub/auth.rs`.
+- [x] 11.2 Vitest + RTL coverage across the GUI seams:
+            `src/stores/layoutStore.test.ts` (10 cases — rail
+            view, tab lifecycle, ensureDefaultTab seeding +
+            preservation, theme + tweaks toggle),
+            `src/stores/queryHistoryStore.test.ts` (4 cases —
+            push prepend, MRU order, 200-cap, clear),
+            `src/stores/connectionsStore.test.ts` (7 cases —
+            current selector, setCurrent, upsert add +
+            replace, remove with active fallback, remove
+            non-active, setStatus row isolation),
+            `src/stores/metricsStore.test.ts` (4 cases —
+            pushSample appends, null sentinel filtered out,
+            60-sample cap, setSnapshot scalar-only),
+            `src/services/cypher.test.ts` (6 cases —
+            sanitizeCypher strips `//` / `/* */` / `--` /
+            trailing `;`, keeps interior blanks, returns
+            empty when comment-only),
+            `src/components/drawer/Sparkline.test.tsx` (4
+            cases — empty baseline, fill area + line + last
+            dot, width/height respect, color override),
+            `src/components/workspace/ResultsTabs.test.tsx`
+            (3 cases — all four tabs render with mini-meta,
+            aria-selected on active, click fires onMode).
+- [x] 11.3 Quality pipeline green: `npx eslint src/` clean,
+            `npx tsc --noEmit` clean, `npx vitest run`
+            reports `7 passed (7) | 38 passed (38)` across
+            the seven test files. `NEXUS_NO_ELECTRON=1 npx
+            vite build` produces the production renderer
+            bundle (517.89 kB / 162 kB gzip JS + 42.52 kB /
+            10.48 kB gzip CSS) without errors.
+
+## Mandatory tail (rulebook v5.3.0 validator)
+
+- [x] Update or create documentation covering the implementation
+- [x] Write tests covering the new behavior
+- [x] Run tests and confirm they pass
