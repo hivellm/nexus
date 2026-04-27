@@ -174,11 +174,60 @@
 
 ## 6. WAL + MVCC
 
-- [ ] 6.1 Add `WalEntry::RTreeInsert { index_id, node_id, bbox }`, `WalEntry::RTreeDelete { index_id, node_id }`, `WalEntry::RTreeBulkLoadDone { index_id, root_page }` to `crates/nexus-core/src/wal/mod.rs`.
-- [ ] 6.2 Replay dispatcher calls `RTreeRegistry::apply_wal_entry` the way FTS already works.
-- [ ] 6.3 Snapshot-aware read filter: after a seek, drop entries whose owning node is invisible at the reader's epoch.
-- [ ] 6.4 Atomic rebuild via `arc_swap`: old tree stays queryable until the new one is WAL-synced, then a single swap promotes it.
-- [ ] 6.5 Crash-recovery integration test at `crates/nexus-core/tests/rtree_crash_recovery.rs` — journal 5 000 inserts + a partial bulk-load-done, simulate kill-9, reopen, assert every WAL-committed row is visible.
+- [x] 6.1 Added `WalEntryType::{RTreeInsert, RTreeDelete,
+            RTreeBulkLoadDone}` (op-codes 0x50/0x51/0x52) and the
+            three matching `WalEntry` variants to
+            `crates/nexus-core/src/wal/mod.rs`. Variant fields:
+            `RTreeInsert { index_name, node_id, x, y }`,
+            `RTreeDelete { index_name, node_id }`,
+            `RTreeBulkLoadDone { index_name, root_page_id }`.
+            Serde framing comes for free via the existing
+            `WalEntry` derive; `entry_type()` match arms cover
+            the new variants.
+- [x] 6.2 New `RTreeRegistry` in
+            `crates/nexus-core/src/index/rtree/registry.rs` with
+            `apply_wal_entry(&WalEntry)`. The recovery loop
+            calls this for every entry; non-R-tree variants are
+            ignored so the same dispatcher can handle the whole
+            stream without pre-filtering. Insert / delete /
+            bulk-load-done all have explicit handlers; deletes
+            for never-inserted ids are idempotent so a partial
+            bulk-load that gets discarded by recovery doesn't
+            error.
+- [x] 6.3 `RTreeRegistry::nearest_with_filter(name, p, k,
+            metric, |id| visible)` runs the priority-queue walk,
+            then drops entries whose `visible(id)` is `false`
+            before they count against the `k` limit. Two-pass
+            over-fetch (2× then 8× target) preserves k under
+            high invisibility miss rates without bloating cold
+            queries. The R-tree itself stays epoch-free —
+            visibility lives at the executor layer where the
+            transaction manager is the source of truth.
+- [x] 6.4 `RTreeRegistry::swap_in(name, new_tree)` replaces the
+            backing `Arc<RTree>` behind a per-index
+            `RwLock<Arc<RTree>>` pointer swap. Readers grab a
+            cloned `Arc<RTree>` snapshot via
+            `RTreeRegistry::snapshot(name)` and keep using it
+            across a concurrent swap; the new tree only becomes
+            visible to subsequent snapshots. Verified by the
+            `swap_in_replaces_tree_atomically` test which holds
+            a pre-swap snapshot, performs the swap, and asserts
+            the snapshot still sees the old shape while a fresh
+            snapshot sees the new one.
+- [x] 6.5 `crates/nexus-core/tests/rtree_crash_recovery.rs`
+            covers the three scenarios from the spec:
+            (1) journal 5 000 committed inserts + a 500-row
+            partial bulk-load with NO `RTreeBulkLoadDone`
+            marker, drop the registry, replay every entry into
+            a fresh registry, assert all 5 500 nodes are
+            reachable through `query_bbox`/`within_distance`
+            and the spot-checked first/middle/last entries
+            land within their own coords;
+            (2) `RTreeBulkLoadDone` marker is a no-op for the
+            already-applied inserts;
+            (3) interleaved insert + delete sequences replay
+            in order and the final shape matches the live
+            tree's view before the crash.
 
 ## 7. Registry + executor integration
 

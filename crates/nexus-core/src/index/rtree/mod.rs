@@ -25,6 +25,7 @@
 pub mod hilbert;
 pub mod packer;
 pub mod page;
+pub mod registry;
 pub mod search;
 pub mod store;
 pub mod tree;
@@ -32,6 +33,7 @@ pub mod tree;
 pub use hilbert::{hilbert_index_2d, hilbert_index_3d};
 pub use packer::{PACK_TARGET_FANOUT, PackedTree, bounding_box, bulk_pack};
 pub use page::{ChildRef, PageDecodeError, RTreePageHeader, decode_page, encode_page};
+pub use registry::RTreeRegistry;
 pub use search::{
     Metric, NearestHit, SearchError, bbox_contains, bbox_intersects, bbox_to_point_sq,
 };

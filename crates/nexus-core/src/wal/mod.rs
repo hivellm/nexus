@@ -94,6 +94,12 @@ pub enum WalEntryType {
     FtsAdd = 0x42,
     /// Full-text document delete
     FtsDel = 0x43,
+    /// R-tree leaf insert (phase6_rtree-index-core §6).
+    RTreeInsert = 0x50,
+    /// R-tree leaf delete.
+    RTreeDelete = 0x51,
+    /// R-tree bulk-load completed marker.
+    RTreeBulkLoadDone = 0x52,
     /// Checkpoint marker
     Checkpoint = 0xFF,
 }
@@ -212,6 +218,39 @@ pub enum WalEntry {
         /// Node (or relationship) id to remove
         entity_id: u64,
     },
+    /// R-tree leaf insert (phase6_rtree-index-core §6.1).
+    /// Carries every field needed to replay the insert: which
+    /// index the entry belongs to, the owning node id, and the
+    /// 2-D point coordinates. The replay dispatcher routes this
+    /// to `RTreeRegistry::apply_wal_entry`.
+    RTreeInsert {
+        /// Registry name (`{label}.{property}` per the spec).
+        index_name: String,
+        /// Owning node id.
+        node_id: u64,
+        /// X coordinate.
+        x: f64,
+        /// Y coordinate.
+        y: f64,
+    },
+    /// R-tree leaf delete.
+    RTreeDelete {
+        /// Registry name.
+        index_name: String,
+        /// Owning node id.
+        node_id: u64,
+    },
+    /// R-tree bulk-load completion marker. Replay sees this when
+    /// a bulk-rebuild ran to completion before shutdown; absence
+    /// of this marker for a journalled bulk-load means the
+    /// rebuild was interrupted and the index must be re-built
+    /// from scratch on recovery.
+    RTreeBulkLoadDone {
+        /// Registry name.
+        index_name: String,
+        /// Root page id of the freshly-built tree.
+        root_page_id: u64,
+    },
 }
 
 impl WalEntry {
@@ -232,6 +271,9 @@ impl WalEntry {
             Self::FtsDropIndex { .. } => WalEntryType::FtsDropIndex,
             Self::FtsAdd { .. } => WalEntryType::FtsAdd,
             Self::FtsDel { .. } => WalEntryType::FtsDel,
+            Self::RTreeInsert { .. } => WalEntryType::RTreeInsert,
+            Self::RTreeDelete { .. } => WalEntryType::RTreeDelete,
+            Self::RTreeBulkLoadDone { .. } => WalEntryType::RTreeBulkLoadDone,
         }
     }
 
