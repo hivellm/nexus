@@ -55,8 +55,15 @@ serde_yaml = "0.9"
 toml = "1.1"
 rmp-serde.workspace = true
 chrono.workspace = true
-uuid = { version = "1.10", features = ["v4"] }
+uuid = { version = "1.10", features = ["v4", "serde"] }
 argon2 = "0.5"
+
+# HiveHub.Cloud integration (phase5_hub-integration §1)
+hivehub-internal-sdk = "1.0.0"
+# Lightweight HTTP client for the Hub liveness probe. The SDK already
+# pulls reqwest transitively; declaring it here keeps the import
+# surface explicit and lets us pin features.
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"] }
 parking_lot.workspace = true
 
 # Error handling

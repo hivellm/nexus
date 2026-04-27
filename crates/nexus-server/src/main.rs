@@ -210,6 +210,30 @@ async fn async_main(_worker_threads: usize) -> anyhow::Result<()> {
             .map_err(|e| anyhow::anyhow!("Failed to initialize audit logger: {}", e))?,
     );
 
+    // Hub integration (phase5_hub-integration §1).
+    // `HubClient::from_env()` returns `Ok(None)` when the operator
+    // hasn't configured `HIVEHUB_CLOUD_BASE_URL` (single-tenant
+    // standalone mode). With it configured, a missing API key is a
+    // hard startup error; a probe failure is logged but not fatal so
+    // a transient Hub outage doesn't take the server down.
+    let hub_client = match nexus_server::hub::HubClient::from_env() {
+        Ok(Some(client)) => {
+            let probe = client.ping().await;
+            info!(
+                target: "nexus_server::hub",
+                base_url = %client.base_url(),
+                status = ?probe,
+                "Hub liveness probe completed"
+            );
+            Some(client)
+        }
+        Ok(None) => None,
+        Err(e) => {
+            return Err(anyhow::anyhow!("Hub integration misconfigured: {e}"));
+        }
+    };
+    let _ = hub_client; // §2-§7 wiring lands in follow-up commits.
+
     // Create Nexus server state
     let nexus_server = Arc::new(NexusServer::new(
         executor.clone(),

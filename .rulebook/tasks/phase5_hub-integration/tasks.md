@@ -1,9 +1,28 @@
 ## 1. Internal SDK Integration
-- [ ] 1.1 Add hivehub-internal-sdk to Cargo.toml dependencies
-- [ ] 1.2 Create nexus-server/src/hub/client.rs for SDK wrapper
-- [ ] 1.3 Initialize Hub client on server startup
-- [ ] 1.4 Configure service API key from environment (HIVEHUB_SERVICE_API_KEY)
-- [ ] 1.5 Implement connection health checks and reconnection logic
+- [x] 1.1 Add `hivehub-internal-sdk = "1.0.0"` + a `reqwest` (rustls
+            only) dependency to `crates/nexus-server/Cargo.toml`
+- [x] 1.2 Create `crates/nexus-server/src/hub/{mod,client}.rs` —
+            opinionated wrapper around `HiveHubCloudClient`; redacts
+            the API key in `Debug`; exposes `sdk()`, `base_url()`,
+            and `ping()` so future modules don't import the SDK
+            directly
+- [x] 1.3 `main.rs` calls `HubClient::from_env()` immediately before
+            building `NexusServer` and runs a `ping()` probe; the
+            result is logged with the resolved base URL
+- [x] 1.4 Reads `HIVEHUB_CLOUD_SERVICE_API_KEY` /
+            `HIVEHUB_CLOUD_BASE_URL` (the env names the SDK already
+            documents — single source of truth instead of re-aliasing
+            to a Nexus-specific name). `HIVEHUB_DISABLED=1` is the
+            explicit opt-out for local / single-tenant deployments
+- [x] 1.5 `HubClient::ping()` runs a 3 s timeout HEAD via reqwest;
+            returns `HubHealthStatus::{Connected, Disconnected,
+            Disabled}`. Reconnection is best-effort: a probe failure
+            is logged + surfaces in `/health` once §2 wires the
+            handle into the server state; the server stays up so a
+            transient Hub outage doesn't kill in-flight Cypher
+            traffic. Four `hub::client::tests` unit tests (env
+            opt-out, missing key, explicit constructor, debug
+            redaction) all green.
 
 ## 2. Authentication Module
 - [ ] 2.1 Create nexus-server/src/auth/hub_auth.rs
