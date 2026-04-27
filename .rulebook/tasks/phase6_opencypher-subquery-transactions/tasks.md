@@ -72,11 +72,30 @@
 
 ## 6. Concurrent Transactions
 
-- [ ] 6.1 Parse `IN CONCURRENT TRANSACTIONS OF N ROWS`
-- [ ] 6.2 Spawn up to `nexus.cypher.concurrency` parallel workers
-- [ ] 6.3 Input rows sharded round-robin across workers
-- [ ] 6.4 Per-worker isolation; no shared mutable state
-- [ ] 6.5 Tests asserting no lost writes under concurrency
+- [x] 6.1 Parse `IN CONCURRENT TRANSACTIONS OF N ROWS` — slice-1
+            grammar already accepts the keyword; parser now emits the
+            `Some(0)` sentinel meaning "use the executor's
+            `cypher_concurrency` config value" so the planner does not
+            need to read `ExecutorConfig` directly
+- [x] 6.2 Spawn up to `nexus.cypher.concurrency` parallel workers via
+            `std::thread::scope` in `run_call_subquery_concurrent`;
+            `ExecutorConfig::cypher_concurrency` (default 4) is the cap
+- [x] 6.3 Input rows sharded round-robin across workers
+            (`shards[i % workers].push(row)` in the new driver)
+- [x] 6.4 Per-worker isolation: each worker owns a fresh
+            `ExecutionContext` shadow rebuilt from the captured outer
+            `params` / `cache` / `plan_hints` / `variables`; the only
+            shared mutable state is the storage layer's single-writer
+            `RwLock`, which is the V1-by-design serialisation point
+            for commits — workers prepare batches in parallel, commits
+            queue through the lock
+- [x] 6.5 Tests asserting no lost writes under concurrency:
+            `call_in_concurrent_transactions_no_lost_writes` (200
+            CREATEs, asserts count + DISTINCT idx),
+            `…_emits_status_rows_for_every_batch` (sums
+            `rowsProcessed` to the input row count regardless of
+            shard size), `…_remainder_batch_flushes`,
+            `…_requires_in_transactions` — all green
 
 ## 7. REPORT STATUS
 

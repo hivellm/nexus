@@ -2335,7 +2335,11 @@ fn call_in_transactions_parses_concurrent() {
     let q = p.parse().unwrap();
     let c = call_tx_clause(&q);
     assert!(c.in_transactions);
-    assert_eq!(c.concurrency, Some(1));
+    // `Some(0)` is the parser sentinel meaning "concurrent flag set,
+    // executor resolves the worker count against
+    // `ExecutorConfig::cypher_concurrency`" (default 4). The serial
+    // variant remains `None`. Phase6 §6.1 + §6.2.
+    assert_eq!(c.concurrency, Some(0));
     assert_eq!(c.batch_size, Some(100));
 }
 

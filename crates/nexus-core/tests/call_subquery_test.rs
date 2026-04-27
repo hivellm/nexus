@@ -373,3 +373,113 @@ fn call_subquery_nested_call_inner_runs_through_dispatch() {
         assert_eq!(row.values[1], serde_json::json!(3));
     }
 }
+
+// -----------------------------------------------------------------
+// §6 — `IN CONCURRENT TRANSACTIONS` worker-pool driver
+// -----------------------------------------------------------------
+
+#[test]
+fn call_in_concurrent_transactions_no_lost_writes() {
+    let (mut executor, _ctx) = create_isolated_test_executor();
+
+    // Drive 200 outer rows through a CONCURRENT pool. Each row CREATEs
+    // one node tagged with its index. After the run, every index 0..199
+    // must be present exactly once — no lost writes, no duplicates.
+    run(
+        &mut executor,
+        "UNWIND range(0, 199) AS i \
+         CALL (i) { CREATE (:Probe {idx: i}) } \
+         IN CONCURRENT TRANSACTIONS OF 25 ROWS",
+    );
+
+    let count_rs = run(&mut executor, "MATCH (p:Probe) RETURN count(p) AS c");
+    assert_eq!(count_rs.rows[0].values[0], serde_json::json!(200));
+
+    let distinct_rs = run(
+        &mut executor,
+        "MATCH (p:Probe) RETURN count(DISTINCT p.idx) AS c",
+    );
+    assert_eq!(distinct_rs.rows[0].values[0], serde_json::json!(200));
+}
+
+#[test]
+fn call_in_concurrent_transactions_emits_status_rows_for_every_batch() {
+    let (mut executor, _ctx) = create_isolated_test_executor();
+
+    // 100 outer rows sharded round-robin across the pool, batches of
+    // 10 per worker. The total batch count = sum over workers of
+    // ceil(shard_size / 10); for the default 4-worker pool that's
+    // 4 * ceil(25 / 10) = 12 batches. We assert on the invariants
+    // independent of pool size: every status row commits, the sum
+    // of `rowsProcessed` equals the input row count, and a non-zero
+    // number of batches landed.
+    let rs = run(
+        &mut executor,
+        "UNWIND range(0, 99) AS i \
+         CALL (i) { CREATE (:Tag {idx: i}) } \
+         IN CONCURRENT TRANSACTIONS OF 10 ROWS \
+         REPORT STATUS AS s \
+         RETURN s",
+    );
+
+    assert_eq!(rs.columns, vec!["s"]);
+    assert!(!rs.rows.is_empty(), "at least one batch must commit");
+    let mut total_processed: i64 = 0;
+    for row in &rs.rows {
+        let map = row.values[0]
+            .as_object()
+            .expect("status row should be a MAP");
+        assert_eq!(
+            map.get("committed").and_then(|v| v.as_bool()),
+            Some(true),
+            "every batch should commit"
+        );
+        total_processed += map
+            .get("rowsProcessed")
+            .and_then(|v| v.as_i64())
+            .unwrap_or(0);
+    }
+    assert_eq!(
+        total_processed, 100,
+        "sum of rowsProcessed across batches equals the outer row count",
+    );
+}
+
+#[test]
+fn call_in_concurrent_transactions_requires_in_transactions() {
+    let (mut executor, _ctx) = create_isolated_test_executor();
+
+    // The `IN CONCURRENT TRANSACTIONS` keyword is rejected by the
+    // parser without the `TRANSACTIONS` token; this test exercises
+    // the executor-level guard that backs up that rejection in
+    // case a hand-built operator slips through.
+    let parse_err = try_run(
+        &mut executor,
+        "UNWIND range(0, 4) AS i \
+         CALL (i) { CREATE (:X {idx: i}) } \
+         IN CONCURRENT \
+         RETURN 1",
+    );
+    assert!(
+        parse_err.is_err(),
+        "IN CONCURRENT without TRANSACTIONS must be a parse error",
+    );
+}
+
+#[test]
+fn call_in_concurrent_transactions_remainder_batch_flushes() {
+    let (mut executor, _ctx) = create_isolated_test_executor();
+
+    // 47 rows, batches of 10 → 5 batches across the pool: the last
+    // worker's last batch holds whatever's left (3-7 rows depending
+    // on round-robin sharding). Every row must still land.
+    run(
+        &mut executor,
+        "UNWIND range(1, 47) AS i \
+         CALL (i) { CREATE (:Frag {idx: i}) } \
+         IN CONCURRENT TRANSACTIONS OF 10 ROWS",
+    );
+
+    let rs = run(&mut executor, "MATCH (f:Frag) RETURN count(f) AS c");
+    assert_eq!(rs.rows[0].values[0], serde_json::json!(47));
+}

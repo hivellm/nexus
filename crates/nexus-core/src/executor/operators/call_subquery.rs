@@ -78,17 +78,23 @@ impl Executor {
         status_var: Option<&str>,
         import_list: Option<&[String]>,
     ) -> Result<()> {
-        // Multi-worker `IN CONCURRENT TRANSACTIONS` requires per-worker
-        // MVCC isolation that today's single-writer storage layer does
-        // not provide. The grammar emits `Some(1)` for the single-
-        // worker variant (parser path), which is permitted; anything
-        // larger is refused here — slice-3 of the task tracks the
-        // sharded / per-worker isolation lift.
-        if matches!(concurrency, Some(n) if n > 1) {
+        // `IN CONCURRENT TRANSACTIONS` resolves the parser's `Some(0)`
+        // sentinel against the executor's `cypher_concurrency` config
+        // (default 4). `Some(n)` with `n >= 2` requests an explicit
+        // worker count. Serial CALL stays `None`. Single-worker
+        // concurrent (`Some(1)`) collapses to the serial in-transactions
+        // path so we don't pay thread-pool overhead for an effectively
+        // sequential plan.
+        let resolved_workers: Option<usize> = match concurrency {
+            None => None,
+            Some(0) => Some(self.config.cypher_concurrency.max(1)),
+            Some(n) => Some(n),
+        };
+        let needs_concurrent_pool = matches!(resolved_workers, Some(n) if n > 1);
+        if needs_concurrent_pool && !in_transactions {
             return Err(Error::executor(
-                "ERR_CALL_IN_TX_CONCURRENCY_UNSUPPORTED: multi-worker \
-                 IN CONCURRENT TRANSACTIONS requires per-worker MVCC \
-                 isolation; only single-worker is currently supported"
+                "ERR_CALL_IN_TX_INVALID_STATE: IN CONCURRENT TRANSACTIONS requires \
+                 the IN TRANSACTIONS clause"
                     .to_string(),
             ));
         }
@@ -149,6 +155,25 @@ impl Executor {
         }
 
         let batch_n = batch_size.unwrap_or(DEFAULT_BATCH_SIZE).max(1);
+
+        if needs_concurrent_pool {
+            // Safe by the `needs_concurrent_pool` guard above.
+            let workers = resolved_workers.unwrap_or(1).max(2);
+            return self.run_call_subquery_concurrent(
+                context,
+                inner_query,
+                &inner_operators,
+                inner_has_return,
+                &outer_columns,
+                &driver_rows,
+                batch_n,
+                workers,
+                on_error,
+                status_var,
+                import_list,
+            );
+        }
+
         self.run_call_subquery_in_transactions(
             context,
             inner_query,
@@ -379,6 +404,158 @@ impl Executor {
         context.result_set = ResultSet {
             columns: joined_columns,
             rows: joined_rows,
+        };
+        Ok(())
+    }
+
+    /// `IN CONCURRENT TRANSACTIONS` worker pool driver
+    /// (phase6_opencypher-subquery-transactions §6).
+    ///
+    /// Splits the outer driver rows round-robin across `workers`
+    /// scoped threads. Each worker holds its own
+    /// [`ExecutionContext`] shadow and runs the same per-batch
+    /// pipeline as the serial in-transactions path against its
+    /// shard. Workers prepare batches in parallel; commits serialise
+    /// through the storage layer's single-writer `RwLock` (so the
+    /// MVCC invariant is preserved without the engine needing
+    /// per-worker isolation).
+    ///
+    /// Result merging:
+    ///
+    /// - When `status_var` is set, every worker emits status rows
+    ///   under the declared name; the outer result is the
+    ///   concatenation of all workers' status streams in completion
+    ///   order (Cypher 25 leaves order undefined under concurrency).
+    /// - When `status_var` is `None`, joined inner rows from each
+    ///   worker accumulate into a single output buffer; column
+    ///   shape comes from the first worker that produces a row.
+    /// - Errors: the first failing worker wins; remaining workers
+    ///   keep running (they can't be cancelled mid-batch without
+    ///   risking partial undo state) but their results are
+    ///   discarded once a fatal error is observed. The captured
+    ///   error is returned to the caller and the joined result is
+    ///   left untouched on the outer context.
+    #[allow(clippy::too_many_arguments)]
+    fn run_call_subquery_concurrent(
+        &self,
+        context: &mut ExecutionContext,
+        inner_query: &parser::CypherQuery,
+        inner_operators: &[Operator],
+        inner_has_return: bool,
+        outer_columns: &[String],
+        driver_rows: &[Row],
+        batch_size: usize,
+        workers: usize,
+        on_error: &parser::OnErrorPolicy,
+        status_var: Option<&str>,
+        import_list: Option<&[String]>,
+    ) -> Result<()> {
+        // Round-robin shard the driver rows across workers. We clone
+        // each row once into the shard; rows are typically small (a
+        // single Value vector) so the up-front allocation is cheap
+        // compared to the cross-thread parallelism.
+        let mut shards: Vec<Vec<Row>> = (0..workers).map(|_| Vec::new()).collect();
+        for (idx, row) in driver_rows.iter().enumerate() {
+            shards[idx % workers].push(row.clone());
+        }
+
+        // Snapshot inputs each worker needs to rebuild its shadow
+        // outer context. ExecutionContext is intentionally not
+        // Clone, so we capture only the fields a worker requires
+        // and reconstruct via `ExecutionContext::new` + setters.
+        let outer_columns_owned: Vec<String> = outer_columns.to_vec();
+        let import_list_owned: Option<Vec<String>> = import_list.map(|v| v.to_vec());
+        let status_var_owned: Option<String> = status_var.map(String::from);
+        let inner_query_owned = inner_query.clone();
+        let inner_ops_owned = inner_operators.to_vec();
+        let on_error_owned = on_error.clone();
+        let params_owned = context.params.clone();
+        let cache_owned = context.cache.clone();
+        let plan_hints_owned = context.plan_hints.clone();
+        let variables_owned: Vec<(String, serde_json::Value)> = context
+            .variables
+            .iter()
+            .map(|(k, v)| (k.clone(), v.clone()))
+            .collect();
+
+        let combined_rows: Arc<Mutex<Vec<Row>>> = Arc::new(Mutex::new(Vec::new()));
+        let combined_columns: Arc<Mutex<Option<Vec<String>>>> = Arc::new(Mutex::new(None));
+        let first_error: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(None));
+
+        std::thread::scope(|scope| {
+            for shard in shards.into_iter().filter(|s| !s.is_empty()) {
+                let exec = self.clone();
+                let inner_query = inner_query_owned.clone();
+                let inner_ops = inner_ops_owned.clone();
+                let outer_cols = outer_columns_owned.clone();
+                let import_list = import_list_owned.clone();
+                let on_error = on_error_owned.clone();
+                let status_var = status_var_owned.clone();
+                let params = params_owned.clone();
+                let cache = cache_owned.clone();
+                let plan_hints = plan_hints_owned.clone();
+                let variables = variables_owned.clone();
+                let combined_rows = combined_rows.clone();
+                let combined_columns = combined_columns.clone();
+                let first_error = first_error.clone();
+
+                scope.spawn(move || {
+                    let mut shadow = ExecutionContext::new(params, cache);
+                    shadow.set_plan_hints(plan_hints);
+                    for (k, v) in &variables {
+                        shadow.set_variable(k, v.clone());
+                    }
+                    shadow.set_columns_and_rows(outer_cols.clone(), shard.clone());
+
+                    let res = exec.run_call_subquery_in_transactions(
+                        &mut shadow,
+                        &inner_query,
+                        &inner_ops,
+                        inner_has_return,
+                        &outer_cols,
+                        &shard,
+                        batch_size,
+                        &on_error,
+                        status_var.as_deref(),
+                        import_list.as_deref(),
+                    );
+
+                    match res {
+                        Ok(()) => {
+                            let mut cols_lock = combined_columns.lock();
+                            if cols_lock.is_none() && !shadow.result_set.columns.is_empty() {
+                                *cols_lock = Some(shadow.result_set.columns.clone());
+                            }
+                            drop(cols_lock);
+                            let mut rows_lock = combined_rows.lock();
+                            rows_lock.extend(shadow.result_set.rows);
+                        }
+                        Err(e) => {
+                            let mut slot = first_error.lock();
+                            if slot.is_none() {
+                                *slot = Some(e.to_string());
+                            }
+                        }
+                    }
+                });
+            }
+        });
+
+        if let Some(err_text) = first_error.lock().take() {
+            return Err(Error::executor(err_text));
+        }
+
+        let cols = combined_columns
+            .lock()
+            .clone()
+            .unwrap_or_else(|| match status_var {
+                Some(name) => vec![name.to_string()],
+                None => outer_columns_owned.clone(),
+            });
+        let rows = std::mem::take(&mut *combined_rows.lock());
+        context.result_set = ResultSet {
+            columns: cols,
+            rows,
         };
         Ok(())
     }

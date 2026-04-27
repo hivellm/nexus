@@ -2005,7 +2005,13 @@ impl CypherParser {
                     break;
                 }
 
-                let concurrency = if concurrent { Some(1) } else { None };
+                // `IN CONCURRENT TRANSACTIONS` flag → `Some(0)` sentinel
+                // meaning "use the executor's `cypher_concurrency`
+                // config knob (default 4)". The serial variant remains
+                // `None`. The executor resolves the sentinel at
+                // dispatch time so the planner does not need to read
+                // ExecutorConfig.
+                let concurrency = if concurrent { Some(0) } else { None };
                 (true, batch, concurrency, status, err_policy)
             } else {
                 (false, None, None, None, OnErrorPolicy::Fail)

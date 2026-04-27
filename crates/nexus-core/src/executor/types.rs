@@ -37,6 +37,13 @@ pub struct ExecutorConfig {
     pub enable_numa_caching: bool,
     /// Phase 9: Enable lock-free data structures where possible
     pub enable_lock_free_structures: bool,
+    /// `nexus.cypher.concurrency` — the maximum worker count for
+    /// `CALL { … } IN CONCURRENT TRANSACTIONS`. Each worker holds
+    /// its own [`ExecutionContext`] and prepares batches in parallel;
+    /// commits serialize through the single-writer storage layer's
+    /// `RwLock`. Set to 1 to force serial execution; `0` is rejected.
+    /// Default: 4.
+    pub cypher_concurrency: usize,
 }
 
 impl Default for ExecutorConfig {
@@ -58,6 +65,7 @@ impl Default for ExecutorConfig {
             enable_numa_optimizations: false, // Disabled by default (requires NUMA hardware)
             enable_numa_caching: false,       // Disabled by default (requires NUMA hardware)
             enable_lock_free_structures: true, // Enabled by default (always beneficial)
+            cypher_concurrency: 4,
         }
     }
 }
