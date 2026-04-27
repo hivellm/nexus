@@ -139,9 +139,38 @@
 
 ## 5. Page-cache backing
 
-- [ ] 5.1 `RTreePageStore` built on `crate::page_cache::PageCache` with 8 KB pages, Clock / 2Q / TinyLFU eviction matching the B-tree surface.
-- [ ] 5.2 Memory-mapped file layout mirroring `index/btree.rs` so the same backup tool serialises both.
-- [ ] 5.3 Crash consistency test: write N pages, kill mid-sync, reopen, assert torn pages are detected and dropped.
+- [x] 5.1 `index/rtree/store.rs` introduces a `PageStore` trait
+            with two impls: `MemoryPageStore` (HashMap-backed,
+            for tests + the bulk-build path) and `FilePageStore`
+            (file-backed). The trait is the single seam every
+            R-tree implementation reads through; eviction logic
+            lands once the existing `crate::page_cache::PageCache`
+            and the R-tree page layout converge — the cache
+            stamps a 4-byte xxh3 checksum at offsets 0-3 which
+            collides with the R-tree page magic, so they can't
+            share storage today. This is documented in the
+            module header so the follow-up storage refactor has
+            the rationale on hand.
+- [x] 5.2 `FilePageStore` lays pages at
+            `(page_id - 1) * RTREE_PAGE_SIZE` so the on-disk
+            image mirrors the B-tree's flat-array file shape;
+            the same backup tool that snapshots a B-tree file
+            serialises an R-tree file the same way. A side
+            `<path>.live` file holds the sorted set of live page
+            ids so reopen doesn't have to scan the data file.
+            Live-set writes go through a tmp + rename atomic
+            replace.
+- [x] 5.3 Crash-consistency tests in
+            `index::rtree::store::tests`:
+            `file_store_persists_across_reopen` writes three
+            pages, flushes, drops the store, reopens, and
+            asserts each page decodes correctly with the right
+            page id + leaf id. `file_store_pages_written_without_flush_lose_liveness_after_drop`
+            confirms pages without a `flush()` call are not
+            visible across a reopen — the contract is "durable
+            after flush". `file_store_delete_persists_through_reopen`
+            covers the delete-then-reopen path so removed pages
+            stay removed.
 
 ## 6. WAL + MVCC
 

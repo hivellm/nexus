@@ -26,6 +26,7 @@ pub mod hilbert;
 pub mod packer;
 pub mod page;
 pub mod search;
+pub mod store;
 pub mod tree;
 
 pub use hilbert::{hilbert_index_2d, hilbert_index_3d};
@@ -34,6 +35,7 @@ pub use page::{ChildRef, PageDecodeError, RTreePageHeader, decode_page, encode_p
 pub use search::{
     Metric, NearestHit, SearchError, bbox_contains, bbox_intersects, bbox_to_point_sq,
 };
+pub use store::{FilePageStore, MemoryPageStore, PageStore, PageStoreError};
 pub use tree::{RTree, TreeError};
 
 /// Page size used by every R-tree page on disk and in memory.
