@@ -3,8 +3,10 @@
  * replicas with state marker, host, lag (ms), and ack (ms).
  *
  * Reads `useReplicationStatus()` directly so the data lifecycle
- * stays cache-managed by TanStack Query. Standalone deployments
- * (no replicas) render a single "standalone" row.
+ * stays cache-managed by TanStack Query. The render path is
+ * defensive: servers may return a partial shape (no `replicas`
+ * array, no `master` block) and we fall back to a "standalone" row
+ * rather than crashing the drawer.
  */
 import { useReplicationStatus } from '../../services/queries';
 
@@ -29,34 +31,46 @@ export function ReplicationCompact() {
   }
 
   const data = repl.data;
-  const isStandalone = !data || data.replicas.length === 0;
+  const replicas = Array.isArray(data?.replicas) ? data!.replicas : [];
+  const master = data?.master;
+  const isStandalone = !master && replicas.length === 0;
 
   return (
     <section className="drawer-section">
       <header className="drawer-head">
         <span>Replication</span>
         <span className="drawer-sub">
-          {isStandalone ? 'standalone' : `${data!.replicas.length} replica(s)`}
+          {isStandalone ? 'standalone' : `${replicas.length} replica(s)`}
         </span>
       </header>
       <div className="repl-list">
-        {data && (
+        {master && (
           <div className="repl-line">
             <span className="repl-marker healthy" />
-            <span className="repl-host mono">{data.master.host}</span>
+            <span className="repl-host mono">{master.host}</span>
             <span className="role-badge master">MASTER</span>
-            <span className="repl-meta mono">epoch {data.master.epoch}</span>
+            <span className="repl-meta mono">epoch {master.epoch ?? 0}</span>
           </div>
         )}
-        {data?.replicas.map((r) => (
+        {replicas.map((r) => (
           <div className="repl-line" key={r.host}>
-            <span className={`repl-marker ${r.state === 'connected' ? 'healthy' : r.state === 'lagging' ? 'lagging' : 'disconnected'}`} />
+            <span
+              className={`repl-marker ${
+                r.state === 'connected'
+                  ? 'healthy'
+                  : r.state === 'lagging'
+                    ? 'lagging'
+                    : 'disconnected'
+              }`}
+            />
             <span className="repl-host mono">{r.host}</span>
             <span className="role-badge replica">REPLICA</span>
-            <span className="repl-meta mono">lag {fmtMs(r.lag_ms)} · ack {fmtMs(r.ack_ms)}</span>
+            <span className="repl-meta mono">
+              lag {fmtMs(r.lag_ms ?? 0)} · ack {fmtMs(r.ack_ms ?? 0)}
+            </span>
           </div>
         ))}
-        {!data && (
+        {isStandalone && (
           <div className="repl-line">
             <span className="repl-marker healthy" />
             <span className="repl-host mono">localhost</span>

@@ -55,17 +55,9 @@ interface LayoutState {
   ensureDefaultTab: () => void;
 }
 
-export const SAMPLE_CYPHER = `// Welcome to Nexus. Try a starter query — ⌘↵ to run.
-//
-// Inspect the graph
-MATCH (n)
+export const SAMPLE_CYPHER = `MATCH (n)
 RETURN n
-LIMIT 25;
-
-// Common patterns to try next:
-// MATCH (n) RETURN labels(n) AS label, count(*) AS count
-// MATCH (a)-[r]->(b) RETURN type(r), count(*) ORDER BY count(*) DESC
-// CREATE (p:Person {name: 'Alice', age: 30}) RETURN p
+LIMIT 25
 `;
 
 /**
@@ -146,6 +138,7 @@ export const useLayoutStore = create<LayoutState>()(
     }),
     {
       name: PERSIST_KEY,
+      version: 2,
       // Persist only the user-controlled preferences. Activity-rail
       // view + dirty flags reset on reload so a stale state does
       // not surface a dirty-but-empty tab the next session.
@@ -155,6 +148,26 @@ export const useLayoutStore = create<LayoutState>()(
         editorTabs: s.editorTabs.map((t) => ({ ...t, dirty: false })),
         activeTab: s.activeTab,
       }),
+      // v1 shipped a multi-statement sample with trailing `;` and a
+      // comment-only block that the Nexus parser rejects with
+      // "Query must contain at least one clause". v2 onward replaces
+      // any tab still carrying any of the early sample variants
+      // with the clean SAMPLE_CYPHER.
+      migrate: (persisted, version) => {
+        const state = persisted as Partial<LayoutState> | undefined;
+        if (!state) return state as unknown as LayoutState;
+        if (version < 2 && Array.isArray(state.editorTabs)) {
+          const migrated = state.editorTabs.map((t) =>
+            typeof t.body === 'string' &&
+            (t.body.includes('Common patterns to try next') ||
+              t.body.includes('Welcome to Nexus'))
+              ? { ...t, body: SAMPLE_CYPHER }
+              : t,
+          );
+          return { ...state, editorTabs: migrated } as unknown as LayoutState;
+        }
+        return state as unknown as LayoutState;
+      },
     },
   ),
 );

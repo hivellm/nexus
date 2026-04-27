@@ -16,6 +16,7 @@
  */
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useExecuteCypher } from '../../services/queries';
+import { sanitizeCypher } from '../../services/cypher';
 import { useLayoutStore } from '../../stores/layoutStore';
 import { useQueryHistoryStore } from '../../stores/queryHistoryStore';
 import { CypherEditor } from './CypherEditor';
@@ -57,16 +58,18 @@ export function Workspace() {
 
   const handleRun = useCallback(() => {
     if (!tab || !tab.body.trim()) return;
+    const sanitized = sanitizeCypher(tab.body);
+    if (!sanitized) return;
     const startedAt = performance.now();
     exec.mutate(
-      { query: tab.body },
+      { query: sanitized },
       {
         onSuccess: (data) => {
           const elapsed = performance.now() - startedAt;
           setResult(data);
           setSelectedNodeId(null);
           pushHistory({
-            query: tab.body,
+            query: sanitized,
             ms: Math.round(data.execution_time_ms || elapsed),
             rows: data.rows.length,
             ok: true,
@@ -75,7 +78,7 @@ export function Workspace() {
         onError: (err) => {
           const elapsed = performance.now() - startedAt;
           pushHistory({
-            query: tab.body,
+            query: sanitized,
             ms: Math.round(elapsed),
             rows: 0,
             ok: false,
