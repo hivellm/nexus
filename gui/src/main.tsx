@@ -4,6 +4,12 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { App } from './app/App';
 import { bindThemeToHtml } from './stores/layoutStore';
 import { registerNexusMonacoThemes } from './styles/monaco-themes';
+// phase5_gui-redesign-mockup-v2 §2.3 — self-host the two
+// design-system fonts via @fontsource-variable so the renderer
+// never reaches out to fonts.googleapis.com at runtime. Variable
+// builds cover every weight in a single woff2 file.
+import '@fontsource-variable/inter';
+import '@fontsource-variable/jetbrains-mono';
 import './styles/tokens.css';
 import './styles/globals.css';
 

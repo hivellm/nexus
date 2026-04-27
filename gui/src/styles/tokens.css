@@ -38,8 +38,19 @@
   --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.5);
   --shadow-lg: 0 16px 40px rgba(0, 0, 0, 0.6);
 
-  --font-ui: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
-  --font-mono: 'JetBrains Mono', 'SF Mono', Menlo, Consolas, monospace;
+  /* phase5_gui-redesign-mockup-v2 §2.3 — self-hosted via
+   * `@fontsource-variable/inter` and
+   * `@fontsource-variable/jetbrains-mono` (imported at the top of
+   * `main.tsx`). The variable family names ship one woff2 covering
+   * every weight; the legacy 'Inter' / 'JetBrains Mono' fallbacks
+   * stay in the chain so a stripped-down ops bundle still
+   * renders against system-installed copies. */
+  --font-ui:
+    'Inter Variable', 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI',
+    sans-serif;
+  --font-mono:
+    'JetBrains Mono Variable', 'JetBrains Mono', 'SF Mono', Menlo, Consolas,
+    monospace;
 }
 
 [data-theme='light'] {

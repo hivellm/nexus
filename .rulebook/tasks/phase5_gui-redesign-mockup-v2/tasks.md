@@ -25,7 +25,14 @@
       scrollbar, `::selection`, plus the shell skeleton
       (titlebar / rail / panel / workspace / right-col /
       statusbar) so the bootstrap App renders.
-- [ ] 2.3 Self-host Inter + JetBrains Mono fonts (no Google CDN at runtime)
+- [x] 2.3 Self-hosted via `@fontsource-variable/inter` +
+      `@fontsource-variable/jetbrains-mono` (npm packages that
+      ship the variable woff2 directly). Imported at the top
+      of `src/main.tsx` so the renderer never reaches out to
+      `fonts.googleapis.com`. `tokens.css` lists `'Inter
+      Variable'` / `'JetBrains Mono Variable'` first in the
+      family chain with the legacy names + system fallbacks
+      kept after them.
 - [x] 2.4 Configure Tailwind v4 to consume tokens via a `@theme`
       block in `globals.css` — `bg-bg-1`, `text-fg-0`,
       `border-border`, `text-accent`, `font-mono`, etc. all
@@ -234,13 +241,49 @@
 
 ## 8. Integration & polish
 
-- [ ] 8.1 Hook `currentView` so rail clicks update left panel without remounting workspace
-- [ ] 8.2 Ensure Result Graph view reuses `GraphView.tsx` (no duplicate renderer)
-- [ ] 8.3 Implement keyboard shortcuts: ⌘K (search), ⌘↵ (run), ⌘/ (comment toggle), ⌘S (save tab) via `react-hotkeys-hook`
-- [ ] 8.4 Implement editor tab persistence (open tabs survive reload via localStorage)
+- [x] 8.1 `LeftColumn.tsx` switches on
+            `useLayoutStore((s) => s.currentView)` and renders
+            the matching panel; `Workspace` is mounted in a
+            sibling grid cell of `App.tsx`, so a rail click
+            re-renders only the left column. No workspace
+            remount — verified by Workspace state (selection,
+            mode, result) surviving a rail click.
+- [x] 8.2 Single source: `components/workspace/GraphView.tsx`
+            backed by `react-force-graph-2d`. Used both by
+            the Workspace's Graph result tab and (when wired)
+            future preview surfaces. `GraphLegend.tsx` calls
+            `colorForLabel` exported from the same module so
+            colours stay in sync.
+- [x] 8.3 ⌘K via `useHotkeys('mod+k')` in `Titlebar.tsx`
+            focuses the global search field; ⌘↵ via
+            `useHotkeys('mod+enter')` in `Workspace.tsx` runs
+            the active query (with `enableOnFormTags` so it
+            fires while typing in the search box too); ⌘/ +
+            ⌘S register inside Monaco via `editor.addCommand`
+            in `CypherEditor.tsx` (toggle line comment + save
+            tab). All four shortcuts work when the editor has
+            focus; the global ⌘↵ also fires from any other
+            focus state.
+- [x] 8.4 `layoutStore.editorTabs` is persisted via
+            zustand's `persist` middleware (`name:
+            "nexus_tweaks"`). `partialize` writes
+            `editorTabs.map(t => ({ ...t, dirty: false }))` so
+            tabs survive reload without leaking a stale dirty
+            flag; the v3 migration drops any tab still
+            carrying the old `// Welcome to Nexus` seed that
+            the parser rejected.
 - [ ] 8.5 Verify both themes (dark / light) at every screen
-- [ ] 8.6 Verify scrollbar styling matches mockup
-- [ ] 8.7 Verify `::selection` color
+- [x] 8.6 `globals.css:82-95` carries the
+            `::-webkit-scrollbar` / `-track` / `-thumb` rules
+            (10 px thumb on `var(--bg-4)` with `var(--bg-1)`
+            border, hover bumps to `var(--border-strong)`).
+            Matches the mockup token palette and inherits the
+            light/dark switch through `tokens.css`.
+- [x] 8.7 `globals.css:77-80` — `::selection { background:
+            var(--accent); color: #000; }` sets the highlight
+            colour on every text surface. `var(--accent)`
+            switches between dark and light themes via the
+            `[data-theme="light"]` override in `tokens.css`.
 - [ ] 8.8 a11y: tab order, ARIA labels on icon buttons, keyboard-reachable rail, `prefers-reduced-motion` respect
 - [ ] 8.9 Performance: confirm sparkline + metrics polling don't cause full-tree re-renders (memoize with `React.memo` + selectors)
 - [ ] 8.10 Smoke test: Electron production build runs, connects to local nexus-server, executes a query end-to-end

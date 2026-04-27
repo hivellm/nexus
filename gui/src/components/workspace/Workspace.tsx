@@ -15,6 +15,7 @@
  * in lock-step without prop-drilling through ResultsTabs.
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useHotkeys } from 'react-hotkeys-hook';
 import { useApiBase, useExecuteCypher } from '../../services/queries';
 import { api } from '../../services/api';
 import { sanitizeCypher } from '../../services/cypher';
@@ -109,6 +110,22 @@ export function Workspace() {
       },
     );
   }, [tab, exec, pushHistory]);
+
+  // Global ⌘↵ / Ctrl+↵ — Run. Monaco has its own ⌘↵ binding when it
+  // owns focus; this hook covers every other focus state (Run
+  // button focused, search field focused, panels, …) so the user
+  // never has to grab the editor first to fire a query. The
+  // `enableOnFormTags` flag lets the shortcut still fire while
+  // typing in the global search field.
+  useHotkeys(
+    'mod+enter',
+    (e) => {
+      e.preventDefault();
+      handleRun();
+    },
+    { enableOnFormTags: ['INPUT', 'TEXTAREA'] },
+    [handleRun],
+  );
 
   const { nodes, relationships } = useMemo(() => extractGraph(result), [result]);
 
