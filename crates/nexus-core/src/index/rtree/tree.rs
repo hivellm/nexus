@@ -190,6 +190,20 @@ impl RTree {
         self.height
     }
 
+    /// Read-only accessors for the search module. Crate-visible
+    /// only — callers outside `index::rtree` go through
+    /// [`RTree::query_bbox`] / [`RTree::nearest`] /
+    /// [`RTree::within_distance`].
+    pub(crate) fn root_page_id_pub(&self) -> u64 {
+        self.root_page_id
+    }
+    pub(crate) fn level_for_pub(&self, page_id: u64) -> u8 {
+        *self.level_of.get(&page_id).unwrap_or(&0)
+    }
+    pub(crate) fn entries_for_pub(&self, page_id: u64) -> &[ChildRef] {
+        self.pages.get(&page_id).map(Vec::as_slice).unwrap_or(&[])
+    }
+
     // --- internals ---------------------------------------------------
 
     fn alloc_page(&mut self) -> u64 {
