@@ -146,17 +146,64 @@
 
 ## 5. Left panel (view-driven content)
 
-- [ ] 5.1 Build `LeftColumn.tsx` dispatcher (switches by `currentView`)
-- [ ] 5.2 Build `ConnectionsPanel.tsx`: status dot, name, url, role badge, "+" new connection
-- [ ] 5.3 Wire `ConnectionsPanel` to connection store (uses Electron IPC for persisted connection list)
-- [ ] 5.4 Build `SchemaPanel.tsx`: collapsible Node Labels / Relationship Types / Indexes / Procedures
-- [ ] 5.5 Wire `SchemaPanel` to `useSchema()` hook with refresh button
-- [ ] 5.6 Build `KnnPanel.tsx`: label select, embedding source textarea, distance, ef_search, k slider, Run
-- [ ] 5.7 Wire `KnnPanel` to `useKnn()`; render scored results with similarity bar
-- [ ] 5.8 Build `ReplicationLeftPanel.tsx`: SVG topology (master + replicas, animated dashed wires)
-- [ ] 5.9 Wire `ReplicationLeftPanel` to `useReplicationStatus()`; verify endpoint exists
-- [ ] 5.10 Build `AuditLeftPanel.tsx`: filters (level/user/action) + query history list
-- [ ] 5.11 Wire `AuditLeftPanel` to `useAuditLog()` + local query history (Zustand)
+- [x] 5.1 `gui/src/components/panels/LeftColumn.tsx` — dispatcher
+      switching on `layoutStore.currentView`. Cypher
+      (`connections`) view stacks `ConnectionsPanel` (220 px)
+      + `SchemaPanel` (1fr); every other view renders a single
+      full-height panel.
+- [x] 5.2 `ConnectionsPanel.tsx` — list of saved connections
+      with status dot, name, URL, role badge, and a "+" button.
+      Click switches `currentConnectionId`; Enter / Space
+      activates the row from keyboard. Active connection gets
+      the `accent-bg` highlight + 2 px accent rule on the left
+      edge.
+- [x] 5.3 Wired to `connectionsStore` via per-field selectors so
+      adding a connection does not re-render unrelated rows. The
+      store persists to localStorage under `nexus_connections`;
+      the Electron-IPC bridge for shared persistence will swap
+      the persistence layer without touching the component API.
+- [x] 5.4 `SchemaPanel.tsx` — four collapsible sections (Node
+      Labels / Relationship Types / Indexes / Procedures) with
+      chevron carets, count badges, and per-section item
+      rendering. Section open/closed state lives in component
+      state; the container preserves the panel head's right-side
+      hd-btn pattern from the mockup.
+- [x] 5.5 Wired to `useSchema()` (TanStack Query, 30 s polling).
+      The Refresh button calls `refetch()`; the title-count
+      shows `…`/`error`/`{n}L · {m}R` reflecting load status so
+      operators see staleness without opening devtools.
+- [x] 5.6 `KnnPanel.tsx` — label select, embedding source
+      textarea (JSON array of numbers, parsed client-side with
+      a clear error if malformed), distance + `ef_search` row,
+      `k` slider with live readout, Run button with ⌘↵ kbd
+      hint and pending-state copy.
+- [x] 5.7 Wired to `useKnn()` mutation. Results render below
+      with rank, label-color dot, name, score, and a similarity
+      bar (`score * 100 %` width clamped to `[0, 1]`). Mutation
+      errors surface inline in red.
+- [x] 5.8 `ReplicationLeftPanel.tsx` — 240 × 200 SVG topology
+      with a master node at top and up to three replicas at
+      the bottom; wires are animated dashed lines whose colour
+      reflects the replica's state (cyan gradient when
+      connected, amber when lagging, red when disconnected).
+- [x] 5.9 Wired to `useReplicationStatus()` (2 s polling).
+      Endpoint is documented in §9.1 and consumed via the
+      typed `ReplicationStatusResponse`. Refresh button calls
+      `refetch()`; per-replica `lag_ms` / `ack_ms` / `epoch`
+      surface in the node list under the topology.
+- [x] 5.10 `AuditLeftPanel.tsx` — filters (Level segmented
+      control, User select, Action select) on top, query
+      history feed below. Filters compose via a `useMemo` so
+      large histories scroll smoothly. Empty state has explicit
+      copy so an empty list does not look like a broken panel.
+- [x] 5.11 Local query history wired via
+      `gui/src/stores/queryHistoryStore.ts` — Zustand `persist`
+      keyed `nexus_query_history`, capped at 200 entries, single
+      `push({query, ms, rows, ok})` API the workspace's Run
+      handler will call. The store feeds the audit panel's
+      "Query History" section directly. Server-side
+      `useAuditLog()` integration lands in the right-drawer
+      `AuditFeed` (item 7.6) where the SSE upgrade lives.
 
 ## 6. Workspace (editor + results)
 

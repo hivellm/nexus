@@ -372,6 +372,9 @@ button {
 .panel {
   background: var(--bg-1);
   border-right: 1px solid var(--border);
+  /* Display + flex declared in the §5 left-panel block below;
+   * keeping background/border-right here so the body grid's
+   * column edges stay visible when a panel is empty. */
 }
 .workspace {
   background: var(--bg-1);
@@ -509,3 +512,203 @@ button {
   color: #001018;
   font-weight: 600;
 }
+
+/* ─── Left panel scaffolding ─── */
+.panel {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  min-width: 0;
+}
+.panel-head {
+  height: 34px;
+  display: flex;
+  align-items: center;
+  padding: 0 12px;
+  gap: 8px;
+  border-bottom: 1px solid var(--border);
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--fg-2);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  flex-shrink: 0;
+}
+.panel-head .title-count {
+  color: var(--fg-3);
+  font-weight: 500;
+  letter-spacing: 0;
+  text-transform: none;
+}
+.panel-head .grow { flex: 1; }
+.panel-head .hd-btn {
+  width: 22px; height: 22px;
+  display: inline-flex; align-items: center; justify-content: center;
+  border-radius: 4px;
+  color: var(--fg-3); cursor: pointer;
+  background: transparent; border: 0;
+}
+.panel-head .hd-btn:hover { background: var(--bg-3); color: var(--fg-0); }
+.panel-body { flex: 1; overflow-y: auto; overflow-x: hidden; min-height: 0; }
+
+/* ─── Connection list ─── */
+.conn {
+  display: flex; align-items: center; gap: 10px;
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--border);
+  cursor: pointer; position: relative;
+}
+.conn:hover { background: var(--bg-2); }
+.conn.active { background: var(--accent-bg); }
+.conn.active::before {
+  content: ""; position: absolute; left: 0; top: 0; bottom: 0;
+  width: 2px; background: var(--accent);
+}
+.conn .st { width: 8px; height: 8px; border-radius: 50%; }
+.conn .st.connected { background: var(--ok); box-shadow: 0 0 6px var(--ok); }
+.conn .st.idle { background: var(--fg-3); }
+.conn .st.error { background: var(--err); }
+.conn .conn-meta { flex: 1; min-width: 0; }
+.conn .conn-name { font-size: 12.5px; color: var(--fg-0); font-weight: 500; }
+.conn .conn-url {
+  font-size: 11px; color: var(--fg-3); font-family: var(--font-mono);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.conn .role {
+  font-size: 10px; padding: 1px 6px; border-radius: 3px;
+  text-transform: uppercase; letter-spacing: 0.06em; font-weight: 600;
+  background: var(--bg-3); color: var(--fg-2);
+}
+.conn .role.master { background: rgba(0, 212, 255, 0.12); color: var(--accent); }
+.conn .role.replica { background: rgba(167, 139, 250, 0.14); color: var(--label-function); }
+.conn .role.standalone { background: var(--bg-3); color: var(--fg-2); }
+
+/* ─── Schema tree ─── */
+.schema-section { padding: 6px 0; border-bottom: 1px solid var(--border); }
+.schema-section:last-child { border-bottom: 0; }
+.schema-group {
+  display: flex; align-items: center; gap: 6px;
+  padding: 4px 12px; font-size: 11px; color: var(--fg-2);
+  font-weight: 600; letter-spacing: 0.04em; cursor: pointer;
+}
+.schema-group .caret { color: var(--fg-3); font-size: 10px; width: 10px; }
+.schema-group .group-count {
+  color: var(--fg-3); font-weight: 400; font-size: 10.5px;
+  margin-left: auto; font-family: var(--font-mono);
+}
+.schema-group:hover { color: var(--fg-0); }
+.schema-item {
+  display: flex; align-items: center; gap: 8px;
+  padding: 4px 12px 4px 28px; font-size: 12.5px;
+  cursor: pointer; position: relative; color: var(--fg-1);
+}
+.schema-item:hover { background: var(--bg-2); }
+.schema-item .chip { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
+.schema-item .chip.sq { border-radius: 2px; transform: rotate(45deg); }
+.schema-item .chip.ring { background: transparent !important; border: 1.5px solid; }
+.schema-item .name {
+  flex: 1; min-width: 0;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.schema-item .count { color: var(--fg-3); font-size: 11px; font-family: var(--font-mono); }
+
+/* ─── Buttons ─── */
+.btn {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 6px 12px;
+  background: var(--bg-2); border: 1px solid var(--border);
+  border-radius: 4px;
+  color: var(--fg-1); font-size: 12px;
+  font-family: inherit; cursor: pointer;
+}
+.btn:hover { background: var(--bg-3); color: var(--fg-0); }
+.btn[disabled] { opacity: 0.5; cursor: not-allowed; }
+.btn.primary {
+  background: var(--accent); border-color: var(--accent);
+  color: #001018; font-weight: 600;
+}
+.btn.primary:hover { background: var(--accent-dim); }
+.btn .kbd {
+  font-family: var(--font-mono); font-size: 10.5px;
+  padding: 1px 5px; border-radius: 3px;
+  background: rgba(255, 255, 255, 0.08); color: var(--fg-3);
+}
+.btn.primary .kbd { background: rgba(0, 0, 0, 0.18); color: #001018; }
+
+/* ─── KNN form + results ─── */
+.knn-form {
+  padding: 12px;
+  display: flex; flex-direction: column; gap: 10px;
+  border-bottom: 1px solid var(--border);
+}
+.knn-form label {
+  font-size: 10.5px; text-transform: uppercase; letter-spacing: 0.06em;
+  color: var(--fg-3); font-weight: 600;
+  display: block; margin-bottom: 4px;
+}
+.knn-form select, .knn-form input, .knn-form textarea {
+  width: 100%;
+  background: var(--bg-2); border: 1px solid var(--border);
+  border-radius: 4px; padding: 6px 8px;
+  color: var(--fg-0); font-family: var(--font-ui); font-size: 12.5px;
+}
+.knn-form textarea {
+  font-family: var(--font-mono); resize: vertical; min-height: 60px;
+}
+.knn-form .row-inline { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.k-range input[type="range"] { width: 100%; margin: 0; background: transparent; }
+.knn-results { flex: 1; overflow-y: auto; min-height: 0; }
+.knn-row {
+  display: grid; grid-template-columns: 28px 1fr 56px;
+  align-items: center; gap: 8px;
+  padding: 6px 12px; border-bottom: 1px solid var(--border);
+  position: relative; font-size: 12px;
+}
+.knn-row .rank { color: var(--fg-3); font-family: var(--font-mono); font-size: 11px; }
+.knn-row .main { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.knn-row .dt { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
+.knn-row .nm {
+  font-family: var(--font-mono); color: var(--fg-1);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.knn-row .sim {
+  font-family: var(--font-mono); color: var(--fg-2);
+  font-size: 11px; text-align: right;
+}
+.knn-row .knn-bar {
+  grid-column: 1 / -1; position: relative; height: 2px; background: var(--bg-3);
+}
+.knn-row .knn-bar > span { position: absolute; left: 0; top: 0; bottom: 0; background: var(--accent); }
+
+/* ─── Replication panel ─── */
+.repl-topo { padding: 12px; display: flex; justify-content: center; border-bottom: 1px solid var(--border); }
+.repl-node {
+  display: grid; grid-template-columns: 12px 1fr auto;
+  gap: 10px; align-items: center;
+  padding: 8px 12px; border-bottom: 1px solid var(--border);
+}
+.repl-node .marker { width: 8px; height: 8px; border-radius: 50%; }
+.repl-node .marker.healthy { background: var(--ok); box-shadow: 0 0 6px var(--ok); }
+.repl-node .marker.lagging { background: var(--warn); }
+.repl-node .marker.disconnected { background: var(--err); }
+.repl-node .name { font-size: 12px; color: var(--fg-0); font-family: var(--font-mono); }
+.repl-node .sub { font-size: 10.5px; color: var(--fg-3); font-family: var(--font-mono); }
+.role-badge {
+  font-size: 10px; padding: 1px 6px; border-radius: 3px;
+  text-transform: uppercase; letter-spacing: 0.06em; font-weight: 600;
+  background: var(--bg-3); color: var(--fg-2);
+}
+.role-badge.master { background: rgba(0, 212, 255, 0.12); color: var(--accent); }
+.role-badge.replica { background: rgba(167, 139, 250, 0.14); color: var(--label-function); }
+
+/* ─── Generic segmented control reused across panels ─── */
+.seg {
+  display: flex; background: var(--bg-1); border: 1px solid var(--border);
+  border-radius: 5px; overflow: hidden;
+}
+.seg button {
+  padding: 4px 10px; background: transparent; border: 0;
+  color: var(--fg-2); cursor: pointer;
+  font-size: 11.5px; font-family: inherit; flex: 1;
+}
+.seg button.on { background: var(--accent); color: #001018; font-weight: 600; }
