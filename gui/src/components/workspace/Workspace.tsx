@@ -14,7 +14,7 @@
  * Selection state lives here too so the inspector + GraphView stay
  * in lock-step without prop-drilling through ResultsTabs.
  */
-import { useCallback, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useExecuteCypher } from '../../services/queries';
 import { useLayoutStore } from '../../stores/layoutStore';
 import { useQueryHistoryStore } from '../../stores/queryHistoryStore';
@@ -30,16 +30,10 @@ import { GraphLegend } from './GraphLegend';
 import { NodeInspector } from './NodeInspector';
 import type { CypherResponse } from '../../types/api';
 
-const DEFAULT_TAB_BODY = `// Try a query
-MATCH (n)
-RETURN n
-LIMIT 25
-`;
-
 export function Workspace() {
   const editorTabs = useLayoutStore((s) => s.editorTabs);
   const activeTab = useLayoutStore((s) => s.activeTab);
-  const openTab = useLayoutStore((s) => s.openTab);
+  const ensureDefaultTab = useLayoutStore((s) => s.ensureDefaultTab);
 
   const pushHistory = useQueryHistoryStore((s) => s.push);
   const exec = useExecuteCypher();
@@ -50,20 +44,18 @@ export function Workspace() {
   const [zoom, setZoom] = useState(1);
   const [layoutSeed, setLayoutSeed] = useState(0);
 
+  // Seed a starter tab with the sample query on first mount so the
+  // editor is not a blank screen on a fresh / cleared session.
+  useEffect(() => {
+    ensureDefaultTab();
+  }, [ensureDefaultTab]);
+
   const tab = useMemo(
     () => editorTabs.find((t) => t.id === activeTab) ?? null,
     [editorTabs, activeTab],
   );
 
-  const ensureTab = useCallback(() => {
-    if (!tab) {
-      const id = `tab-${Date.now().toString(36)}`;
-      openTab({ id, title: 'query-1.cypher', body: DEFAULT_TAB_BODY });
-    }
-  }, [tab, openTab]);
-
   const handleRun = useCallback(() => {
-    ensureTab();
     if (!tab || !tab.body.trim()) return;
     const startedAt = performance.now();
     exec.mutate(
@@ -98,7 +90,7 @@ export function Workspace() {
         },
       },
     );
-  }, [ensureTab, tab, exec, pushHistory]);
+  }, [tab, exec, pushHistory]);
 
   const { nodes, relationships } = useMemo(() => extractGraph(result), [result]);
   const selectedNode = useMemo(

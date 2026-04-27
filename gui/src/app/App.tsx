@@ -9,6 +9,7 @@ import { StatusBar } from '../components/chrome/StatusBar';
 import { Tweaks } from '../components/chrome/Tweaks';
 import { LeftColumn } from '../components/panels/LeftColumn';
 import { Workspace } from '../components/workspace/Workspace';
+import { RightDrawer } from '../components/drawer/RightDrawer';
 
 export function App() {
   return (
@@ -18,7 +19,7 @@ export function App() {
         <ActivityRail />
         <LeftColumn />
         <Workspace />
-        <aside className="right-col" aria-label="Right drawer" />
+        <RightDrawer />
       </div>
       <StatusBar />
       <Tweaks />

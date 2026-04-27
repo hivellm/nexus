@@ -10,7 +10,7 @@
  * first mount; the registration is idempotent so swapping tabs
  * does not stack handlers.
  */
-import { Editor, type Monaco, type OnMount } from '@monaco-editor/react';
+import { Editor, type BeforeMount, type Monaco, type OnMount } from '@monaco-editor/react';
 import { useCallback, useMemo, useRef } from 'react';
 import { useLayoutStore } from '../../stores/layoutStore';
 import type { editor as MonacoEditor } from 'monaco-editor';
@@ -162,6 +162,13 @@ export function CypherEditor({ onRun, onSave }: CypherEditorProps) {
 
   const editorRef = useRef<MonacoEditor.IStandaloneCodeEditor | null>(null);
 
+  // Register the Cypher language + nexus themes BEFORE Monaco
+  // first paints, otherwise the editor flashes the default light
+  // `vs` theme (white background) until `onMount` runs.
+  const handleBeforeMount: BeforeMount = useCallback((monaco) => {
+    registerCypherLanguage(monaco);
+  }, []);
+
   const handleMount: OnMount = useCallback(
     (editor, monaco) => {
       editorRef.current = editor;
@@ -210,6 +217,7 @@ export function CypherEditor({ onRun, onSave }: CypherEditorProps) {
         language="cypher"
         theme={theme === 'light' ? 'nexus-light' : 'nexus-dark'}
         value={tab?.body ?? ''}
+        beforeMount={handleBeforeMount}
         onMount={handleMount}
         onChange={handleChange}
         options={{

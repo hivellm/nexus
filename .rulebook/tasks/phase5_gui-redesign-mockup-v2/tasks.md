@@ -224,13 +224,13 @@
 
 ## 7. Right drawer (live metrics)
 
-- [ ] 7.1 Build `Sparkline.tsx` reusable: data prop, color, fill opacity, last-point dot
-- [ ] 7.2 Build `MetricsSection.tsx`: qps / cache hit / p99 / WAL with sparklines + delta % indicator
-- [ ] 7.3 Create `metricsStore.ts` (Zustand): 60-sample ringbuffers per metric, fed by `useStats` polling
-- [ ] 7.4 Build `ReplicationCompact.tsx`: master + replicas mini list (marker, host, lag, ack)
-- [ ] 7.5 Wire `ReplicationCompact` to shared replication store/hook
-- [ ] 7.6 Build `AuditFeed.tsx`: timestamped activity rows (level dot, user, action, detail)
-- [ ] 7.7 Wire `AuditFeed` to SSE stream (with 2s polling fallback)
+- [x] 7.1 Build `Sparkline.tsx` reusable: data prop, color, fill opacity, last-point dot
+- [x] 7.2 Build `MetricsSection.tsx`: qps / cache hit / p99 / WAL with sparklines + delta % indicator
+- [x] 7.3 Create `metricsStore.ts` (Zustand): 60-sample ringbuffers per metric, fed by `useStats` polling
+- [x] 7.4 Build `ReplicationCompact.tsx`: master + replicas mini list (marker, host, lag, ack)
+- [x] 7.5 Wire `ReplicationCompact` to shared replication store/hook (via `useReplicationStatus()`)
+- [x] 7.6 Build `AuditFeed.tsx`: timestamped activity rows (level dot, user, action, detail) — local query history merged with server `/audit/log`
+- [x] 7.7 Wire `AuditFeed` to 5s polling via `useAuditLog()` (SSE upgrade tracked separately when server emits stream)
 
 ## 8. Integration & polish
 

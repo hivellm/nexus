@@ -1,7 +1,8 @@
 /**
  * TanStack Query hooks. Each hook resolves the current connection's
- * `baseUrl` from `connectionsStore` and threads it into the matching
- * `api.*` call. Polling intervals match what each panel needs:
+ * `baseUrl` and optional `apiKey` from `connectionsStore`, then
+ * threads them into the matching `api.*` call. Polling intervals
+ * match what each panel needs:
  *
  * - `useHealth` / `useStats` / `useReplicationStatus` — 2 s, fast
  *   enough for the live pills and statusbar without hammering the
@@ -54,15 +55,25 @@ export function useApiBase(): string | null {
   return useMemo(() => conn?.url ?? null, [conn?.url]);
 }
 
+/**
+ * Resolve the active connection's optional API key. Threaded into
+ * every request as `X-API-Key`; `undefined` means no auth header.
+ */
+function useApiKey(): string | undefined {
+  const conn = useConnectionsStore(selectCurrentConnection);
+  return useMemo(() => conn?.apiKey, [conn?.apiKey]);
+}
+
 const POLL_FAST = 2_000;
 const POLL_SLOW = 30_000;
 const POLL_AUDIT = 5_000;
 
 export function useHealth(): UseQueryResult<HealthResponse, NexusApiError> {
   const baseUrl = useApiBase();
+  const apiKey = useApiKey();
   return useQuery<HealthResponse, NexusApiError>({
-    queryKey: ['health', baseUrl],
-    queryFn: ({ signal }) => api.health(baseUrl!, { signal }),
+    queryKey: ['health', baseUrl, apiKey],
+    queryFn: ({ signal }) => api.health(baseUrl!, { signal, apiKey }),
     enabled: baseUrl !== null,
     refetchInterval: POLL_FAST,
     staleTime: POLL_FAST,
@@ -71,9 +82,10 @@ export function useHealth(): UseQueryResult<HealthResponse, NexusApiError> {
 
 export function useStats(): UseQueryResult<StatsResponse, NexusApiError> {
   const baseUrl = useApiBase();
+  const apiKey = useApiKey();
   return useQuery<StatsResponse, NexusApiError>({
-    queryKey: ['stats', baseUrl],
-    queryFn: ({ signal }) => api.stats(baseUrl!, { signal }),
+    queryKey: ['stats', baseUrl, apiKey],
+    queryFn: ({ signal }) => api.stats(baseUrl!, { signal, apiKey }),
     enabled: baseUrl !== null,
     refetchInterval: POLL_FAST,
     staleTime: POLL_FAST,
@@ -85,9 +97,10 @@ export function useReplicationStatus(): UseQueryResult<
   NexusApiError
 > {
   const baseUrl = useApiBase();
+  const apiKey = useApiKey();
   return useQuery<ReplicationStatusResponse, NexusApiError>({
-    queryKey: ['replication-status', baseUrl],
-    queryFn: ({ signal }) => api.replicationStatus(baseUrl!, { signal }),
+    queryKey: ['replication-status', baseUrl, apiKey],
+    queryFn: ({ signal }) => api.replicationStatus(baseUrl!, { signal, apiKey }),
     enabled: baseUrl !== null,
     refetchInterval: POLL_FAST,
     staleTime: POLL_FAST,
@@ -103,15 +116,16 @@ export interface SchemaSnapshot {
 
 export function useSchema(): UseQueryResult<SchemaSnapshot, NexusApiError> {
   const baseUrl = useApiBase();
+  const apiKey = useApiKey();
   return useQuery<SchemaSnapshot, NexusApiError>({
-    queryKey: ['schema', baseUrl],
+    queryKey: ['schema', baseUrl, apiKey],
     queryFn: async ({ signal }) => {
       const url = baseUrl!;
       const [labels, relTypes, indexes, procedures] = await Promise.all([
-        api.labels(url, { signal }),
-        api.relTypes(url, { signal }),
-        api.indexes(url, { signal }),
-        api.procedures(url, { signal }),
+        api.labels(url, { signal, apiKey }),
+        api.relTypes(url, { signal, apiKey }),
+        api.indexes(url, { signal, apiKey }),
+        api.procedures(url, { signal, apiKey }),
       ]);
       return { labels, relTypes, indexes, procedures };
     },
@@ -127,13 +141,14 @@ export function useExecuteCypher(): UseMutationResult<
   CypherRequest
 > {
   const baseUrl = useApiBase();
+  const apiKey = useApiKey();
   const qc = useQueryClient();
   return useMutation<CypherResponse, NexusApiError, CypherRequest>({
     mutationFn: (req) => {
       if (baseUrl === null) {
         throw new NexusApiError(0, 'No active connection');
       }
-      return api.executeCypher(baseUrl, req);
+      return api.executeCypher(baseUrl, req, { apiKey });
     },
     onSuccess: () => {
       // Schema may have changed if the query created labels / rel
@@ -146,12 +161,13 @@ export function useExecuteCypher(): UseMutationResult<
 
 export function useKnn(): UseMutationResult<KnnResponse, NexusApiError, KnnRequest> {
   const baseUrl = useApiBase();
+  const apiKey = useApiKey();
   return useMutation<KnnResponse, NexusApiError, KnnRequest>({
     mutationFn: (req) => {
       if (baseUrl === null) {
         throw new NexusApiError(0, 'No active connection');
       }
-      return api.knn(baseUrl, req);
+      return api.knn(baseUrl, req, { apiKey });
     },
   });
 }
@@ -160,9 +176,10 @@ export function useAuditLog(
   cursor?: string,
 ): UseQueryResult<AuditLogResponse, NexusApiError> {
   const baseUrl = useApiBase();
+  const apiKey = useApiKey();
   return useQuery<AuditLogResponse, NexusApiError>({
-    queryKey: ['audit-log', baseUrl, cursor],
-    queryFn: ({ signal }) => api.auditLog(baseUrl!, cursor, { signal }),
+    queryKey: ['audit-log', baseUrl, apiKey, cursor],
+    queryFn: ({ signal }) => api.auditLog(baseUrl!, cursor, { signal, apiKey }),
     enabled: baseUrl !== null,
     refetchInterval: POLL_AUDIT,
     staleTime: POLL_AUDIT,

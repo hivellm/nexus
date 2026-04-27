@@ -52,7 +52,21 @@ interface LayoutState {
   closeTab: (id: string) => void;
   selectTab: (id: string) => void;
   setTabBody: (id: string, body: string) => void;
+  ensureDefaultTab: () => void;
 }
+
+export const SAMPLE_CYPHER = `// Welcome to Nexus. Try a starter query — ⌘↵ to run.
+//
+// Inspect the graph
+MATCH (n)
+RETURN n
+LIMIT 25;
+
+// Common patterns to try next:
+// MATCH (n) RETURN labels(n) AS label, count(*) AS count
+// MATCH (a)-[r]->(b) RETURN type(r), count(*) ORDER BY count(*) DESC
+// CREATE (p:Person {name: 'Alice', age: 30}) RETURN p
+`;
 
 /**
  * Persistence partition: the chrome cares about user-visible
@@ -97,6 +111,38 @@ export const useLayoutStore = create<LayoutState>()(
             t.id === id ? { ...t, body, dirty: true } : t,
           ),
         })),
+      ensureDefaultTab: () =>
+        set((s) => {
+          // If a tab already has content, leave it alone — only seed
+          // the sample query when the workspace would otherwise be
+          // an empty editor staring back at a new user.
+          if (s.editorTabs.length > 0) {
+            const allEmpty = s.editorTabs.every((t) => !t.body.trim());
+            if (!allEmpty) {
+              return s.activeTab
+                ? s
+                : { ...s, activeTab: s.editorTabs[0].id };
+            }
+            // All persisted tabs are blank — replace the active one
+            // with the sample so the user sees something runnable.
+            const id = s.activeTab ?? s.editorTabs[0].id;
+            return {
+              ...s,
+              editorTabs: s.editorTabs.map((t) =>
+                t.id === id ? { ...t, body: SAMPLE_CYPHER, dirty: false } : t,
+              ),
+              activeTab: id,
+            };
+          }
+          const id = `tab-${Date.now().toString(36)}`;
+          return {
+            ...s,
+            editorTabs: [
+              { id, title: 'query-1.cypher', body: SAMPLE_CYPHER, dirty: false },
+            ],
+            activeTab: id,
+          };
+        }),
     }),
     {
       name: PERSIST_KEY,

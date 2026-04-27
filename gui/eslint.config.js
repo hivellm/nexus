@@ -35,6 +35,7 @@ export default [
         Response: 'readonly',
         navigator: 'readonly',
         performance: 'readonly',
+        URL: 'readonly',
         setTimeout: 'readonly',
         clearTimeout: 'readonly',
         setInterval: 'readonly',
