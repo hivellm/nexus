@@ -11,7 +11,7 @@
  * does not stack handlers.
  */
 import { Editor, type BeforeMount, type Monaco, type OnMount } from '@monaco-editor/react';
-import { useCallback, useMemo, useRef } from 'react';
+import { useCallback, useEffect, useMemo, useRef } from 'react';
 import { useLayoutStore } from '../../stores/layoutStore';
 import type { editor as MonacoEditor } from 'monaco-editor';
 
@@ -161,18 +161,33 @@ export function CypherEditor({ onRun, onSave }: CypherEditorProps) {
   );
 
   const editorRef = useRef<MonacoEditor.IStandaloneCodeEditor | null>(null);
+  const monacoRef = useRef<Monaco | null>(null);
+
+  const themeName = theme === 'light' ? 'nexus-light' : 'nexus-dark';
 
   // Register the Cypher language + nexus themes BEFORE Monaco
-  // first paints, otherwise the editor flashes the default light
-  // `vs` theme (white background) until `onMount` runs.
-  const handleBeforeMount: BeforeMount = useCallback((monaco) => {
-    registerCypherLanguage(monaco);
-  }, []);
+  // first paints, AND explicitly setTheme() — without the explicit
+  // call Monaco's react wrapper looks up the theme name during
+  // editor construction (before our defineTheme has run) and falls
+  // back to the default `vs` theme, leaving the editor white until
+  // the user types. The `theme` prop alone races against
+  // registration; calling `setTheme` after `defineTheme` is the
+  // documented fix.
+  const handleBeforeMount: BeforeMount = useCallback(
+    (monaco) => {
+      monacoRef.current = monaco;
+      registerCypherLanguage(monaco);
+      monaco.editor.setTheme(themeName);
+    },
+    [themeName],
+  );
 
   const handleMount: OnMount = useCallback(
     (editor, monaco) => {
       editorRef.current = editor;
+      monacoRef.current = monaco;
       registerCypherLanguage(monaco);
+      monaco.editor.setTheme(themeName);
       editor.updateOptions({
         fontFamily: "'JetBrains Mono', 'SF Mono', Menlo, Consolas, monospace",
         fontSize: 13,
@@ -201,8 +216,16 @@ export function CypherEditor({ onRun, onSave }: CypherEditorProps) {
         editor.getAction('editor.action.commentLine')?.run();
       });
     },
-    [onRun, onSave],
+    [onRun, onSave, themeName],
   );
+
+  // React to theme flips (Tweaks panel) — re-apply the matching
+  // nexus theme. Monaco is global; setTheme repaints all instances.
+  useEffect(() => {
+    const monaco = monacoRef.current;
+    if (!monaco) return;
+    monaco.editor.setTheme(themeName);
+  }, [themeName]);
 
   const handleChange = (value: string | undefined) => {
     if (tab && typeof value === 'string') {

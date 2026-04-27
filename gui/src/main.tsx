@@ -3,6 +3,7 @@ import { createRoot } from 'react-dom/client';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { App } from './app/App';
 import { bindThemeToHtml } from './stores/layoutStore';
+import { registerNexusMonacoThemes } from './styles/monaco-themes';
 import './styles/tokens.css';
 import './styles/globals.css';
 
@@ -10,6 +11,14 @@ import './styles/globals.css';
 // before the first render so CSS variables in tokens.css resolve
 // to the right palette without a flash of unstyled content.
 bindThemeToHtml();
+
+// Prime Monaco with the nexus dark/light themes BEFORE any Editor
+// component mounts. The React wrapper otherwise calls
+// `monaco.editor.create({ theme: 'nexus-dark' })` while the global
+// theme service still has only `vs`/`vs-dark` registered, and
+// silently falls back to white `vs`. Fire-and-forget — the loader
+// caches its initialised Monaco for subsequent mounts.
+void registerNexusMonacoThemes();
 
 // QueryClient defaults — tuned for a desktop GUI talking to a
 // single graph server: aggressive retry would mask real outages
