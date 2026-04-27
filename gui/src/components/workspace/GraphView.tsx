@@ -111,20 +111,53 @@ interface LaidOutNode extends GraphNode {
   y: number;
 }
 
+/**
+ * Deterministic layout. For small projections (≤ 60 nodes) a single
+ * ring; beyond that we lay nodes out on concentric rings with a
+ * fixed angular spacing so neighbours don't pile on top of each
+ * other when 1000+ nodes come back from a `MATCH (n) RETURN n`.
+ */
 function layoutRadial(nodes: GraphNode[], width: number, height: number): LaidOutNode[] {
   if (nodes.length === 0) return [];
   const cx = width / 2;
   const cy = height / 2;
   if (nodes.length === 1) return [{ ...nodes[0], x: cx, y: cy }];
-  const radius = Math.min(width, height) * 0.36;
+
+  const minDim = Math.min(width, height);
+  if (nodes.length <= 60) {
+    const radius = minDim * 0.36;
+    return nodes.map((n, i) => {
+      const a = (i / nodes.length) * Math.PI * 2 - Math.PI / 2;
+      return { ...n, x: cx + Math.cos(a) * radius, y: cy + Math.sin(a) * radius };
+    });
+  }
+
+  // Concentric rings: 60 nodes per ring, each ring ~36px further out.
+  const perRing = 60;
+  const ringStep = Math.max(28, minDim * 0.05);
   return nodes.map((n, i) => {
-    const a = (i / nodes.length) * Math.PI * 2 - Math.PI / 2;
-    return { ...n, x: cx + Math.cos(a) * radius, y: cy + Math.sin(a) * radius };
+    const ring = Math.floor(i / perRing);
+    const idxInRing = i % perRing;
+    const slots = ring === 0 ? perRing : perRing + ring * 6;
+    const r = minDim * 0.18 + ring * ringStep;
+    const a = (idxInRing / slots) * Math.PI * 2 - Math.PI / 2;
+    return { ...n, x: cx + Math.cos(a) * r, y: cy + Math.sin(a) * r };
   });
+}
+
+function nodeRadius(count: number, selected: boolean): number {
+  if (count <= 25) return selected ? 22 : 18;
+  if (count <= 100) return selected ? 14 : 11;
+  if (count <= 400) return selected ? 8 : 6;
+  return selected ? 5 : 3.5;
 }
 
 interface GraphViewProps {
   result: CypherResponse | null;
+  /** Edges fetched out-of-band (e.g. the workspace's auto-fetch
+   *  for queries that project nodes only). Merged with the rels
+   *  extracted from `result` and de-duplicated by id. */
+  extraRelationships?: GraphRelationship[];
   selectedId: number | null;
   onSelect: (id: number | null) => void;
   width?: number;
@@ -133,15 +166,34 @@ interface GraphViewProps {
 
 export function GraphView({
   result,
+  extraRelationships,
   selectedId,
   onSelect,
   width = 720,
   height = 480,
 }: GraphViewProps) {
   const { nodes, relationships } = useMemo(() => extractGraph(result), [result]);
+  const mergedRels = useMemo(() => {
+    if (!extraRelationships || extraRelationships.length === 0) return relationships;
+    const seen = new Set(relationships.map((r) => r.id));
+    const merged = [...relationships];
+    for (const r of extraRelationships) {
+      if (!seen.has(r.id)) {
+        merged.push(r);
+        seen.add(r.id);
+      }
+    }
+    return merged;
+  }, [relationships, extraRelationships]);
+
+  // Canvas grows for large projections so the concentric rings
+  // have room to breathe; layout uses the same dimensions.
+  const svgW = nodes.length > 200 ? Math.max(width, 1200) : width;
+  const svgH = nodes.length > 200 ? Math.max(height, 800) : height;
+
   const laidOut = useMemo(
-    () => layoutRadial(nodes, width, height),
-    [nodes, width, height],
+    () => layoutRadial(nodes, svgW, svgH),
+    [nodes, svgW, svgH],
   );
   const positionById = useMemo(() => {
     const m = new Map<number, LaidOutNode>();
@@ -167,14 +219,14 @@ export function GraphView({
   return (
     <div className="results-graph">
       <svg
-        width={width}
-        height={height}
-        viewBox={`0 0 ${width} ${height}`}
+        width={svgW}
+        height={svgH}
+        viewBox={`0 0 ${svgW} ${svgH}`}
         onClick={() => onSelect(null)}
         role="img"
         aria-label="Query graph result"
       >
-        {relationships.map((r) => {
+        {mergedRels.map((r) => {
           const a = positionById.get(r.source);
           const b = positionById.get(r.target);
           if (!a || !b) return null;
@@ -203,6 +255,8 @@ export function GraphView({
         })}
         {laidOut.map((n) => {
           const isSelected = n.id === selectedId;
+          const r = nodeRadius(nodes.length, isSelected);
+          const showLabels = nodes.length <= 60;
           return (
             <g
               key={n.id}
@@ -214,22 +268,24 @@ export function GraphView({
               style={{ cursor: 'pointer' }}
             >
               <circle
-                r={isSelected ? 22 : 18}
+                r={r}
                 fill={colorFor(n.label)}
                 fillOpacity={0.18}
                 stroke={colorFor(n.label)}
                 strokeWidth={isSelected ? 2.5 : 1.5}
               />
-              <text
-                textAnchor="middle"
-                y={4}
-                fontSize={10}
-                fontFamily="JetBrains Mono"
-                fill="var(--fg-1)"
-              >
-                {(n.properties.name as string | undefined) ?? `#${n.id}`}
-              </text>
-              {n.label && (
+              {showLabels && (
+                <text
+                  textAnchor="middle"
+                  y={4}
+                  fontSize={10}
+                  fontFamily="JetBrains Mono"
+                  fill="var(--fg-1)"
+                >
+                  {(n.properties.name as string | undefined) ?? `#${n.id}`}
+                </text>
+              )}
+              {showLabels && n.label && (
                 <text
                   textAnchor="middle"
                   y={36}

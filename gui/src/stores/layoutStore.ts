@@ -138,7 +138,7 @@ export const useLayoutStore = create<LayoutState>()(
     }),
     {
       name: PERSIST_KEY,
-      version: 2,
+      version: 3,
       // Persist only the user-controlled preferences. Activity-rail
       // view + dirty flags reset on reload so a stale state does
       // not surface a dirty-but-empty tab the next session.
@@ -156,11 +156,21 @@ export const useLayoutStore = create<LayoutState>()(
       migrate: (persisted, version) => {
         const state = persisted as Partial<LayoutState> | undefined;
         if (!state) return state as unknown as LayoutState;
-        if (version < 2 && Array.isArray(state.editorTabs)) {
+        if (version < 3 && Array.isArray(state.editorTabs)) {
+          // Any tab still carrying an early sample (recognised by the
+          // "Welcome to Nexus" / "Common patterns" markers, or any
+          // body whose first non-blank line is a `//` comment) gets
+          // rewritten to the clean SAMPLE_CYPHER. The Nexus parser
+          // refuses leading-comment queries, so users running the
+          // seed straight from a stale persist hit the same
+          // "Query must contain at least one clause" error.
+          const isLeadingComment = (b: string) => /^\s*\/\//.test(b);
+          const isStaleSeed = (b: string) =>
+            b.includes('Common patterns to try next') ||
+            b.includes('Welcome to Nexus') ||
+            isLeadingComment(b);
           const migrated = state.editorTabs.map((t) =>
-            typeof t.body === 'string' &&
-            (t.body.includes('Common patterns to try next') ||
-              t.body.includes('Welcome to Nexus'))
+            typeof t.body === 'string' && isStaleSeed(t.body)
               ? { ...t, body: SAMPLE_CYPHER }
               : t,
           );

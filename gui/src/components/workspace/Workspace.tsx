@@ -15,9 +15,14 @@
  * in lock-step without prop-drilling through ResultsTabs.
  */
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { useExecuteCypher } from '../../services/queries';
+import { useApiBase, useExecuteCypher } from '../../services/queries';
+import { api } from '../../services/api';
 import { sanitizeCypher } from '../../services/cypher';
 import { useLayoutStore } from '../../stores/layoutStore';
+import {
+  selectCurrentConnection,
+  useConnectionsStore,
+} from '../../stores/connectionsStore';
 import { useQueryHistoryStore } from '../../stores/queryHistoryStore';
 import { CypherEditor } from './CypherEditor';
 import { EditorHead } from './EditorHead';
@@ -25,7 +30,7 @@ import { ResultsTabs, type ResultMode } from './ResultsTabs';
 import { TableView } from './TableView';
 import { JsonView } from './JsonView';
 import { PlanView } from './PlanView';
-import { GraphView, extractGraph } from './GraphView';
+import { GraphView, extractGraph, type GraphRelationship } from './GraphView';
 import { GraphControls } from './GraphControls';
 import { GraphLegend } from './GraphLegend';
 import { NodeInspector } from './NodeInspector';
@@ -38,9 +43,12 @@ export function Workspace() {
 
   const pushHistory = useQueryHistoryStore((s) => s.push);
   const exec = useExecuteCypher();
+  const baseUrl = useApiBase();
+  const apiKey = useConnectionsStore((s) => selectCurrentConnection(s)?.apiKey);
 
   const [mode, setMode] = useState<ResultMode>('graph');
   const [result, setResult] = useState<CypherResponse | null>(null);
+  const [extraRels, setExtraRels] = useState<GraphRelationship[]>([]);
   const [selectedNodeId, setSelectedNodeId] = useState<number | null>(null);
   const [zoom, setZoom] = useState(1);
   const [layoutSeed, setLayoutSeed] = useState(0);
@@ -67,6 +75,7 @@ export function Workspace() {
         onSuccess: (data) => {
           const elapsed = performance.now() - startedAt;
           setResult(data);
+          setExtraRels([]);
           setSelectedNodeId(null);
           pushHistory({
             query: sanitized,
@@ -96,6 +105,61 @@ export function Workspace() {
   }, [tab, exec, pushHistory]);
 
   const { nodes, relationships } = useMemo(() => extractGraph(result), [result]);
+
+  // Auto-fetch the relationships that connect the projected nodes
+  // when the user's query returns nodes only (the common
+  // `MATCH (n) RETURN n` pattern). Capped at 1000 ids and 5000 rels
+  // to keep the SVG renderable; bigger projections need a Cypher
+  // that selects edges explicitly.
+  useEffect(() => {
+    if (!result || !baseUrl) return;
+    if (relationships.length > 0) return;
+    if (nodes.length < 2) return;
+    const ids = nodes.slice(0, 1000).map((n) => n.id);
+    const idList = ids.join(', ');
+    const probe = `MATCH (a)-[r]->(b) WHERE a._nexus_id IN [${idList}] AND b._nexus_id IN [${idList}] RETURN a._nexus_id AS s, r._nexus_id AS rid, type(r) AS t, b._nexus_id AS d LIMIT 5000`;
+    let cancelled = false;
+    api
+      .executeCypher(baseUrl, { query: probe }, { apiKey })
+      .then((data) => {
+        if (cancelled) return;
+        const edges: GraphRelationship[] = [];
+        const cols = data.columns;
+        const sIdx = cols.indexOf('s');
+        const rIdx = cols.indexOf('rid');
+        const tIdx = cols.indexOf('t');
+        const dIdx = cols.indexOf('d');
+        if (sIdx < 0 || rIdx < 0 || tIdx < 0 || dIdx < 0) return;
+        for (const row of data.rows) {
+          const s = row[sIdx];
+          const rid = row[rIdx];
+          const t = row[tIdx];
+          const d = row[dIdx];
+          if (
+            typeof s === 'number' &&
+            typeof rid === 'number' &&
+            typeof t === 'string' &&
+            typeof d === 'number'
+          ) {
+            edges.push({ id: rid, type: t, source: s, target: d });
+          }
+        }
+        setExtraRels(edges);
+      })
+      .catch(() => {
+        // Silently ignore — the workspace already renders the
+        // primary result; rel auto-fetch is best-effort.
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [result, baseUrl, apiKey, nodes, relationships.length]);
+
+  const allRelationships = useMemo(
+    () => (relationships.length > 0 ? relationships : extraRels),
+    [relationships, extraRels],
+  );
+
   const selectedNode = useMemo(
     () => nodes.find((n) => n.id === selectedNodeId) ?? null,
     [nodes, selectedNodeId],
@@ -127,6 +191,7 @@ export function Workspace() {
             <div className="graph-pane" key={layoutSeed} style={{ transform: `scale(${zoom})` }}>
               <GraphView
                 result={result}
+                extraRelationships={extraRels}
                 selectedId={selectedNodeId}
                 onSelect={setSelectedNodeId}
               />
@@ -139,7 +204,7 @@ export function Workspace() {
               <GraphLegend nodes={nodes} />
               <NodeInspector
                 node={selectedNode}
-                relationships={relationships}
+                relationships={allRelationships}
                 onClose={() => setSelectedNodeId(null)}
               />
             </div>
