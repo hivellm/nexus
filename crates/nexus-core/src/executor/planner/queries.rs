@@ -3064,6 +3064,24 @@ impl<'a> QueryPlanner<'a> {
                     // estimate suffices.
                     total_cost += 50.0 * (inner_query.clauses.len() as f64).max(1.0);
                 }
+                Operator::SpatialSeek { mode, .. } => {
+                    // phase6_spatial-planner-seek §3 — cost the seek
+                    // as `log_b(N) + matching_entries` with `b = 127`
+                    // (RTREE_MAX_FANOUT). `matching_entries` is
+                    // unknown at plan time; we use a conservative
+                    // selectivity estimate (5% for bounded modes,
+                    // `k` itself for k-NN). The label-scan + filter
+                    // alternative is cost-modelled via the
+                    // surrounding NodeByLabel arm; the planner
+                    // picks the cheaper plan in the rewriter.
+                    let n_default: f64 = 1000.0;
+                    let log_b: f64 = 1.0_f64.max(n_default.log(127.0));
+                    let matching: f64 = match mode {
+                        crate::executor::types::SeekMode::Nearest { k, .. } => *k as f64,
+                        _ => 0.05 * n_default,
+                    };
+                    total_cost += log_b + matching;
+                }
             }
         }
 

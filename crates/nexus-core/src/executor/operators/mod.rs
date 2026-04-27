@@ -17,5 +17,6 @@ pub mod procedures;
 pub mod project;
 pub mod quantified_expand;
 pub mod scan;
+pub mod spatial;
 pub mod union;
 pub mod unwind;

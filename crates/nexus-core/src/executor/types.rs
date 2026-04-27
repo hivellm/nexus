@@ -381,6 +381,23 @@ pub enum Operator {
         /// CALL { … }` semantic).
         import_list: Option<Vec<String>>,
     },
+    /// Spatial index seek (phase6_spatial-planner-seek §1).
+    /// Probes `IndexManager::rtree` directly and emits matching
+    /// rows without going through `NodeByLabel`. The planner
+    /// rewrites `WHERE point.withinBBox/withinDistance(...)` and
+    /// `ORDER BY distance(...) LIMIT k` (plus the function-style
+    /// `point.nearest`) into this operator when an R-tree index
+    /// exists for the property.
+    SpatialSeek {
+        /// `{Label}.{property}` — the R-tree registry key.
+        index_id: String,
+        /// Variable to bind each emitted node to (matches the
+        /// pattern variable from the original MATCH).
+        variable: String,
+        /// Seek mode dictates which `RTree` walk the executor
+        /// runs against the indexed points.
+        mode: SeekMode,
+    },
     /// Load CSV file
     LoadCsv {
         /// CSV file URL/path
@@ -606,4 +623,50 @@ pub enum IndexType {
     FullText,
     /// Spatial index (R-tree)
     Spatial,
+}
+
+/// Spatial-seek modes (phase6_spatial-planner-seek §1.2).
+///
+/// One variant per recogniser arm in the planner. The R-tree
+/// runtime turns each into a different walk:
+///
+/// - [`SeekMode::Bbox`] — `RTree::query_bbox(min_x, min_y, max_x,
+///   max_y)`. Closed-interval intersection, no distance threshold.
+/// - [`SeekMode::WithinDistance`] — `RTree::within_distance(px,
+///   py, meters, Metric::Cartesian)`. Squared-distance pruning.
+/// - [`SeekMode::Nearest`] — `RTree::nearest(px, py, k,
+///   Metric::Cartesian)`. Min-heap walk; ties on `node_id`.
+#[derive(Debug, Clone, PartialEq)]
+pub enum SeekMode {
+    /// Bounding-box seek for `point.withinBBox(p, lower, upper)`.
+    Bbox {
+        /// Lower-left x.
+        min_x: f64,
+        /// Lower-left y.
+        min_y: f64,
+        /// Upper-right x.
+        max_x: f64,
+        /// Upper-right y.
+        max_y: f64,
+    },
+    /// Within-distance seek for `point.withinDistance(p, q, d)`.
+    WithinDistance {
+        /// Centre x.
+        center_x: f64,
+        /// Centre y.
+        center_y: f64,
+        /// Maximum distance in the index's CRS units (Cartesian
+        /// metres for v1).
+        meters: f64,
+    },
+    /// k-Nearest-neighbour seek for `ORDER BY distance(p, q) ASC
+    /// LIMIT k` and the function-style `point.nearest(p, k)`.
+    Nearest {
+        /// Query point x.
+        center_x: f64,
+        /// Query point y.
+        center_y: f64,
+        /// Number of nearest entries to emit.
+        k: usize,
+    },
 }

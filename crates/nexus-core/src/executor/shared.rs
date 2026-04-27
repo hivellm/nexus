@@ -36,6 +36,13 @@ pub struct ExecutorShared {
     pub(super) udf_registry: Arc<UdfRegistry>,
     /// Spatial indexes (`label.property` -> `RTreeIndex`)
     pub(super) spatial_indexes: Arc<parking_lot::RwLock<HashMap<String, SpatialIndex>>>,
+    /// Packed-Hilbert R-tree registry
+    /// (phase6_rtree-index-core §7.1 / phase6_spatial-planner-seek §1.3).
+    /// The `SpatialSeek` operator probes this directly. The grid-
+    /// backed `spatial_indexes` map continues to own writes until
+    /// the storage migration retargets them; both surfaces are
+    /// kept in sync by the executor's spatial CRUD path.
+    pub(super) rtree_registry: Arc<crate::index::rtree::RTreeRegistry>,
     /// Multi-layer cache system for performance optimization
     pub(super) cache: Option<Arc<parking_lot::RwLock<crate::cache::MultiLayerCache>>>,
     /// Intelligent query cache for Cypher query results
@@ -113,6 +120,7 @@ impl ExecutorShared {
             knn_index: Arc::new(RwLock::new(knn_index.clone())),
             udf_registry: Arc::new(UdfRegistry::new()),
             spatial_indexes: Arc::new(parking_lot::RwLock::new(HashMap::new())),
+            rtree_registry: Arc::new(crate::index::rtree::RTreeRegistry::new()),
             cache: None,
             query_cache: None,
             row_lock_manager: Arc::new(RowLockManager::default()),
@@ -220,6 +228,7 @@ impl ExecutorShared {
             knn_index: Arc::new(RwLock::new(knn_index.clone())),
             udf_registry: Arc::new(udf_registry),
             spatial_indexes: Arc::new(parking_lot::RwLock::new(HashMap::new())),
+            rtree_registry: Arc::new(crate::index::rtree::RTreeRegistry::new()),
             cache: None,
             query_cache: None,
             row_lock_manager: Arc::new(RowLockManager::default()),

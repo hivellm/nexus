@@ -2,10 +2,38 @@
 
 ## 1. Operator + executor integration
 
-- [ ] 1.1 Add `Operator::SpatialSeek { index_id, mode: SeekMode, limit: Option<usize> }` to `crates/nexus-core/src/executor/types.rs`.
-- [ ] 1.2 Define `SeekMode` enum with `Bbox(BBox)`, `WithinDistance { center: Point, meters: f64 }`, `Nearest { point: Point, k: usize }`.
-- [ ] 1.3 New file `crates/nexus-core/src/executor/operators/spatial.rs` implementing `execute_spatial_seek`: probe `IndexManager::rtree` and emit rows without going through `NodeByLabel`.
-- [ ] 1.4 Unit tests for the operator against a hand-built in-memory R-tree (independent of planner wiring).
+- [x] 1.1 `Operator::SpatialSeek { index_id, variable, mode }`
+            added in `crates/nexus-core/src/executor/types.rs`.
+            `index_id` is the `{Label}.{property}` registry
+            key; `variable` is the pattern variable so
+            downstream operators reference `n.prop`. `limit`
+            folds into `SeekMode::Nearest::k`.
+- [x] 1.2 `SeekMode` enum with `Bbox { min_x, min_y, max_x,
+            max_y }`, `WithinDistance { center_x, center_y,
+            meters }`, `Nearest { center_x, center_y, k }`.
+            Plain f64 fields keep the surface free of
+            geometry-crate types so tests build seeks without
+            going through Cypher.
+- [x] 1.3 `crates/nexus-core/src/executor/operators/spatial.rs`
+            implements `execute_spatial_seek`. Probes the new
+            `ExecutorShared::rtree_registry` (`Arc<
+            RTreeRegistry>`) via `snapshot(name)`, walks per
+            seek mode (`query_bbox` / `within_distance` /
+            `nearest`), reads each matching node through
+            `read_node_as_value`, emits rows. `Nearest` adds
+            a `distance` column. Tombstoned ids are dropped
+            silently so a stale registry entry does not fail
+            the query. Unknown index surfaces typed
+            `ERR_SPATIAL_INDEX_NOT_FOUND`. Dispatch arms in
+            `dispatch.rs` and `mod.rs` route here;
+            `Engine::rtree_registry()` accessor exposes the
+            registry to engine callers and tests.
+- [x] 1.4 Five `executor::operators::spatial::tests` cases:
+            bbox emits only matching rows (4 inputs → 3 hits),
+            within-distance filters by radius (4 inputs → 2
+            hits at radius 1.5), nearest emits a `distance`
+            column with the right values, unknown index errors
+            typed, empty index returns no rows.
 
 ## 2. Predicate recogniser
 

@@ -289,6 +289,14 @@ impl Executor {
         self.shared.store.write()
     }
 
+    /// Public handle on the shared R-tree registry. Used by the
+    /// engine to publish snapshots, by `Operator::SpatialSeek` to
+    /// probe indexes, and by tests to seed indexes without going
+    /// through the full DDL path.
+    pub fn rtree_registry(&self) -> std::sync::Arc<crate::index::rtree::RTreeRegistry> {
+        self.shared.rtree_registry.clone()
+    }
+
     /// Read lock on label_index (guard derefs to `&LabelIndex`).
     pub(super) fn label_index(&self) -> parking_lot::RwLockReadGuard<'_, LabelIndex> {
         self.shared.label_index.read()

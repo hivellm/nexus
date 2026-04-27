@@ -865,6 +865,13 @@ impl Executor {
                         import_list.as_deref(),
                     )?;
                 }
+                Operator::SpatialSeek {
+                    index_id,
+                    variable,
+                    mode,
+                } => {
+                    self.execute_spatial_seek(&mut context, index_id, variable, mode)?;
+                }
             }
         }
 
