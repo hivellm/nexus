@@ -2477,3 +2477,54 @@ fn call_subquery_parses_empty_import_list() {
     let c = call_tx_clause(&q);
     assert_eq!(c.import_list, Some(vec![]));
 }
+
+// phase6_rtree-index-core §7.5 — `USING RTREE` parser alias
+
+fn first_create_index(q: &CypherQuery) -> &CreateIndexClause {
+    for c in &q.clauses {
+        if let Clause::CreateIndex(ix) = c {
+            return ix;
+        }
+    }
+    panic!("expected a CreateIndex clause in: {q:?}");
+}
+
+#[test]
+fn create_index_using_rtree_marks_index_type_as_spatial() {
+    let mut p = CypherParser::new(
+        "CREATE INDEX place_loc FOR (p:Place) ON (p.loc) USING RTREE".to_string(),
+    );
+    let q = p.parse().unwrap();
+    let ix = first_create_index(&q);
+    assert_eq!(ix.index_type.as_deref(), Some("spatial"));
+    assert_eq!(ix.label, "Place");
+    assert_eq!(ix.properties, vec!["loc".to_string()]);
+    assert_eq!(ix.name.as_deref(), Some("place_loc"));
+}
+
+#[test]
+fn create_index_using_rtree_lowercase_also_parses() {
+    // Cypher keywords are case-insensitive; the alias should
+    // accept lower-case `using rtree` too.
+    let mut p = CypherParser::new("CREATE INDEX FOR (p:Place) ON (p.loc) using rtree".to_string());
+    let q = p.parse().unwrap();
+    let ix = first_create_index(&q);
+    assert_eq!(ix.index_type.as_deref(), Some("spatial"));
+}
+
+#[test]
+fn create_index_using_unknown_type_errors() {
+    let mut p = CypherParser::new("CREATE INDEX FOR (p:Place) ON (p.loc) USING BTREE".to_string());
+    assert!(p.parse().is_err(), "USING BTREE is not yet wired up");
+}
+
+#[test]
+fn create_spatial_index_legacy_form_still_parses() {
+    // The pre-§7.5 grammar `CREATE SPATIAL INDEX ON :Label(prop)`
+    // keeps its semantics — both shapes register the same
+    // index_type so existing scripts don't break.
+    let mut p = CypherParser::new("CREATE SPATIAL INDEX ON :Place(loc)".to_string());
+    let q = p.parse().unwrap();
+    let ix = first_create_index(&q);
+    assert_eq!(ix.index_type.as_deref(), Some("spatial"));
+}

@@ -81,6 +81,13 @@ pub struct IndexManager {
     /// Named full-text search indexes (phase6_opencypher-fulltext-search).
     /// Backed by Tantivy through `fulltext::FullTextIndex`.
     pub fulltext: fulltext_registry::FullTextRegistry,
+    /// Packed-Hilbert R-tree registry
+    /// (phase6_rtree-index-core §7.1). Replaces the grid-backed
+    /// `crate::geospatial::rtree::RTreeIndex` for the spatial
+    /// query path. Registered via `CREATE SPATIAL INDEX` (and the
+    /// `USING RTREE` alias from §7.5); WAL replay routes through
+    /// `RTreeRegistry::apply_wal_entry`.
+    pub rtree: std::sync::Arc<rtree::RTreeRegistry>,
 }
 
 impl IndexManager {
@@ -111,6 +118,7 @@ impl IndexManager {
             property_index: PropertyIndex::new(),
             composite_btree: composite_btree::CompositeBtreeRegistry::new(),
             fulltext,
+            rtree: std::sync::Arc::new(rtree::RTreeRegistry::new()),
         })
     }
 

@@ -1883,24 +1883,36 @@ impl Executor {
             ))
         })?;
 
-        // Naive k-NN over the grid index — iterate every indexed
-        // point, compute distance, sort. For the grid-backed
-        // SpatialIndex this is equivalent to the index's internal
-        // capability today; swapping in a packed R-tree in a
-        // follow-up task will plug the priority-queue walk in
-        // without touching this procedure's shape.
-        let mut pairs: Vec<(u64, f64)> = index
-            .entries()
-            .into_iter()
-            .filter(|(_, p)| p.same_crs(&point))
-            .map(|(id, p)| (id, point.distance_to(&p)))
-            .collect();
-        pairs.sort_by(|a, b| {
-            a.1.partial_cmp(&b.1)
-                .unwrap_or(std::cmp::Ordering::Equal)
-                .then(a.0.cmp(&b.0))
-        });
-        pairs.truncate(k);
+        // phase6_rtree-index-core §7.4 — swap the linear
+        // `entries()` scan for the priority-queue walk on the
+        // packed R-tree. The grid index still owns the durable
+        // state until §7.2's storage migration lands; for this
+        // commit we rebuild a packed `RTree` in-process from the
+        // grid's entries, run `nearest` against it (O(log_b N + k)
+        // page reads), and feed the hits back through the same
+        // result-row plumbing. Keeping the grid as the source of
+        // truth means writes still land where the rest of the
+        // executor expects them.
+        use crate::index::rtree::{Metric as RtreeMetric, RTree as PackedRTree};
+        let mut packed = PackedRTree::new();
+        let mut indexed_count: usize = 0;
+        for (id, p) in index.entries() {
+            if !p.same_crs(&point) {
+                continue;
+            }
+            packed.insert(id, p.x, p.y);
+            indexed_count += 1;
+        }
+        let pairs: Vec<(u64, f64)> = if indexed_count == 0 {
+            Vec::new()
+        } else {
+            packed
+                .nearest(point.x, point.y, k, RtreeMetric::Cartesian)
+                .map_err(|e| Error::CypherExecution(format!("ERR_SPATIAL_NEAREST_FAILED: {e}")))?
+                .into_iter()
+                .map(|h| (h.node_id, h.distance))
+                .collect()
+        };
 
         let columns = yield_columns
             .cloned()

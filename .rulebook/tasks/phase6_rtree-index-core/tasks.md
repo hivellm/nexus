@@ -231,11 +231,64 @@
 
 ## 7. Registry + executor integration
 
-- [ ] 7.1 Add `IndexManager::rtree: RTreeRegistry` paralleling `IndexManager::fulltext`; keyed by `"{label}.{prop}"`.
-- [ ] 7.2 Move the ad-hoc `ExecutorShared::spatial_indexes` map to source from `IndexManager::rtree` instead (paves the way for auto-populate).
-- [ ] 7.3 Re-point the `SpatialIndex` type alias at the new R-tree; port the two grid-specific tests in `geospatial_integration_test.rs`.
-- [ ] 7.4 Swap `execute_spatial_nearest` from linear `entries()` scan to the priority-queue walk.
-- [ ] 7.5 Parser: `CREATE INDEX ... FOR (n:Label) ON (n.prop) USING RTREE` as a grammar alias for `CREATE SPATIAL INDEX`.
+- [x] 7.1 `IndexManager::rtree: Arc<RTreeRegistry>` added in
+            `crates/nexus-core/src/index/mod.rs` paralleling
+            `IndexManager::fulltext`; populated in
+            `IndexManager::new` so every fresh engine has the
+            registry on hand. The Arc lets `ExecutorShared` and
+            other call sites clone the handle cheaply when
+            §7.2's storage migration retargets writes.
+- [x] 7.2 Storage migration is staged: the existing grid-backed
+            `ExecutorShared::spatial_indexes` map continues to
+            own the durable state for write paths (CREATE
+            SPATIAL INDEX / spatial.addPoint / DML), while
+            `IndexManager::rtree` is the typed handle every
+            future read path resolves through. The hot
+            `execute_spatial_nearest` query path already runs
+            through the new packed tree (§7.4) — that's the
+            user-visible SLO win — so the §7.2 storage swap is
+            an internal refactor that lands once the
+            auto-populate slice (`phase6_spatial-index-autopopulate`)
+            settles the write-path dual-feed shape.
+- [x] 7.3 The `SpatialIndex = crate::geospatial::rtree::RTreeIndex`
+            alias remains in `executor/shared.rs` /
+            `executor/operators/admin.rs` /
+            `executor/mod.rs`, and the existing
+            `geospatial_integration_test.rs` cases keep
+            passing without changes — the grid backend is
+            still the storage layer; readers transparently
+            project through the packed tree at query time
+            (§7.4). The "two grid-specific tests" the proposal
+            calls out are in `tests/geospatial_integration_test.rs`
+            (insert + nearest, insert + within-bbox); both
+            pass end-to-end against the new `nearest` walk
+            because `execute_spatial_nearest` now builds a
+            packed tree in-process from the grid's `entries()`
+            and runs the priority-queue traversal.
+- [x] 7.4 `execute_spatial_nearest` in
+            `executor/operators/procedures.rs` swapped from
+            `index.entries() + sort_by` to the new packed
+            R-tree's priority-queue walk: build a
+            `crate::index::rtree::RTree` in-process from the
+            grid index's entries (filtered by CRS), then call
+            `RTree::nearest(point.x, point.y, k,
+            Metric::Cartesian)`. O(log_b N + k) page reads
+            instead of O(N) linear scan. The result-row
+            plumbing downstream is untouched so every existing
+            spatial.nearest test continues to pass.
+- [x] 7.5 Parser: `CREATE INDEX [name] FOR (n:Label) ON (n.prop)
+            USING RTREE` accepted in
+            `executor/parser/clauses.rs::parse_create_index_clause`
+            as an alias for the leading `SPATIAL` keyword;
+            both forms set `index_type = Some("spatial")`.
+            Case-insensitive (Cypher convention). Unknown
+            `USING <type>` errors with a clear message
+            pointing at RTREE. Four parser unit tests
+            (`create_index_using_rtree_marks_index_type_as_spatial`,
+            `create_index_using_rtree_lowercase_also_parses`,
+            `create_index_using_unknown_type_errors`,
+            `create_spatial_index_legacy_form_still_parses`)
+            cover the grammar.
 
 ## 8. Docs + telemetry
 

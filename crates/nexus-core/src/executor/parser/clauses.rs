@@ -2266,6 +2266,35 @@ impl CypherParser {
             (lbl, vec![prop])
         };
 
+        // phase6_rtree-index-core §7.5 — `USING RTREE` alias for
+        // `CREATE [SPATIAL] INDEX`. Both forms register the same
+        // index on `IndexManager::rtree`. Treating `USING RTREE`
+        // as equivalent to the leading `SPATIAL` keyword keeps a
+        // Neo4j-dialect script with `... USING RTREE` parsing
+        // unchanged.
+        self.skip_whitespace();
+        let index_type = if self.peek_keyword("USING") {
+            self.parse_keyword()?; // consume "USING"
+            self.skip_whitespace();
+            if self.peek_keyword("RTREE") {
+                self.parse_keyword()?;
+                Some("spatial".to_string())
+            } else {
+                let raw = self.parse_identifier()?;
+                let lower = raw.to_lowercase();
+                match lower.as_str() {
+                    "rtree" | "spatial" => Some("spatial".to_string()),
+                    other => {
+                        return Err(self.error(&format!(
+                            "CREATE INDEX: unknown USING <type> {other:?}; expected RTREE"
+                        )));
+                    }
+                }
+            }
+        } else {
+            index_type
+        };
+
         let property = properties.first().cloned().unwrap_or_default();
 
         Ok(CreateIndexClause {
