@@ -166,8 +166,15 @@ fn test_engine_creation() {
     let _ = engine.transaction_manager.read().active_count();
 }
 
+// `Engine::default()` and `Engine::new_default()` both delegate to
+// `Engine::new()` which has used `tempfile::tempdir()` since at least
+// 1.13.0, so each construction is isolated to its own per-process
+// scratch directory. The `#[ignore]` attributes that lived here
+// previously were stale carry-over from a pre-tempdir implementation
+// and were preventing parallel CI from exercising these constructors.
+// Both tests now run under default `--test-threads`.
+
 #[test]
-#[ignore] // TODO: Fix - uses default data dir which conflicts with parallel tests
 fn test_engine_default() {
     let engine = Engine::default();
     // Test passes if default creation succeeds
@@ -175,7 +182,6 @@ fn test_engine_default() {
 }
 
 #[test]
-#[ignore] // TODO: Fix - uses default data dir which conflicts with parallel tests
 fn test_engine_new_default() {
     let engine = Engine::new_default();
     assert!(engine.is_ok());

@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [1.2.0] — 2026-04-28
 
+### Fixed — `phase7_fix-ignored-engine-tests`
+
+- **Two stale `#[ignore]` attributes** removed from
+  `crates/nexus-core/src/engine/tests.rs` (`test_engine_default`,
+  `test_engine_new_default`). Both carried a placeholder comment
+  blaming "default data dir which conflicts with parallel tests"
+  but `Engine::default()` and `Engine::new_default()` both
+  delegate to `Engine::new()`, which has used
+  `tempfile::tempdir()` for per-instance isolation since at
+  least 1.13.0. The ignore markers were carry-over from a
+  pre-tempdir implementation. Added a block comment above the
+  two tests so future readers do not re-add the ignore. Lib test
+  count moved from `91 passed / 2 ignored` to `93 passed / 0
+  ignored` on `cargo +nightly test -p nexus-core --lib
+  engine::tests`.
+
 ### Added — `phase6_opencypher-tck-spatial`
 
 - **openCypher-TCK-shaped spatial conformance suite** at
