@@ -15,6 +15,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > SDK versions all read 1.15.0. The release branch retains its
 > original `release/v1.2.0` name to keep upstream PR refs stable.
 
+### Discovered (audit only) — `phase7_cross-test-row-count-parity`
+
+- The phase7 task asked to fix the 22-test row-count gap in the
+  74-test cross-bench (`docs/performance/BENCHMARK_NEXUS_VS_NEO4J.md`
+  Sections 11/12/15 list 0% Compatible categories). The audit ran
+  a Rust-only probe (deleted after capture) against
+  `Engine::execute_cypher` and surfaced two distinct correctness
+  problems plus three projection-semantics nits:
+  - **OPTIONAL MATCH binding leak** (HIGH severity, silent wrong
+    data): `MATCH (a:Person) OPTIONAL MATCH (a)-[:KNOWS]->(b:Person)
+    RETURN a.name, b.name` returns `['Alice', 'Alice']` when Alice
+    has no `:KNOWS` edge — Nexus binds `b` to `a` itself instead of
+    NULL. Carved out as `phase8_optional-match-binding-leak`. This
+    is wrong data on every OPTIONAL MATCH no-match path; aggregations
+    on top inherit the corruption.
+  - **OPTIONAL MATCH empty-driver row-count**: standalone
+    `OPTIONAL MATCH (n:Ghost) RETURN n` returns 0 rows; Neo4j returns
+    1 row with `n = null` (LEFT-OUTER-JOIN against an implicit
+    single-row driver). Carved out as `phase8_optional-match-empty-driver`.
+  - **Projection nits** (WITH grouping carry-through, write success-row
+    emission, ORDER BY tie-stability): folded into the
+    `phase8_bolt-protocol-shim` task, which already needs
+    Neo4j-exact row shapes for driver compatibility.
+- No engine code was changed in this task — the audit drove the
+  carve-out and re-sequencing. The sibling tasks each ship their
+  own repro + fix + tests when implemented.
+
 ### Removed — `phase7_page-cache-property-index-eviction`
 
 - **Dead `warm_recent_indexes` helper** in
