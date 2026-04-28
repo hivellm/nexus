@@ -15,6 +15,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > SDK versions all read 1.15.0. The release branch retains its
 > original `release/v1.2.0` name to keep upstream PR refs stable.
 
+### Removed — `phase7_page-cache-property-index-eviction`
+
+- **Dead `warm_recent_indexes` helper** in
+  `crates/nexus-core/src/cache/mod.rs` and the matching
+  `CacheKey::Index(String)` variant. The function iterated
+  `last_access` filtered to `CacheKey::Index(_)` entries but no
+  production caller ever inserted a value of that variant — the
+  only `track_access` site is the page-cache `Page(u64)` path —
+  so the loop never ran and the placeholder marker inside it
+  ("`Check if index is actually cached`") could not be reached.
+  Removing both is pure dead-code cleanup, no behaviour change,
+  one Tier-1 marker fewer in shipping code.
+- **Audit finding (queued for follow-up):** `IndexKey::Property(label_id,
+  key_id)` is defined and unit-tested in
+  `crates/nexus-core/src/cache/index_cache.rs` but has **no
+  production producer** — no path in the property-lookup hot
+  path calls `index_cache.put(IndexKey::Property(...), ...)`.
+  The eviction policy + memory budget are already there
+  (`IndexCache` LRU with `max_memory` ceiling); the missing
+  piece is wiring the property-lookup code path into the cache.
+  Threading `IndexCache` through the property-index hot path is
+  a separate task and lives behind the same wider
+  index-handle-Arc refactor that gates
+  `phase7_planner-using-index-hints` engine wiring.
+- **Two new memory-budget tests** in
+  `crates/nexus-core/src/cache/index_cache.rs`:
+  `test_index_cache_property_keys_respect_memory_budget` and
+  `test_index_cache_fulltext_keys_respect_memory_budget`. Both
+  pin the LRU + memory-budget invariant for the typed `IndexKey`
+  variants so the future producer path inherits a verified
+  ceiling. 12/12 tests in the module passing.
+
 ### Added — `phase7_planner-using-index-hints`
 
 - **`USING INDEX <var>:<Label>(<prop>)` validation at plan time.**

@@ -315,13 +315,19 @@ impl Default for CacheConfig {
     }
 }
 
-/// Unified cache key for frequency tracking
+/// Unified cache key for frequency tracking. Only `Page(u64)` is
+/// produced by `track_access` today; `Object` and `Query` variants
+/// are reserved for future per-layer recency tracking. The
+/// `Index(String)` variant was dropped in
+/// `phase7_page-cache-property-index-eviction` because no producer
+/// ever wrote one, and the consumer (`warm_recent_indexes`) was a
+/// dead loop. Real index-cache recency lives inside `IndexCache`
+/// itself via the typed `IndexKey` enum.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 enum CacheKey {
     Page(u64),
     Object(String),
     Query(String),
-    Index(String),
 }
 
 /// Property index key for efficient WHERE clause filtering
@@ -891,11 +897,16 @@ impl MultiLayerCache {
             tracing::info!("Warmed {} observed query patterns", query_warm_count);
         }
 
-        // Warm recently accessed indexes
-        let index_warm_count = self.warm_recent_indexes()?;
-        if index_warm_count > 0 {
-            tracing::info!("Warmed {} recently accessed indexes", index_warm_count);
-        }
+        // Recently-accessed-index warming used to live here as a
+        // dead-loop helper: it iterated `last_access` filtered to
+        // `CacheKey::Index(_)` entries, but no production caller ever
+        // inserted a `CacheKey::Index` value into `last_access` (the
+        // only `track_access` site is the page-cache `Page(u64)`
+        // path). Removed in `phase7_page-cache-property-index-eviction`
+        // alongside the dead `CacheKey::Index(String)` variant. Real
+        // index-cache warming continues through `warm_index_cache`
+        // above, which iterates the typed `IndexKey::Label(...)`
+        // surface directly.
 
         Ok(())
     }
@@ -936,33 +947,6 @@ impl MultiLayerCache {
         for label_id in 0..max_items.min(20) {
             let key = IndexKey::Label(label_id as u32);
             if self.index_cache.get(&key).is_some() {
-                warmed += 1;
-            }
-        }
-
-        Ok(warmed)
-    }
-
-    /// Warm recently accessed indexes
-    fn warm_recent_indexes(&mut self) -> crate::Result<usize> {
-        let mut warmed = 0;
-        let max_items = self.config.global.warming.max_warm_items / 4; // Limit for lazy warming
-
-        // Get recently accessed index keys
-        let mut recent_keys: Vec<_> = self
-            .last_access
-            .iter()
-            .filter(|(key, _)| matches!(key, CacheKey::Index(_)))
-            .collect();
-
-        // Sort by most recent access
-        recent_keys.sort_by(|a, b| b.1.cmp(a.1));
-
-        for (key, _) in recent_keys.into_iter().take(max_items) {
-            if let CacheKey::Index(index_key) = key {
-                // Preload this index if not already in cache
-                // TODO: Check if index is actually cached
-                // For now, just count as warmed
                 warmed += 1;
             }
         }

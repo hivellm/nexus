@@ -668,4 +668,69 @@ mod tests {
         // Should have some memory size estimate
         assert!(page.memory_size > 0);
     }
+
+    /// phase7_page-cache-property-index-eviction: confirm
+    /// `IndexKey::Property(label_id, key_id)` entries are bounded by
+    /// the same memory budget as `IndexKey::Label`. The variant has
+    /// existed since the cache was introduced but no production
+    /// caller currently writes to it; this test pins the invariant
+    /// so a future task that wires the property-lookup hot path
+    /// into `IndexCache::put` inherits a correct memory ceiling.
+    #[test]
+    fn test_index_cache_property_keys_respect_memory_budget() {
+        // `max_page_size` is `max_memory / 100`, so we pick a budget
+        // (16 KiB) that comfortably accommodates the per-page payload
+        // below while still being small enough that 32 entries trigger
+        // LRU eviction.
+        let config = super::super::IndexCacheConfig {
+            max_memory: 16 * 1024,
+            ttl: Duration::from_secs(60),
+        };
+        let cache = IndexCache::new(config);
+
+        for i in 0..32u32 {
+            let key = IndexKey::Property(i, i + 1);
+            let data = serde_json::json!({"posting_list": "x".repeat(50), "label": i});
+            cache.put(key, data, IndexType::Property);
+        }
+
+        // Memory usage stays bounded near the configured ceiling.
+        assert!(
+            cache.memory_usage() <= 16 * 1024 + 256,
+            "property-keyed cache exceeded budget: {} bytes",
+            cache.memory_usage()
+        );
+        // Per-type breakdown reports the entries that survived the
+        // budget cap. At least one Property entry must be live.
+        let stats = cache.stats_by_type();
+        let prop = stats.get(&IndexType::Property).expect("property stats");
+        assert!(prop.count > 0 && prop.count <= 32);
+        assert!(prop.total_memory <= 16 * 1024 + 256);
+    }
+
+    /// Same invariant as above, but for `IndexKey::FullText` — the
+    /// only `IndexKey` variant currently written to in production
+    /// (via `MultiLayerCache::cache_fulltext_result`). Pins the
+    /// memory budget for that path so a future bulk-FTS workload
+    /// can't blow past the cache ceiling unnoticed.
+    #[test]
+    fn test_index_cache_fulltext_keys_respect_memory_budget() {
+        let config = super::super::IndexCacheConfig {
+            max_memory: 16 * 1024,
+            ttl: Duration::from_secs(60),
+        };
+        let cache = IndexCache::new(config);
+
+        for i in 0..32u64 {
+            let key = IndexKey::FullText(i);
+            let data = serde_json::json!({"hits": "x".repeat(50), "score": i as f64});
+            cache.put(key, data, IndexType::FullText);
+        }
+
+        assert!(
+            cache.memory_usage() <= 16 * 1024 + 256,
+            "fulltext-keyed cache exceeded budget: {} bytes",
+            cache.memory_usage()
+        );
+    }
 }
