@@ -15,6 +15,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > SDK versions all read 1.15.0. The release branch retains its
 > original `release/v1.2.0` name to keep upstream PR refs stable.
 
+### Discovered (no code change) — `phase7_call-in-transactions-executor`
+
+- The phase7 task asked to "finish executor batching for `CALL { } IN
+  TRANSACTIONS`" — but on audit the executor side was already
+  shipped end-to-end by `phase6_opencypher-subquery-transactions`
+  slice-2 (batching + `ON ERROR FAIL/CONTINUE/BREAK/RETRY n` +
+  `REPORT STATUS AS s`) and slice-3 (`IN CONCURRENT TRANSACTIONS`
+  + atomic per-batch rollback via `CompensatingUndoBuffer`).
+  Lives in `crates/nexus-core/src/executor/operators/call_subquery.rs`
+  (715 LOC); 20 passing tests in `crates/nexus-core/tests/call_subquery_test.rs`
+  (9 dedicated to IN TRANSACTIONS); spec already documents the
+  full surface at `docs/specs/cypher-subset.md:755-774`. The phase7
+  task is archived as a no-op audit; no behavior change.
+
 ### Removed — `phase7_resolve-jit-module`
 
 - **JIT scaffold deleted** (`crates/nexus-core/src/execution/jit/`).
