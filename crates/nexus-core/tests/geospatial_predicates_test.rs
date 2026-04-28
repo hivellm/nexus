@@ -410,6 +410,267 @@ fn spatial_nearest_errors_when_index_missing() {
 }
 
 // ============================================================================
+// CRUD auto-populate (phase6_spatial-index-autopopulate §2-§4)
+// ============================================================================
+
+/// §2.4 — `CREATE (p:Place {loc: point(...)})` populates the index
+/// without any prior `spatial.addPoint` call.
+#[test]
+fn spatial_index_autopopulate_on_create_node() {
+    let (executor, _ctx) = create_test_executor();
+
+    executor
+        .execute(&Query {
+            cypher: "CREATE SPATIAL INDEX ON :Place(loc)".to_string(),
+            params: HashMap::new(),
+        })
+        .unwrap();
+
+    // No `spatial.addPoint` — plain CREATE with an inline point
+    // literal (parameter-substituted values are rejected by the
+    // CREATE-property evaluator; literals go through the same
+    // serialise path the engine hooks read).
+    executor
+        .execute(&Query {
+            cypher: "CREATE (n:Place {loc: point({x: 3.0, y: 4.0})})".to_string(),
+            params: HashMap::new(),
+        })
+        .unwrap();
+
+    let mut params = HashMap::new();
+    params.insert("p".to_string(), cart(0.0, 0.0));
+    params.insert("k".to_string(), json!(1));
+    let result = executor
+        .execute(&Query {
+            cypher: "CALL spatial.nearest($p, 'Place', $k) YIELD node, dist RETURN dist"
+                .to_string(),
+            params,
+        })
+        .unwrap();
+    assert_eq!(result.rows.len(), 1, "auto-populate must surface the node");
+    let dist = result.rows[0].values[0].as_f64().unwrap();
+    assert!((dist - 5.0).abs() < 1e-9, "expected dist=5.0, got {dist}");
+}
+
+/// §3.4 — `SET p.loc = point({...})` refreshes the index so a
+/// subsequent `spatial.nearest` returns the new position.
+///
+/// Goes through the engine entry point because Cypher SET / REMOVE /
+/// DELETE only mutate storage when routed through
+/// `Engine::execute_cypher_with_*`; `Executor::execute` alone runs
+/// the planner without the engine's write-side dispatch. The
+/// auto-populate hook fires on the executor's `store_mut().create`
+/// path so CREATE alone is testable via the executor harness.
+#[test]
+fn spatial_index_autorefresh_on_set_property() {
+    let (mut engine, _ctx) = nexus_core::testing::setup_test_engine().expect("setup engine");
+
+    engine
+        .execute_cypher("CREATE SPATIAL INDEX ON :Place(loc)")
+        .unwrap();
+
+    engine
+        .execute_cypher("CREATE (n:Place {name: 'movable', loc: point({x: 1.0, y: 1.0})})")
+        .unwrap();
+
+    engine
+        .execute_cypher("MATCH (n:Place {name: 'movable'}) SET n.loc = point({x: 10.0, y: 10.0})")
+        .unwrap();
+
+    let result = engine
+        .execute_cypher(
+            "CALL spatial.nearest(point({x: 10.0, y: 10.0}), 'Place', 1) YIELD node, dist RETURN dist",
+        )
+        .unwrap();
+    assert_eq!(result.rows.len(), 1);
+    let dist = result.rows[0].values[0].as_f64().unwrap();
+    assert!(
+        dist.abs() < 1e-9,
+        "after SET, nearest from (10,10) must be 0, got {dist}"
+    );
+}
+
+/// §3.3 — `REMOVE p.loc` clears the last indexed property; the
+/// node must stay evicted (no phantom re-add).
+#[test]
+fn spatial_index_evicts_on_remove_property() {
+    let (mut engine, _ctx) = nexus_core::testing::setup_test_engine().expect("setup engine");
+
+    engine
+        .execute_cypher("CREATE SPATIAL INDEX ON :Place(loc)")
+        .unwrap();
+
+    engine
+        .execute_cypher("CREATE (n:Place {name: 'doomed', loc: point({x: 1.0, y: 1.0})})")
+        .unwrap();
+
+    engine
+        .execute_cypher("MATCH (n:Place {name: 'doomed'}) REMOVE n.loc")
+        .unwrap();
+
+    let result = engine
+        .execute_cypher(
+            "CALL spatial.nearest(point({x: 1.0, y: 1.0}), 'Place', 5) YIELD node, dist RETURN dist",
+        )
+        .unwrap();
+    assert!(
+        result.rows.is_empty(),
+        "REMOVE must evict; got {} rows",
+        result.rows.len()
+    );
+}
+
+/// §4.3 — `DELETE p` removes the node from every spatial index it
+/// belonged to.
+#[test]
+fn spatial_index_evicts_on_delete_node() {
+    let (mut engine, _ctx) = nexus_core::testing::setup_test_engine().expect("setup engine");
+
+    engine
+        .execute_cypher("CREATE SPATIAL INDEX ON :Place(loc)")
+        .unwrap();
+
+    engine
+        .execute_cypher("CREATE (n:Place {name: 'temp', loc: point({x: 2.0, y: 2.0})})")
+        .unwrap();
+
+    engine
+        .execute_cypher("MATCH (n:Place {name: 'temp'}) DELETE n")
+        .unwrap();
+
+    let result = engine
+        .execute_cypher(
+            "CALL spatial.nearest(point({x: 2.0, y: 2.0}), 'Place', 5) YIELD node, dist RETURN dist",
+        )
+        .unwrap();
+    assert!(result.rows.is_empty(), "DELETE must evict from every index");
+}
+
+// ============================================================================
+// CREATE SPATIAL INDEX type check (phase6_spatial-index-autopopulate §5)
+// ============================================================================
+
+/// §5.3 — sample-validate rejects when an existing `Place` node
+/// carries `loc` as a STRING.
+#[test]
+fn create_spatial_index_rejects_string_property() {
+    let (executor, _ctx) = create_test_executor();
+
+    executor
+        .execute(&Query {
+            cypher: "CREATE (n:Place {loc: 'not a point'})".to_string(),
+            params: HashMap::new(),
+        })
+        .unwrap();
+
+    let err = executor
+        .execute(&Query {
+            cypher: "CREATE SPATIAL INDEX ON :Place(loc)".to_string(),
+            params: HashMap::new(),
+        })
+        .expect_err("must reject non-Point property")
+        .to_string();
+    assert!(
+        err.contains("ERR_RTREE_BUILD"),
+        "expected ERR_RTREE_BUILD, got: {err}"
+    );
+}
+
+/// §5.3 — sample-validate rejects on a malformed-map property
+/// (object that is not a recognisable Point). Uses
+/// `Engine::create_node` to seed the malformed map because the
+/// CREATE-property evaluator only admits literals.
+#[test]
+fn create_spatial_index_rejects_malformed_map_property() {
+    let (mut engine, _ctx) = nexus_core::testing::setup_test_engine().expect("setup engine");
+
+    let mut props = serde_json::Map::new();
+    props.insert("loc".to_string(), json!({"a": 1, "b": 2}));
+    engine
+        .create_node(vec!["Place".to_string()], Value::Object(props))
+        .expect("seed Place node with non-Point map");
+
+    let err = engine
+        .execute_cypher("CREATE SPATIAL INDEX ON :Place(loc)")
+        .expect_err("must reject malformed-map property")
+        .to_string();
+    assert!(
+        err.contains("ERR_RTREE_BUILD"),
+        "expected ERR_RTREE_BUILD, got: {err}"
+    );
+}
+
+/// §5.3 — sample-validate rejects on INTEGER-typed property.
+#[test]
+fn create_spatial_index_rejects_integer_property() {
+    let (executor, _ctx) = create_test_executor();
+
+    executor
+        .execute(&Query {
+            cypher: "CREATE (n:Place {loc: 42})".to_string(),
+            params: HashMap::new(),
+        })
+        .unwrap();
+
+    let err = executor
+        .execute(&Query {
+            cypher: "CREATE SPATIAL INDEX ON :Place(loc)".to_string(),
+            params: HashMap::new(),
+        })
+        .expect_err("must reject integer property")
+        .to_string();
+    assert!(
+        err.contains("ERR_RTREE_BUILD"),
+        "expected ERR_RTREE_BUILD, got: {err}"
+    );
+}
+
+// ============================================================================
+// Engine programmatic API auto-populate (phase6_spatial-index-autopopulate §2.3)
+// ============================================================================
+
+/// §2.3 — `Engine::create_node` (the programmatic SDK ingest path)
+/// fires the engine-side `spatial_autopopulate_node` hook and emits
+/// the matching `WalEntry::RTreeInsert`. Crash-recovery replay is
+/// covered separately in `spatial_crash_recovery.rs`; this test
+/// proves the hook fires from the non-Cypher write path so the
+/// REST/SDK ingest paths inherit auto-populate.
+#[test]
+fn engine_create_node_fires_spatial_autopopulate_hook() {
+    let (mut engine, _ctx) = nexus_core::testing::setup_test_engine().expect("setup engine");
+
+    engine
+        .execute_cypher("CREATE SPATIAL INDEX ON :Place(loc)")
+        .unwrap();
+
+    // Use the programmatic engine API instead of Cypher CREATE.
+    let mut props = serde_json::Map::new();
+    props.insert(
+        "loc".to_string(),
+        Point::new_2d(7.0, 24.0, CoordinateSystem::Cartesian).to_json_value(),
+    );
+    let _node_id = engine
+        .create_node(vec!["Place".to_string()], Value::Object(props))
+        .expect("engine.create_node");
+
+    let result = engine
+        .execute_cypher(
+            "CALL spatial.nearest(point({x: 0.0, y: 0.0}), 'Place', 1) YIELD node, dist RETURN dist",
+        )
+        .unwrap();
+    assert_eq!(
+        result.rows.len(),
+        1,
+        "engine-side spatial_autopopulate_node must fire on Engine::create_node"
+    );
+    let dist = result.rows[0].values[0].as_f64().unwrap();
+    assert!(
+        (dist - 25.0).abs() < 1e-9,
+        "expected dist=25.0 for (7,24), got {dist}"
+    );
+}
+
+// ============================================================================
 // Parser regression - namespaced call must NOT shadow property access
 // ============================================================================
 

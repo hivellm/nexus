@@ -224,6 +224,13 @@ pub struct QueryPlanner<'a> {
     catalog: &'a Catalog,
     label_index: &'a LabelIndex,
     knn_index: &'a KnnIndex,
+    /// R-tree registry for the spatial-seek planner rewriter
+    /// (phase6_spatial-planner-seek §2). Optional: when `None` the
+    /// planner emits the legacy `NodeByLabel + Filter` plan
+    /// regardless of registered R-tree indexes. Threaded through
+    /// constructor + builder so existing call sites that don't
+    /// have a handle (e.g. planner unit tests) keep compiling.
+    rtree_registry: Option<std::sync::Arc<crate::index::rtree::RTreeRegistry>>,
     /// Query plan cache for performance optimization
     plan_cache: QueryPlanCache,
     /// Aggregation result cache for intermediate results

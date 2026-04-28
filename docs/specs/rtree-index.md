@@ -182,6 +182,43 @@ the registry (the inserts that built the tree journal
 separately); it exists so recovery code outside the registry can
 detect a partial bulk-load and re-run it.
 
+## CRUD hooks
+
+Spec implemented by `phase6_spatial-index-autopopulate`. The
+engine layer keeps the registry in lockstep with the node store
+through three hooks on `crate::engine::Engine`, mirroring the FTS
+auto-populate / refresh / evict trio line-for-line:
+
+| Hook                          | Call site                                       | WAL entry                  |
+|-------------------------------|-------------------------------------------------|----------------------------|
+| `spatial_autopopulate_node`   | every `create_node` path                        | `RTreeInsert`              |
+| `spatial_refresh_node`        | `persist_node_state` (SET / REMOVE)             | `RTreeDelete` + `RTreeInsert` (conditional) |
+| `spatial_evict_node`          | `delete_node` path                              | `RTreeDelete` per index    |
+
+Each hook walks `RTreeRegistry::definitions()` to enumerate the
+registered `(name, label, property)` triples, matches them against
+the written node's `(label_ids, properties)`, and routes the
+mutation through `RTreeRegistry::insert_point` /
+`RTreeRegistry::delete_point`. The registry maintains a per-index
+`HashSet<u64>` membership set so refresh / evict short-circuit on
+already-absent nodes without re-scanning the property store on
+every write; `RTreeRegistry::indexes_containing(node_id)` gives
+the SET / DELETE paths the matching index list directly.
+
+`CREATE SPATIAL INDEX ON :Label(prop)` runs a sample-validate
+step before registering: up to 1 000 existing `Label` nodes are
+read and the indexed `prop` is verified to be a Point. The first
+non-Point sample raises `ERR_RTREE_BUILD` with the offending
+`node_id`. This catches the silent "index built, queries empty"
+trap when a property is heterogeneously typed.
+
+`spatial.addPoint(label, prop, node_id, point)` is **deprecated**
+as of this slice. The procedure stays callable and idempotent
+with the auto-populate hook for backward compatibility but emits
+a `tracing::info!` breadcrumb on every invocation. Scheduled for
+removal in v2.0.0; see [`docs/guides/GEOSPATIAL.md`](../guides/GEOSPATIAL.md)
+for the recommended ingest pattern.
+
 ## MVCC visibility
 
 The R-tree itself does not store epoch metadata. Visibility

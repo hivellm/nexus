@@ -28,7 +28,14 @@ nexus-protocol = { path = "crates/nexus-protocol" }
 
 # Storage
 memmap2 = "0.9"
-heed = "0.20"
+# `read-txn-no-tls` switches LMDB envs to MDB_NOTLS so reader slot
+# allocation no longer consumes Windows TLS slots. Without it, the
+# nexus-core lib test binary (~2150 tests, each opening its own
+# Catalog -> Env) exhausts the OS TLS quota and `env.read_txn()`
+# returns `Database(Mdb(TlsFull))` mid-suite. The feature also
+# relaxes `RoTxn` to `Send`, which the codebase already tolerates
+# (every catalog read txn lives on the thread that opened it).
+heed = { version = "0.20", features = ["read-txn-no-tls"] }
 parking_lot = "0.12"
 roaring = "0.10"
 

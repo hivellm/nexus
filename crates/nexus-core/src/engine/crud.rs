@@ -90,6 +90,9 @@ impl Engine {
         };
         let props_value = Value::Object(properties);
         self.fts_refresh_node(node_id, &effective_label_ids, &props_value);
+        // phase6_spatial-index-autopopulate §3 — refresh spatial indexes
+        // after SET / REMOVE so the tree stays in sync with node state.
+        self.spatial_refresh_node(node_id, &effective_label_ids, &props_value);
         Ok(())
     }
 
@@ -456,6 +459,10 @@ impl Engine {
         // `FtsAdd` WAL entry so crash recovery replays the write.
         self.fts_autopopulate_node(node_id, &label_ids, &properties)?;
 
+        // phase6_spatial-index-autopopulate §2 — auto-populate every
+        // registered spatial index whose label/property matches.
+        self.spatial_autopopulate_node(node_id, &label_ids, &properties)?;
+
         Ok(node_id)
     }
 
@@ -542,6 +549,156 @@ impl Engine {
             }
         }
         Ok(())
+    }
+
+    // ── Spatial auto-populate hooks ───────────────────────────────
+
+    /// Walk every registered spatial index and, for each one whose
+    /// `(label, property)` matches the node just created, insert the
+    /// node's Point into the R-tree and emit a matching
+    /// `WalEntry::RTreeInsert` so crash recovery replays the write.
+    ///
+    /// Match rule (mirrors `fts_autopopulate_node`):
+    /// - The node carries at least one of the index's label ids, AND
+    /// - the indexed property holds a well-formed Point value.
+    ///
+    /// Errors from individual tree writes are logged via
+    /// `tracing::warn!` and swallowed — spatial indexes are secondary
+    /// structures, never the source of truth.
+    fn spatial_autopopulate_node(
+        &mut self,
+        node_id: u64,
+        label_ids: &[u32],
+        properties: &serde_json::Value,
+    ) -> Result<()> {
+        let props_obj = match properties.as_object() {
+            Some(o) => o,
+            None => return Ok(()),
+        };
+        let registry = self.indexes.rtree.clone();
+        for (name, label_name, property_key) in registry.definitions() {
+            // Resolve the label name to an id; skip if unknown.
+            let label_id = match self.catalog.get_label_id(&label_name) {
+                Ok(id) => id,
+                Err(_) => continue,
+            };
+            if !label_ids.contains(&label_id) {
+                continue;
+            }
+            // Extract a Point from the indexed property.
+            let Some(val) = props_obj.get(&property_key) else {
+                continue;
+            };
+            let point = match crate::geospatial::Point::from_json_value(val) {
+                Ok(p) => p,
+                Err(_) => continue,
+            };
+            registry.insert_point(&name, node_id, point.x, point.y);
+            let wal_entry = wal::WalEntry::RTreeInsert {
+                index_name: name.clone(),
+                node_id,
+                x: point.x,
+                y: point.y,
+            };
+            if let Err(e) = self.write_wal_async(wal_entry) {
+                tracing::warn!(
+                    "Spatial: WAL RTreeInsert on autopopulate for {name:?} / {node_id} failed: {e}"
+                );
+            }
+        }
+        Ok(())
+    }
+
+    /// Delete-then-conditional-add the node's point in every spatial
+    /// index whose `(label, property)` still matches after a SET /
+    /// REMOVE. Called from `persist_node_state`.
+    ///
+    /// For every index the node currently belongs to: drop the stale
+    /// entry and emit `RTreeDelete`. Then, if the new property value
+    /// is still a valid Point, re-insert and emit `RTreeInsert`.
+    ///
+    /// All errors are swallowed with `tracing::warn!`.
+    fn spatial_refresh_node(
+        &mut self,
+        node_id: u64,
+        label_ids: &[u32],
+        new_props: &serde_json::Value,
+    ) {
+        let registry = self.indexes.rtree.clone();
+        let props_obj = new_props.as_object();
+
+        // Phase 1: evict the stale entry from every index the node
+        // currently belongs to.
+        let containing = registry.indexes_containing(node_id);
+        for name in &containing {
+            registry.delete_point(name, node_id);
+            let del = wal::WalEntry::RTreeDelete {
+                index_name: name.clone(),
+                node_id,
+            };
+            if let Err(e) = self.write_wal_async(del) {
+                tracing::warn!(
+                    "Spatial: WAL RTreeDelete on refresh for {name:?} / {node_id} failed: {e}"
+                );
+            }
+        }
+
+        // Phase 2: re-insert where the new value is still a valid Point
+        // AND the node's labels match the index definition.
+        let Some(obj) = props_obj else { return };
+        for (idx_name, idx_label, prop_key) in registry.definitions() {
+            // Label check — resolve index label name to an id and confirm
+            // the node carries it. Skip (don't re-add) when labels don't
+            // match.
+            let label_matches = match self.catalog.get_label_id(&idx_label) {
+                Ok(id) => label_ids.contains(&id),
+                Err(_) => false,
+            };
+            if !label_matches {
+                continue;
+            }
+            let Some(val) = obj.get(&prop_key) else {
+                continue;
+            };
+            let point = match crate::geospatial::Point::from_json_value(val) {
+                Ok(p) => p,
+                Err(_) => continue,
+            };
+            registry.insert_point(&idx_name, node_id, point.x, point.y);
+            let ins = wal::WalEntry::RTreeInsert {
+                index_name: idx_name.clone(),
+                node_id,
+                x: point.x,
+                y: point.y,
+            };
+            if let Err(e) = self.write_wal_async(ins) {
+                tracing::warn!(
+                    "Spatial: WAL RTreeInsert on refresh for {idx_name:?} / {node_id} failed: {e}"
+                );
+            }
+        }
+    }
+
+    /// Evict `node_id` from every spatial index that currently lists
+    /// it as a member. Called from `delete_node` before the storage
+    /// record is marked deleted. Emits `WalEntry::RTreeDelete` per
+    /// index so crash recovery can replay the eviction.
+    ///
+    /// Best-effort: all errors are logged and swallowed.
+    fn spatial_evict_node(&mut self, node_id: u64) {
+        let registry = self.indexes.rtree.clone();
+        for name in registry.indexes_containing(node_id) {
+            registry.delete_point(&name, node_id);
+            let wal_entry = wal::WalEntry::RTreeDelete {
+                index_name: name.clone(),
+                node_id,
+            };
+            if let Err(e) = self.write_wal_async(wal_entry) {
+                tracing::warn!(
+                    "Spatial: WAL RTreeDelete on evict for {name:?} / {node_id} failed: {e}"
+                );
+            }
+        }
     }
 
     /// Create a new relationship
@@ -744,6 +901,9 @@ impl Engine {
             // so an index-side failure cannot cascade into a write
             // failure.
             self.fts_evict_node(id);
+            // phase6_spatial-index-autopopulate §4 — evict from every
+            // spatial index that contains the node.
+            self.spatial_evict_node(id);
 
             // Mark node as deleted
             let mut deleted_record = node_record;

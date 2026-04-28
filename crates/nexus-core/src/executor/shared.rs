@@ -7,7 +7,6 @@
 use crate::Result;
 use crate::catalog::Catalog;
 use crate::database::DatabaseManager;
-use crate::geospatial::rtree::RTreeIndex as SpatialIndex;
 use crate::index::{KnnIndex, LabelIndex};
 use crate::query_cache::{IntelligentQueryCache, QueryCacheConfig};
 use crate::relationship::{
@@ -16,7 +15,6 @@ use crate::relationship::{
 use crate::storage::{RecordStore, row_lock::RowLockManager};
 use crate::udf::UdfRegistry;
 use parking_lot::RwLock;
-use std::collections::HashMap;
 use std::sync::Arc;
 
 /// Shared executor state for concurrent execution.
@@ -34,14 +32,15 @@ pub struct ExecutorShared {
     pub(super) knn_index: Arc<RwLock<KnnIndex>>,
     /// UDF registry for user-defined functions (immutable, can be shared)
     pub(super) udf_registry: Arc<UdfRegistry>,
-    /// Spatial indexes (`label.property` -> `RTreeIndex`)
-    pub(super) spatial_indexes: Arc<parking_lot::RwLock<HashMap<String, SpatialIndex>>>,
     /// Packed-Hilbert R-tree registry
-    /// (phase6_rtree-index-core §7.1 / phase6_spatial-planner-seek §1.3).
-    /// The `SpatialSeek` operator probes this directly. The grid-
-    /// backed `spatial_indexes` map continues to own writes until
-    /// the storage migration retargets them; both surfaces are
-    /// kept in sync by the executor's spatial CRUD path.
+    /// (phase6_rtree-index-core §7.1 / phase6_spatial-planner-seek §1.3 /
+    /// phase6_spatial-index-autopopulate §1.2).
+    ///
+    /// Owned by `IndexManager::rtree` on the engine side and shared here
+    /// via `install_rtree` (called from `Engine::refresh_executor`).
+    /// `CREATE SPATIAL INDEX`, `spatial.nearest`, and `spatial.addPoint`
+    /// all read and write this registry exclusively — the legacy
+    /// `spatial_indexes: HashMap<String, SpatialIndex>` has been removed.
     pub(super) rtree_registry: Arc<crate::index::rtree::RTreeRegistry>,
     /// Multi-layer cache system for performance optimization
     pub(super) cache: Option<Arc<parking_lot::RwLock<crate::cache::MultiLayerCache>>>,
@@ -119,7 +118,6 @@ impl ExecutorShared {
             label_index: Arc::new(RwLock::new(label_index.clone())),
             knn_index: Arc::new(RwLock::new(knn_index.clone())),
             udf_registry: Arc::new(UdfRegistry::new()),
-            spatial_indexes: Arc::new(parking_lot::RwLock::new(HashMap::new())),
             rtree_registry: Arc::new(crate::index::rtree::RTreeRegistry::new()),
             cache: None,
             query_cache: None,
@@ -227,7 +225,6 @@ impl ExecutorShared {
             label_index: Arc::new(RwLock::new(label_index.clone())),
             knn_index: Arc::new(RwLock::new(knn_index.clone())),
             udf_registry: Arc::new(udf_registry),
-            spatial_indexes: Arc::new(parking_lot::RwLock::new(HashMap::new())),
             rtree_registry: Arc::new(crate::index::rtree::RTreeRegistry::new()),
             cache: None,
             query_cache: None,

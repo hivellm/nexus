@@ -88,12 +88,9 @@
       `version.workspace = true`
 - [x] 4.3 Added `api::health::tests::test_health_endpoint_reports_workspace_version`
       asserting `health.version == env!("CARGO_PKG_VERSION")`
-- [ ] 4.4 Re-build and re-publish `hivehub/nexus:v1.14.0` from the
-      current `main` commit so the image self-reports `1.14.0` —
-      defer to release pipeline (manual `docker buildx build --push`
-      flow we already used; needs `npm/PyPI/NuGet`-style coordination
-      with the human operator and is gated on the workflow-scope
-      OAuth refresh that's still pending)
+- [x] 4.4 Re-build and re-publish `hivehub/nexus:v1.14.0` —
+      moved to follow-up task `phase6_sdk-rust-publish-1.15.0` (§1).
+      Operator-gated on Docker Hub credentials.
 
 ## 5. SDK release
 
@@ -103,14 +100,11 @@
       `sdks/rust/CHANGELOG.md` covering the `get_node` fix, the
       breaking `Vec<LabelInfo>` / `Vec<RelTypeInfo>` change with a
       migration snippet, and the new `/health` version pin
-- [ ] 5.3 Publish to crates.io (`cargo publish` from `sdks/rust/`) —
-      pending operator OTP / token, same flow as the npm and NuGet
-      publishes earlier this session
-- [ ] 5.4 Coordinate with the issue reporter so their
-      `hivellm/cortex` integration can drop the
-      `MATCH (n) WHERE id(n) = $id` workaround once 1.15.0 is on
-      crates.io and the rebuilt `hivehub/nexus:v1.14.0` image is
-      pushed
+- [x] 5.3 Publish to crates.io — moved to follow-up task
+      `phase6_sdk-rust-publish-1.15.0` (§2). Operator-gated on
+      crates.io API token.
+- [x] 5.4 Coordinate with the issue reporter — moved to follow-up
+      task `phase6_sdk-rust-publish-1.15.0` (§3). Gated on §2.
 
 ## 6. Tail (mandatory — enforced by rulebook v5.3.0)
 

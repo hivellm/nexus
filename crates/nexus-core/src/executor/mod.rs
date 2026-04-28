@@ -1152,7 +1152,8 @@ impl Executor {
 
         // Locks are released here - planning happens with cloned data
         let mut planner =
-            QueryPlanner::new(self.catalog(), &label_index_snapshot, &knn_index_snapshot);
+            QueryPlanner::new(self.catalog(), &label_index_snapshot, &knn_index_snapshot)
+                .with_rtree(self.shared.rtree_registry.clone());
 
         let mut operators = planner.plan_query(ast)?;
 

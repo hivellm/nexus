@@ -327,6 +327,10 @@ impl Engine {
         engine
             .executor
             .install_fulltext(engine.indexes.fulltext.clone());
+        // phase6_spatial-index-autopopulate §1.2 — install the R-tree
+        // registry at construction so spatial DDL and queries work even
+        // before the first `refresh_executor` fires.
+        engine.executor.install_rtree(engine.indexes.rtree.clone());
 
         Ok(engine)
     }
@@ -503,6 +507,7 @@ impl Engine {
         engine
             .executor
             .install_fulltext(engine.indexes.fulltext.clone());
+        engine.executor.install_rtree(engine.indexes.rtree.clone());
 
         Ok(engine)
     }
@@ -1286,6 +1291,10 @@ impl Engine {
             .install_composite_btree(self.indexes.composite_btree.clone());
         self.executor
             .install_fulltext(self.indexes.fulltext.clone());
+        // phase6_spatial-index-autopopulate §1.2 — share the engine's
+        // R-tree registry with the executor so spatial CRUD hooks and
+        // query operators read and write the same in-memory state.
+        self.executor.install_rtree(self.indexes.rtree.clone());
         Ok(())
     }
 
@@ -4669,7 +4678,8 @@ impl Engine {
                 &self.catalog,
                 &self.indexes.label_index,
                 &self.indexes.knn_index,
-            );
+            )
+            .with_rtree(self.indexes.rtree.clone());
             planner.plan_query(query)?
         } else {
             // Fallback: parse and plan from string
@@ -4715,7 +4725,8 @@ impl Engine {
                 &self.catalog,
                 &self.indexes.label_index,
                 &self.indexes.knn_index,
-            );
+            )
+            .with_rtree(self.indexes.rtree.clone());
             planner.plan_query(query)?
         } else {
             // Fallback: parse and plan from string

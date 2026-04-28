@@ -640,6 +640,35 @@ impl Executor {
             }
         }
 
+        // phase6_spatial-planner-seek §5 — surface every registered
+        // R-tree index with `type = "RTREE"`, `state = "ONLINE"` (the
+        // registry has no failed/building states yet — every entry
+        // is online once `register_empty` returns).
+        for (idx_name, label, property) in self.shared.rtree_registry.definitions() {
+            if filter_name.is_some_and(|n| n != idx_name) {
+                continue;
+            }
+            rows.push(Row {
+                values: vec![
+                    Value::Number(serde_json::Number::from(next_id)),
+                    Value::String(idx_name),
+                    Value::String("ONLINE".to_string()),
+                    Value::Number(
+                        serde_json::Number::from_f64(100.0)
+                            .unwrap_or_else(|| serde_json::Number::from(100)),
+                    ),
+                    Value::String("NONUNIQUE".to_string()),
+                    Value::String("RTREE".to_string()),
+                    Value::String("NODE".to_string()),
+                    Value::Array(vec![Value::String(label)]),
+                    Value::Array(vec![Value::String(property)]),
+                    Value::String("rtree-1.0".to_string()),
+                    Value::Object(serde_json::Map::new()),
+                ],
+            });
+            next_id += 1;
+        }
+
         if filter_name.is_some() && rows.is_empty() {
             return Err(Error::CypherExecution(format!(
                 "ERR_INDEX_NOT_FOUND: no index named '{}'",
@@ -1526,6 +1555,118 @@ impl Executor {
         }
     }
 
+    // ──────────── phase6_spatial-index-autopopulate hooks ────────────
+    //
+    // These mirror `fts_autopopulate_node` / refresh / evict but route
+    // through `IndexManager::rtree` (shared with the engine via
+    // `ExecutorShared::rtree_registry`). Wired into the same CREATE /
+    // SET / DELETE call sites the FTS hooks use, so any path that
+    // mutates the node store keeps every spatial index in lockstep
+    // without requiring a manual `spatial.addPoint` call.
+
+    /// §2 — auto-populate every registered spatial index whose
+    /// `(label, property)` pair matches the node just created.
+    ///
+    /// For every registered index, when the node carries one of
+    /// the indexed labels AND the indexed property is a Point,
+    /// insert into the registry and emit `RTreeInsert` for replay.
+    pub(in crate::executor) fn spatial_autopopulate_node(
+        &self,
+        node_id: u64,
+        label_ids: &[u32],
+        properties: &serde_json::Value,
+    ) {
+        let Some(props_obj) = properties.as_object() else {
+            return;
+        };
+        let registry = self.shared.rtree_registry.clone();
+        for (idx_name, idx_label, prop_key) in registry.definitions() {
+            let label_id = match self.catalog().get_label_id(&idx_label) {
+                Ok(id) => id,
+                Err(_) => continue,
+            };
+            if !label_ids.contains(&label_id) {
+                continue;
+            }
+            let Some(val) = props_obj.get(&prop_key) else {
+                continue;
+            };
+            let point = match crate::geospatial::Point::from_json_value(val) {
+                Ok(p) => p,
+                Err(_) => continue,
+            };
+            registry.insert_point(&idx_name, node_id, point.x, point.y);
+            // Replay-WAL journaling lives on the engine-side hook
+            // (`Engine::spatial_autopopulate_node`); the executor
+            // hook only keeps the in-memory tree current. This
+            // matches the FTS auto-populate layering — the
+            // executor crate does not own the WAL handle.
+            let _ = (node_id, point.x, point.y, &idx_name);
+        }
+    }
+
+    /// §3 — delete-then-conditional-add the node's point in every
+    /// spatial index after a SET / REMOVE.
+    pub(in crate::executor) fn spatial_refresh_node(
+        &self,
+        node_id: u64,
+        label_ids: &[u32],
+        new_props: &serde_json::Value,
+    ) {
+        let registry = self.shared.rtree_registry.clone();
+
+        // Phase 1: evict the stale entry from every index the node
+        // currently belongs to.
+        for name in registry.indexes_containing(node_id) {
+            registry.delete_point(&name, node_id);
+            // See spatial_autopopulate_node note: WAL journalling
+            // lives on the engine-side hook.
+            let _ = (&name, node_id);
+        }
+
+        // Phase 2: re-insert where the new value is still a valid
+        // Point AND the node's labels match the index definition.
+        let Some(obj) = new_props.as_object() else {
+            return;
+        };
+        for (idx_name, idx_label, prop_key) in registry.definitions() {
+            let label_matches = match self.catalog().get_label_id(&idx_label) {
+                Ok(id) => label_ids.contains(&id),
+                Err(_) => false,
+            };
+            if !label_matches {
+                continue;
+            }
+            let Some(val) = obj.get(&prop_key) else {
+                continue;
+            };
+            let point = match crate::geospatial::Point::from_json_value(val) {
+                Ok(p) => p,
+                Err(_) => continue,
+            };
+            registry.insert_point(&idx_name, node_id, point.x, point.y);
+            // Replay-WAL journaling lives on the engine-side hook
+            // (`Engine::spatial_autopopulate_node`); the executor
+            // hook only keeps the in-memory tree current. This
+            // matches the FTS auto-populate layering — the
+            // executor crate does not own the WAL handle.
+            let _ = (node_id, point.x, point.y, &idx_name);
+        }
+    }
+
+    /// §4 — evict `node_id` from every spatial index that currently
+    /// lists it as a member. Called from the DELETE path before the
+    /// storage record is marked deleted.
+    pub(in crate::executor) fn spatial_evict_node(&self, node_id: u64) {
+        let registry = self.shared.rtree_registry.clone();
+        for name in registry.indexes_containing(node_id) {
+            registry.delete_point(&name, node_id);
+            // See spatial_autopopulate_node note: WAL journalling
+            // lives on the engine-side hook.
+            let _ = (&name, node_id);
+        }
+    }
+
     pub(in crate::executor) fn execute_fts_create(
         &self,
         context: &mut ExecutionContext,
@@ -1686,6 +1827,13 @@ impl Executor {
         arguments: &[parser::Expression],
         yield_columns: Option<&Vec<String>>,
     ) -> Result<()> {
+        // §7.1 — telemetry breadcrumb so deployments can spot stragglers
+        // still calling the legacy bulk-loader. The procedure stays
+        // idempotent with the auto-populate hook; log at info so a
+        // routine production run surfaces it without flipping debug.
+        tracing::info!(
+            "spatial.addPoint called — superseded by Cypher CRUD auto-populate (phase6_spatial-index-autopopulate); scheduled for removal in v2.0.0"
+        );
         let label = match arguments.first() {
             Some(expr) => match self.evaluate_expression_in_context(context, expr)? {
                 Value::String(s) => s,
@@ -1760,17 +1908,25 @@ impl Executor {
                 "ERR_INVALID_ARG_TYPE: spatial.addPoint `point` is not a valid POINT: {e}"
             ))
         })?;
+        // phase6_spatial-index-autopopulate §7.1 — procedure kept for
+        // backwards compat; auto-populate on CREATE/SET now covers the
+        // same writes. Emit a deprecation notice so operators can
+        // instrument stragglers.
+        tracing::info!(
+            label = %label,
+            property = %property,
+            node_id = node_id,
+            "spatial.addPoint called — superseded by auto-populate; see CHANGELOG"
+        );
         let key = format!("{label}.{property}");
-        let indexes = self.shared.spatial_indexes.read();
-        let index = indexes.get(&key).cloned();
-        drop(indexes);
-        let index = index.ok_or_else(|| {
-            Error::CypherExecution(format!(
+        let registry = &self.shared.rtree_registry;
+        if !registry.contains(&key) {
+            return Err(Error::CypherExecution(format!(
                 "ERR_SPATIAL_INDEX_NOT_FOUND: no spatial index for `{key}` — run `CREATE \
                  SPATIAL INDEX ON :{label}({property})` first"
-            ))
-        })?;
-        index.insert(node_id, &point)?;
+            )));
+        }
+        registry.insert_point(&key, node_id, point.x, point.y);
         let columns = yield_columns
             .cloned()
             .unwrap_or_else(|| vec!["added".to_string()]);
@@ -1861,58 +2017,40 @@ impl Executor {
             ))
         })?;
 
-        // Locate the `{label}.<prop>` index. Sort keys so the pick
-        // is stable across runs when more than one property is
-        // indexed for the same label.
-        let indexes = self.shared.spatial_indexes.read();
+        // Locate the `{label}.<prop>` index in the R-tree registry.
+        // Sort definitions so the pick is stable when more than one
+        // property is indexed for the same label.
+        let registry = &self.shared.rtree_registry;
         let prefix = format!("{label}.");
-        let mut matching: Vec<&String> =
-            indexes.keys().filter(|k| k.starts_with(&prefix)).collect();
+        let mut matching: Vec<String> = registry
+            .definitions()
+            .into_iter()
+            .filter(|(name, _, _)| name.starts_with(&prefix))
+            .map(|(name, _, _)| name)
+            .collect();
         matching.sort();
-        let Some(index_key) = matching.first().map(|s| (*s).clone()) else {
+        let Some(index_key) = matching.into_iter().next() else {
             return Err(Error::CypherExecution(format!(
                 "ERR_SPATIAL_INDEX_NOT_FOUND: no spatial index exists for label `{label}` — \
                  run `CREATE SPATIAL INDEX ON :{label}(<property>)` first",
             )));
         };
-        let index = indexes.get(&index_key).cloned();
-        drop(indexes);
-        let index = index.ok_or_else(|| {
-            Error::CypherExecution(format!(
-                "ERR_SPATIAL_INDEX_NOT_FOUND: {index_key:?} vanished during read"
-            ))
-        })?;
 
-        // phase6_rtree-index-core §7.4 — swap the linear
-        // `entries()` scan for the priority-queue walk on the
-        // packed R-tree. The grid index still owns the durable
-        // state until §7.2's storage migration lands; for this
-        // commit we rebuild a packed `RTree` in-process from the
-        // grid's entries, run `nearest` against it (O(log_b N + k)
-        // page reads), and feed the hits back through the same
-        // result-row plumbing. Keeping the grid as the source of
-        // truth means writes still land where the rest of the
-        // executor expects them.
-        use crate::index::rtree::{Metric as RtreeMetric, RTree as PackedRTree};
-        let mut packed = PackedRTree::new();
-        let mut indexed_count: usize = 0;
-        for (id, p) in index.entries() {
-            if !p.same_crs(&point) {
-                continue;
-            }
-            packed.insert(id, p.x, p.y);
-            indexed_count += 1;
-        }
-        let pairs: Vec<(u64, f64)> = if indexed_count == 0 {
-            Vec::new()
-        } else {
-            packed
-                .nearest(point.x, point.y, k, RtreeMetric::Cartesian)
-                .map_err(|e| Error::CypherExecution(format!("ERR_SPATIAL_NEAREST_FAILED: {e}")))?
-                .into_iter()
-                .map(|h| (h.node_id, h.distance))
-                .collect()
-        };
+        // Query the packed R-tree directly through the registry.
+        use crate::index::rtree::Metric as RtreeMetric;
+        let pairs: Vec<(u64, f64)> = registry
+            .nearest_with_filter(
+                &index_key,
+                point.x,
+                point.y,
+                k,
+                RtreeMetric::Cartesian,
+                |_| true,
+            )
+            .map_err(|e| Error::CypherExecution(format!("ERR_SPATIAL_NEAREST_FAILED: {e}")))?
+            .into_iter()
+            .map(|h| (h.node_id, h.distance))
+            .collect();
 
         let columns = yield_columns
             .cloned()

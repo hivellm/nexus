@@ -5,10 +5,15 @@ import electron from 'vite-plugin-electron';
 import renderer from 'vite-plugin-electron-renderer';
 import { resolve } from 'path';
 
+const SKIP_ELECTRON = process.env.NEXUS_NO_ELECTRON === '1';
+
 // https://vitejs.dev/config/
 export default defineConfig({
   plugins: [
     react(),
+    ...(SKIP_ELECTRON
+      ? []
+      : [
     electron([
       {
         entry: 'electron/main.ts',
@@ -57,6 +62,7 @@ export default defineConfig({
       },
     ]),
     renderer(),
+        ]),
   ],
   resolve: {
     alias: {

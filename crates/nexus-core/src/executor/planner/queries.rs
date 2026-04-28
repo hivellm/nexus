@@ -6,15 +6,33 @@
 use super::*;
 
 impl<'a> QueryPlanner<'a> {
-    /// Create a new query planner
+    /// Create a new query planner without an R-tree registry handle.
+    ///
+    /// Plans built by this constructor never emit `Operator::SpatialSeek`
+    /// — every spatial predicate falls back to `NodeByLabel + Filter`.
+    /// Use [`QueryPlanner::with_rtree`] to opt into the rewriter from
+    /// callers that hold a registry handle (`Engine::execute_*` paths).
     pub fn new(catalog: &'a Catalog, label_index: &'a LabelIndex, knn_index: &'a KnnIndex) -> Self {
         Self {
             catalog,
             label_index,
             knn_index,
+            rtree_registry: None,
             plan_cache: QueryPlanCache::new(1000, Duration::from_secs(300)), // 1000 plans, 5min TTL
             aggregation_cache: AggregationCache::new(500, Duration::from_secs(180)), // 500 results, 3min TTL
         }
+    }
+
+    /// Builder shim: install an R-tree registry handle so the
+    /// spatial-seek rewriter (phase6_spatial-planner-seek §2) can
+    /// look up which `(label, property)` pairs have a registered
+    /// index. Idiomatic call: `QueryPlanner::new(...).with_rtree(reg)`.
+    pub fn with_rtree(
+        mut self,
+        registry: std::sync::Arc<crate::index::rtree::RTreeRegistry>,
+    ) -> Self {
+        self.rtree_registry = Some(registry);
+        self
     }
 
     /// Generate a hash for query caching based on query structure
@@ -165,6 +183,7 @@ impl<'a> QueryPlanner<'a> {
                     catalog: self.catalog,
                     label_index: self.label_index,
                     knn_index: self.knn_index,
+                    rtree_registry: self.rtree_registry.clone(),
                     plan_cache: QueryPlanCache::new(0, std::time::Duration::from_secs(0)), // Empty cache
                     aggregation_cache: AggregationCache::new(
                         100,
@@ -1159,6 +1178,14 @@ impl<'a> QueryPlanner<'a> {
                 operators.push(Operator::Limit { count: limit });
             }
         }
+
+        // phase6_spatial-planner-seek §2 + §3 — try to rewrite the
+        // operator pipeline to use `SpatialSeek` when an R-tree
+        // index covers the predicate. The rewriter is a no-op when
+        // no registry is installed or when no shape matches; the
+        // cost-based picker (§3) only swaps in the seek when its
+        // estimated cost is below the legacy `NodeByLabel + Filter`.
+        let operators = self.try_rewrite_spatial_seek(query, operators);
 
         // Cache the planned operators for future use
         // Estimate cost using the improved cost model
@@ -3515,6 +3542,353 @@ impl<'a> QueryPlanner<'a> {
         }
 
         Ok(result)
+    }
+
+    /// phase6_spatial-planner-seek §2 — rewrite the operator
+    /// pipeline to use [`Operator::SpatialSeek`] when the query
+    /// matches one of the seek-shape predicates AND an R-tree
+    /// index covers the `(label, property)` pair.
+    ///
+    /// Matched shapes (each requires a literal point / bbox /
+    /// distance / k — parameter-bound values are deferred to the
+    /// legacy `NodeByLabel + Filter` plan because the planner
+    /// can't extract coordinates at plan time):
+    ///
+    /// | Cypher                                                       | SeekMode             |
+    /// |--------------------------------------------------------------|----------------------|
+    /// | `WHERE point.withinBBox(<var>.<prop>, <bbox-map-literal>)`   | `Bbox`               |
+    /// | `WHERE point.withinDistance(<var>.<prop>, <pt-lit>, <d-lit>)`| `WithinDistance`     |
+    /// | `MATCH (n:L) ... ORDER BY distance(n.p, <pt>) LIMIT <k>`     | `Nearest`            |
+    ///
+    /// When a shape matches but `RTreeRegistry::contains(name)` is
+    /// false, the rewriter is a no-op and the legacy plan stands.
+    fn try_rewrite_spatial_seek(
+        &self,
+        query: &CypherQuery,
+        operators: Vec<Operator>,
+    ) -> Vec<Operator> {
+        let Some(registry) = self.rtree_registry.as_ref() else {
+            return operators;
+        };
+        if registry.is_empty() {
+            return operators;
+        }
+
+        // Index every MATCH node by variable -> label so the WHERE /
+        // ORDER BY scan below can resolve `n.prop` to a registered
+        // `{Label}.{prop}` index. Multi-label patterns: we record
+        // the first label only — registering against multi-label
+        // matches is reserved for the cluster-mode work.
+        let mut var_to_label: std::collections::HashMap<String, String> =
+            std::collections::HashMap::new();
+        for clause in &query.clauses {
+            if let Clause::Match(mc) = clause {
+                for elem in &mc.pattern.elements {
+                    if let crate::executor::parser::PatternElement::Node(n) = elem {
+                        if let (Some(var), Some(label)) = (n.variable.as_ref(), n.labels.first()) {
+                            var_to_label
+                                .entry(var.clone())
+                                .or_insert_with(|| label.clone());
+                        }
+                    }
+                }
+            }
+        }
+        if var_to_label.is_empty() {
+            return operators;
+        }
+
+        // Collect candidate seeks. WHERE-shape predicates land
+        // directly. ORDER BY + LIMIT pairs need both clauses to
+        // resolve before we can emit a Nearest seek.
+        let mut candidates: Vec<(String, String, crate::executor::types::SeekMode)> = Vec::new();
+        let mut order_by_distance: Option<(String, String, f64, f64)> = None;
+        let mut limit_value: Option<usize> = None;
+
+        for clause in &query.clauses {
+            match clause {
+                Clause::Where(wc) => {
+                    if let Some(c) =
+                        self.try_recognise_where_seek(&wc.expression, &var_to_label, registry)
+                    {
+                        candidates.push(c);
+                    }
+                }
+                Clause::Match(mc) => {
+                    if let Some(w) = mc.where_clause.as_ref() {
+                        if let Some(c) =
+                            self.try_recognise_where_seek(&w.expression, &var_to_label, registry)
+                        {
+                            candidates.push(c);
+                        }
+                    }
+                }
+                Clause::OrderBy(ob) => {
+                    if order_by_distance.is_none() {
+                        order_by_distance = recognise_order_by_distance(ob);
+                    }
+                }
+                Clause::Limit(lc) => {
+                    if limit_value.is_none() {
+                        limit_value = extract_usize_literal(&lc.count);
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        if let (Some((var, prop, cx, cy)), Some(k)) = (order_by_distance, limit_value) {
+            if let Some(label) = var_to_label.get(&var) {
+                let name = format!("{label}.{prop}");
+                if registry.contains(&name) {
+                    candidates.push((
+                        var,
+                        name,
+                        crate::executor::types::SeekMode::Nearest {
+                            center_x: cx,
+                            center_y: cy,
+                            k,
+                        },
+                    ));
+                }
+            }
+        }
+
+        if candidates.is_empty() {
+            return operators;
+        }
+
+        // §3 cost-based picker: only swap when the seek is cheaper
+        // than the legacy `NodeByLabel + Filter` alternative. For
+        // the v1 cost model the comparison is selectivity-based
+        // (5% for bounded modes, k for k-NN); future slices that
+        // surface real index statistics tighten the estimate.
+        for (variable, index_id, mode) in candidates {
+            let n = self
+                .estimate_label_cardinality(&variable, &var_to_label)
+                .unwrap_or(1000.0);
+            let seek_cost = self.spatial_seek_cost(&mode, n);
+            let scan_cost = n + n; // label scan + per-row filter
+            if seek_cost >= scan_cost {
+                continue;
+            }
+            if let Some(rewritten) =
+                self.swap_in_spatial_seek(&operators, &variable, &index_id, mode)
+            {
+                return rewritten;
+            }
+        }
+        operators
+    }
+
+    /// Recognise a `WHERE` expression that fits the spatial-seek
+    /// shape. Returns `Some((variable, index_id, mode))` only when
+    /// the expression is a top-level `point.withinBBox` or
+    /// `point.withinDistance` call against a `<var>.<prop>` whose
+    /// `(label, property)` registers in the R-tree.
+    fn try_recognise_where_seek(
+        &self,
+        expr: &Expression,
+        var_to_label: &std::collections::HashMap<String, String>,
+        registry: &std::sync::Arc<crate::index::rtree::RTreeRegistry>,
+    ) -> Option<(String, String, crate::executor::types::SeekMode)> {
+        let (name, args) = match expr {
+            Expression::FunctionCall { name, args } => (name.as_str(), args),
+            _ => return None,
+        };
+        // First arg must be `<var>.<prop>`.
+        let (var, prop) = match args.first()? {
+            Expression::PropertyAccess { variable, property } => {
+                (variable.clone(), property.clone())
+            }
+            _ => return None,
+        };
+        let label = var_to_label.get(&var)?;
+        let index_id = format!("{label}.{prop}");
+        if !registry.contains(&index_id) {
+            return None;
+        }
+        let mode = match name {
+            "point.withinBBox" | "withinBBox" => {
+                let (min_x, min_y, max_x, max_y) = extract_bbox_literal(args.get(1)?)?;
+                crate::executor::types::SeekMode::Bbox {
+                    min_x,
+                    min_y,
+                    max_x,
+                    max_y,
+                }
+            }
+            "point.withinDistance" | "withinDistance" => {
+                let (cx, cy) = extract_point_literal(args.get(1)?)?;
+                let d = extract_f64_literal(args.get(2)?)?;
+                crate::executor::types::SeekMode::WithinDistance {
+                    center_x: cx,
+                    center_y: cy,
+                    meters: d,
+                }
+            }
+            _ => return None,
+        };
+        Some((var, index_id, mode))
+    }
+
+    /// Cost the spatial seek per §3: `log_b(N) + matching` with
+    /// `b = 127`. `matching` is `k` for k-NN, otherwise `0.05 * N`.
+    fn spatial_seek_cost(&self, mode: &crate::executor::types::SeekMode, n: f64) -> f64 {
+        let b = 127.0_f64;
+        let log_b = if n > 1.0 { n.log(b).max(1.0) } else { 1.0 };
+        let matching = match mode {
+            crate::executor::types::SeekMode::Nearest { k, .. } => *k as f64,
+            _ => 0.05 * n,
+        };
+        log_b + matching
+    }
+
+    /// Conservative label-cardinality estimate for the scan-vs-seek
+    /// cost comparison. Reads `LabelIndex` stats when available;
+    /// falls back to 1 000 (planner-default) when the catalog
+    /// hasn't been queried yet.
+    fn estimate_label_cardinality(
+        &self,
+        variable: &str,
+        var_to_label: &std::collections::HashMap<String, String>,
+    ) -> Option<f64> {
+        let label_name = var_to_label.get(variable)?;
+        let label_id = self.catalog.get_label_id(label_name).ok()?;
+        let count = self
+            .label_index
+            .get_nodes_with_labels(&[label_id])
+            .ok()?
+            .len();
+        if count == 0 {
+            Some(1000.0)
+        } else {
+            Some(count as f64)
+        }
+    }
+
+    /// Replace the `NodeByLabel { variable, .. }` operator with a
+    /// `SpatialSeek` carrying the same variable. Returns `None`
+    /// when the pipeline has no matching `NodeByLabel` to swap.
+    fn swap_in_spatial_seek(
+        &self,
+        operators: &[Operator],
+        variable: &str,
+        index_id: &str,
+        mode: crate::executor::types::SeekMode,
+    ) -> Option<Vec<Operator>> {
+        let mut out = Vec::with_capacity(operators.len());
+        let mut swapped = false;
+        for op in operators {
+            if !swapped {
+                if let Operator::NodeByLabel { variable: v, .. } = op {
+                    if v == variable {
+                        out.push(Operator::SpatialSeek {
+                            index_id: index_id.to_string(),
+                            variable: variable.to_string(),
+                            mode: mode.clone(),
+                        });
+                        swapped = true;
+                        continue;
+                    }
+                }
+            }
+            out.push(op.clone());
+        }
+        if swapped { Some(out) } else { None }
+    }
+}
+
+/// Recognise an `ORDER BY distance(<var>.<prop>, <point-literal>)
+/// ASC` shape. Returns `(variable, property, cx, cy)` only when
+/// the first sort item is a single ascending distance call against
+/// a property-access first argument and a literal point second
+/// argument; any other shape (DESC, multi-key sort, parameter
+/// point) leaves the legacy plan in place.
+fn recognise_order_by_distance(
+    ob: &crate::executor::parser::OrderByClause,
+) -> Option<(String, String, f64, f64)> {
+    let item = ob.items.first()?;
+    if !matches!(
+        item.direction,
+        crate::executor::parser::SortDirection::Ascending
+    ) {
+        return None;
+    }
+    let (name, args) = match &item.expression {
+        Expression::FunctionCall { name, args } => (name.as_str(), args),
+        _ => return None,
+    };
+    if !matches!(name, "distance" | "point.distance") {
+        return None;
+    }
+    let (variable, property) = match args.first()? {
+        Expression::PropertyAccess { variable, property } => (variable.clone(), property.clone()),
+        _ => return None,
+    };
+    let (cx, cy) = extract_point_literal(args.get(1)?)?;
+    Some((variable, property, cx, cy))
+}
+
+/// Read a non-negative integer literal as `usize`. Negative or
+/// non-integer LIMIT values fall through to the legacy plan so the
+/// planner never invents a coordinate the user didn't specify.
+fn extract_usize_literal(expr: &Expression) -> Option<usize> {
+    match expr {
+        Expression::Literal(crate::executor::parser::Literal::Integer(i)) if *i >= 0 => {
+            Some(*i as usize)
+        }
+        _ => None,
+    }
+}
+
+/// Extract a 4-tuple `(min_x, min_y, max_x, max_y)` from a bbox
+/// expression of the shape `{bottomLeft: point(...), topRight:
+/// point(...)}` literal map. Returns `None` for parameter / non-
+/// literal forms — the planner falls back to `NodeByLabel + Filter`
+/// because it can't see the coordinates at plan time.
+fn extract_bbox_literal(expr: &Expression) -> Option<(f64, f64, f64, f64)> {
+    let map = match expr {
+        Expression::Map(m) => m,
+        _ => return None,
+    };
+    let bl = map.get("bottomLeft")?;
+    let tr = map.get("topRight")?;
+    let (min_x, min_y) = extract_point_literal(bl)?;
+    let (max_x, max_y) = extract_point_literal(tr)?;
+    Some((min_x, min_y, max_x, max_y))
+}
+
+/// Extract a `(x, y)` pair from a `point({x: <num>, y: <num>})`
+/// literal expression. Returns `None` for any other shape so the
+/// planner falls back to the legacy plan instead of guessing.
+fn extract_point_literal(expr: &Expression) -> Option<(f64, f64)> {
+    match expr {
+        Expression::Literal(crate::executor::parser::Literal::Point(p)) => Some((p.x, p.y)),
+        // `point({x: 1, y: 2})` parses as a function call when the
+        // parser can't fold it into a literal at parse time.
+        Expression::FunctionCall { name, args } if name.eq_ignore_ascii_case("point") => {
+            let inner = match args.first()? {
+                Expression::Map(m) => m,
+                _ => return None,
+            };
+            let x = extract_f64_literal(inner.get("x")?)?;
+            let y = extract_f64_literal(inner.get("y")?)?;
+            Some((x, y))
+        }
+        _ => None,
+    }
+}
+
+/// Read a numeric literal as `f64`. Unlike the projection
+/// evaluator's path, this never coerces strings — the rewriter
+/// only matches when the planner can pin down the coordinate at
+/// plan time.
+fn extract_f64_literal(expr: &Expression) -> Option<f64> {
+    match expr {
+        Expression::Literal(crate::executor::parser::Literal::Float(f)) => Some(*f),
+        Expression::Literal(crate::executor::parser::Literal::Integer(i)) => Some(*i as f64),
+        _ => None,
     }
 }
 

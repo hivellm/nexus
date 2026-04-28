@@ -3,11 +3,16 @@
 
 use super::super::engine::Executor;
 use super::super::types::{ResultSet, Row};
-use crate::geospatial::rtree::RTreeIndex as SpatialIndex;
 use crate::{Error, Result};
 use serde_json::Value;
 
 impl Executor {
+    /// Execute `CREATE [SPATIAL] INDEX ON :Label(property)`.
+    ///
+    /// For spatial indexes (phase6_spatial-index-autopopulate §5):
+    /// samples up to 1 000 existing `Label` nodes and verifies that
+    /// `property` is a Point on each. Returns `ERR_RTREE_BUILD` on the
+    /// first non-Point sample, naming the offending `node_id`.
     pub fn execute_create_index(
         &self,
         label: &str,
@@ -17,15 +22,11 @@ impl Executor {
         or_replace: bool,
     ) -> Result<()> {
         let index_key = format!("{}.{}", label, property);
-
-        // Check if index already exists
-        let indexes = self.shared.spatial_indexes.read();
-        let exists = indexes.contains_key(&index_key);
-        drop(indexes);
+        let registry = &self.shared.rtree_registry;
+        let exists = registry.contains(&index_key);
 
         if exists {
             if if_not_exists {
-                // Index exists and IF NOT EXISTS was specified - do nothing
                 return Ok(());
             } else if !or_replace {
                 return Err(Error::CypherExecution(format!(
@@ -33,27 +34,24 @@ impl Executor {
                     label, property
                 )));
             }
-            // OR REPLACE - will be handled by creating new index below
         }
 
         // Create the appropriate index type
         match index_type {
             Some("spatial") => {
-                // Create spatial index (R-tree)
-                let mut indexes = self.shared.spatial_indexes.write();
+                // §5 — sample existing nodes and reject if any carry a
+                // non-Point value for `property`.
+                self.validate_spatial_index_property(label, property)?;
+
                 if or_replace && exists {
-                    // Replace existing index
-                    indexes.remove(&index_key);
+                    registry.drop_index(&index_key);
                 }
-                indexes.insert(index_key, SpatialIndex::new());
+                registry.register_empty(&index_key);
             }
             None | Some("property") => {
-                // Property index - for now, just register in catalog
-                // In a full implementation, this would create a B-tree index
-                // For MVP, we'll just track that the index exists
+                // Property index — register in catalog.
                 let _label_id = self.catalog().get_or_create_label(label)?;
                 let _key_id = self.catalog().get_or_create_key(property)?;
-                // Index is registered - actual indexing would happen during inserts
             }
             _ => {
                 return Err(Error::CypherExecution(format!(
@@ -63,6 +61,69 @@ impl Executor {
             }
         }
 
+        Ok(())
+    }
+
+    /// Sample up to 1 000 existing nodes that carry `label` and verify
+    /// that `property` is a Point value on every sampled node.
+    ///
+    /// Returns `ERR_RTREE_BUILD` on the first non-Point sample, with
+    /// the offending `node_id` in the message.
+    fn validate_spatial_index_property(&self, label: &str, property: &str) -> Result<()> {
+        // Resolve label_id; if the label does not exist yet there are
+        // no existing nodes to validate — succeed immediately.
+        let label_id = match self.catalog().get_label_id(label) {
+            Ok(id) => id,
+            Err(_) => return Ok(()),
+        };
+
+        let label_index = self.shared.label_index.read();
+        let bitmap = label_index
+            .get_nodes_with_labels(&[label_id])
+            .unwrap_or_default();
+        drop(label_index);
+
+        let store = self.shared.store.read();
+        let mut sampled: usize = 0;
+        for raw_id in bitmap.iter() {
+            if sampled >= 1_000 {
+                break;
+            }
+            let node_id = raw_id as u64;
+            // Load properties; skip deleted nodes.
+            let props = match store.load_node_properties(node_id) {
+                Ok(Some(Value::Object(m))) => m,
+                _ => continue,
+            };
+            sampled += 1;
+
+            let val = props.get(property);
+            let is_point = match val {
+                Some(Value::Object(m)) => {
+                    // A Point map must have at least an "x" key (or
+                    // "latitude") — `geospatial::Point::from_json_value`
+                    // is the canonical check.
+                    crate::geospatial::Point::from_json_value(&Value::Object(m.clone())).is_ok()
+                }
+                None => {
+                    // Property absent on this node — treat as non-Point
+                    // only if nodes with that property exist elsewhere.
+                    // For simplicity and safety: absent == skip (no
+                    // value to validate). We only reject actual
+                    // wrong-type values.
+                    continue;
+                }
+                _ => false,
+            };
+
+            if !is_point {
+                return Err(Error::CypherExecution(format!(
+                    "ERR_RTREE_BUILD: node {node_id} has a non-Point value for property \
+                     `{property}` — cannot build spatial index on :{}({property})",
+                    label
+                )));
+            }
+        }
         Ok(())
     }
 

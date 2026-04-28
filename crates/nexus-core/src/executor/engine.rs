@@ -251,6 +251,21 @@ impl Executor {
         self.shared.set_fulltext(registry);
     }
 
+    /// Replace the executor's R-tree registry arc with the engine's
+    /// canonical `IndexManager::rtree` arc so CRUD hooks and query
+    /// operators share the same in-memory index state.
+    ///
+    /// Called from `Engine::refresh_executor` after every engine-side
+    /// index update. Subsequent calls replace the arc again — unlike
+    /// `install_fulltext` (OnceLock), the rtree registry is a plain
+    /// `Arc` field and can be overwritten on every refresh.
+    pub(crate) fn install_rtree(
+        &mut self,
+        registry: std::sync::Arc<crate::index::rtree::RTreeRegistry>,
+    ) {
+        self.shared.rtree_registry = registry;
+    }
+
     pub(crate) fn install_preparsed_ast_override(
         &self,
         ast: Option<super::parser::CypherQuery>,

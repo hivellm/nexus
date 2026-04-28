@@ -99,9 +99,40 @@ Internally:
 
 ### `CALL spatial.addPoint(node_id, prop, point)`
 
-Indexes `point` for `node_id` under the `{label}.{prop}` index.
-Used by ingest pipelines that materialise spatial state outside
-the regular CREATE / SET path.
+> **Deprecated** — Cypher CRUD now auto-populates spatial
+> indexes. `spatial.addPoint` is retained as an idempotent
+> compatibility shim so legacy scripts keep working, and every
+> call logs `tracing::info!` so you can spot stragglers in
+> production telemetry. Scheduled for removal in **v2.0.0**.
+
+For new code, the recommended pattern is plain Cypher: create the
+index first, then write nodes — the engine's
+`spatial_autopopulate_node` hook indexes every node that carries
+the indexed `(label, property)` pair, and the matching
+`RTreeInsert` WAL entry makes the write crash-safe.
+
+```cypher
+// Recommended ingest pattern.
+CREATE SPATIAL INDEX ON :Store(loc);
+
+// Every CREATE that follows auto-populates the index — no
+// separate spatial.addPoint call.
+UNWIND $batch AS row
+CREATE (:Store {name: row.name, loc: point({x: row.x, y: row.y})});
+```
+
+`SET p.loc = point({...})` and `REMOVE p.loc` go through
+`spatial_refresh_node` (delete-then-conditional-add), and
+`DELETE p` goes through `spatial_evict_node`. All four lifecycle
+events are journalled and replayed on recovery — see
+`crates/nexus-core/tests/spatial_crash_recovery.rs`.
+
+If you have existing data that pre-dates the index, the legacy
+form still bulk-loads safely:
+
+```cypher
+CALL spatial.addPoint(node_id, 'loc', point({x: ..., y: ...}));
+```
 
 ## DDL
 

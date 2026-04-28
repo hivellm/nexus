@@ -5,7 +5,96 @@ All notable changes to Nexus will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [1.2.0] — 2026-04-28
+
+### Added — `phase6_spatial-planner-seek`
+
+- **`Operator::SpatialSeek` planner rewriter** at
+  `crates/nexus-core/src/executor/planner/queries.rs`. The planner
+  now recognises three Cypher shapes against an R-tree-indexed
+  property and rewrites the operator pipeline to drive directly
+  off `IndexManager::rtree` instead of `NodeByLabel + Filter`:
+   - `WHERE point.withinBBox(<var>.<prop>, {bottomLeft, topRight})`
+     → `SeekMode::Bbox`
+   - `WHERE point.withinDistance(<var>.<prop>, <pt-literal>, <d>)`
+     → `SeekMode::WithinDistance`
+   - `MATCH ... ORDER BY distance(<var>.<prop>, <pt-lit>) ASC
+     LIMIT <k>` → `SeekMode::Nearest { k }`
+- **Cost-based picker.** The cost arm at queries.rs:3067 was
+  already wired by `phase6_rtree-index-core`; the rewriter now
+  compares its `log_b(N) + matching` estimate against the legacy
+  `NodeByLabel + Filter` cost (`2*N`) and keeps the legacy plan
+  when the seek isn't cheaper. Selectivity defaults: 5 % for
+  bounded modes, `k` for k-NN.
+- **`QueryPlanner::with_rtree(Arc<RTreeRegistry>)` builder shim.**
+  The planner is opt-in: existing call sites that don't have a
+  registry handle (planner unit tests, the standalone
+  `Executor::parse_and_plan`) keep emitting the legacy plan.
+  `Engine::execute_*` and the executor `plan_with_indexes` path
+  install the handle automatically.
+- **`db.indexes()` RTREE rows** at
+  `crates/nexus-core/src/executor/operators/procedures.rs::execute_db_indexes_procedure`.
+  Every registered R-tree index now surfaces with
+  `type = "RTREE"`, `state = "ONLINE"`, `entityType = "NODE"`,
+  the matching `labelsOrTypes` / `properties` arrays, and
+  `indexProvider = "rtree-1.0"`.
+- **6 new planner regression tests** in
+  `crates/nexus-core/tests/spatial_planner_test.rs`: each rewriter
+  shape is exercised in isolation against a synthetic catalog
+  scaffold so the tests never depend on engine-level fixtures, and
+  the negative path (no registry handle) is covered by a paired
+  test that asserts the legacy plan stands. The `db.indexes()`
+  RTREE row shape is asserted end-to-end through the engine.
+- **Deferred to a follow-up slice**: §4 function-style
+  `point.nearest(<var>.<prop>, <k>)` (needs a multi-row
+  Project+Sort+Limit projection lowering that's out of scope for
+  the planner-only rewrite); §6 openCypher TCK import (vendoring
+  external `spatial.feature` distribution); §7 Neo4j compat-diff
+  +25 spatial scenarios (live Neo4j operator-gated).
+
+### Added — `phase6_spatial-index-autopopulate`
+
+- **Auto-populate spatial indexes on CREATE / SET / REMOVE / DELETE**
+  so `spatial.nearest` reflects live data without a manual
+  `spatial.addPoint` bulk-loader call. The hot-path contract now
+  mirrors FTS line-for-line: every `create_node` path runs
+  `Engine::spatial_autopopulate_node`, every `persist_node_state`
+  runs `Engine::spatial_refresh_node`, every `delete_node` runs
+  `Engine::spatial_evict_node`. Each hook walks
+  `IndexManager::rtree`, matches `(label, property)` against the
+  written node, inserts / refreshes / evicts the entry, and emits
+  the matching `WalEntry::RTreeInsert` / `RTreeDelete` so crash
+  recovery replays the write.
+- **Per-index membership tracking** via `RTreeRegistry::definitions`
+  + an in-`IndexSlot` `HashSet<u64>` mirroring the FTS
+  `NamedFullTextIndex::members` pattern. Refresh and evict paths
+  short-circuit on already-absent nodes; `indexes_containing(node_id)`
+  enumerates exactly the indexes a SET / DELETE has to touch.
+- **Registry relocation**. `ExecutorShared::spatial_indexes` is
+  removed; `execute_create_index`, `execute_spatial_nearest`, and
+  `execute_spatial_add_point` now re-source through
+  `IndexManager::rtree`. The engine crate's `engine::crud` module
+  reaches the registry the same way it reaches `indexes.fulltext`.
+- **`CREATE SPATIAL INDEX` type-check**. The executor samples up to
+  1 000 existing `Label` nodes and rejects with `ERR_RTREE_BUILD`
+  on the first non-Point sample, naming the offending `node_id`.
+  Catches the silent "index built, queries empty" trap when a
+  property is heterogeneously typed.
+- **Crash-recovery harness** at
+  `crates/nexus-core/tests/spatial_crash_recovery.rs` covering:
+  WAL replay restores every committed point after a registry drop;
+  unflushed entries stay absent after recovery; and an insert /
+  delete pair replayed in order converges to the post-delete
+  state. Mirrors the FTS crash-recovery suite.
+
+### Deprecated
+
+- **`spatial.addPoint` is no longer required** — Cypher CRUD
+  auto-populates spatial indexes. The procedure remains callable
+  and idempotent with the auto-populate hook for backward
+  compatibility, but every call now logs `tracing::info!` so
+  deployments can spot stragglers. **Scheduled for removal in
+  v2.0.0.**
 
 ### Added — `phase6_rtree-index-core`
 
