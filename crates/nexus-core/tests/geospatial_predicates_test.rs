@@ -687,3 +687,105 @@ fn namespaced_call_does_not_steal_property_access() {
     );
     assert_eq!(rows[0][0], Value::String("hello".to_string()));
 }
+
+// ============================================================================
+// Function-style point.nearest (phase6_spatial-planner-followups §1)
+// ============================================================================
+
+/// §1.3 — same query against `Engine::execute_cypher` with and
+/// without an R-tree index returns identical `LIST<NODE>` ordered
+/// ascending by distance. The function arm in
+/// `eval/projection.rs` walks the registry when present and falls
+/// back to a label scan + sort + truncate when not.
+#[test]
+fn point_nearest_function_returns_same_list_with_and_without_index() {
+    fn nearest_names(engine: &mut nexus_core::engine::Engine) -> Vec<String> {
+        // The function returns LIST<NODE>; pull the `name`
+        // property off each element so the assertion is stable
+        // against the internal `_nexus_id` value.
+        let result = engine
+            .execute_cypher(
+                "MATCH (s:Store) \
+                 RETURN [n IN point.nearest(s.loc, point({x: 0.0, y: 0.0}), 2) | n.name] AS top \
+                 LIMIT 1",
+            )
+            .unwrap();
+        let top = &result.rows[0].values[0];
+        top.as_array()
+            .unwrap()
+            .iter()
+            .map(|v| v.as_str().unwrap().to_string())
+            .collect()
+    }
+
+    // --- WITHOUT index — scan-fallback path ---------------------
+    {
+        let (mut engine, _ctx) = nexus_core::testing::setup_test_engine().expect("setup engine");
+        engine
+            .execute_cypher(
+                "CREATE (a:Store {name: 'a', loc: point({x: 1.0, y: 0.0})}), \
+                        (b:Store {name: 'b', loc: point({x: 5.0, y: 0.0})}), \
+                        (c:Store {name: 'c', loc: point({x: 3.0, y: 0.0})})",
+            )
+            .unwrap();
+        let no_idx = nearest_names(&mut engine);
+        assert_eq!(no_idx, vec!["a".to_string(), "c".to_string()]);
+    }
+
+    // --- WITH index — registry-walk path ------------------------
+    {
+        let (mut engine, _ctx) = nexus_core::testing::setup_test_engine().expect("setup engine");
+        engine
+            .execute_cypher("CREATE SPATIAL INDEX ON :Store(loc)")
+            .unwrap();
+        engine
+            .execute_cypher(
+                "CREATE (a:Store {name: 'a', loc: point({x: 1.0, y: 0.0})}), \
+                        (b:Store {name: 'b', loc: point({x: 5.0, y: 0.0})}), \
+                        (c:Store {name: 'c', loc: point({x: 3.0, y: 0.0})})",
+            )
+            .unwrap();
+        let with_idx = nearest_names(&mut engine);
+        assert_eq!(with_idx, vec!["a".to_string(), "c".to_string()]);
+    }
+}
+
+/// §1 — `point.nearest` rejects a parameter-style first argument
+/// with a typed error so users see why the function needs a
+/// property-access form.
+#[test]
+fn point_nearest_rejects_non_property_access_first_arg() {
+    let (mut engine, _ctx) = nexus_core::testing::setup_test_engine().expect("setup engine");
+    engine
+        .execute_cypher("CREATE (s:Store {name: 'only', loc: point({x: 0.0, y: 0.0})})")
+        .unwrap();
+    let err = engine
+        .execute_cypher(
+            "MATCH (s:Store) \
+             RETURN point.nearest(point({x: 0.0, y: 0.0}), point({x: 0.0, y: 0.0}), 1) AS top",
+        )
+        .expect_err("must reject non-property-access first arg")
+        .to_string();
+    assert!(
+        err.contains("ERR_INVALID_ARG_TYPE"),
+        "expected ERR_INVALID_ARG_TYPE, got: {err}"
+    );
+}
+
+/// §1 — `k = 0` returns an empty list immediately.
+#[test]
+fn point_nearest_returns_empty_list_when_k_is_zero() {
+    let (mut engine, _ctx) = nexus_core::testing::setup_test_engine().expect("setup engine");
+    engine
+        .execute_cypher("CREATE (s:Store {name: 'only', loc: point({x: 1.0, y: 1.0})})")
+        .unwrap();
+    let result = engine
+        .execute_cypher(
+            "MATCH (s:Store) \
+             RETURN point.nearest(s.loc, point({x: 0.0, y: 0.0}), 0) AS top \
+             LIMIT 1",
+        )
+        .unwrap();
+    let top = result.rows[0].values[0].as_array().unwrap();
+    assert!(top.is_empty(), "k=0 must return an empty list, got {top:?}");
+}

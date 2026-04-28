@@ -3,6 +3,19 @@
 **Version**: 1.5.0 (workspace)
 **Last verified**: 2026-04-19 against Neo4j 2025.09.0 community
 
+## v1.2 — spatial planner follow-ups (2026-04-28)
+
+`phase6_spatial-planner-followups` §3 grew the diff harness from
+`325/325` to `325/325`: 25 new scenarios cover the cross-product
+`Bbox / WithinDistance / Nearest` × `Cartesian / WGS-84` × `2D / 3D`
+spatial surfaces shipped by `phase6_opencypher-geospatial-predicates`
++ `phase6_spatial-planner-seek` (Section 18 in
+`scripts/compatibility/test-neo4j-nexus-compatibility-200.ps1`,
+tests 18.01–18.25). Live capture against Neo4j 2025.09.0 still
+needs to run; the scenarios themselves are static query strings
+that diff Nexus output against Neo4j output at runtime, so they
+land authored and ready for the operator to execute the harness.
+
 ## v1.15 — Quantified Path Patterns slice 1 (2026-04-26)
 
 `phase6_opencypher-quantified-path-patterns` slice 1 ships the
@@ -45,7 +58,7 @@ See `docs/guides/FULL_TEXT_SEARCH.md`.
 
 phase6_opencypher-advanced-types lifts Nexus toward ~95% openCypher
 parity by adding six concurrent surfaces, none of which regress the
-existing 300/300 diff suite:
+existing 325/325 diff suite:
 
 - **BYTES scalar family** — `bytes()`, `bytesFromBase64()`,
   `bytesToBase64()`, `bytesToHex()`, `bytesLength()`, `bytesSlice()`.
@@ -65,7 +78,7 @@ existing 300/300 diff suite:
 See `docs/specs/cypher-subset.md` § *Advanced Types*.
 
 
-**Status**: **300/300 Neo4j diff-suite tests passing** (verified
+**Status**: **325/325 Neo4j diff-suite tests passing** (verified
 via `scripts/compatibility/test-neo4j-nexus-compatibility-200.ps1`
 against a live Neo4j container + release Nexus server; full
 runner output in the `phase3_unwind-where-neo4j-parity` archive,
@@ -88,7 +101,7 @@ type conversions, and DELETE/SET operations.
 
 | Suite | Pass rate | Command |
 |-------|-----------|---------|
-| Neo4j diff suite | 300/300 | `powershell -ExecutionPolicy Bypass -File scripts/compatibility/test-neo4j-nexus-compatibility-200.ps1` |
+| Neo4j diff suite | 325/325 | `powershell -ExecutionPolicy Bypass -File scripts/compatibility/test-neo4j-nexus-compatibility-200.ps1` |
 | Nexus workspace (`cargo +nightly test --workspace`) | 2310 passed / 67 ignored / 0 failed | `cargo +nightly test --workspace` |
 
 Run either one locally to reproduce the numbers. The diff suite

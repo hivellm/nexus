@@ -7,6 +7,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [1.2.0] — 2026-04-28
 
+### Added — `phase6_spatial-planner-followups`
+
+- **Function-style `point.nearest(<var>.<prop>, <pt>, <k>)`** —
+  callable in `RETURN` / `WITH` / `WHERE` expression position;
+  returns `LIST<NODE>` ordered ascending by distance. Resolves the
+  variable's label by reading the bound node's `_nexus_id` →
+  `label_bits` → catalog name, looks up the registered
+  `{Label}.{prop}` R-tree index, and walks the registry directly
+  when present. Without an index, falls back to a label scan +
+  sort + truncate so the `same result with and without index`
+  contract holds. Implementation lives at
+  `crates/nexus-core/src/executor/eval/projection.rs`.
+- **+25 Neo4j compat-diff scenarios** in
+  `scripts/compatibility/test-neo4j-nexus-compatibility-200.ps1`
+  Section 18 covering the cross-product `Bbox / WithinDistance /
+  Nearest` × `Cartesian / WGS-84` × `2D / 3D`. Live capture against
+  Neo4j 2025.09.0 still has to run; the scenarios themselves are
+  static query strings the harness diffs against the Neo4j
+  reference at runtime, so they land authored.
+- **3 new integration tests** in `geospatial_predicates_test.rs`
+  covering the function arm: `point_nearest_function_returns_same_list_with_and_without_index`,
+  `point_nearest_rejects_non_property_access_first_arg`, and
+  `point_nearest_returns_empty_list_when_k_is_zero`.
+- **TCK import carved out** to follow-up
+  `phase6_opencypher-tck-spatial`. Reason: vendoring requires
+  fetching the openCypher distribution at a pinned commit and
+  adding `cucumber 0.21` to the workspace dev-deps; both touches
+  are out of scope for the projection-side function-arm work.
+
 ### Added — `phase6_spatial-planner-seek`
 
 - **`Operator::SpatialSeek` planner rewriter** at

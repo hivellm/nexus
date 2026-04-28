@@ -1094,6 +1094,207 @@ impl Executor {
                             None => Ok(Value::Null),
                         }
                     }
+                    "point.nearest" => {
+                        // phase6_spatial-planner-followups §1 —
+                        // function-style k-NN over a label's
+                        // points. Signature:
+                        //   point.nearest(<var>.<prop>, <pt>, <k>)
+                        // Returns LIST<NODE> ordered ascending by
+                        // distance. With an R-tree index on the
+                        // matching `(label, property)` pair the
+                        // function walks the registry directly;
+                        // without one it falls back to a label
+                        // scan + sort + truncate so the spec
+                        // scenario "same query with and without
+                        // index returns same LIST<NODE>" holds.
+                        if args.len() < 3 {
+                            return Err(Error::CypherExecution(
+                                "ERR_MISSING_ARG: point.nearest requires \
+                                 (variable.property, point, k)"
+                                    .to_string(),
+                            ));
+                        }
+                        // First arg must be `<var>.<prop>` so we
+                        // can resolve the variable's label at
+                        // call time.
+                        let (variable, property) = match &args[0] {
+                            parser::Expression::PropertyAccess { variable, property } => {
+                                (variable.clone(), property.clone())
+                            }
+                            _ => {
+                                return Err(Error::CypherExecution(
+                                    "ERR_INVALID_ARG_TYPE: point.nearest first arg \
+                                     must be a property access (e.g. n.loc)"
+                                        .to_string(),
+                                ));
+                            }
+                        };
+                        // Centre point.
+                        let pt_val = self.evaluate_projection_expression(row, context, &args[1])?;
+                        let centre = match &pt_val {
+                            Value::Object(_) => crate::geospatial::Point::from_json_value(&pt_val)
+                                .map_err(|e| {
+                                    Error::CypherExecution(format!(
+                                        "ERR_INVALID_ARG_TYPE: point.nearest centre is \
+                                         not a Point: {e}"
+                                    ))
+                                })?,
+                            _ => {
+                                return Err(Error::CypherExecution(
+                                    "ERR_INVALID_ARG_TYPE: point.nearest centre must \
+                                     be a Point"
+                                        .to_string(),
+                                ));
+                            }
+                        };
+                        // k.
+                        let k_val = self.evaluate_projection_expression(row, context, &args[2])?;
+                        let k = match &k_val {
+                            Value::Number(n) => match n.as_i64() {
+                                Some(i) if i >= 0 => i as usize,
+                                _ => {
+                                    return Err(Error::CypherExecution(
+                                        "ERR_INVALID_ARG_TYPE: point.nearest k must \
+                                         be a non-negative INTEGER"
+                                            .to_string(),
+                                    ));
+                                }
+                            },
+                            _ => {
+                                return Err(Error::CypherExecution(
+                                    "ERR_INVALID_ARG_TYPE: point.nearest k must be \
+                                     a non-negative INTEGER"
+                                        .to_string(),
+                                ));
+                            }
+                        };
+                        if k == 0 {
+                            return Ok(Value::Array(Vec::new()));
+                        }
+                        // Resolve the variable's label via its
+                        // bound `_nexus_id`: read the node record,
+                        // decode `label_bits` against the catalog,
+                        // pick the first label. This avoids
+                        // threading a var→label map through the
+                        // projection evaluator and works with the
+                        // existing node-as-Value shape (which
+                        // `read_node_as_value` does not include
+                        // `_labels` for).
+                        let bound = row.get(&variable).cloned().unwrap_or_else(|| {
+                            context
+                                .get_variable(&variable)
+                                .cloned()
+                                .unwrap_or(Value::Null)
+                        });
+                        let bound_id = Self::extract_entity_id(&bound).ok_or_else(|| {
+                            Error::CypherExecution(format!(
+                                "ERR_INVALID_ARG_TYPE: point.nearest could not resolve \
+                                 a node for variable '{variable}' — bind it via \
+                                 MATCH (var:Label) so the index lookup can route to \
+                                 {{label}}.{{prop}}"
+                            ))
+                        })?;
+                        let label_name = {
+                            let store = self.shared.store.read();
+                            let node_record = store.read_node(bound_id).map_err(|e| {
+                                Error::CypherExecution(format!("ERR_NODE_READ: {bound_id}: {e}"))
+                            })?;
+                            drop(store);
+                            let labels = self
+                                .catalog()
+                                .get_labels_from_bitmap(node_record.label_bits)
+                                .map_err(|e| {
+                                    Error::CypherExecution(format!(
+                                        "ERR_LABEL_DECODE: {bound_id}: {e}"
+                                    ))
+                                })?;
+                            labels.into_iter().next().ok_or_else(|| {
+                                Error::CypherExecution(format!(
+                                    "ERR_INVALID_ARG_TYPE: point.nearest variable \
+                                     '{variable}' has no labels — index lookup \
+                                     requires a label-bound binding"
+                                ))
+                            })?
+                        };
+                        let index_name = format!("{label_name}.{property}");
+
+                        // Index path — walk the R-tree directly.
+                        let registry = self.shared.rtree_registry.clone();
+                        let hits = if registry.contains(&index_name) {
+                            registry
+                                .nearest_with_filter(
+                                    &index_name,
+                                    centre.x,
+                                    centre.y,
+                                    k,
+                                    crate::index::rtree::search::Metric::Cartesian,
+                                    |_| true,
+                                )
+                                .map_err(|e| {
+                                    Error::CypherExecution(format!("ERR_RTREE_SEEK: {e}"))
+                                })?
+                                .into_iter()
+                                .map(|h| h.node_id)
+                                .collect::<Vec<u64>>()
+                        } else {
+                            // Scan-fallback — read the label
+                            // bitmap, compute distances, sort,
+                            // truncate to k. The spec scenario
+                            // requires identical LIST<NODE>
+                            // shape with or without the index.
+                            let label_id =
+                                self.catalog().get_label_id(&label_name).map_err(|e| {
+                                    Error::CypherExecution(format!(
+                                        "ERR_LABEL_NOT_FOUND: {label_name}: {e}"
+                                    ))
+                                })?;
+                            let bitmap = self
+                                .shared
+                                .label_index
+                                .read()
+                                .get_nodes_with_labels(&[label_id])
+                                .map_err(|e| {
+                                    Error::CypherExecution(format!("ERR_LABEL_INDEX: {e}"))
+                                })?;
+                            let mut scored: Vec<(f64, u64)> = Vec::new();
+                            for raw_id in bitmap.iter() {
+                                let node_id = raw_id as u64;
+                                let props =
+                                    match self.shared.store.read().load_node_properties(node_id) {
+                                        Ok(Some(Value::Object(m))) => m,
+                                        _ => continue,
+                                    };
+                                let val = match props.get(&property) {
+                                    Some(v) => v,
+                                    None => continue,
+                                };
+                                let p = match crate::geospatial::Point::from_json_value(val) {
+                                    Ok(p) => p,
+                                    Err(_) => continue,
+                                };
+                                if !p.same_crs(&centre) {
+                                    continue;
+                                }
+                                scored.push((centre.distance_to(&p), node_id));
+                            }
+                            scored.sort_by(|a, b| {
+                                a.0.partial_cmp(&b.0)
+                                    .unwrap_or(std::cmp::Ordering::Equal)
+                                    .then_with(|| a.1.cmp(&b.1))
+                            });
+                            scored.truncate(k);
+                            scored.into_iter().map(|(_, id)| id).collect()
+                        };
+
+                        let mut out: Vec<Value> = Vec::with_capacity(hits.len());
+                        for node_id in hits {
+                            match self.read_node_as_value(node_id) {
+                                Ok(v) if !v.is_null() => out.push(v),
+                                _ => continue,
+                            }
+                        }
+                        Ok(Value::Array(out))
+                    }
                     "point.distance" => {
                         // point.distance as a namespaced alias for
                         // the bare `distance()` function. Keeps

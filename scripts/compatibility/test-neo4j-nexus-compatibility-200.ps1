@@ -831,6 +831,52 @@ Invoke-NexusQuery "CREATE (n:Item {name: 'Final'})" | Out-Null
 Run-Test -Name "17.15 REMOVE property" -Query "MATCH (n:Item {name: 'Final'}) REMOVE n.name RETURN n.name AS name"
 
 #= = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = =
+# SECTION 18: SPATIAL PREDICATES (25 tests) — phase6_spatial-planner-followups §3
+#= = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = =
+Clear-Databases -SectionName "Section 18: Spatial Predicates"
+Write-Host "`n+-----------------------------------------------------+ " -ForegroundColor Yellow
+Write-Host '| Section 18: Spatial Predicates (25 tests)          |' -ForegroundColor Yellow
+Write-Host "+-----------------------------------------------------+ " -ForegroundColor Yellow
+
+# Seed a small Cartesian point set against both engines so every
+# scenario below runs against the same data shape.
+Invoke-Neo4jQuery "CREATE (:Place {name: 'A', loc: point({x: 0.0, y: 0.0})}), (:Place {name: 'B', loc: point({x: 1.0, y: 1.0})}), (:Place {name: 'C', loc: point({x: 5.0, y: 5.0})}), (:Place {name: 'D', loc: point({x: 10.0, y: 10.0})})" | Out-Null
+Invoke-NexusQuery "CREATE (:Place {name: 'A', loc: point({x: 0.0, y: 0.0})}), (:Place {name: 'B', loc: point({x: 1.0, y: 1.0})}), (:Place {name: 'C', loc: point({x: 5.0, y: 5.0})}), (:Place {name: 'D', loc: point({x: 10.0, y: 10.0})})" | Out-Null
+
+# 18.01-18.06 — point.withinBBox shape × Cartesian / WGS-84
+Run-Test -Name "18.01 withinBBox cartesian inside" -Query "RETURN point.withinBBox(point({x: 1.0, y: 1.0}), point({x: 0.0, y: 0.0}), point({x: 2.0, y: 2.0})) AS v"
+Run-Test -Name "18.02 withinBBox cartesian outside" -Query "RETURN point.withinBBox(point({x: 5.0, y: 5.0}), point({x: 0.0, y: 0.0}), point({x: 2.0, y: 2.0})) AS v"
+Run-Test -Name "18.03 withinBBox cartesian boundary" -Query "RETURN point.withinBBox(point({x: 2.0, y: 2.0}), point({x: 0.0, y: 0.0}), point({x: 2.0, y: 2.0})) AS v"
+Run-Test -Name "18.04 withinBBox MATCH filter cartesian" -Query "MATCH (p:Place) WHERE point.withinBBox(p.loc, point({x: 0.0, y: 0.0}), point({x: 2.0, y: 2.0})) RETURN count(p) AS cnt"
+Run-Test -Name "18.05 withinBBox WGS-84 inside" -Query "RETURN point.withinBBox(point({longitude: 2.3, latitude: 48.85}), point({longitude: 2.0, latitude: 48.0}), point({longitude: 3.0, latitude: 49.0})) AS v"
+Run-Test -Name "18.06 withinBBox WGS-84 outside" -Query "RETURN point.withinBBox(point({longitude: 13.4, latitude: 52.5}), point({longitude: 2.0, latitude: 48.0}), point({longitude: 3.0, latitude: 49.0})) AS v"
+
+# 18.07-18.13 — point.withinDistance shape × Cartesian / WGS-84
+Run-Test -Name "18.07 withinDistance cartesian close" -Query "RETURN point.withinDistance(point({x: 0.0, y: 0.0}), point({x: 1.0, y: 1.0}), 2.0) AS v"
+Run-Test -Name "18.08 withinDistance cartesian far" -Query "RETURN point.withinDistance(point({x: 0.0, y: 0.0}), point({x: 10.0, y: 10.0}), 2.0) AS v"
+Run-Test -Name "18.09 withinDistance MATCH filter cartesian" -Query "MATCH (p:Place) WHERE point.withinDistance(p.loc, point({x: 0.0, y: 0.0}), 2.0) RETURN count(p) AS cnt"
+Run-Test -Name "18.10 withinDistance WGS-84 close" -Query "RETURN point.withinDistance(point({longitude: 2.3522, latitude: 48.8566}), point({longitude: 2.3615, latitude: 48.8606}), 2000.0) AS v"
+Run-Test -Name "18.11 withinDistance WGS-84 far" -Query "RETURN point.withinDistance(point({longitude: 2.3522, latitude: 48.8566}), point({longitude: 13.4050, latitude: 52.5200}), 100000.0) AS v"
+Run-Test -Name "18.12 withinDistance large radius captures all" -Query "MATCH (p:Place) WHERE point.withinDistance(p.loc, point({x: 0.0, y: 0.0}), 1000.0) RETURN count(p) AS cnt"
+Run-Test -Name "18.13 withinDistance zero radius" -Query "RETURN point.withinDistance(point({x: 0.0, y: 0.0}), point({x: 0.0, y: 0.0}), 0.0) AS v"
+
+# 18.14-18.20 — Nearest shape via ORDER BY distance LIMIT
+Run-Test -Name "18.14 distance cartesian basic" -Query "RETURN distance(point({x: 0.0, y: 0.0}), point({x: 3.0, y: 4.0})) AS d"
+Run-Test -Name "18.15 ORDER BY distance LIMIT 1 cartesian" -Query "MATCH (p:Place) RETURN p.name AS name ORDER BY distance(p.loc, point({x: 0.0, y: 0.0})) ASC LIMIT 1"
+Run-Test -Name "18.16 ORDER BY distance LIMIT 2 cartesian" -Query "MATCH (p:Place) RETURN p.name AS name ORDER BY distance(p.loc, point({x: 0.0, y: 0.0})) ASC LIMIT 2"
+Run-Test -Name "18.17 ORDER BY distance LIMIT 3 cartesian" -Query "MATCH (p:Place) RETURN p.name AS name ORDER BY distance(p.loc, point({x: 0.0, y: 0.0})) ASC LIMIT 3"
+Run-Test -Name "18.18 ORDER BY distance DESC cartesian" -Query "MATCH (p:Place) RETURN p.name AS name ORDER BY distance(p.loc, point({x: 0.0, y: 0.0})) DESC LIMIT 1"
+Run-Test -Name "18.19 distance WGS-84 metres" -Query "RETURN distance(point({longitude: 2.3522, latitude: 48.8566}), point({longitude: 13.4050, latitude: 52.5200})) AS d"
+Run-Test -Name "18.20 distance same point is zero" -Query "RETURN distance(point({x: 1.0, y: 2.0}), point({x: 1.0, y: 2.0})) AS d"
+
+# 18.21-18.25 — 3D points + projection-side computations
+Run-Test -Name "18.21 distance cartesian 3D" -Query "RETURN distance(point({x: 0.0, y: 0.0, z: 0.0}), point({x: 1.0, y: 2.0, z: 2.0})) AS d"
+Run-Test -Name "18.22 point 3D cartesian property" -Query "WITH point({x: 1.0, y: 2.0, z: 3.0}) AS p RETURN p.x AS x, p.y AS y, p.z AS z"
+Run-Test -Name "18.23 point WGS-84 height property" -Query "WITH point({longitude: 2.3, latitude: 48.85, height: 100.0}) AS p RETURN p.longitude AS lon, p.latitude AS lat, p.height AS h"
+Run-Test -Name "18.24 point CRS cartesian default" -Query "WITH point({x: 1.0, y: 2.0}) AS p RETURN p.crs AS crs"
+Run-Test -Name "18.25 point CRS WGS-84 default" -Query "WITH point({longitude: 2.3, latitude: 48.85}) AS p RETURN p.crs AS crs"
+
+#= = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = =
 # FINAL REPORT
 #= = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = 
 Write-Host "`n+= = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = +" -ForegroundColor Cyan
