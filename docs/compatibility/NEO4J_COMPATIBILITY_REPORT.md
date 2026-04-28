@@ -3,6 +3,31 @@
 **Version**: 1.5.0 (workspace)
 **Last verified**: 2026-04-19 against Neo4j 2025.09.0 community
 
+## v1.2 — openCypher TCK spatial corpus (2026-04-28)
+
+`phase6_opencypher-tck-spatial` ships an openCypher-TCK-shaped
+Gherkin corpus for the spatial Cypher surface — **22 scenarios, 87
+steps, all passing** — covering point construction (Cartesian + WGS-84,
+2D + 3D, negative coordinates, explicit-CRS overrides), `point.distance`
+(Pythagorean 2D / 3D, symmetry, self-distance, `ERR_CRS_MISMATCH`),
+`point.withinBBox` and `point.withinDistance` predicates (interior /
+exterior / boundary / radius edges), and `CREATE SPATIAL INDEX` +
+`db.indexes()` RTREE rows + `ERR_RTREE_BUILD` rejection. Harness is
+`crates/nexus-core/tests/tck_runner.rs`; corpus is
+`crates/nexus-core/tests/tck/spatial/*.feature`. The upstream
+openCypher TCK ships **no** spatial scenarios as of 2026-04-28
+(verified against `opencypher/openCypher@main`); the Nexus corpus is
+authored under Apache 2.0 and ready for upstream contribution. See
+`crates/nexus-core/tests/tck/spatial/VENDOR.md` for the verification
+recipe.
+
+Two parser bugs fell out of authoring the corpus and shipped with
+the same task: negative-coordinate literals in `point({...})` now
+parse via unary-minus (`-73.9857` was previously rejected as
+"Point coordinates must be numbers"), and `longitude/latitude/height`
+keys imply WGS-84 unless an explicit `crs:` field overrides (Nexus
+previously defaulted to Cartesian).
+
 ## v1.2 — spatial planner follow-ups (2026-04-28)
 
 `phase6_spatial-planner-followups` §3 grew the diff harness from

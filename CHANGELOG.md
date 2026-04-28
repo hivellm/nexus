@@ -7,6 +7,92 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [1.2.0] — 2026-04-28
 
+### Added — `phase6_opencypher-tck-spatial`
+
+- **openCypher-TCK-shaped spatial conformance suite** at
+  `crates/nexus-core/tests/tck/spatial/*.feature`. Four feature
+  files, **22 scenarios, 87 steps, all passing**:
+  - `Point1-construction.feature` — 7 scenarios covering 2D / 3D
+    Cartesian + WGS-84 constructors, negative-coordinate parsing,
+    explicit-CRS overrides over `x/y` and `longitude/latitude`
+    aliases.
+  - `Point2-distance.feature` — 5 scenarios covering Pythagorean
+    2D / 3D distance, symmetry, self-distance zero, and
+    `ERR_CRS_MISMATCH` on mixed-CRS inputs.
+  - `Point3-predicates.feature` — 7 scenarios covering
+    `point.withinBBox` (interior / exterior / boundary / CRS
+    mismatch) and `point.withinDistance` (within / outside /
+    exact-radius).
+  - `SpatialIndex1-rtree.feature` — 3 scenarios covering
+    `CREATE SPATIAL INDEX` feedback row, `db.indexes()` reporting
+    the registered RTREE index alongside the auto-LOOKUP entry,
+    and `ERR_RTREE_BUILD` on a non-Point sample row.
+- **Cucumber harness** at `crates/nexus-core/tests/tck_runner.rs`
+  (`cucumber = "0.21"` dev-dependency, runs as a `harness = false`
+  integration test). Discovers `.feature` files under
+  `tests/tck/spatial/`, drives every scenario through
+  `Engine::execute_cypher` with an isolated `Engine` per scenario,
+  and supports the standard openCypher TCK step grammar (`Given an
+  empty graph` / `having executed: """…"""` / `executing query:
+  """…"""` / `the result should be, in any order: <table>` /
+  `the result should be: <table>` / `the result should be empty` /
+  `a TypeError should be raised at runtime: <token>` / `no side
+  effects`). Custom TCK-cell parser handles unquoted-key map
+  literals (`{x: 1.0, y: 2.0, crs: 'cartesian'}`), single-quoted
+  strings, lists, booleans, null, and signed numbers; numeric
+  comparison uses a 1e-9 absolute tolerance for floats.
+- **Vendor notes** at `crates/nexus-core/tests/tck/spatial/VENDOR.md`
+  documenting that the upstream openCypher TCK has **no spatial
+  corpus** (verified 2026-04-28 against `opencypher/openCypher@main`
+  at `tck/features/`), so the Nexus corpus is authored under
+  Apache 2.0 and ready for upstream contribution if openCypher
+  ever opens a spatial track. Includes a one-line `curl` recipe
+  to re-verify upstream coverage on future bumps.
+- **Apache 2.0 attribution** at `LICENSE-NOTICE.md` covering the
+  openCypher TCK format and step grammar the Nexus corpus reuses.
+
+### Fixed — `phase6_opencypher-tck-spatial`
+
+- **Negative coordinates in inline `point()` literals**
+  (`crates/nexus-core/src/executor/parser/expressions.rs`).
+  `extract_number_from_expression` now accepts
+  `UnaryOp { Minus | Plus, Literal::Integer | Literal::Float }`
+  in addition to bare integer / float literals. Before this fix,
+  `point({longitude: -73.9857, latitude: 40.7484})` raised
+  `Cypher syntax error: Point coordinates must be numbers` because
+  the lexer tokenises `-73.9857` as `UnaryOp { Minus,
+  Literal::Float(73.9857) }`, not as a negative literal. Surfaced
+  by Point1 scenarios 3, 5, 6, and Point3 scenarios across the
+  withinBBox + withinDistance suite.
+- **Implicit WGS-84 CRS from `longitude`/`latitude`/`height` keys**
+  (same file). `parse_point_literal` now defaults to
+  `CoordinateSystem::WGS84` when any geographic key alias is
+  present *and* no explicit `crs:` field overrides. Before this
+  fix, `point({longitude: 13.4, latitude: 52.5, height: 100.0})`
+  silently defaulted to Cartesian and the `crs` accessor returned
+  `'cartesian-3d'` instead of `'wgs-84-3d'`. Matches Neo4j's
+  behaviour; explicit `crs:` always wins. Surfaced by Point1
+  scenario 4 + Point2 scenario 5 (CRS-mismatch path).
+
+### Known limitations exposed by the TCK harness
+
+The TCK suite intentionally avoids three Cypher shapes that
+surfaced engine bugs out of scope for this task; each is filed as
+a follow-up:
+- **`<expr>.<prop>` projection** — `RETURN point(...).x AS xx` and
+  `RETURN $param.x AS xx` drop the AS alias and the rest of the
+  projection list because the `PropertyAccess` AST is keyed by
+  `variable: String` rather than `expression: Box<Expression>`.
+  Workaround in scenarios: compare the full `point()` map shape,
+  not individual accessors.
+- **`WITH 1 AS x RETURN x` returns 0 rows** — value-only `WITH`
+  with no upstream pattern source emits no row. Workaround in
+  scenarios: keep the value inline in the same `RETURN`.
+- **`UNWIND [point(...)]` parser overrun** — the list-literal
+  parser misreads characters of `'cartesian'` inside an inlined
+  point. Workaround: pass points as parameters or reference a
+  matched node's property.
+
 ### Added — `phase6_spatial-planner-followups`
 
 - **Function-style `point.nearest(<var>.<prop>, <pt>, <k>)`** —

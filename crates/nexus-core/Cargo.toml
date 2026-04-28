@@ -109,6 +109,19 @@ tracing-subscriber = { workspace = true }
 # `tower::util::ServiceExt::oneshot` is used by the cluster quota
 # middleware tests to drive an `axum::Router` synchronously.
 tower = { workspace = true, features = ["util"] }
+# openCypher TCK harness — Gherkin-format `.feature` runner used by the
+# `tck_runner` integration test (phase6_opencypher-tck-spatial). Pinned at
+# 0.21 because that's the latest stable major; default features cover
+# Gherkin parsing + tracing which is all the runner needs.
+cucumber = "0.21"
+
+# openCypher TCK runner — uses the cucumber crate's own main, not
+# libtest. `harness = false` lets `fn main()` in tests/tck_runner.rs
+# drive the discovery + execution.
+[[test]]
+name = "tck_runner"
+path = "tests/tck_runner.rs"
+harness = false
 
 [[bench]]
 name = "cluster_mode_benchmark"

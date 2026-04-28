@@ -1358,6 +1358,12 @@ impl CypherParser {
         let mut y: Option<f64> = None;
         let mut z: Option<f64> = None;
         let mut coordinate_system = crate::geospatial::CoordinateSystem::Cartesian;
+        // Track whether the caller used `longitude/latitude/height`
+        // (implies WGS-84 unless an explicit `crs` overrides) or the
+        // `x/y/z` aliases (Cartesian default). Explicit `crs:` always
+        // wins.
+        let mut wgs_keys_seen = false;
+        let mut explicit_crs = false;
 
         // Parse key-value pairs
         while self.peek_char() != Some('}') {
@@ -1367,19 +1373,35 @@ impl CypherParser {
             self.skip_whitespace();
 
             match key.to_lowercase().as_str() {
-                "x" | "longitude" => {
+                "x" => {
                     let expr = self.parse_expression()?;
                     x = Some(self.extract_number_from_expression(&expr)?);
                 }
-                "y" | "latitude" => {
+                "longitude" => {
+                    wgs_keys_seen = true;
+                    let expr = self.parse_expression()?;
+                    x = Some(self.extract_number_from_expression(&expr)?);
+                }
+                "y" => {
                     let expr = self.parse_expression()?;
                     y = Some(self.extract_number_from_expression(&expr)?);
                 }
-                "z" | "height" => {
+                "latitude" => {
+                    wgs_keys_seen = true;
+                    let expr = self.parse_expression()?;
+                    y = Some(self.extract_number_from_expression(&expr)?);
+                }
+                "z" => {
+                    let expr = self.parse_expression()?;
+                    z = Some(self.extract_number_from_expression(&expr)?);
+                }
+                "height" => {
+                    wgs_keys_seen = true;
                     let expr = self.parse_expression()?;
                     z = Some(self.extract_number_from_expression(&expr)?);
                 }
                 "crs" => {
+                    explicit_crs = true;
                     let expr = self.parse_string_literal()?;
                     let crs_str = if let Expression::Literal(Literal::String(s)) = expr {
                         s.to_lowercase()
@@ -1417,6 +1439,16 @@ impl CypherParser {
         let x = x.ok_or_else(|| self.error("Point must have x or longitude"))?;
         let y = y.ok_or_else(|| self.error("Point must have y or latitude"))?;
 
+        // Implicit CRS inference: when the caller used the geographic
+        // key aliases (longitude/latitude/height) without an explicit
+        // `crs:` field, the point is WGS-84. This matches Neo4j's
+        // behaviour and is what users expect from
+        // `point({longitude: 13.4, latitude: 52.5})`. Explicit `crs:`
+        // always wins (handled above by `explicit_crs`).
+        if wgs_keys_seen && !explicit_crs {
+            coordinate_system = crate::geospatial::CoordinateSystem::WGS84;
+        }
+
         let point = if let Some(z_val) = z {
             crate::geospatial::Point::new_3d(x, y, z_val, coordinate_system)
         } else {
@@ -1426,11 +1458,26 @@ impl CypherParser {
         Ok(Expression::Literal(Literal::Point(point)))
     }
 
-    /// Extract number from expression (helper for point parsing)
+    /// Extract number from expression (helper for point parsing).
+    ///
+    /// Accepts integer / float literals plus unary `+`/`-` applied to
+    /// such literals. The unary case is necessary because the lexer
+    /// tokenises `-1.0` as `UnaryOp { Minus, Literal::Float(1.0) }`,
+    /// not as `Literal::Float(-1.0)`. Without this, point literals
+    /// with negative coordinates (`{longitude: -73.9857, …}`) raised
+    /// `Cypher syntax error: Point coordinates must be numbers`
+    /// despite being canonical Cypher.
     pub(super) fn extract_number_from_expression(&self, expr: &Expression) -> Result<f64> {
         match expr {
             Expression::Literal(Literal::Integer(i)) => Ok(*i as f64),
             Expression::Literal(Literal::Float(f)) => Ok(*f),
+            Expression::UnaryOp { op, operand } => match op {
+                UnaryOperator::Minus => Ok(-self.extract_number_from_expression(operand)?),
+                UnaryOperator::Plus => self.extract_number_from_expression(operand),
+                UnaryOperator::Not => Err(Error::CypherSyntax(
+                    "Point coordinates must be numbers".to_string(),
+                )),
+            },
             _ => Err(Error::CypherSyntax(
                 "Point coordinates must be numbers".to_string(),
             )),
