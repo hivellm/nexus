@@ -5,7 +5,15 @@ All notable changes to Nexus will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [1.2.0] — 2026-04-28
+## [1.15.0] — 2026-04-28
+
+> Note: this entry was originally authored as `[1.2.0]` (a typo) on
+> commit 7701ae6e while the workspace `Cargo.toml` was already at
+> `1.15.0` (bumped in commit bcab3e21 to align the server image with
+> the SDK train). `phase7_reconcile-version-strings` corrected the
+> heading so the CHANGELOG, the workspace version, and the published
+> SDK versions all read 1.15.0. The release branch retains its
+> original `release/v1.2.0` name to keep upstream PR refs stable.
 
 ### Fixed — `phase7_fix-ignored-engine-tests`
 

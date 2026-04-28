@@ -13,6 +13,9 @@ on:
       - "rust-toolchain.toml"
       - ".cargo/**"
       - ".github/workflows/rust-lint.yml"
+      - "README.md"
+      - "CHANGELOG.md"
+      - "scripts/ci/check_version_consistency.sh"
   pull_request:
     branches: ["**"]
     paths:
@@ -25,6 +28,9 @@ on:
       - "rust-toolchain.toml"
       - ".cargo/**"
       - ".github/workflows/rust-lint.yml"
+      - "README.md"
+      - "CHANGELOG.md"
+      - "scripts/ci/check_version_consistency.sh"
 
 env:
   CARGO_TERM_COLOR: always
@@ -51,6 +57,9 @@ jobs:
           key: clippy
           cache-all-crates: false
           save-if: ${{ github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master' || github.ref == 'refs/heads/develop' }}
+
+      - name: Check version-string consistency (workspace ↔ README badge ↔ CHANGELOG)
+        run: bash scripts/ci/check_version_consistency.sh
 
       - name: Check code formatting
         run: cargo +nightly fmt --all -- --check

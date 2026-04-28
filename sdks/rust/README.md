@@ -8,6 +8,12 @@
 
 Official Rust SDK for Nexus graph database.
 
+> **Compatibility:** SDK 1.15.0 ↔ `nexus-server` 1.15.0. SDK and
+> server move in lockstep on the same X.Y.Z train; mismatches
+> within the same `MAJOR.MINOR` are usually fine but only the
+> exact-match build is in the test matrix. See
+> [`docs/COMPATIBILITY_MATRIX.md`](../../docs/COMPATIBILITY_MATRIX.md).
+
 The crate is published as **`nexus-graph-sdk`** (the generic
 `nexus-sdk` name on crates.io is owned by the unrelated Nexus
 Workflow project). The module name stays `nexus_sdk`, so every

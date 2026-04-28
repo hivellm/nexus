@@ -2,6 +2,10 @@
 
 Official Go client library for [Nexus](https://github.com/hivellm/nexus), a high-performance Neo4j-compatible graph database.
 
+> **Compatibility:** SDK 1.15.0 ↔ `nexus-server` 1.15.0. SDK and
+> server move in lockstep on the same X.Y.Z train. See
+> [`docs/COMPATIBILITY_MATRIX.md`](../../docs/COMPATIBILITY_MATRIX.md).
+
 ## Features
 
 - **Binary RPC by default** — connects over `nexus://127.0.0.1:15475` using length-prefixed MessagePack; 3–10× lower latency and 40–60% smaller payloads than the legacy HTTP path.
