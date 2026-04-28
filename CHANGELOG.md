@@ -15,6 +15,53 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > SDK versions all read 1.15.0. The release branch retains its
 > original `release/v1.2.0` name to keep upstream PR refs stable.
 
+### Fixed — `phase8_optional-match-binding-leak`
+
+- **HIGH-severity correctness bug fixed.** OPTIONAL MATCH against
+  a node with no matching relationships used to silently bind the
+  target (and relationship) variables to **the source node's
+  data** instead of NULL. Repro: `MATCH (a:Person) OPTIONAL MATCH
+  (a)-[:KNOWS]->(b) RETURN a.name, b.name` returned `['Alice',
+  'Alice']` when Alice had no `:KNOWS` edge — Neo4j returns
+  `['Alice', null]`. `b IS NULL` returned `false`, `count(b)`
+  returned `1`, every aggregation on top inherited the corruption.
+- Root cause: the scan-fallback in
+  `crates/nexus-core/src/executor/operators/path.rs::find_relationships`
+  (kept alive as a workaround for an mmap-sync edge case) read
+  rel_id=0 from the memmapped backing file as a zero-byte record
+  (`src=0`, `dst=0`, `type_id=0`). The existing skip filter
+  (`src=0 && dst=0 && rel_id > 0`) let rel_id=0 through. When the
+  source node was itself at id=0 (the very first node — Alice in
+  the canonical reproducer), the direction check accepted
+  `check_src_id (0) == node_id (0)` as a match and the operator
+  emitted a phantom relationship pointing back at the source.
+- Three-part fix in `path.rs`:
+  1. Short-circuit the scan when `relationship_count() == 0`.
+  2. Clamp the scan upper bound to `relationship_count() - 1` so
+     a node-with-no-edges does not pull zero-byte records off the
+     end of the in-use range.
+  3. Strengthen the uninitialized-record skip filter: drop the
+     `rel_id > 0` qualifier and key off `type_id == 0` instead.
+     Genuine relationships have non-zero `type_id` because the
+     catalog's type registry never assigns id 0.
+- 7 new regression tests in
+  `crates/nexus-core/tests/optional_match_binding_leak_test.rs`
+  pin every shape from the canonical repro: target-var NULL,
+  property-access NULL, `IS NULL` true, `count(b) = 0`, both rel
+  and target NULL on `[r:KNOWS]->(b)` shape, anonymous target
+  variant, plus a happy-path regression confirming OPTIONAL MATCH
+  with a real `:KNOWS` edge still returns the target. All 7 pass.
+- Quality gates: workspace `cargo +nightly clippy --all-targets
+  --all-features -- -D warnings` clean. Regression suites green:
+  `tck_runner` 22/22, `geospatial_predicates_test` 34/34,
+  `call_subquery_test` 20/20. Lib + integration suite reports
+  `2141 passed; 1 failed (pre-existing parallel-flake on
+  `engine::tests::match_scopes_by_label_and_property_together`,
+  passes in isolation, unrelated to this fix); 10 ignored`.
+- Sibling: `phase8_optional-match-empty-driver` covers the
+  separate row-count divergence on standalone OPTIONAL MATCH with
+  no prior driver.
+
 ### Discovered (audit only) — `phase7_cross-test-row-count-parity`
 
 - The phase7 task asked to fix the 22-test row-count gap in the

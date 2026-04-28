@@ -228,6 +228,38 @@ impl Executor {
             // When first_rel_ptr is 0, we scan for all relationships matching the direction
             // and then follow the linked list from each found relationship
             if rel_ptr == 0 {
+                // phase8_optional-match-binding-leak: short-circuit
+                // when the relationship store has *no* records at
+                // all. Without this guard the scan loop below reads
+                // rel_id=0 from the memmapped backing file as a
+                // zero-byte record (`src_id=0`, `dst_id=0`,
+                // `type_id=0`) and the existing
+                // "skip if src=0 && dst=0 && rel_id > 0" filter does
+                // not catch the rel_id=0 case. When the source node
+                // is itself node_id=0 (the very first node — Alice
+                // in the canonical reproducer), the
+                // `matches_direction` check at `:266-271` accepts
+                // `check_src_id (0) == node_id (0)` as a match and
+                // the operator emits a phantom relationship pointing
+                // back at the source. OPTIONAL MATCH then binds the
+                // target variable to the source's data instead of to
+                // NULL, returning silent wrong data.
+                //
+                // The scan-fallback is a workaround for an mmap
+                // sync bug; clamping its upper bound to
+                // `relationship_count()` keeps the workaround alive
+                // for genuine sync failures while making it
+                // structurally impossible to fabricate a zero-record
+                // ghost.
+                let total_rels = self.store().relationship_count();
+                if total_rels == 0 {
+                    tracing::trace!(
+                        "[find_relationships] Node {}: relationship store is empty, returning no relationships",
+                        node_id
+                    );
+                    return Ok(relationships);
+                }
+
                 tracing::trace!(
                     "[find_relationships] Node {}: first_rel_ptr is 0 - attempting to find relationships by scanning",
                     node_id
@@ -237,8 +269,12 @@ impl Executor {
                 // We'll scan recent relationships (limit to avoid performance issues)
                 // CRITICAL FIX: Start from a reasonable high ID and scan backwards, checking up to 501 relationships
                 // to ensure rel_id=0 is always checked. This assumes relationships are created sequentially.
-                let start_id = 500; // Start from a reasonable high ID (adjust if you have more relationships)
-                let scan_limit = 501; // Check at most 501 relationships (0..=500 is 501 items)
+                // phase8_optional-match-binding-leak: clamp the scan
+                // upper bound to the live `relationship_count()` so a
+                // node-with-no-edges does not pull zero-byte records
+                // off the end of the in-use range.
+                let start_id = (total_rels.saturating_sub(1)).min(500);
+                let scan_limit = (start_id + 1) as usize;
                 let mut scanned_rel_ids = std::collections::HashSet::new();
                 let mut scanned_count = 0;
 
@@ -254,10 +290,29 @@ impl Executor {
                             let check_src_id = rel_record.src_id;
                             let check_dst_id = rel_record.dst_id;
 
-                            // CRITICAL FIX: Skip uninitialized relationship records
-                            // These have src_id=0 and dst_id=0 (pointing to node 0 in both directions)
-                            if check_src_id == 0 && check_dst_id == 0 && check_rel_id > 0 {
-                                // This looks like an uninitialized record - skip it
+                            // Skip uninitialized relationship records.
+                            //
+                            // A record whose `src_id`, `dst_id`, and
+                            // `type_id` are all zero is either an
+                            // uninitialized memmap region or a
+                            // tombstone whose `is_deleted()` flag was
+                            // not set (rare but observed under crash
+                            // recovery). A genuine relationship has
+                            // a non-zero `type_id` because the
+                            // catalog's type registry never assigns
+                            // id 0 (catalog ids start at 1).
+                            //
+                            // phase8_optional-match-binding-leak: the
+                            // previous filter qualified the skip with
+                            // `&& check_rel_id > 0`, which let
+                            // rel_id=0 zero-byte records through. When
+                            // the source node was also at id=0, the
+                            // direction check below treated
+                            // `check_src_id (0) == node_id (0)` as a
+                            // match and the operator emitted a
+                            // phantom relationship.
+                            let check_type_id = rel_record.type_id;
+                            if check_src_id == 0 && check_dst_id == 0 && check_type_id == 0 {
                                 continue;
                             }
 
