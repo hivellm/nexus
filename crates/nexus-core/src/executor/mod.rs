@@ -1153,7 +1153,17 @@ impl Executor {
             _guard.clone()
         };
 
-        // Locks are released here - planning happens with cloned data
+        // Locks are released here - planning happens with cloned data.
+        // `with_property_index` is intentionally not called here yet —
+        // the executor's `ExecutorShared` does not currently carry a
+        // `PropertyIndex` handle (the registry lives on the engine
+        // side at `Engine::indexes::property_index`), so plans built
+        // from `Executor::execute` accept `USING INDEX` hints
+        // silently. Direct planner callers that hold a `PropertyIndex`
+        // reference can opt into validation via
+        // `QueryPlanner::with_property_index`. Threading the registry
+        // through `ExecutorShared` is queued behind a wider
+        // index-handle-Arc refactor.
         let mut planner =
             QueryPlanner::new(self.catalog(), &label_index_snapshot, &knn_index_snapshot)
                 .with_rtree(self.shared.rtree_registry.clone());

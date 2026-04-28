@@ -679,7 +679,12 @@ PROFILE MATCH (n:Person) RETURN n
 ### Query Hints ✅ IMPLEMENTED
 
 ```cypher
--- Force index usage
+-- Force index usage. When a `PropertyIndex` handle is installed on
+-- the planner (`QueryPlanner::with_property_index`), the planner
+-- validates the hinted `(label, property)` pair against the
+-- registered indexes and raises `ERR_USING_INDEX_NOT_FOUND` if the
+-- pair has no matching property index. Without a handle the hint
+-- is accepted silently — see `phase7_planner-using-index-hints`.
 MATCH (n:Person)
 USING INDEX n:Person(email)
 WHERE n.email = 'alice@example.com'

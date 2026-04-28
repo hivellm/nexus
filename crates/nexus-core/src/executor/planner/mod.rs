@@ -231,6 +231,15 @@ pub struct QueryPlanner<'a> {
     /// constructor + builder so existing call sites that don't
     /// have a handle (e.g. planner unit tests) keep compiling.
     rtree_registry: Option<std::sync::Arc<crate::index::rtree::RTreeRegistry>>,
+    /// Property-index registry handle for `USING INDEX` hint
+    /// validation (phase7_planner-using-index-hints). Optional: when
+    /// `None` the planner accepts the hint silently — current
+    /// behaviour for callers without an index handle (planner unit
+    /// tests, the standalone `Executor::parse_and_plan`). When
+    /// `Some` the planner verifies the hinted `(label, property)`
+    /// pair has a registered property index and emits
+    /// `ERR_USING_INDEX_NOT_FOUND` when it doesn't.
+    property_index: Option<&'a crate::index::PropertyIndex>,
     /// Query plan cache for performance optimization
     plan_cache: QueryPlanCache,
     /// Aggregation result cache for intermediate results

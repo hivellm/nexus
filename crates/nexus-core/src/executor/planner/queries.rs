@@ -18,6 +18,7 @@ impl<'a> QueryPlanner<'a> {
             label_index,
             knn_index,
             rtree_registry: None,
+            property_index: None,
             plan_cache: QueryPlanCache::new(1000, Duration::from_secs(300)), // 1000 plans, 5min TTL
             aggregation_cache: AggregationCache::new(500, Duration::from_secs(180)), // 500 results, 3min TTL
         }
@@ -32,6 +33,19 @@ impl<'a> QueryPlanner<'a> {
         registry: std::sync::Arc<crate::index::rtree::RTreeRegistry>,
     ) -> Self {
         self.rtree_registry = Some(registry);
+        self
+    }
+
+    /// Builder shim: install a property-index handle so
+    /// `USING INDEX <var>:<Label>(<prop>)` hints can be validated at
+    /// plan time (phase7_planner-using-index-hints). When the named
+    /// `(label, property)` pair has no registered index the planner
+    /// raises `ERR_USING_INDEX_NOT_FOUND`. Without a handle the hint
+    /// is accepted silently, matching the legacy behaviour of
+    /// callers that have no `IndexManager` reference (planner unit
+    /// tests, the standalone `Executor::parse_and_plan`).
+    pub fn with_property_index(mut self, idx: &'a crate::index::PropertyIndex) -> Self {
+        self.property_index = Some(idx);
         self
     }
 
@@ -184,6 +198,7 @@ impl<'a> QueryPlanner<'a> {
                     label_index: self.label_index,
                     knn_index: self.knn_index,
                     rtree_registry: self.rtree_registry.clone(),
+                    property_index: self.property_index,
                     plan_cache: QueryPlanCache::new(0, std::time::Duration::from_secs(0)), // Empty cache
                     aggregation_cache: AggregationCache::new(
                         100,
@@ -1320,12 +1335,43 @@ impl<'a> QueryPlanner<'a> {
                         let first_label = &node.labels[0];
                         let label_id = self.catalog.get_or_create_label(first_label)?;
 
-                        // Apply USING INDEX hint if present
+                        // Apply USING INDEX hint if present.
+                        //
+                        // phase7_planner-using-index-hints §1.5: when a
+                        // `PropertyIndex` handle is installed
+                        // (`with_property_index`), the planner verifies
+                        // that the hinted `(label, property)` pair has a
+                        // registered index and raises a structured
+                        // `ERR_USING_INDEX_NOT_FOUND` when it doesn't.
+                        // Without a handle the hint is accepted silently
+                        // — that's the legacy behaviour of unit-test
+                        // callers that don't construct an
+                        // `IndexManager`.
                         if let Some(QueryHint::UsingIndex {
-                            property: _property,
+                            label: hint_label,
+                            property: hint_property,
                             ..
                         }) = use_index_hint
                         {
+                            if let Some(prop_idx) = self.property_index {
+                                // Verify the (label, property) pair has
+                                // a registered single-property index.
+                                let label_id_for_check = self.catalog.get_label_id(hint_label).map_err(|_| {
+                                    Error::CypherSyntax(format!(
+                                        "ERR_USING_INDEX_NOT_FOUND: label `:{hint_label}` referenced by USING INDEX hint is not registered"
+                                    ))
+                                })?;
+                                let key_id_for_check = self.catalog.get_key_id(hint_property).map_err(|_| {
+                                    Error::CypherSyntax(format!(
+                                        "ERR_USING_INDEX_NOT_FOUND: property `{hint_property}` referenced by USING INDEX hint on `:{hint_label}` is not registered"
+                                    ))
+                                })?;
+                                if !prop_idx.has_index(label_id_for_check, key_id_for_check) {
+                                    return Err(Error::CypherSyntax(format!(
+                                        "ERR_USING_INDEX_NOT_FOUND: no property index registered for `:{hint_label}({hint_property})` (USING INDEX hint requires a matching CREATE INDEX)"
+                                    )));
+                                }
+                            }
                             // Force index usage for this property
                             // The executor will use property index lookup instead of label scan
                             operators.push(Operator::NodeByLabel {

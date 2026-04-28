@@ -15,6 +15,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > SDK versions all read 1.15.0. The release branch retains its
 > original `release/v1.2.0` name to keep upstream PR refs stable.
 
+### Added — `phase7_planner-using-index-hints`
+
+- **`USING INDEX <var>:<Label>(<prop>)` validation at plan time.**
+  `QueryPlanner` now carries an optional `&PropertyIndex` handle
+  installed via the new `with_property_index(idx)` builder. When
+  the handle is present and the hinted `(label, property)` pair
+  has no matching registered property index, the planner raises
+  `ERR_USING_INDEX_NOT_FOUND` with a structured message naming the
+  pair. Without the handle the hint is accepted silently — that's
+  the legacy behaviour for unit-test callers and direct planner
+  consumers that don't construct an `IndexManager`. The handle is
+  intentionally not yet threaded through `Executor::execute`
+  because `ExecutorShared` does not currently carry a
+  `PropertyIndex` reference; threading it lives behind a wider
+  index-handle-Arc refactor and is queued.
+- **Catalog-level pre-check** — the planner short-circuits with
+  the same error when the hinted label or property key is not
+  registered in the catalog at all (typo in the hint).
+- 4 new planner unit tests in
+  `crates/nexus-core/src/executor/planner/tests.rs`:
+  `using_index_hint_accepted_silently_without_property_index_handle`,
+  `using_index_hint_validated_when_property_index_handle_installed_and_index_exists`,
+  `using_index_hint_errors_when_index_missing`,
+  `using_index_hint_errors_when_label_missing_in_catalog`. All
+  passing on `cargo +nightly test -p nexus-core --lib using_index_hint`.
+- `docs/specs/cypher-subset.md` updated to document the
+  validation behaviour. Existing 300/300 Neo4j diff suite stays
+  green; the TCK runner (22 scenarios) and geospatial predicates
+  suite (34 tests) stay green.
+
 ### Discovered (no code change) — `phase7_call-in-transactions-executor`
 
 - The phase7 task asked to "finish executor batching for `CALL { } IN
