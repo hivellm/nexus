@@ -88,9 +88,12 @@ use parking_lot::RwLock;
 use planner::QueryPlanner;
 use rayon::prelude::*;
 
-// TODO: Re-enable after core optimizations are stable
-// use crate::execution::jit::CraneliftJitCompiler;
-// use crate::execution::parallel::{ParallelQueryExecutor, ParallelQuery, ParallelFilter, should_use_parallel};
+// JIT compiler + parallel-execution imports removed in
+// `phase7_resolve-jit-module` (ADR
+// `delete-the-unused-jit-scaffold-rather-than-finish-the-cranelift-codegen`).
+// The JIT scaffold under `crate::execution::jit::` had no
+// production caller; the parallel module has been off the build
+// since the same JIT-era refactor.
 use serde_json::{Map, Value};
 use std::collections::HashMap;
 use std::sync::Arc;

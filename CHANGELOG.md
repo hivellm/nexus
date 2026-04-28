@@ -15,6 +15,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > SDK versions all read 1.15.0. The release branch retains its
 > original `release/v1.2.0` name to keep upstream PR refs stable.
 
+### Removed — `phase7_resolve-jit-module`
+
+- **JIT scaffold deleted** (`crates/nexus-core/src/execution/jit/`).
+  ~1320 LOC of half-implemented Cranelift codegen + a 173-line
+  `cranelift_jit.rs.disabled` shadow are gone, plus the matching
+  `pub use jit::{JitRuntime, QueryHints}` re-export from
+  `execution/mod.rs` and the commented-out
+  `// use crate::execution::jit::CraneliftJitCompiler;` import in
+  `executor/mod.rs`. ADR
+  `delete-the-unused-jit-scaffold-rather-than-finish-the-cranelift-codegen`
+  records the rationale: zero production callers across
+  `nexus-server` / `nexus-cli` / `nexus-protocol` / `nexus-bench` /
+  the integration tests; the columnar fast-path real-world ratio
+  is already ~1.13× per `PERFORMANCE_V1.md` so the gain a JIT
+  would deliver is dominated by materialisation cost; the
+  planner's bigger leverage is cardinality propagation. Existing
+  test suites (`tck_runner`, `geospatial_predicates_test`) stay
+  green. No public-API breakage — the re-exports were unused.
+
 ### Fixed — `phase7_fix-ignored-engine-tests`
 
 - **Two stale `#[ignore]` attributes** removed from

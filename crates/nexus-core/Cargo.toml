@@ -69,10 +69,13 @@ regex = "1.11"
 strsim = "0.11"  # phase6 apoc.text.* similarity metrics (Levenshtein, Jaro, Sorensen-Dice)
 tracing = "0.1"
 dashmap = "6.1"
-# Temporarily disabled - focus on core optimizations first
 rayon = "1.8"
-# cranelift = "0.101"
-# num_cpus = "1.16"
+# `cranelift` and `num_cpus` were dropped in
+# `phase7_resolve-jit-module` (ADR
+# `delete-the-unused-jit-scaffold-rather-than-finish-the-cranelift-codegen`).
+# The JIT scaffold + parallel-execution module they fed are gone.
+# A future compiled-query or parallel-execution track should
+# re-introduce only the deps it actually uses.
 
 # Authentication & Security
 argon2 = "0.5"  # Still used for API keys
