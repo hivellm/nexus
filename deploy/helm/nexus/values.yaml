@@ -1,0 +1,245 @@
+# Default values for nexus.
+# This is a YAML-formatted file. Each top-level group maps to a
+# template under templates/. Override any value with `--set` or a
+# values file (`helm install nexus ./deploy/helm/nexus -f myvalues.yaml`).
+
+# -- Override the chart name (truncated to 63 chars).
+nameOverride: ""
+# -- Override the full release name (truncated to 63 chars).
+fullnameOverride: ""
+
+image:
+  # -- Container image repository.
+  repository: hivehub/nexus
+  # -- Pull policy. `IfNotPresent` for stable tags; `Always` for `latest`.
+  pullPolicy: IfNotPresent
+  # -- Image tag. Defaults to `.Chart.AppVersion`.
+  tag: ""
+  # -- Optional pull secrets for private registries.
+  pullSecrets: []
+
+# -- Topology: `standalone` (single StatefulSet, replicas=1) or
+# `cluster` (sharded StatefulSet wired through `NEXUS_SHARDING_*`).
+mode: standalone
+
+cluster:
+  # -- Number of shards. Only read at bootstrap; changing it on a live
+  # cluster requires a manual reshard procedure (see docs/CLUSTER_MODE.md).
+  numShards: 3
+  # -- Replication factor per shard.
+  replicaFactor: 3
+  # -- Raft port. Exposed via the headless Service for peer discovery.
+  raftPort: 15480
+  # -- Bootstrap mode. `bootstrap` on the first install, then flip to
+  # `join` for `helm upgrade` so additional pods join an existing
+  # cluster instead of bootstrapping a new one.
+  bootstrapMode: bootstrap
+
+# -- Number of replicas. Ignored when `mode=cluster` (the chart computes
+# `numShards * replicaFactor`).
+replicaCount: 1
+
+server:
+  http:
+    # -- HTTP API port (`/cypher`, `/knn_traverse`, `/health`, ...).
+    port: 15474
+    # -- Bind address inside the pod.
+    bindAddress: 0.0.0.0:15474
+  rpc:
+    # -- Native binary RPC transport (`nexus://host:15475`).
+    enabled: true
+    port: 15475
+    bindAddress: 0.0.0.0:15475
+    # -- Require auth on the RPC listener even when binding to localhost.
+    requireAuth: true
+    maxFrameBytes: 16777216
+  resp3:
+    # -- Optional RESP3 listener (off by default).
+    enabled: false
+    port: 15476
+    bindAddress: 0.0.0.0:15476
+    requireAuth: true
+  # -- Maximum HTTP request body size (MB). 0 keeps the server default.
+  maxBodySizeMb: 16
+  # -- Server log level (`trace`, `debug`, `info`, `warn`, `error`).
+  logLevel: info
+  # -- Persistent data directory inside the pod.
+  dataDir: /app/data
+  # -- Optional inline `config.yml`. Mounted at `/app/config/config.yml`
+  # via the chart ConfigMap when non-empty. Use this for settings that
+  # have no env-var equivalent (page-cache size, executor pool sizes).
+  configYaml: ""
+
+auth:
+  # -- Enable bearer-token / basic auth on every listener.
+  enabled: true
+  # -- Reject unauthenticated requests when binding to a non-localhost
+  # address. Always `true` in K8s deployments.
+  requiredForPublic: true
+  # -- Require auth on `/health` as well. Off by default so the kubelet
+  # liveness probe can reach it without a token.
+  requireHealthAuth: false
+  # Root user provisioned on first boot.
+  root:
+    enabled: true
+    username: admin
+    # -- Set the password literal here, OR leave empty and reference an
+    # existing Secret via `auth.root.existingSecret`. NEVER commit a
+    # real password to a values file checked into git.
+    password: ""
+    # -- Existing Secret to read the root password from. The Secret must
+    # have a `password` key. Mutually exclusive with `auth.root.password`.
+    existingSecret: ""
+    # -- Disable the root user after the first boot once you have
+    # provisioned a replacement admin via the API.
+    disableAfterSetup: true
+
+# -- Optional cluster mode (multi-tenant single-instance), distinct from
+# the V2 sharded cluster wired via `mode=cluster`. See docs/CLUSTER_MODE.md.
+multiTenant:
+  enabled: false
+
+persistence:
+  # -- Provision a `volumeClaimTemplate` on the StatefulSet. Set to
+  # `false` for ephemeral / in-memory deployments (data is lost on
+  # pod restart).
+  enabled: true
+  # -- Storage class. Empty string uses the cluster default.
+  storageClass: ""
+  # -- Access mode. ReadWriteOnce is sufficient since each pod owns
+  # its own PVC.
+  accessMode: ReadWriteOnce
+  # -- PVC size.
+  size: 50Gi
+  # -- Optional annotations on the PVC.
+  annotations: {}
+
+service:
+  # -- ClusterIP (default) / NodePort / LoadBalancer / ExternalName.
+  type: ClusterIP
+  http:
+    port: 15474
+    targetPort: 15474
+    # -- For NodePort. Leave empty for an auto-assigned port.
+    nodePort: ""
+  rpc:
+    port: 15475
+    targetPort: 15475
+    nodePort: ""
+  # -- Optional annotations (e.g. `service.beta.kubernetes.io/aws-load-balancer-internal: "true"`).
+  annotations: {}
+  # -- `clusterIP: None` headless service alongside the regular Service.
+  # Always created in cluster mode (Raft peer discovery); optional in
+  # standalone mode if you want stable per-pod DNS names.
+  headless:
+    enabled: false
+
+ingress:
+  enabled: false
+  className: ""
+  annotations: {}
+  hosts:
+    - host: nexus.local
+      paths:
+        - path: /
+          pathType: Prefix
+  tls: []
+
+# Liveness / readiness probes hit the HTTP API. The probes intentionally
+# target `/health` (cheap, no DB lock) for liveness and `/stats` (which
+# exercises the catalog) for readiness.
+probes:
+  liveness:
+    enabled: true
+    path: /health
+    initialDelaySeconds: 30
+    periodSeconds: 10
+    timeoutSeconds: 5
+    failureThreshold: 3
+  readiness:
+    enabled: true
+    path: /stats
+    initialDelaySeconds: 5
+    periodSeconds: 5
+    timeoutSeconds: 3
+    failureThreshold: 3
+  startup:
+    enabled: true
+    path: /health
+    initialDelaySeconds: 5
+    periodSeconds: 5
+    failureThreshold: 30
+
+resources:
+  limits:
+    cpu: 2000m
+    memory: 4Gi
+  requests:
+    cpu: 500m
+    memory: 1Gi
+
+serviceAccount:
+  # -- Provision a dedicated ServiceAccount for Nexus pods.
+  create: true
+  name: ""
+  annotations: {}
+  automountServiceAccountToken: false
+
+podSecurityContext:
+  fsGroup: 1000
+  runAsNonRoot: true
+  runAsUser: 1000
+
+securityContext:
+  allowPrivilegeEscalation: false
+  capabilities:
+    drop: [ALL]
+  readOnlyRootFilesystem: false
+  runAsNonRoot: true
+  runAsUser: 1000
+
+networkPolicy:
+  # -- Provision a default-deny NetworkPolicy plus per-port allow rules.
+  enabled: false
+  # -- Pod selectors allowed to reach the HTTP and RPC ports. Empty
+  # `from:` means "any pod in the same namespace".
+  ingressFrom: []
+  # -- Allow scrapes from a Prometheus namespace.
+  prometheusNamespace: ""
+
+podDisruptionBudget:
+  enabled: false
+  minAvailable: ""
+  maxUnavailable: 1
+
+prometheus:
+  serviceMonitor:
+    # -- Provision a `ServiceMonitor` for the Prometheus Operator. The
+    # Nexus server exposes Prometheus-format metrics at `/metrics`.
+    enabled: false
+    namespace: ""
+    interval: 30s
+    scrapeTimeout: 10s
+    labels: {}
+    relabelings: []
+    metricRelabelings: []
+
+tls:
+  # -- Terminate TLS at the Nexus server using a Secret containing
+  # `tls.crt` and `tls.key`. Pair with cert-manager for automatic
+  # rotation (see docs/operations/KUBERNETES.md).
+  enabled: false
+  existingSecret: ""
+
+nodeSelector: {}
+tolerations: []
+affinity: {}
+priorityClassName: ""
+
+podAnnotations: {}
+podLabels: {}
+
+extraEnv: []
+extraEnvFrom: []
+extraVolumes: []
+extraVolumeMounts: []

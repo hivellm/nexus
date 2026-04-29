@@ -1,0 +1,76 @@
+{{- if .Values.networkPolicy.enabled -}}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "nexus.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "nexus.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "nexus.selectorLabels" . | nindent 6 }}
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    - from:
+        {{- if .Values.networkPolicy.ingressFrom }}
+        {{- toYaml .Values.networkPolicy.ingressFrom | nindent 8 }}
+        {{- else }}
+        - podSelector: {}
+        {{- end }}
+      ports:
+        - port: {{ .Values.server.http.port }}
+          protocol: TCP
+        {{- if .Values.server.rpc.enabled }}
+        - port: {{ .Values.server.rpc.port }}
+          protocol: TCP
+        {{- end }}
+        {{- if .Values.server.resp3.enabled }}
+        - port: {{ .Values.server.resp3.port }}
+          protocol: TCP
+        {{- end }}
+    {{- if eq .Values.mode "cluster" }}
+    # Raft peer-to-peer traffic — pods of the same release talk to each other
+    # over the headless Service.
+    - from:
+        - podSelector:
+            matchLabels:
+              {{- include "nexus.selectorLabels" . | nindent 14 }}
+      ports:
+        - port: {{ .Values.cluster.raftPort }}
+          protocol: TCP
+    {{- end }}
+    {{- if .Values.networkPolicy.prometheusNamespace }}
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ .Values.networkPolicy.prometheusNamespace | quote }}
+      ports:
+        - port: {{ .Values.server.http.port }}
+          protocol: TCP
+    {{- end }}
+  egress:
+    # DNS resolution.
+    - to:
+        - namespaceSelector: {}
+          podSelector:
+            matchLabels:
+              k8s-app: kube-dns
+      ports:
+        - port: 53
+          protocol: UDP
+        - port: 53
+          protocol: TCP
+    {{- if eq .Values.mode "cluster" }}
+    # Outbound Raft to peer pods.
+    - to:
+        - podSelector:
+            matchLabels:
+              {{- include "nexus.selectorLabels" . | nindent 14 }}
+      ports:
+        - port: {{ .Values.cluster.raftPort }}
+          protocol: TCP
+    {{- end }}
+{{- end -}}

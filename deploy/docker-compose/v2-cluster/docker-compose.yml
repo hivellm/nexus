@@ -1,0 +1,177 @@
+# V2 cluster trial — 3 shards × 3 replicas = 9 nodes wired through Raft.
+#
+# All 9 pods bootstrap into a single sharded cluster. The peer list
+# below is hard-coded for clarity — for production scale prefer the
+# Helm chart at deploy/helm/nexus with `mode: cluster`, which generates
+# the peer list from `numShards * replicaFactor` automatically.
+#
+# Host port layout: each node's HTTP API maps to 1547X, RPC to 1547X+1
+# where X is the node ordinal incremented by 10 per node (15474, 25474,
+# 35474, 45474, ...). Adjust if you need denser packing.
+#
+# Usage:
+#   cd deploy/docker-compose/v2-cluster
+#   echo "$(openssl rand -hex 32)" > root_password.txt && chmod 600 root_password.txt
+#   docker compose up -d
+#   docker compose ps
+#   curl http://localhost:15474/health
+
+x-nexus-base: &nexus-base
+  image: ${NEXUS_IMAGE:-hivehub/nexus:latest}
+  restart: unless-stopped
+  environment: &nexus-env
+    NEXUS_ADDR: 0.0.0.0:15474
+    NEXUS_DATA_DIR: /app/data
+    NEXUS_RPC_ENABLED: "true"
+    NEXUS_RPC_ADDR: 0.0.0.0:15475
+    NEXUS_AUTH_ENABLED: "true"
+    NEXUS_ROOT_ENABLED: "true"
+    NEXUS_ROOT_USERNAME: ${NEXUS_ROOT_USERNAME:-admin}
+    NEXUS_ROOT_PASSWORD_FILE: /run/secrets/nexus_root_password
+    NEXUS_SHARDING_MODE: bootstrap
+    NEXUS_SHARDING_LISTEN_ADDR: 0.0.0.0:15480
+    NEXUS_SHARDING_PEERS: "node-0=nexus-0:15480,node-1=nexus-1:15480,node-2=nexus-2:15480,node-3=nexus-3:15480,node-4=nexus-4:15480,node-5=nexus-5:15480,node-6=nexus-6:15480,node-7=nexus-7:15480,node-8=nexus-8:15480"
+    NEXUS_SHARDING_NUM_SHARDS: "3"
+    NEXUS_SHARDING_REPLICA_FACTOR: "3"
+    RUST_LOG: ${RUST_LOG:-info}
+  secrets:
+    - nexus_root_password
+  healthcheck:
+    test: ["CMD", "curl", "-f", "http://localhost:15474/health"]
+    interval: 30s
+    timeout: 10s
+    retries: 3
+    start_period: 60s
+
+services:
+  nexus-0:
+    <<: *nexus-base
+    container_name: nexus-0
+    hostname: nexus-0
+    ports:
+      - "15474:15474"
+      - "15475:15475"
+    volumes:
+      - nexus-0-data:/app/data
+    environment:
+      <<: *nexus-env
+      NEXUS_SHARDING_NODE_ID: node-0
+
+  nexus-1:
+    <<: *nexus-base
+    container_name: nexus-1
+    hostname: nexus-1
+    ports:
+      - "25474:15474"
+      - "25475:15475"
+    volumes:
+      - nexus-1-data:/app/data
+    environment:
+      <<: *nexus-env
+      NEXUS_SHARDING_NODE_ID: node-1
+
+  nexus-2:
+    <<: *nexus-base
+    container_name: nexus-2
+    hostname: nexus-2
+    ports:
+      - "35474:15474"
+      - "35475:15475"
+    volumes:
+      - nexus-2-data:/app/data
+    environment:
+      <<: *nexus-env
+      NEXUS_SHARDING_NODE_ID: node-2
+
+  nexus-3:
+    <<: *nexus-base
+    container_name: nexus-3
+    hostname: nexus-3
+    ports:
+      - "45474:15474"
+      - "45475:15475"
+    volumes:
+      - nexus-3-data:/app/data
+    environment:
+      <<: *nexus-env
+      NEXUS_SHARDING_NODE_ID: node-3
+
+  nexus-4:
+    <<: *nexus-base
+    container_name: nexus-4
+    hostname: nexus-4
+    ports:
+      - "55474:15474"
+      - "55475:15475"
+    volumes:
+      - nexus-4-data:/app/data
+    environment:
+      <<: *nexus-env
+      NEXUS_SHARDING_NODE_ID: node-4
+
+  nexus-5:
+    <<: *nexus-base
+    container_name: nexus-5
+    hostname: nexus-5
+    ports:
+      - "16474:15474"
+      - "16475:15475"
+    volumes:
+      - nexus-5-data:/app/data
+    environment:
+      <<: *nexus-env
+      NEXUS_SHARDING_NODE_ID: node-5
+
+  nexus-6:
+    <<: *nexus-base
+    container_name: nexus-6
+    hostname: nexus-6
+    ports:
+      - "26474:15474"
+      - "26475:15475"
+    volumes:
+      - nexus-6-data:/app/data
+    environment:
+      <<: *nexus-env
+      NEXUS_SHARDING_NODE_ID: node-6
+
+  nexus-7:
+    <<: *nexus-base
+    container_name: nexus-7
+    hostname: nexus-7
+    ports:
+      - "36474:15474"
+      - "36475:15475"
+    volumes:
+      - nexus-7-data:/app/data
+    environment:
+      <<: *nexus-env
+      NEXUS_SHARDING_NODE_ID: node-7
+
+  nexus-8:
+    <<: *nexus-base
+    container_name: nexus-8
+    hostname: nexus-8
+    ports:
+      - "46474:15474"
+      - "46475:15475"
+    volumes:
+      - nexus-8-data:/app/data
+    environment:
+      <<: *nexus-env
+      NEXUS_SHARDING_NODE_ID: node-8
+
+volumes:
+  nexus-0-data: { driver: local }
+  nexus-1-data: { driver: local }
+  nexus-2-data: { driver: local }
+  nexus-3-data: { driver: local }
+  nexus-4-data: { driver: local }
+  nexus-5-data: { driver: local }
+  nexus-6-data: { driver: local }
+  nexus-7-data: { driver: local }
+  nexus-8-data: { driver: local }
+
+secrets:
+  nexus_root_password:
+    file: ./root_password.txt

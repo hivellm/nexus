@@ -1,0 +1,32 @@
+{{- if or .Values.service.headless.enabled (eq .Values.mode "cluster") -}}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "nexus.headlessServiceName" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "nexus.labels" . | nindent 4 }}
+spec:
+  type: ClusterIP
+  clusterIP: None
+  publishNotReadyAddresses: true
+  ports:
+    - name: http
+      port: {{ .Values.service.http.port }}
+      targetPort: {{ .Values.service.http.targetPort }}
+      protocol: TCP
+    {{- if .Values.server.rpc.enabled }}
+    - name: rpc
+      port: {{ .Values.service.rpc.port }}
+      targetPort: {{ .Values.service.rpc.targetPort }}
+      protocol: TCP
+    {{- end }}
+    {{- if eq .Values.mode "cluster" }}
+    - name: raft
+      port: {{ .Values.cluster.raftPort }}
+      targetPort: {{ .Values.cluster.raftPort }}
+      protocol: TCP
+    {{- end }}
+  selector:
+    {{- include "nexus.selectorLabels" . | nindent 4 }}
+{{- end -}}

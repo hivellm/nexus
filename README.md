@@ -487,6 +487,11 @@ ORDER BY confidence DESC
 - [`docs/performance/PERFORMANCE_V1.md`](docs/performance/PERFORMANCE_V1.md) — throughput, latency, vs-Neo4j benchmark matrix.
 - [`docs/performance/MEMORY_TUNING.md`](docs/performance/MEMORY_TUNING.md) — cache sizes, page budgets, Docker memtest.
 
+### Deployment
+- [`deploy/helm/nexus/`](deploy/helm/nexus/README.md) — official Helm chart (single-node + sharded cluster topology).
+- [`deploy/docker-compose/`](deploy/docker-compose/README.md) — single-node, master-replica, and v2-cluster Compose stacks.
+- [`docs/operations/KUBERNETES.md`](docs/operations/KUBERNETES.md) — install, upgrade, scaling, TLS, observability, backups.
+
 ## 🗺️ Roadmap
 
 ### 1.15.0 — current (2026-04-28)

@@ -1,0 +1,46 @@
+Nexus has been deployed.
+
+  Release name: {{ .Release.Name }}
+  Namespace:    {{ .Release.Namespace }}
+  Mode:         {{ .Values.mode }}
+  Replicas:     {{ include "nexus.replicas" . }}
+
+1. Wait for pods to be ready:
+
+     kubectl rollout status statefulset/{{ include "nexus.fullname" . }} -n {{ .Release.Namespace }}
+
+2. Reach the HTTP API:
+
+   {{- if eq .Values.service.type "ClusterIP" }}
+     kubectl port-forward -n {{ .Release.Namespace }} svc/{{ include "nexus.fullname" . }} {{ .Values.service.http.port }}:{{ .Values.service.http.port }}
+     curl http://localhost:{{ .Values.service.http.port }}/health
+   {{- else if eq .Values.service.type "NodePort" }}
+     export NODE_PORT=$(kubectl get -n {{ .Release.Namespace }} svc {{ include "nexus.fullname" . }} -o jsonpath="{.spec.ports[?(@.name=='http')].nodePort}")
+     export NODE_IP=$(kubectl get nodes -o jsonpath="{.items[0].status.addresses[0].address}")
+     curl http://$NODE_IP:$NODE_PORT/health
+   {{- else if eq .Values.service.type "LoadBalancer" }}
+     export LB_IP=$(kubectl get -n {{ .Release.Namespace }} svc {{ include "nexus.fullname" . }} -o jsonpath="{.status.loadBalancer.ingress[0].ip}")
+     curl http://$LB_IP:{{ .Values.service.http.port }}/health
+   {{- end }}
+
+3. SDK connection (RPC, the default transport):
+
+     nexus://{{ include "nexus.fullname" . }}.{{ .Release.Namespace }}.svc.cluster.local:{{ .Values.service.rpc.port }}
+
+{{- if .Values.auth.enabled }}
+
+4. Authentication is ENABLED. The root credentials are stored in:
+
+     kubectl get secret -n {{ .Release.Namespace }} {{ include "nexus.authSecretName" . }} -o jsonpath="{.data.password}" | base64 -d
+{{- end }}
+
+{{- if eq .Values.mode "cluster" }}
+
+5. Cluster mode is ON.
+   Shards: {{ .Values.cluster.numShards }}    Replica factor: {{ .Values.cluster.replicaFactor }}
+   Peer discovery is over the headless Service ({{ include "nexus.headlessServiceName" . }}).
+   See docs/CLUSTER_MODE.md for the scaling and reshard procedures.
+{{- end }}
+
+For production hardening — TLS, NetworkPolicy, ServiceMonitor, backups —
+see docs/operations/KUBERNETES.md in the source repository.

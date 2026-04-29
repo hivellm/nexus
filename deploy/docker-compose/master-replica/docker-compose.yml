@@ -1,0 +1,85 @@
+# Master + read-replica stack for trial replication setups.
+#
+# - `nexus-master` accepts writes on :15474 / :15475.
+# - `nexus-replica` follows the master via WAL shipping (configured by
+#   the replication subsystem in nexus-server). It exposes a read-only
+#   HTTP/RPC surface on :25474 / :25475 for the host.
+#
+# This is a trial topology only — for HA in production prefer the V2
+# sharded cluster (see ../v2-cluster/).
+
+services:
+  nexus-master:
+    image: ${NEXUS_IMAGE:-hivehub/nexus:latest}
+    container_name: nexus-master
+    restart: unless-stopped
+    hostname: nexus-master
+    ports:
+      - "15474:15474"
+      - "15475:15475"
+    volumes:
+      - nexus-master-data:/app/data
+    environment:
+      NEXUS_ADDR: 0.0.0.0:15474
+      NEXUS_DATA_DIR: /app/data
+      NEXUS_RPC_ENABLED: "true"
+      NEXUS_RPC_ADDR: 0.0.0.0:15475
+      NEXUS_AUTH_ENABLED: "true"
+      NEXUS_ROOT_ENABLED: "true"
+      NEXUS_ROOT_USERNAME: ${NEXUS_ROOT_USERNAME:-admin}
+      NEXUS_ROOT_PASSWORD_FILE: /run/secrets/nexus_root_password
+      NEXUS_REPLICATION_ROLE: master
+      NEXUS_REPLICATION_LISTEN_ADDR: 0.0.0.0:15479
+      RUST_LOG: ${RUST_LOG:-info}
+    secrets:
+      - nexus_root_password
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:15474/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+  nexus-replica:
+    image: ${NEXUS_IMAGE:-hivehub/nexus:latest}
+    container_name: nexus-replica
+    restart: unless-stopped
+    hostname: nexus-replica
+    depends_on:
+      nexus-master:
+        condition: service_healthy
+    ports:
+      - "25474:15474"
+      - "25475:15475"
+    volumes:
+      - nexus-replica-data:/app/data
+    environment:
+      NEXUS_ADDR: 0.0.0.0:15474
+      NEXUS_DATA_DIR: /app/data
+      NEXUS_RPC_ENABLED: "true"
+      NEXUS_RPC_ADDR: 0.0.0.0:15475
+      NEXUS_AUTH_ENABLED: "true"
+      NEXUS_ROOT_ENABLED: "true"
+      NEXUS_ROOT_USERNAME: ${NEXUS_ROOT_USERNAME:-admin}
+      NEXUS_ROOT_PASSWORD_FILE: /run/secrets/nexus_root_password
+      NEXUS_REPLICATION_ROLE: replica
+      NEXUS_REPLICATION_MASTER_ADDR: nexus-master:15479
+      RUST_LOG: ${RUST_LOG:-info}
+    secrets:
+      - nexus_root_password
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:15474/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+
+volumes:
+  nexus-master-data:
+    driver: local
+  nexus-replica-data:
+    driver: local
+
+secrets:
+  nexus_root_password:
+    file: ./root_password.txt

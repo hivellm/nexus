@@ -1,0 +1,61 @@
+# Cluster-mode preset for the Nexus Helm chart.
+#
+# Apply with:
+#   helm install nexus ./deploy/helm/nexus \
+#     -f ./deploy/helm/nexus/values.yaml \
+#     -f ./deploy/helm/nexus/values-cluster.yaml \
+#     --set auth.root.password=<strong-password>
+#
+# Required infrastructure: a CSI driver providing ReadWriteOnce volumes
+# for every replica. Each pod owns its own PVC; cross-pod sharing is
+# never required (replication is at the application layer via Raft).
+
+mode: cluster
+
+cluster:
+  numShards: 3
+  replicaFactor: 3
+  raftPort: 15480
+  bootstrapMode: bootstrap
+
+# Cluster mode forces the headless Service on (Raft peer discovery) but
+# also benefits from the regular ClusterIP Service for client traffic.
+service:
+  type: ClusterIP
+  headless:
+    enabled: true
+
+resources:
+  limits:
+    cpu: 4000m
+    memory: 8Gi
+  requests:
+    cpu: 1000m
+    memory: 2Gi
+
+persistence:
+  enabled: true
+  size: 100Gi
+
+podDisruptionBudget:
+  enabled: true
+  maxUnavailable: 1
+
+networkPolicy:
+  enabled: true
+
+prometheus:
+  serviceMonitor:
+    enabled: true
+
+# Pod anti-affinity: spread shard replicas across nodes so a single
+# node failure can't take down more than one replica per shard.
+affinity:
+  podAntiAffinity:
+    preferredDuringSchedulingIgnoredDuringExecution:
+      - weight: 100
+        podAffinityTerm:
+          labelSelector:
+            matchLabels:
+              app.kubernetes.io/name: nexus
+          topologyKey: kubernetes.io/hostname

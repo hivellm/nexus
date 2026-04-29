@@ -1,0 +1,243 @@
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ include "nexus.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "nexus.labels" . | nindent 4 }}
+spec:
+  serviceName: {{ include "nexus.headlessServiceName" . }}
+  replicas: {{ include "nexus.replicas" . }}
+  podManagementPolicy: {{ if eq .Values.mode "cluster" }}Parallel{{ else }}OrderedReady{{ end }}
+  updateStrategy:
+    type: RollingUpdate
+  selector:
+    matchLabels:
+      {{- include "nexus.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "nexus.selectorLabels" . | nindent 8 }}
+        {{- with .Values.podLabels }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      annotations:
+        checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
+        checksum/secret: {{ include (print $.Template.BasePath "/secret.yaml") . | sha256sum }}
+        {{- with .Values.podAnnotations }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+    spec:
+      serviceAccountName: {{ include "nexus.serviceAccountName" . }}
+      {{- with .Values.image.pullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.priorityClassName }}
+      priorityClassName: {{ . }}
+      {{- end }}
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      terminationGracePeriodSeconds: 60
+      containers:
+        - name: nexus
+          image: {{ include "nexus.image" . }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          securityContext:
+            {{- toYaml .Values.securityContext | nindent 12 }}
+          ports:
+            - name: http
+              containerPort: {{ .Values.server.http.port }}
+              protocol: TCP
+            {{- if .Values.server.rpc.enabled }}
+            - name: rpc
+              containerPort: {{ .Values.server.rpc.port }}
+              protocol: TCP
+            {{- end }}
+            {{- if .Values.server.resp3.enabled }}
+            - name: resp3
+              containerPort: {{ .Values.server.resp3.port }}
+              protocol: TCP
+            {{- end }}
+            {{- if eq .Values.mode "cluster" }}
+            - name: raft
+              containerPort: {{ .Values.cluster.raftPort }}
+              protocol: TCP
+            {{- end }}
+          env:
+            - name: NEXUS_ADDR
+              value: {{ .Values.server.http.bindAddress | quote }}
+            - name: NEXUS_DATA_DIR
+              value: {{ .Values.server.dataDir | quote }}
+            - name: RUST_LOG
+              value: {{ .Values.server.logLevel | quote }}
+            {{- if .Values.server.maxBodySizeMb }}
+            - name: NEXUS_MAX_BODY_SIZE_MB
+              value: {{ .Values.server.maxBodySizeMb | quote }}
+            {{- end }}
+            {{- if .Values.server.rpc.enabled }}
+            - name: NEXUS_RPC_ENABLED
+              value: "true"
+            - name: NEXUS_RPC_ADDR
+              value: {{ .Values.server.rpc.bindAddress | quote }}
+            - name: NEXUS_RPC_REQUIRE_AUTH
+              value: {{ .Values.server.rpc.requireAuth | quote }}
+            - name: NEXUS_RPC_MAX_FRAME_BYTES
+              value: {{ .Values.server.rpc.maxFrameBytes | quote }}
+            {{- end }}
+            {{- if .Values.server.resp3.enabled }}
+            - name: NEXUS_RESP3_ENABLED
+              value: "true"
+            - name: NEXUS_RESP3_ADDR
+              value: {{ .Values.server.resp3.bindAddress | quote }}
+            - name: NEXUS_RESP3_REQUIRE_AUTH
+              value: {{ .Values.server.resp3.requireAuth | quote }}
+            {{- end }}
+            - name: NEXUS_AUTH_ENABLED
+              value: {{ .Values.auth.enabled | quote }}
+            - name: NEXUS_AUTH_REQUIRED_FOR_PUBLIC
+              value: {{ .Values.auth.requiredForPublic | quote }}
+            - name: NEXUS_REQUIRE_HEALTH_AUTH
+              value: {{ .Values.auth.requireHealthAuth | quote }}
+            {{- if .Values.auth.root.enabled }}
+            - name: NEXUS_ROOT_ENABLED
+              value: "true"
+            - name: NEXUS_ROOT_USERNAME
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "nexus.authSecretName" . }}
+                  key: username
+            - name: NEXUS_ROOT_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "nexus.authSecretName" . }}
+                  key: password
+            - name: NEXUS_DISABLE_ROOT_AFTER_SETUP
+              value: {{ .Values.auth.root.disableAfterSetup | quote }}
+            {{- end }}
+            {{- if .Values.multiTenant.enabled }}
+            - name: NEXUS_CLUSTER_ENABLED
+              value: "true"
+            {{- end }}
+            {{- if eq .Values.mode "cluster" }}
+            - name: POD_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            - name: POD_ORDINAL
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.labels['apps.kubernetes.io/pod-index']
+            - name: NEXUS_SHARDING_MODE
+              value: {{ .Values.cluster.bootstrapMode | quote }}
+            - name: NEXUS_SHARDING_NODE_ID
+              value: "node-$(POD_ORDINAL)"
+            - name: NEXUS_SHARDING_LISTEN_ADDR
+              value: "0.0.0.0:{{ .Values.cluster.raftPort }}"
+            - name: NEXUS_SHARDING_PEERS
+              value: {{ include "nexus.shardingPeers" . | quote }}
+            - name: NEXUS_SHARDING_NUM_SHARDS
+              value: {{ .Values.cluster.numShards | quote }}
+            - name: NEXUS_SHARDING_REPLICA_FACTOR
+              value: {{ .Values.cluster.replicaFactor | quote }}
+            {{- end }}
+            {{- with .Values.extraEnv }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          {{- with .Values.extraEnvFrom }}
+          envFrom:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          {{- if .Values.probes.startup.enabled }}
+          startupProbe:
+            httpGet:
+              path: {{ .Values.probes.startup.path }}
+              port: http
+            initialDelaySeconds: {{ .Values.probes.startup.initialDelaySeconds }}
+            periodSeconds: {{ .Values.probes.startup.periodSeconds }}
+            failureThreshold: {{ .Values.probes.startup.failureThreshold }}
+          {{- end }}
+          {{- if .Values.probes.liveness.enabled }}
+          livenessProbe:
+            httpGet:
+              path: {{ .Values.probes.liveness.path }}
+              port: http
+            initialDelaySeconds: {{ .Values.probes.liveness.initialDelaySeconds }}
+            periodSeconds: {{ .Values.probes.liveness.periodSeconds }}
+            timeoutSeconds: {{ .Values.probes.liveness.timeoutSeconds }}
+            failureThreshold: {{ .Values.probes.liveness.failureThreshold }}
+          {{- end }}
+          {{- if .Values.probes.readiness.enabled }}
+          readinessProbe:
+            httpGet:
+              path: {{ .Values.probes.readiness.path }}
+              port: http
+            initialDelaySeconds: {{ .Values.probes.readiness.initialDelaySeconds }}
+            periodSeconds: {{ .Values.probes.readiness.periodSeconds }}
+            timeoutSeconds: {{ .Values.probes.readiness.timeoutSeconds }}
+            failureThreshold: {{ .Values.probes.readiness.failureThreshold }}
+          {{- end }}
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+          volumeMounts:
+            - name: data
+              mountPath: {{ .Values.server.dataDir }}
+            {{- if .Values.server.configYaml }}
+            - name: config
+              mountPath: /app/config
+              readOnly: true
+            {{- end }}
+            {{- if .Values.tls.enabled }}
+            - name: tls
+              mountPath: /app/tls
+              readOnly: true
+            {{- end }}
+            {{- with .Values.extraVolumeMounts }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+      volumes:
+        {{- if .Values.server.configYaml }}
+        - name: config
+          configMap:
+            name: {{ include "nexus.configMapName" . }}
+        {{- end }}
+        {{- if .Values.tls.enabled }}
+        - name: tls
+          secret:
+            secretName: {{ required "tls.existingSecret is required when tls.enabled=true" .Values.tls.existingSecret }}
+        {{- end }}
+        {{- with .Values.extraVolumes }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+  {{- if .Values.persistence.enabled }}
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+        labels:
+          {{- include "nexus.labels" . | nindent 10 }}
+        {{- with .Values.persistence.annotations }}
+        annotations:
+          {{- toYaml . | nindent 10 }}
+        {{- end }}
+      spec:
+        accessModes:
+          - {{ .Values.persistence.accessMode }}
+        {{- if .Values.persistence.storageClass }}
+        storageClassName: {{ .Values.persistence.storageClass | quote }}
+        {{- end }}
+        resources:
+          requests:
+            storage: {{ .Values.persistence.size }}
+  {{- end }}

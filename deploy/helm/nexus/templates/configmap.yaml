@@ -1,0 +1,12 @@
+{{- if .Values.server.configYaml -}}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "nexus.configMapName" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "nexus.labels" . | nindent 4 }}
+data:
+  config.yml: |
+{{ .Values.server.configYaml | indent 4 }}
+{{- end -}}
