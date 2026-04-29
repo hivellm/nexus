@@ -83,12 +83,19 @@ pub mod aes_gcm;
 pub mod encrypted_file;
 pub mod kdf;
 pub mod key_provider;
+pub mod rotation;
 
 pub use aes_gcm::{
     AeadError, NONCE_LEN, PageCipher, PageNonce, TAG_LEN, decrypt_page, encrypt_page,
 };
-pub use encrypted_file::{EncryptedPageStream, FileId, PageBuffer, PageHeader, PageStreamError};
+pub use encrypted_file::{
+    EncryptedPageStream, FileId, KeySource, PageBuffer, PageHeader, PageStreamError,
+};
 pub use kdf::{DatabaseKey, KdfError, MasterKey, derive_database_key};
 pub use key_provider::{
     EnvKeyProvider, FileKeyProvider, KeyProvider, KeyProviderError, MASTER_KEY_LEN,
+};
+pub use rotation::{
+    InMemoryPageStore, PageRef, PageStore, RotationCheckpoint, RotationError, RotationRunner,
+    RotationRunnerConfig, RotationStats,
 };

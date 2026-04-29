@@ -47,7 +47,9 @@ const HEADER_MAGIC: u32 = 0x4E58_4350; // "NXCP" — Nexus Crypto Page
 /// would bump the [`super::kdf::KDF_DOMAIN_TAG`] constant rather
 /// than mutate these.
 #[repr(u16)]
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, serde::Serialize, serde::Deserialize,
+)]
 pub enum FileId {
     /// LMDB catalog (label / type / key mappings).
     Catalog = 1,
@@ -155,6 +157,20 @@ pub enum PageStreamError {
     PayloadTooLarge { actual: usize, capacity: usize },
 }
 
+/// Which cipher decrypted a page — primary (current epoch) or
+/// secondary (rotation source). Used by the rotation runner to
+/// decide whether a page still needs to be re-encrypted.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum KeySource {
+    /// The page was decrypted under the current-epoch key.
+    Primary,
+    /// The page was decrypted under the previous-epoch key
+    /// (set via [`EncryptedPageStream::install_secondary`]).
+    /// The rotation runner must re-encrypt this page under the
+    /// primary before the next checkpoint.
+    Secondary,
+}
+
 /// One-page output buffer: header || ciphertext || tag. Helper
 /// type to keep the call sites readable.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -179,21 +195,53 @@ pub const MAX_PAGE_PAYLOAD: usize = PAGE_SIZE - PAGE_HEADER_LEN - TAG_LEN;
 /// counter map keyed by `(file_id, page_offset)`. A storage hook
 /// constructs one stream per active database key and threads it
 /// through every page write; reads do not touch the counter.
+///
+/// During an online key rotation, the stream may hold an optional
+/// **secondary** cipher — the previous epoch's per-database key.
+/// Writes always use the primary; reads probe the primary first and
+/// fall back to the secondary on `ERR_BAD_KEY`. Once the rotation
+/// runner finishes re-encrypting every page under the primary, the
+/// caller calls [`EncryptedPageStream::clear_secondary`] to drop
+/// the old key out of memory.
 pub struct EncryptedPageStream {
-    cipher: PageCipher,
+    primary: PageCipher,
+    secondary: parking_lot::RwLock<Option<PageCipher>>,
     generations: Mutex<HashMap<(FileId, u64), u32>>,
 }
 
 impl EncryptedPageStream {
     /// Build a stream from a per-database key. The cipher is
-    /// owned for the lifetime of the stream; rotating the key
-    /// requires building a fresh stream.
+    /// owned for the lifetime of the stream; rotating the key uses
+    /// [`EncryptedPageStream::install_secondary`] to keep the old
+    /// key available for reads while the runner re-encrypts.
     #[must_use]
     pub fn new(cipher: PageCipher) -> Self {
         Self {
-            cipher,
+            primary: cipher,
+            secondary: parking_lot::RwLock::new(None),
             generations: Mutex::new(HashMap::new()),
         }
+    }
+
+    /// Install the **previous** (rotation-source) cipher as the
+    /// secondary read-fallback key. Pass the cipher built from the
+    /// old per-database key (e.g. `derive_database_key(master, db,
+    /// epoch_old)`) before bumping the primary to the new epoch's
+    /// key. This call replaces any existing secondary.
+    pub fn install_secondary(&self, secondary: PageCipher) {
+        *self.secondary.write() = Some(secondary);
+    }
+
+    /// Drop the secondary cipher. Called by the rotation runner once
+    /// every page has been re-encrypted under the primary; after
+    /// this point the old key is gone from memory.
+    pub fn clear_secondary(&self) {
+        *self.secondary.write() = None;
+    }
+
+    /// True when a rotation is in progress (secondary key installed).
+    pub fn has_secondary(&self) -> bool {
+        self.secondary.read().is_some()
     }
 
     /// Encrypt one page. Increments the generation counter for the
@@ -234,7 +282,10 @@ impl EncryptedPageStream {
 
         // The header is bound into the AEAD as AAD so an adversary
         // who swaps the on-disk header is detected at decrypt time.
-        let ct = encrypt_page(&self.cipher, nonce, plaintext, &header_bytes)?;
+        // Writes always use the primary key — the secondary exists
+        // only to decrypt pages that the rotation runner has not yet
+        // touched.
+        let ct = encrypt_page(&self.primary, nonce, plaintext, &header_bytes)?;
 
         // Output layout: header || ciphertext-with-tag.
         let mut out = Vec::with_capacity(PAGE_HEADER_LEN + ct.len());
@@ -246,6 +297,12 @@ impl EncryptedPageStream {
     /// Decrypt one page. The generation is read from the on-disk
     /// header; the caller's known `page_offset` plus the encoded
     /// `file_id` reconstruct the AEAD nonce.
+    ///
+    /// During a rotation, the read path probes the primary cipher
+    /// first; on `ERR_BAD_KEY` (which happens on every page that
+    /// the runner has not yet re-encrypted), it falls back to the
+    /// secondary. If both fail, surfaces the primary's error so
+    /// downstream callers see the post-rotation key.
     pub fn decrypt(&self, page_offset: u64, page: &[u8]) -> Result<Vec<u8>, PageStreamError> {
         if page.len() < PAGE_HEADER_LEN + TAG_LEN {
             return Err(PageStreamError::BadHeader);
@@ -256,8 +313,53 @@ impl EncryptedPageStream {
         let header = PageHeader::from_bytes(&header_bytes).ok_or(PageStreamError::BadHeader)?;
         let ciphertext = &page[PAGE_HEADER_LEN..];
         let nonce = PageNonce::new(header.file_id.as_u16(), page_offset, header.generation);
-        let pt = decrypt_page(&self.cipher, nonce, ciphertext, &header_bytes)?;
-        Ok(pt)
+
+        match decrypt_page(&self.primary, nonce, ciphertext, &header_bytes) {
+            Ok(pt) => Ok(pt),
+            Err(primary_err) => {
+                // During a rotation the secondary holds the previous
+                // epoch's key. Probe it before surfacing the failure.
+                let secondary_guard = self.secondary.read();
+                if let Some(ref secondary) = *secondary_guard
+                    && let Ok(pt) = decrypt_page(secondary, nonce, ciphertext, &header_bytes)
+                {
+                    return Ok(pt);
+                }
+                Err(primary_err.into())
+            }
+        }
+    }
+
+    /// Same as [`Self::decrypt`] but reports which cipher actually
+    /// validated the page. Used by the rotation runner to detect
+    /// pages that still need re-encryption.
+    pub fn decrypt_with_source(
+        &self,
+        page_offset: u64,
+        page: &[u8],
+    ) -> Result<(Vec<u8>, KeySource), PageStreamError> {
+        if page.len() < PAGE_HEADER_LEN + TAG_LEN {
+            return Err(PageStreamError::BadHeader);
+        }
+        let header_bytes: [u8; PAGE_HEADER_LEN] = page[..PAGE_HEADER_LEN]
+            .try_into()
+            .expect("len already checked");
+        let header = PageHeader::from_bytes(&header_bytes).ok_or(PageStreamError::BadHeader)?;
+        let ciphertext = &page[PAGE_HEADER_LEN..];
+        let nonce = PageNonce::new(header.file_id.as_u16(), page_offset, header.generation);
+
+        match decrypt_page(&self.primary, nonce, ciphertext, &header_bytes) {
+            Ok(pt) => Ok((pt, KeySource::Primary)),
+            Err(primary_err) => {
+                let secondary_guard = self.secondary.read();
+                if let Some(ref secondary) = *secondary_guard
+                    && let Ok(pt) = decrypt_page(secondary, nonce, ciphertext, &header_bytes)
+                {
+                    return Ok((pt, KeySource::Secondary));
+                }
+                Err(primary_err.into())
+            }
+        }
     }
 
     /// Snapshot of the generation map. Test-only.

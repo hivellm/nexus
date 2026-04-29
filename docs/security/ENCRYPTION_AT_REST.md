@@ -160,20 +160,49 @@ Properties of the derivation:
 * Rotatable — bumping `epoch` derives an independent key without
   disturbing other databases.
 
-### Online key rotation (follow-up)
+### Online key rotation
 
-Tracked under `phase8_encryption-at-rest-rotation`. The contract:
+Shipped under `phase8_encryption-at-rest-rotation` in
+[`crates/nexus-core/src/storage/crypto/rotation.rs`](../../crates/nexus-core/src/storage/crypto/rotation.rs).
+Contract:
 
-1. Operator increments the rotation epoch via the CLI.
-2. The runner derives the new per-database key, holds both the
-   old and new keys in memory.
-3. Each page is re-encrypted in the background, lowest-offset
-   first; reads probe new key first then old key on `ERR_BAD_KEY`.
-4. Once every page is re-encrypted, the old key drops out of
-   memory.
+1. Operator derives the new per-database key
+   (`derive_database_key(master, db, new_epoch)`).
+2. [`EncryptedPageStream::install_secondary`](../../crates/nexus-core/src/storage/crypto/encrypted_file.rs)
+   installs the **previous** epoch's cipher as the read-fallback
+   key.
+3. The stream's primary cipher is rebuilt under the new epoch's
+   key.
+4. [`RotationRunner::run`](../../crates/nexus-core/src/storage/crypto/rotation.rs)
+   walks every page in `(file_id, page_offset)` ascending order via
+   the [`PageStore`] trait, decrypts under whichever key works,
+   and re-encrypts under the primary if the source was the
+   secondary. Idempotent on already-primary pages.
+5. Once the runner returns, the operator calls
+   [`EncryptedPageStream::clear_secondary`] to drop the old key
+   out of memory.
 
-The two-key window is bounded by the slowest re-encrypt pass on
-disk; for a 1 TB database on NVMe expect minutes.
+Read traffic during the window pays one extra failed AEAD probe
+per page that has not yet been rotated; cost is bounded by the
+runner's progress. Writes always use the primary regardless.
+
+The runner reports progress through a [`RotationCheckpoint`]
+(serde-serialisable so the operator can persist it across
+restarts) and accepts a resume cursor — recovery is "load the
+last checkpoint, call `RotationRunner::run(checkpoint)`, runner
+skips every page ≤ the cursor".
+
+Throttling: `RotationRunnerConfig::byte_budget_per_second`
+(default 64 MiB/s) caps the re-encryption rate so live read /
+write traffic is never starved.
+
+The `PageStore` trait is the seam the runner walks; the
+in-memory implementation is shipped today, and the storage-hooks
+follow-up wires the LMDB catalog + record stores + WAL + indexes
+through their own `PageStore` impls.
+
+Two-key window is bounded by the slowest re-encrypt pass on
+disk; for a 1 TB database on NVMe at 64 MiB/s expect ~4.5 hours.
 
 ## Activation
 
@@ -228,7 +257,7 @@ storage-hook follow-up.
 | `phase8_encryption-at-rest-wal` | follow-up | WAL append + replay through the page stream. |
 | `phase8_encryption-at-rest-indexes` | follow-up | B-tree, full-text, KNN, R-tree. |
 | `phase8_encryption-at-rest-kms` | follow-up | AWS KMS, GCP KMS, Vault adapters. |
-| `phase8_encryption-at-rest-rotation` | follow-up | Online key rotation with two-key window. |
+| `phase8_encryption-at-rest-rotation` | **shipped** | Online key rotation with two-key window. `EncryptedPageStream::install_secondary` + `RotationRunner` + `PageStore` trait + checkpoint + throttle. 9 unit tests. |
 | `phase8_encryption-at-rest-cli` | follow-up | `nexus admin encrypt-database` / `rotate-key`. |
 
 ## Cross-references

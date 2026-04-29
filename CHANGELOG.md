@@ -15,6 +15,47 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > SDK versions all read 1.15.0. The release branch retains its
 > original `release/v1.2.0` name to keep upstream PR refs stable.
 
+### Added — `phase8_encryption-at-rest-rotation`
+
+- **Online key rotation** built on top of the encryption-at-rest
+  cryptographic core. NIST SP 800-57 recommends rotating
+  data-encryption keys at most annually; this commit ships the
+  runner that does it without downtime.
+- `EncryptedPageStream` extended with an optional **secondary**
+  cipher: `install_secondary` / `clear_secondary` / `has_secondary`.
+  The read path probes primary first, falls back to secondary on
+  `ERR_BAD_KEY`, surfaces the primary's error if both fail. The
+  write path always uses the primary so new pages are immediately
+  consistent with the post-rotation state.
+- New `KeySource` enum + `decrypt_with_source` so the runner can
+  tell whether a page was decrypted under the primary (no-op) or
+  the secondary (must re-encrypt).
+- `PageStore` trait — the storage-layer seam the runner walks.
+  `InMemoryPageStore` ships today; storage-hook follow-ups
+  (`-storage-hooks`, `-wal`, `-indexes`) provide concrete impls.
+- `RotationRunner` orchestrator: ascending `(file_id, page_offset)`
+  sweep, idempotent on already-primary pages, throttled by a
+  configurable `byte_budget_per_second` (default 64 MiB/s),
+  cancellable via an `Arc<AtomicBool>`, resumable from a
+  serde-serialisable `RotationCheckpoint`.
+- `RotationStats`: `pages_total`, `pages_rotated`,
+  `pages_already_primary`, `bytes_rotated` — ready to export to
+  Prometheus when the metrics layer wires up.
+- 9 new unit tests cover: read-path fallback to secondary,
+  read-path-without-secondary fails loudly, runner rejects
+  no-secondary state, runner rotates every page to primary,
+  runner skips already-primary pages, runner resumes from
+  checkpoint, runner honours cancel flag, write during rotation
+  uses primary (post-clear read still works), cleared-secondary
+  can be reinstalled (chained rotations).
+- `FileId` enum gained `Serialize`/`Deserialize` + `Ord` so
+  `PageRef` round-trips cleanly through the checkpoint.
+- Doc: [`docs/security/ENCRYPTION_AT_REST.md`](docs/security/ENCRYPTION_AT_REST.md)
+  § "Online key rotation" rewritten from follow-up placeholder
+  to the live spec.
+- Quality gates: 45/45 `storage::crypto::*` tests green; clippy
+  clean.
+
 ### Added — `phase8_encryption-at-rest` (cryptographic core)
 
 - **Encryption-at-rest cryptographic foundation.** SOC2 / FedRAMP
