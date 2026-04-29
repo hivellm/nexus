@@ -875,6 +875,28 @@ impl Executor {
                 } => {
                     self.execute_spatial_seek(&mut context, index_id, variable, mode)?;
                 }
+                Operator::EnsureNullRowIfEmpty { vars } => {
+                    // phase8_optional-match-empty-driver: if the
+                    // pipeline produced zero rows for a top-level
+                    // OPTIONAL MATCH, emit one row with the
+                    // listed vars bound to NULL so downstream
+                    // Project / OptionalFilter / aggregations see
+                    // the Neo4j-shape "OPTIONAL = always at least
+                    // one row" contract.
+                    if context.result_set.rows.is_empty() && results.is_empty() {
+                        for v in vars {
+                            context.set_variable(v, serde_json::Value::Null);
+                        }
+                        context
+                            .result_set
+                            .rows
+                            .push(crate::executor::types::Row { values: Vec::new() });
+                        tracing::debug!(
+                            "EnsureNullRowIfEmpty (mod): emitted NULL fallback row for vars {:?}",
+                            vars
+                        );
+                    }
+                }
             }
         }
 

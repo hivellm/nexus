@@ -478,6 +478,39 @@ OPTIONAL MATCH (n)-[:KNOWS]->(friend)
 RETURN n, friend
 ```
 
+#### Standalone OPTIONAL MATCH semantics (phase8_optional-match-empty-driver)
+
+When `OPTIONAL MATCH` is the **first** clause of a query and no
+prior driver (`UNWIND`, prior `MATCH`, etc.) has fed the pipeline,
+the OPTIONAL contract demands one row with the optional variables
+bound to `NULL` even when the scan produces no matches. Concrete
+shapes:
+
+```cypher
+-- Empty label scan — returns one row with n = null
+OPTIONAL MATCH (n:NonExistentLabel) RETURN n;
+
+-- Property access on the null binding — returns one row, name = null
+OPTIONAL MATCH (n:NonExistentLabel) RETURN n.name AS name;
+
+-- Aggregation — returns one row, c = 0
+OPTIONAL MATCH (n:NonExistentLabel) RETURN count(n) AS c;
+```
+
+When OPTIONAL MATCH follows a prior MATCH that itself produced
+zero rows, the OPTIONAL does NOT re-introduce wrapped-NULL rows
+— the prior MATCH already eliminated everything:
+
+```cypher
+-- Person is empty; both clauses produce zero rows total
+MATCH (a:Person) OPTIONAL MATCH (a)-[:KNOWS]->(b) RETURN a, b;
+```
+
+Implementation: the planner injects an `EnsureNullRowIfEmpty`
+operator after the first OPTIONAL pattern's scan when no prior
+driver exists. The operator is a no-op when the scan produced
+rows.
+
 ### UNWIND Clause
 
 ```cypher

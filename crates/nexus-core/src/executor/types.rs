@@ -206,6 +206,28 @@ pub enum Operator {
         /// Join condition
         condition: Option<String>,
     },
+    /// Ensure the result set has at least one row, padding optional
+    /// variables with NULL when the upstream pipeline yielded
+    /// nothing.
+    ///
+    /// Inserted by the planner when the **first** clause of a query
+    /// is `OPTIONAL MATCH` and no prior driver (UNWIND, MATCH) feeds
+    /// the pipeline. OPTIONAL MATCH against an empty label scan
+    /// must return one row with the optional variables bound to
+    /// NULL (Neo4j contract); without this operator the planner's
+    /// `NodeByLabel + Project` pipeline returns zero rows.
+    ///
+    /// No-op when the result set is non-empty — i.e. the OPTIONAL
+    /// scan actually matched something. Idempotent on repeated
+    /// invocation.
+    ///
+    /// Wired in `phase8_optional-match-empty-driver`.
+    EnsureNullRowIfEmpty {
+        /// Optional variables to bind to NULL when emitting the
+        /// fallback row. Order does not matter — the executor
+        /// indexes by name.
+        vars: Vec<String>,
+    },
     /// Create nodes and relationships from pattern
     Create {
         /// Pattern to create

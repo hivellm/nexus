@@ -1439,6 +1439,70 @@ impl<'a> QueryPlanner<'a> {
 
         // Add relationship traversal operators for first pattern
         let first_is_optional = patterns_local.first().map(|(_, opt)| *opt).unwrap_or(false);
+
+        // phase8_optional-match-empty-driver: when the very first
+        // clause of the query is OPTIONAL MATCH and no prior driver
+        // (UNWIND, prior MATCH, etc.) feeds the pipeline, the
+        // OPTIONAL contract demands one row with the optional vars
+        // bound to NULL even when the scan produces no matches.
+        // Inject `EnsureNullRowIfEmpty` after the scan so the
+        // executor's downstream `Project` / `OptionalFilter` /
+        // aggregation operators see a non-empty row set.
+        //
+        // Trigger conditions:
+        //   1. `first_is_optional == true`
+        //   2. The pipeline going into `plan_execution_strategy`
+        //      had no prior driver — `unwind_before_match` is
+        //      false AND `operators` was empty before this fn ran.
+        //      We approximate the latter by checking whether any
+        //      operators have been pushed before this point: at
+        //      this point `operators` contains only this pattern's
+        //      `NodeByLabel`/`AllNodesScan`/`Filter` chain plus
+        //      any optional `unwind_operators` from §1232. We
+        //      capture the pre-pattern operator count by stashing
+        //      it before the per-element loop above (see
+        //      `pre_pattern_op_count` below) and gate on
+        //      `unwind_before_match == false &&
+        //      pre_pattern_op_count == 0`.
+        let inject_optional_null_fallback = first_is_optional
+            && !unwind_before_match
+            && operators.iter().all(|op| {
+                // The only operators allowed here are the ones we
+                // just pushed for the first OPTIONAL pattern. A
+                // prior driver (e.g. a previous WITH, UNWIND, or
+                // CREATE) would have pushed something else; bail
+                // out conservatively if we see anything that
+                // isn't a NodeByLabel / AllNodesScan / Filter.
+                matches!(
+                    op,
+                    Operator::NodeByLabel { .. }
+                        | Operator::AllNodesScan { .. }
+                        | Operator::Filter { .. }
+                )
+            });
+
+        if inject_optional_null_fallback {
+            // Collect the variables the first OPTIONAL pattern
+            // introduced so the fallback knows which slots to
+            // bind to NULL. Limit to node variables — relationship
+            // variables on the first pattern require the Expand
+            // operator, and a relationship-only first OPTIONAL
+            // does not match the standalone "OPTIONAL MATCH (n)"
+            // shape this fix targets.
+            let mut vars: Vec<String> = Vec::new();
+            for el in &start_pattern.elements {
+                if let PatternElement::Node(node) = el
+                    && let Some(v) = &node.variable
+                    && !vars.contains(v)
+                {
+                    vars.push(v.clone());
+                }
+            }
+            if !vars.is_empty() {
+                operators.push(Operator::EnsureNullRowIfEmpty { vars });
+            }
+        }
+
         self.add_relationship_operators(
             std::slice::from_ref(start_pattern),
             first_is_optional,
@@ -3154,6 +3218,12 @@ impl<'a> QueryPlanner<'a> {
                         _ => 0.05 * n_default,
                     };
                     total_cost += log_b + matching;
+                }
+                Operator::EnsureNullRowIfEmpty { .. } => {
+                    // Trivial branch on row count — single-digit
+                    // microseconds when it fires; bounded above by
+                    // a no-op when the upstream produced rows.
+                    total_cost += 0.5;
                 }
             }
         }

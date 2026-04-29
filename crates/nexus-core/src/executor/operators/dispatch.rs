@@ -158,6 +158,35 @@ impl Executor {
             } => {
                 self.execute_union(context, left, right, *distinct)?;
             }
+            Operator::EnsureNullRowIfEmpty { vars } => {
+                // phase8_optional-match-empty-driver: a top-level
+                // OPTIONAL MATCH against an empty driver must
+                // surface ONE row with the optional vars bound to
+                // NULL (Neo4j contract). The planner inserts this
+                // operator after the first OPTIONAL pattern's
+                // operators when no prior driver exists.
+                if context.result_set.rows.is_empty() {
+                    for v in vars {
+                        // Bind the variable to NULL in the
+                        // execution context so subsequent operators
+                        // (Project, Filter on optional vars,
+                        // count(...)) see a NULL value rather than
+                        // a missing variable.
+                        context.set_variable(v, Value::Null);
+                    }
+                    // Emit a single empty-shaped row. Project /
+                    // OptionalFilter downstream rebuild the
+                    // visible columns from the variables map.
+                    context
+                        .result_set
+                        .rows
+                        .push(crate::executor::types::Row { values: Vec::new() });
+                    tracing::debug!(
+                        "EnsureNullRowIfEmpty: emitted NULL fallback row for vars {:?}",
+                        vars
+                    );
+                }
+            }
             Operator::Create { pattern } => {
                 // phase6_opencypher-subquery-transactions — CREATE
                 // reachable through the dispatch path comes from

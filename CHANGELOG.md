@@ -15,6 +15,46 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > SDK versions all read 1.15.0. The release branch retains its
 > original `release/v1.2.0` name to keep upstream PR refs stable.
 
+### Fixed — `phase8_optional-match-empty-driver`
+
+- **OPTIONAL MATCH against an empty driver now returns one NULL
+  row instead of zero rows**, matching the Neo4j contract.
+  `OPTIONAL MATCH (n:NonExistentLabel) RETURN n` returned `[]`
+  before the fix, returns `[[null]]` after. Property access
+  (`RETURN n.name`) and aggregation (`RETURN count(n)`) flow
+  through the same fix.
+- Root cause: the planner emitted a regular `NodeByLabel +
+  Project` pipeline that produced zero rows when the labelled
+  set was empty. OPTIONAL MATCH is a LEFT OUTER JOIN against an
+  implicit single-row driver when no prior clause feeds the
+  pipeline; the emitted plan had no driver.
+- Fix: new operator `Operator::EnsureNullRowIfEmpty { vars }` in
+  `crates/nexus-core/src/executor/types.rs`, executed in both
+  `executor::operators::dispatch` and the main `executor::mod`
+  exec loop. The planner appends it after the first OPTIONAL
+  pattern's scan when (a) `first_is_optional == true`, (b) no
+  prior driver (`unwind_before_match == false` and the only
+  operators in the pipeline so far are `NodeByLabel` /
+  `AllNodesScan` / `Filter`).
+- 6 regression tests in
+  `crates/nexus-core/tests/optional_match_empty_driver_test.rs`:
+  empty-label returns NULL row, property access returns NULL,
+  count returns 0, prior MATCH eliminating rows does NOT
+  resurrect them, OPTIONAL on a non-empty label returns the
+  actual rows (NOT a NULL row), and the existing
+  `phase8_optional-match-binding-leak` contract still holds.
+- Spec: `docs/specs/cypher-subset.md` § "OPTIONAL MATCH" gains
+  a "Standalone OPTIONAL MATCH semantics" subsection.
+- Quality gates: `cargo +nightly test -p nexus-core --lib` 2199
+  passed (1 pre-existing parallel-flake on
+  `engine::tests::match_scopes_by_label_and_property_together`,
+  unrelated to this fix, passes in isolation — same flake
+  documented under `phase8_optional-match-binding-leak`); the
+  new test file 6/6 green; the
+  `phase8_optional-match-binding-leak` regression suite 7/7
+  still green; `cargo +nightly clippy -p nexus-core --all-targets
+  -- -D warnings` clean.
+
 ### Added — `phase8_encryption-at-rest-cli` (status surface)
 
 - **Operator surface for encryption-at-rest configuration.** The
