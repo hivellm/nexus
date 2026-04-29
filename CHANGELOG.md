@@ -15,6 +15,54 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > SDK versions all read 1.15.0. The release branch retains its
 > original `release/v1.2.0` name to keep upstream PR refs stable.
 
+### Added — `phase8_cross-shard-2pc`
+
+- **V2 cluster mode now supports atomic multi-shard writes.** Before
+  phase 8, the coordinator's scatter path `fail-atomics` any
+  mutation whose write set spanned more than one shard. The
+  remaining gate for advertising V2 as production-grade
+  multi-shard cluster mode (every other engine in this space —
+  Memgraph HA, ArangoDB cluster, Dgraph, NebulaGraph — supports
+  multi-shard writes).
+- **Pessimistic ordered locking, not 2PC.** ADR-009 documents
+  the choice: pessimistic locking has zero coordinator-state
+  recovery story (leases time out on the shard side if the
+  coordinator dies), Havender total-order deadlock prevention
+  (no cycle is possible), and forward-compatible API for a
+  future full-2PC swap. Tracked under
+  `phase9_full-2pc-cross-shard`.
+- New module
+  `crates/nexus-core/src/coordinator/multi_shard_tx.rs` (~700
+  LOC): `TxId` + `TxIdAllocator`, `WriteSet` (BTreeSet over
+  shards iterated in ascending order), `ShardLockManager` trait
+  + in-memory test impl with chaos hooks
+  (`inject_partition`, `inject_failure`, `force_release`),
+  `ShardMutator` trait, `MultiShardTx` orchestrator
+  (`acquire-in-order` → `mutate` → `release-in-reverse-order`,
+  with a deterministic abort path that rolls back every
+  previously-mutated shard).
+- Failure surface: `ERR_LOCK_BUSY`, `ERR_LOCK_TIMEOUT`,
+  `ERR_PARTITION`, `ERR_SHARD_FAILURE`, `ERR_SHARD_MUTATION`,
+  `ERR_ROLLBACK_FAILED`, `ERR_TX_TIMEOUT`,
+  `ERR_EMPTY_WRITE_SET`. Each maps to a specific recovery
+  procedure documented in
+  `docs/specs/cluster-transactions.md`.
+- Metrics counters surfaced for Prometheus:
+  `nexus_cluster_multi_shard_writes_total`,
+  `_writes_aborted_total`, `_lock_acquire_total`,
+  `_lock_timeout_total`. Recommended dashboards (abort ratio,
+  lease wait time, per-shard fairness) documented in the spec.
+- 11 unit tests pin every chaos case: leader churn mid-write,
+  partition mid-acquisition, busy-shard timeout, 64 concurrent
+  writers on overlapping shard sets (no deadlock), shard outage
+  mid-commit (atomic rollback in reverse order),
+  rollback-itself-fails (state preserved, root cause not
+  masked).
+- New spec: [`docs/specs/cluster-transactions.md`](docs/specs/cluster-transactions.md).
+- Updated guide: [`docs/guides/DISTRIBUTED_DEPLOYMENT.md`](docs/guides/DISTRIBUTED_DEPLOYMENT.md).
+- Quality gates: workspace tests `2154 passed; 0 failed` (11 new);
+  `cargo clippy -p nexus-core --all-targets` clean.
+
 ### Documentation — `phase7_kuzu-migration-guide`
 
 - **New migration guide for displaced KuzuDB users.** Kùzu Inc.

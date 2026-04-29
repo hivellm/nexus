@@ -30,6 +30,7 @@
 pub mod classify;
 pub mod cross_shard;
 pub mod merge;
+pub mod multi_shard_tx;
 pub mod plan;
 pub mod scatter;
 pub mod tcp_client;
@@ -40,6 +41,10 @@ pub use cross_shard::{
     RemoteNodeView, fetch_cached,
 };
 pub use merge::{AggregationMerge, MergeError, MergeOp, OrderDir, SortKey};
+pub use multi_shard_tx::{
+    InMemoryShardLockManager, LockError, MultiShardTx, MultiShardTxConfig, MultiShardTxError,
+    MultiShardTxMetrics, ShardLockManager, ShardMutator, TxId, TxIdAllocator, WriteSet,
+};
 pub use plan::{DecomposedPlan, DistributedPlan, Row};
 pub use scatter::{
     CoordinatorError, InMemoryShardClient, ScatterGather, ScatterGatherConfig, ShardClient,

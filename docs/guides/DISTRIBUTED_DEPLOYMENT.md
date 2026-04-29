@@ -61,6 +61,30 @@ with a fresh snapshot.
 Single-writer invariant stays true per shard: **only the Raft apply
 loop writes to the storage layer**. No path bypasses Raft.
 
+### Multi-shard write path (phase 8)
+
+If the planner produces a write set spanning more than one shard,
+the coordinator routes through the multi-shard transaction
+orchestrator
+([`multi_shard_tx`](../../crates/nexus-core/src/coordinator/multi_shard_tx.rs)):
+
+1. Build [`WriteSet`](../../crates/nexus-core/src/coordinator/multi_shard_tx.rs)
+   from the planner's per-shard subplans.
+2. Acquire a write lease on each shard in **ascending `shard_id`
+   order** (Havender deadlock prevention).
+3. Execute the per-shard mutation against each acquired lease in
+   the same order.
+4. On success: release leases in reverse order. On any per-shard
+   error: roll back every previously-mutated shard, release every
+   lease.
+
+Defaults: `tx_timeout = 5 s`, `lock_acquire_timeout = 500 ms`,
+`leader_retries = 3`. See
+[`docs/specs/cluster-transactions.md`](../specs/cluster-transactions.md)
+for the full atomicity + deadlock-prevention contract,
+observability counters, and forward-compatibility story with full
+2PC.
+
 ## Configuration
 
 `[cluster.sharding]` in the server TOML config:
@@ -286,8 +310,11 @@ files are unchanged.
 ## Out of scope for V2
 
 * Online re-sharding (changing `num_shards` at runtime)
-* Cross-shard ACID transactions (2PC)
 * Geo-distribution / multi-region latency optimizations
 * Read-replica shards with bounded staleness
+* Full Paxos-style cross-shard 2PC (phase 8 ships pessimistic
+  ordered locking; full 2PC is tracked under
+  `phase9_full-2pc-cross-shard` if pessimistic-locking
+  throughput becomes a contention bottleneck)
 
 These are tracked as V2.1 / V3 roadmap items.
