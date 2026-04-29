@@ -15,6 +15,69 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > SDK versions all read 1.15.0. The release branch retains its
 > original `release/v1.2.0` name to keep upstream PR refs stable.
 
+### Added — `phase8_encryption-at-rest` (cryptographic core)
+
+- **Encryption-at-rest cryptographic foundation.** SOC2 / FedRAMP
+  / HIPAA / PCI-DSS gate. Neo4j Enterprise, Aura, ArangoDB
+  Enterprise, Memgraph Enterprise all ship this; Nexus's previous
+  posture ("rely on disk-level encryption") was disqualifying for
+  any regulated customer.
+- New module `crates/nexus-core/src/storage/crypto/`:
+  - `key_provider.rs` — `KeyProvider` trait, `EnvKeyProvider`
+    (reads `NEXUS_DATA_KEY` once at construction), `FileKeyProvider`
+    (0600-perm-checked on Unix, ACL-deferred on Windows). Master
+    key sources accept either 32 raw bytes or 64-char hex.
+  - `kdf.rs` — HKDF-SHA-256 per-database key derivation (RFC 5869).
+    Domain-separated via `nexus-encryption-at-rest-v1` tag;
+    rotatable per database via an `epoch` parameter.
+  - `aes_gcm.rs` — AES-256-GCM page cipher with deterministic
+    `(file_id, page_offset, generation)` 96-bit nonce. The
+    generation counter is non-negotiable — AES-GCM is
+    catastrophically broken under nonce reuse.
+  - `encrypted_file.rs` — `EncryptedPageStream` is the seam
+    storage hooks plug into. 8 KiB pages with a 16-byte
+    plaintext header (magic + file_id + generation) bound into
+    the AEAD as AAD so an adversary swapping the on-disk header
+    is detected at decrypt time.
+- Every secret wrapped in `zeroize::Zeroizing` so it gets wiped on
+  drop.
+- Failure surface: `ERR_BAD_KEY` (vague on purpose to avoid a
+  CCA-2 oracle), `ERR_KEY_NOT_FOUND`, `ERR_KEY_BAD_FORMAT`,
+  `ERR_KEY_IO`, `ERR_KEY_HEX`, `ERR_KDF_BAD_LENGTH`,
+  `ERR_KDF_EMPTY_DATABASE`, `ERR_PAGE_HEADER`,
+  `ERR_PAGE_TOO_LARGE`, `ERR_AEAD_EMPTY`.
+- 36 unit tests cover: nonce layout (round-trip, 48-bit truncation,
+  endianness), AEAD round-trip, wrong-key / wrong-database-key /
+  AAD-mismatch / nonce-mismatch / tampered-ciphertext / empty-input
+  rejection, no-plaintext-leak invariant, distinct-nonces-produce-
+  distinct-ciphertexts, HKDF determinism + per-name + per-epoch +
+  per-master independence, page-stream generation advancement,
+  on-disk header parsing + invalid-magic / unknown-file-id
+  rejection, header-swap detection at decrypt, key-rotation-via-
+  fresh-stream invalidates old pages, env-var hex parsing,
+  file-key newline stripping, missing-file IO error.
+- New doc:
+  [`docs/security/ENCRYPTION_AT_REST.md`](docs/security/ENCRYPTION_AT_REST.md) —
+  threat model, architecture, cryptographic choices, key-management
+  recipes, performance expectations, operational checklist.
+  [`AUTHENTICATION.md`](docs/security/AUTHENTICATION.md) cross-
+  links the new doc.
+- **Storage-layer wiring is intentionally NOT in this commit.**
+  Wiring the page stream into LMDB catalog, record stores, WAL,
+  and indexes is invasive; each module has its own invariants
+  that need a per-module review. Tracked under
+  `phase8_encryption-at-rest-storage-hooks`,
+  `-wal`, `-indexes`, `-kms`, `-rotation`, and `-cli`. The
+  contracts in this commit are stable and the follow-ups consume
+  them without changing any public API.
+- Workspace deps added: `aes-gcm = "0.10"`, `hkdf = "0.12"`,
+  `sha2_010` (sha2 0.10 alias to satisfy hkdf's digest 0.10
+  bound; coexists with the existing `sha2 = "0.11"` already in
+  nexus-core), `zeroize = "1.8"`.
+- Quality gates: `cargo +nightly test -p nexus-core --lib
+  storage::crypto::` 36/36 green; `cargo +nightly clippy
+  -p nexus-core --all-targets -- -D warnings` clean.
+
 ### Added — `phase8_cross-shard-2pc`
 
 - **V2 cluster mode now supports atomic multi-shard writes.** Before

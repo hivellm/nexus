@@ -2,6 +2,13 @@
 
 This guide covers authentication and authorization features in Nexus Graph Database, including root user setup, user management, API keys, JWT tokens, permissions, rate limiting, and audit logging.
 
+> **Encryption at rest** is documented separately in
+> [`ENCRYPTION_AT_REST.md`](./ENCRYPTION_AT_REST.md). The two
+> features protect different threats: authentication keeps
+> unauthorised callers out of a *running* server; encryption at
+> rest keeps a stolen disk / cold-snapshot leak from revealing
+> data. Production deployments should enable both.
+
 ## Table of Contents
 
 1. [Overview](#overview)

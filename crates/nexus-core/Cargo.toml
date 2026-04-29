@@ -82,6 +82,13 @@ argon2 = "0.5"  # Still used for API keys
 sha2 = "0.11"
 hex = "0.4"
 base64 = "0.22"
+
+# Encryption-at-rest (phase8_encryption-at-rest). Self-contained
+# foundation; storage-layer wiring follows in a separate phase.
+aes-gcm.workspace = true
+hkdf.workspace = true
+sha2_010.workspace = true
+zeroize.workspace = true
 # jsonwebtoken 10 dropped the bundled crypto backend and requires an
 # explicit `rust_crypto` or `aws_lc_rs` feature — absent one, every
 # `encode` / `decode` call panics with

@@ -84,6 +84,18 @@ chrono = { version = "0.4", features = ["serde"] }
 tempfile = "3.8"
 rand = "0.8"
 
+# Cryptography (encryption-at-rest, phase8_encryption-at-rest).
+# `aes-gcm` is the AEAD; `hkdf` derives per-database keys from the
+# master key. `zeroize` wipes secret material on drop. `sha2` here
+# is pinned to 0.10 for `hkdf` (0.12) compatibility — distinct from
+# the `sha2 = "0.11"` nexus-core already pulls in for argon2 / API
+# keys; Cargo resolves both copies side-by-side under the
+# `sha2_010` rename in the consumer.
+aes-gcm = { version = "0.10", default-features = false, features = ["aes", "alloc"] }
+hkdf = "0.12"
+sha2_010 = { package = "sha2", version = "0.10", default-features = false }
+zeroize = { version = "1.8", features = ["zeroize_derive"] }
+
 [profile.release]
 opt-level = 3
 lto = "thin"

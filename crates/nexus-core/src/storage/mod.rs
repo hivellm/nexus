@@ -18,6 +18,7 @@ use tempfile;
 use tracing;
 
 pub mod adjacency_list;
+pub mod crypto;
 pub mod graph_engine;
 pub mod property_store;
 pub mod row_lock;
