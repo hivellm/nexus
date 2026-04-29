@@ -4,12 +4,14 @@
 //!   pattern reordering, join algorithm choice, index push-down).
 //! - `tests` — cfg(test) harness.
 
+pub mod cache;
 pub mod preparse;
 pub mod queries;
 
 #[cfg(test)]
 mod tests;
 
+pub use cache::{CANONICAL_VERSION, canonicalise_query, hash_canonicalised};
 pub use preparse::{PlanHint, extract_plan_hints};
 
 use super::parser::{

@@ -240,14 +240,16 @@ impl QueryOptimizer {
         Ok(result)
     }
 
-    /// Hash a query for caching purposes
+    /// Hash a query for caching purposes.
+    ///
+    /// Routes through `executor::planner::cache::hash_canonicalised`
+    /// (phase8_query-plan-cache canonicaliser) so two queries that
+    /// differ only in whitespace, comments, or trailing punctuation
+    /// hit the same cache entry. Without canonicalisation the cache
+    /// missed every templated query whose insignificant characters
+    /// differed across requests.
     fn hash_query(&self, query: &Query) -> String {
-        use std::collections::hash_map::DefaultHasher;
-        use std::hash::{Hash, Hasher};
-
-        let mut hasher = DefaultHasher::new();
-        query.cypher.hash(&mut hasher);
-        hasher.finish().to_string()
+        crate::executor::planner::cache::hash_canonicalised(&query.cypher).to_string()
     }
 
     /// Clear the plan cache

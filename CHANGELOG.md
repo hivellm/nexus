@@ -15,6 +15,54 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > SDK versions all read 1.15.0. The release branch retains its
 > original `release/v1.2.0` name to keep upstream PR refs stable.
 
+### Added — `phase8_query-plan-cache` (canonicaliser slice)
+
+- **Cypher canonicaliser landed at
+  `crates/nexus-core/src/executor/planner/cache.rs`** — turns a
+  query string into a cache-key-friendly form before hashing.
+- Strips line comments (`// ...`), block comments
+  (`/* ... */`, non-nested), collapses every run of ASCII
+  whitespace to a single space, trims leading + trailing
+  whitespace. **Does not touch string literals**: `'a  b'`
+  keeps its inner whitespace; `// inside a string` is not
+  treated as a comment marker.
+- Does **not** lower-case keywords (Cypher is case-sensitive on
+  identifiers; lower-casing would alias property names like
+  `match` with the keyword) and does **not** normalise
+  parameter placeholders (`$x` and `$y` participate in binding
+  scope and produce different plans).
+- `canonicalise_query(&str) -> Cow<'_, str>` — `Cow::Borrowed`
+  on already-canonical input (zero-allocation cache hit path),
+  owned `String` otherwise.
+- `hash_canonicalised(&str) -> u64` — xxh3 over the canonical
+  form + a `CANONICAL_VERSION = 1` stamp so a future shape
+  change forces a clean cache invalidation.
+- `executor::optimizer::QueryOptimizer::hash_query` now routes
+  through the canonicaliser. Two queries that differ only in
+  whitespace or comments now hit the same plan-cache entry,
+  closing the cache-miss path that templated workloads tripped
+  on every request.
+- 21 unit tests cover empty input, already-canonical
+  borrow-not-clone path, whitespace + tab + newline collapse,
+  leading/trailing trim, line-comment + block-comment
+  stripping, unterminated block comment to EOF, single +
+  double + escaped string-literal preservation, comment-inside-
+  string-literal preservation, multiple back-to-back comments,
+  keyword-case preservation, parameter-name distinction,
+  hash stability + collapse + distinction invariants.
+- The remaining `phase8_query-plan-cache` items (lookup at
+  `Engine::execute`, schema-change invalidation,
+  `db.planCache.*` procedures, env vars, `/stats` counters,
+  Prometheus metrics, hot-endpoint bench) consume the
+  canonicaliser without changing it; tracked under the same
+  task for follow-up sessions.
+- Quality gates: `cargo +nightly test -p nexus-core --lib`
+  2232 passed (same pre-existing parallel-flake on
+  `engine::tests::match_scopes_by_label_and_property_together`
+  noted under `phase8_optional-match-binding-leak`); `cargo
+  +nightly clippy -p nexus-core --all-targets -- -D warnings`
+  clean.
+
 ### Added — `phase8_encryption-at-rest-indexes` (R-tree shipped)
 
 - **R-tree spatial index gains an encrypted page-store**, the
