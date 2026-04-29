@@ -258,12 +258,93 @@ storage refactor that retargets writes to the page-cache backing.
 
 ```
 crates/nexus-core/src/index/rtree/
-├── mod.rs       — module constants + re-exports
-├── page.rs      — page codec (encode/decode/PageDecodeError)
-├── hilbert.rs   — Hilbert curve + stable sort helpers
-├── packer.rs    — bottom-up bulk-load
-├── tree.rs      — mutable in-memory R-tree (insert/delete/query_bbox)
-├── search.rs    — k-NN priority-queue walk + within-distance
-├── store.rs     — PageStore trait + Memory + File impls
-└── registry.rs  — RTreeRegistry: WAL replay + atomic swap
+├── mod.rs              — module constants + re-exports
+├── page.rs             — page codec (encode/decode/PageDecodeError)
+├── hilbert.rs          — Hilbert curve + stable sort helpers
+├── packer.rs           — bottom-up bulk-load
+├── tree.rs             — mutable in-memory R-tree
+├── search.rs           — k-NN priority-queue walk + within-distance
+├── store.rs            — PageStore trait + Memory + File impls
+├── encrypted_store.rs  — EncryptedFilePageStore (encryption at rest)
+└── registry.rs         — RTreeRegistry: WAL replay + atomic swap
 ```
+
+## Encrypted page-store (phase8_encryption-at-rest-indexes)
+
+`EncryptedFilePageStore`
+([`crates/nexus-core/src/index/rtree/encrypted_store.rs`](../../crates/nexus-core/src/index/rtree/encrypted_store.rs))
+is a `PageStore` implementation that lives parallel to
+`FilePageStore` and adds AES-256-GCM encryption per page. The
+R-tree itself is unchanged — flipping encryption on for a
+deployment is a one-line constructor swap at the call site.
+
+### On-disk slot layout
+
+Each logical page lives in an `ENCRYPTED_RTREE_SLOT_SIZE = 8224`
+byte slot at `(page_id - 1) * 8224`:
+
+```
+  [0..16]      page header (plaintext)
+                 [0..4]   magic "NXRT" (0x4E58_5254)
+                 [4..6]   file_id = FileId::RTreeIndex (10)
+                 [6..10]  generation counter (u32, LE)
+                 [10..16] reserved (zero)
+  [16..8208]   ciphertext of the 8 KB R-tree page
+  [8208..8224] AEAD authentication tag (16 bytes)
+```
+
+The header is bound into the AEAD as additional authenticated
+data so an adversary swapping the on-disk header (different
+generation, different page id) is detected at decrypt time.
+
+### Nonce derivation
+
+Each `(page_id, write)` event produces a unique 96-bit AES-GCM
+nonce:
+
+```
+  bytes [0..2]   = file_id      (16 bits, big-endian)
+  bytes [2..8]   = page_offset  (low 48 bits of the slot offset)
+  bytes [8..12]  = generation   (32 bits, monotonic per page)
+```
+
+The generation counter bumps on every overwrite of the same
+page. AES-GCM is catastrophically broken under nonce reuse with
+the same key; the counter is non-negotiable.
+
+### Crash consistency
+
+Same as `FilePageStore`: the live-set sidecar (`<path>.live`)
+records every page id committed via `flush()`. Reopening loads
+the live set; pages whose slot exists on disk but whose id is
+not in the live set are treated as absent (NotFound).
+
+### Performance
+
+One AEAD pass per page read / write. AES-NI runs at 3-5 GB/s per
+core; per-page overhead is ~2-3 µs amortised over the 8 KB slot
+size — well below the page-cache miss + disk seek cost it sits
+behind.
+
+### Wiring
+
+Constructor swap:
+
+```rust
+use nexus_core::index::rtree::EncryptedFilePageStore;
+use nexus_core::storage::crypto::{
+    PageCipher, derive_database_key, MasterKey,
+};
+
+let master = MasterKey::new(/* 32 bytes from KeyProvider */);
+let key = derive_database_key(&master, "default", /* epoch */ 0)?;
+let store = EncryptedFilePageStore::open(
+    "/var/lib/nexus/rtree.dat",
+    PageCipher::new(&key),
+)?;
+```
+
+The B-tree, Tantivy, and HNSW indexes adopt the same pattern as
+their on-disk formats / IO seams land — see
+[`docs/security/ENCRYPTION_AT_REST.md`](../security/ENCRYPTION_AT_REST.md)
+for the per-index status table.

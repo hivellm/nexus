@@ -255,7 +255,7 @@ storage-hook follow-up.
 | `phase8_encryption-at-rest` | **shipped** | Crypto core: `KeyProvider`, KDF, AES-GCM page cipher, `EncryptedPageStream`. 36 unit tests. |
 | `phase8_encryption-at-rest-storage-hooks` | follow-up | Wire the page stream into LMDB catalog + record stores + page cache. |
 | `phase8_encryption-at-rest-wal` | follow-up | WAL append + replay through the page stream. |
-| `phase8_encryption-at-rest-indexes` | follow-up | B-tree, full-text, KNN, R-tree. |
+| `phase8_encryption-at-rest-indexes` | **partial** | R-tree shipped via [`EncryptedFilePageStore`](../../crates/nexus-core/src/index/rtree/encrypted_store.rs) (12 unit tests; parallel to the unencrypted `FilePageStore`; slot 8224 B). B-tree is in-memory today (no on-disk format to encrypt); Tantivy needs a custom `Directory` adapter; HNSW (`hnsw_rs`) lacks a streaming-IO seam. The R-tree pattern is the template the others adopt as their IO seams land. |
 | `phase8_encryption-at-rest-kms` | follow-up | AWS KMS, GCP KMS, Vault adapters. |
 | `phase8_encryption-at-rest-rotation` | **shipped** | Online key rotation with two-key window. `EncryptedPageStream::install_secondary` + `RotationRunner` + `PageStore` trait + checkpoint + throttle. 9 unit tests. |
 | `phase8_encryption-at-rest-cli` | follow-up | `nexus admin encrypt-database` / `rotate-key`. |

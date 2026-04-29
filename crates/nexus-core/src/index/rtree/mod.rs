@@ -22,6 +22,7 @@
 //! load primitive. The remaining slices land in follow-up commits
 //! against this same module tree.
 
+pub mod encrypted_store;
 pub mod hilbert;
 pub mod packer;
 pub mod page;
@@ -30,6 +31,9 @@ pub mod search;
 pub mod store;
 pub mod tree;
 
+pub use encrypted_store::{
+    ENCRYPTED_RTREE_HEADER_LEN, ENCRYPTED_RTREE_SLOT_SIZE, EncryptedFilePageStore,
+};
 pub use hilbert::{hilbert_index_2d, hilbert_index_3d};
 pub use packer::{PACK_TARGET_FANOUT, PackedTree, bounding_box, bulk_pack};
 pub use page::{ChildRef, PageDecodeError, RTreePageHeader, decode_page, encode_page};

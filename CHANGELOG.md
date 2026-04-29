@@ -15,6 +15,50 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > SDK versions all read 1.15.0. The release branch retains its
 > original `release/v1.2.0` name to keep upstream PR refs stable.
 
+### Added — `phase8_encryption-at-rest-indexes` (R-tree shipped)
+
+- **R-tree spatial index gains an encrypted page-store**, the
+  first index family to wire encryption-at-rest end-to-end.
+- New module `crates/nexus-core/src/index/rtree/encrypted_store.rs`:
+  `EncryptedFilePageStore` lives parallel to `FilePageStore` and
+  drops into every R-tree call site through the existing
+  `PageStore` trait — no R-tree internals needed modification.
+- On-disk slot layout: `ENCRYPTED_RTREE_SLOT_SIZE = 8224 bytes`
+  per logical 8 KB R-tree page, laid out as
+  `[16 B header][8192 B ciphertext][16 B AEAD tag]`. Header
+  carries magic `NXRT` (`0x4E58_5254`), `FileId::RTreeIndex`,
+  and a per-page `u32` generation counter; bound into the AEAD
+  as AAD so adversarial header swaps fail at decrypt.
+- Per-page nonce derives from `(FileId::RTreeIndex,
+  page_offset, generation)`. Generation bumps on every
+  overwrite, structurally preventing AES-GCM nonce reuse
+  (catastrophic with the same key).
+- Crash consistency mirrors `FilePageStore`: live-set sidecar
+  (`<path>.live`), `flush()` syncs both the data file and the
+  sidecar, reopening picks up every page that was committed.
+- 12 unit tests cover round-trip on a full 8192-byte page,
+  distinct pages get distinct slots, overwrite advances
+  generation, wrong-key surfaces a clean IO error, tampered
+  ciphertext is rejected, header swap is detected at decrypt,
+  restart recovers the live set + decrypts every page, delete +
+  re-read produces NotFound, page-id-zero rejected on every
+  method, wrong-size writes rejected, empty-store invariants,
+  on-disk slot layout matches the documented contract.
+- Spec: `docs/specs/rtree-index.md` gains an "Encrypted
+  page-store" section documenting the slot layout, nonce
+  derivation, performance overhead (~2-3 µs per page on
+  AES-NI), and the constructor-swap wiring recipe.
+- B-tree, full-text, and KNN remain follow-ups: the B-tree is
+  in-memory today (no on-disk format to encrypt yet); Tantivy
+  needs a custom `tantivy::Directory` adapter; `hnsw_rs` lacks
+  a streaming-IO seam. The R-tree pattern is the template the
+  three adopt as their IO seams land. Status documented in
+  `docs/security/ENCRYPTION_AT_REST.md` follow-up table;
+  `-indexes` now reads **partial**.
+- Quality gates: `cargo +nightly test -p nexus-core --lib
+  index::rtree::encrypted_store::` 12/12 green; `cargo +nightly
+  clippy -p nexus-core --all-targets -- -D warnings` clean.
+
 ### Fixed — `phase8_optional-match-empty-driver`
 
 - **OPTIONAL MATCH against an empty driver now returns one NULL
