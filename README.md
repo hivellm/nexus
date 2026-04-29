@@ -493,6 +493,10 @@ ORDER BY confidence DESC
 - [`deploy/docker-compose/`](deploy/docker-compose/README.md) — single-node, master-replica, and v2-cluster Compose stacks.
 - [`docs/operations/KUBERNETES.md`](docs/operations/KUBERNETES.md) — install, upgrade, scaling, TLS, observability, backups.
 
+### Migration
+- [`docs/migration/FROM_KUZU.md`](docs/migration/FROM_KUZU.md) — **migrating from KuzuDB** (archived 2025-10-10). Schema mapping, Cypher dialect deltas, vector + FTS port, embedded-mode replacement, three end-to-end cookbooks.
+- [`scripts/migration/`](scripts/migration/README.md) — Kùzu CSV → Nexus bulk RPC ingester + Cypher dialect translator.
+
 ## 🗺️ Roadmap
 
 ### 1.15.0 — current (2026-04-28)

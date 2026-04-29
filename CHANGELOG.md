@@ -15,6 +15,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > SDK versions all read 1.15.0. The release branch retains its
 > original `release/v1.2.0` name to keep upstream PR refs stable.
 
+### Documentation — `phase7_kuzu-migration-guide`
+
+- **New migration guide for displaced KuzuDB users.** Kùzu Inc.
+  archived its repository on 2025-10-10. `docs/migration/FROM_KUZU.md`
+  covers schema mapping (Kùzu node/rel tables → Nexus labels/types),
+  Cypher dialect deltas (`[*SHORTEST n..m]`, `CREATE_HNSW_INDEX`,
+  `CREATE_FTS_INDEX`, `QUERY_VECTOR_INDEX`, `QUERY_FTS_INDEX`),
+  vector + FTS index migration with the cosine score sign-flip
+  flagged, embedded-mode → RPC story, and a full gotchas section.
+- `scripts/migration/from_kuzu.py` ships three subcommands:
+  `load-csv` (emit a `LOAD CSV WITH HEADERS` driver per table),
+  `bulk-rpc` (stream into a running Nexus via the Python SDK's
+  batch helpers), and `rewrite-cypher` (regex translator for the
+  dialect deltas, with `-- TRANSLATOR-NOTE:` comments on every
+  rewrite so the operator can review).
+- Three before/after cookbooks under `scripts/migration/cookbook/`:
+  `graphrag/` (vector + traversal-augmented retrieval),
+  `recommendation/` (co-purchase shortest-path + cosine-similarity
+  fusion), `knowledge-graph/` (hybrid graph + vector + FTS).
+- 19 unit tests in `tests/migration/test_from_kuzu.py` cover the
+  spec parsers, Cypher emitters, CSV streamers, dialect
+  translator, and CLI subcommands. All green.
+
 ### Fixed — `phase8_optional-match-binding-leak`
 
 - **HIGH-severity correctness bug fixed.** OPTIONAL MATCH against
