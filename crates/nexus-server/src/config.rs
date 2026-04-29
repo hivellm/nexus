@@ -33,6 +33,54 @@ pub struct Config {
     /// request is scoped to the tenant namespace derived from its API
     /// key's `user_id`. See `nexus_core::cluster::ClusterConfig`.
     pub cluster: nexus_core::cluster::ClusterConfig,
+    /// Encryption-at-rest configuration. The full stack is gated
+    /// behind `enabled = true` AND a valid [`KeyProvider`] resolved
+    /// at boot; storage-layer wiring lands in
+    /// `phase8_encryption-at-rest-storage-hooks` and friends. The
+    /// CLI surface ships now so operators can validate their key
+    /// configuration before the storage hooks land.
+    ///
+    /// [`KeyProvider`]: nexus_core::storage::crypto::KeyProvider
+    pub encryption: EncryptionConfig,
+}
+
+/// Encryption-at-rest configuration. Resolved from
+/// `NEXUS_ENCRYPT_AT_REST` + `NEXUS_DATA_KEY` / `NEXUS_KEY_FILE` at
+/// server boot.
+#[derive(Debug, Clone, Default)]
+pub struct EncryptionConfig {
+    /// Master switch. `false` keeps the storage layer in plaintext
+    /// (the pre-phase-8 behaviour); `true` requires a valid
+    /// [`KeyProvider`] source to be configured. Storage hooks gate
+    /// on this flag once they land.
+    ///
+    /// [`KeyProvider`]: nexus_core::storage::crypto::KeyProvider
+    pub enabled: bool,
+    /// Where the master key is sourced from. `None` when
+    /// `enabled = false` or when boot resolution failed and the
+    /// server intentionally started without a key (we never silently
+    /// fall through — a hard fail is the default).
+    pub source: Option<EncryptionSource>,
+    /// SHA-256 fingerprint of the resolved master key (32 bytes,
+    /// hex-encoded). Safe to log; safe to ship over the
+    /// `/admin/encryption/status` endpoint. Lets operators verify
+    /// two servers are using the same key without exposing the key
+    /// itself.
+    pub fingerprint: Option<String>,
+}
+
+/// Tag identifying which [`KeyProvider`] backed the resolved master
+/// key. Wider than `KeyProviderError` because the operator might
+/// want to know *which* env var or *which* path was used.
+///
+/// [`KeyProvider`]: nexus_core::storage::crypto::KeyProvider
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum EncryptionSource {
+    /// Master key sourced from an environment variable.
+    Env { name: String },
+    /// Master key sourced from a file on disk.
+    File { path: String },
 }
 
 /// Configuration for the optional RESP3 TCP listener. Disabled or enabled
@@ -196,6 +244,154 @@ impl Default for Config {
             resp3: Resp3Config::default(),
             rpc: RpcConfig::default(),
             cluster: nexus_core::cluster::ClusterConfig::default(),
+            encryption: EncryptionConfig::default(),
+        }
+    }
+}
+
+/// Resolve the master key from the configured source and compute a
+/// SHA-256 fingerprint. The fingerprint is safe to log — it's a
+/// hash of the key, not the key itself; two servers booting with
+/// the same master will report the same fingerprint, two servers
+/// with different masters will report different ones.
+///
+/// Returns `Ok(None)` when `enabled = false` (no key resolution
+/// attempted) and `Err` when resolution itself failed (bad path,
+/// wrong format, missing env var). The server's boot path treats
+/// the latter as fatal — silently falling through would let an
+/// operator who *thought* they had encryption running ship to
+/// production without it.
+pub fn resolve_encryption_config() -> anyhow::Result<EncryptionConfig> {
+    let enabled = std::env::var("NEXUS_ENCRYPT_AT_REST")
+        .map(|v| matches!(v.as_str(), "1" | "true" | "TRUE" | "yes"))
+        .unwrap_or(false);
+    if !enabled {
+        return Ok(EncryptionConfig::default());
+    }
+
+    use nexus_core::storage::crypto::{
+        EnvKeyProvider, FileKeyProvider, KeyProvider, MASTER_KEY_LEN,
+    };
+
+    let (source, key) = if let Ok(path) = std::env::var("NEXUS_KEY_FILE") {
+        let p = FileKeyProvider::from_path(&path)
+            .map_err(|e| anyhow::anyhow!("failed to load NEXUS_KEY_FILE={path}: {e}"))?;
+        let k = p
+            .master_key()
+            .map_err(|e| anyhow::anyhow!("failed to read master key from {path}: {e}"))?;
+        (EncryptionSource::File { path: path.clone() }, *k)
+    } else {
+        let p = EnvKeyProvider::from_default_env()
+            .map_err(|e| anyhow::anyhow!("failed to load NEXUS_DATA_KEY env var: {e}"))?;
+        let k = p
+            .master_key()
+            .map_err(|e| anyhow::anyhow!("failed to read NEXUS_DATA_KEY: {e}"))?;
+        (
+            EncryptionSource::Env {
+                name: "NEXUS_DATA_KEY".to_string(),
+            },
+            *k,
+        )
+    };
+    debug_assert_eq!(key.len(), MASTER_KEY_LEN);
+
+    Ok(EncryptionConfig {
+        enabled: true,
+        source: Some(source),
+        fingerprint: Some(fingerprint_master_key(&key)),
+    })
+}
+
+/// SHA-256 fingerprint of the master key — first 16 hex digits of
+/// the digest, prefixed with `nexus:` for log readability. Short
+/// enough to fit in a log line, long enough that birthday-collisions
+/// against a hostile observer are negligible (`2^32` keys).
+pub fn fingerprint_master_key(key: &[u8]) -> String {
+    use sha2::{Digest, Sha256};
+    let mut hasher = Sha256::new();
+    hasher.update(b"nexus-master-key-fingerprint-v1");
+    hasher.update(key);
+    let digest = hasher.finalize();
+    let mut out = String::with_capacity(22);
+    out.push_str("nexus:");
+    for byte in &digest[..8] {
+        use std::fmt::Write as _;
+        let _ = write!(out, "{byte:02x}");
+    }
+    out
+}
+
+#[cfg(test)]
+mod encryption_tests {
+    use super::*;
+
+    #[test]
+    fn fingerprint_is_stable_for_the_same_key() {
+        let k = [0x42u8; 32];
+        let a = fingerprint_master_key(&k);
+        let b = fingerprint_master_key(&k);
+        assert_eq!(a, b);
+        assert!(a.starts_with("nexus:"));
+        assert_eq!(a.len(), "nexus:".len() + 16);
+    }
+
+    #[test]
+    fn fingerprint_changes_with_the_key() {
+        let a = fingerprint_master_key(&[0u8; 32]);
+        let b = fingerprint_master_key(&[1u8; 32]);
+        assert_ne!(a, b);
+    }
+
+    #[test]
+    fn fingerprint_does_not_leak_key_bytes() {
+        let k = [0xAAu8; 32];
+        let fp = fingerprint_master_key(&k);
+        // Naive check: the literal hex of the key must not appear
+        // in the fingerprint output.
+        assert!(!fp.contains("aaaaaa"), "fingerprint leaked key bytes");
+    }
+
+    #[test]
+    fn resolve_disabled_returns_default() {
+        // Use a unique env var so parallel tests don't collide.
+        unsafe { std::env::remove_var("NEXUS_ENCRYPT_AT_REST") };
+        let cfg = resolve_encryption_config().expect("resolve");
+        assert!(!cfg.enabled);
+        assert!(cfg.source.is_none());
+        assert!(cfg.fingerprint.is_none());
+    }
+
+    #[test]
+    fn resolve_with_env_key_records_source_and_fingerprint() {
+        unsafe { std::env::set_var("NEXUS_ENCRYPT_AT_REST", "true") };
+        unsafe { std::env::set_var("NEXUS_DATA_KEY", "a".repeat(64)) };
+        unsafe { std::env::remove_var("NEXUS_KEY_FILE") };
+        let cfg = resolve_encryption_config().expect("resolve");
+        assert!(cfg.enabled);
+        assert_eq!(
+            cfg.source,
+            Some(EncryptionSource::Env {
+                name: "NEXUS_DATA_KEY".into()
+            })
+        );
+        assert!(cfg.fingerprint.unwrap().starts_with("nexus:"));
+        unsafe {
+            std::env::remove_var("NEXUS_ENCRYPT_AT_REST");
+            std::env::remove_var("NEXUS_DATA_KEY");
+        }
+    }
+
+    #[test]
+    fn resolve_rejects_bad_key_format() {
+        unsafe { std::env::set_var("NEXUS_ENCRYPT_AT_REST", "true") };
+        // 8-byte key — invalid; expect 32 raw or 64 hex.
+        unsafe { std::env::set_var("NEXUS_DATA_KEY", "shortkey") };
+        unsafe { std::env::remove_var("NEXUS_KEY_FILE") };
+        let err = resolve_encryption_config().unwrap_err();
+        assert!(err.to_string().contains("NEXUS_DATA_KEY"));
+        unsafe {
+            std::env::remove_var("NEXUS_ENCRYPT_AT_REST");
+            std::env::remove_var("NEXUS_DATA_KEY");
         }
     }
 }
@@ -468,6 +664,16 @@ impl Config {
             } else {
                 nexus_core::cluster::ClusterConfig::default()
             },
+            // Encryption-at-rest. Resolved separately so a bad key
+            // surfaces as a hard fail at boot (`expect`) rather than
+            // silently disabling encryption — an operator who set
+            // NEXUS_ENCRYPT_AT_REST=true and got a typo'd key file
+            // path must NOT see the server start in plaintext mode.
+            encryption: resolve_encryption_config().expect(
+                "ERR_ENCRYPTION_BOOT: failed to resolve master key — \
+                 set NEXUS_ENCRYPT_AT_REST=false to start in plaintext, \
+                 or fix NEXUS_DATA_KEY / NEXUS_KEY_FILE",
+            ),
         }
     }
 

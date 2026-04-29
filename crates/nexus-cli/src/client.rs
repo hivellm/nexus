@@ -187,6 +187,25 @@ impl NexusClient {
         self.endpoint.to_string()
     }
 
+    /// Issue a `GET <http_base><path>` and parse the JSON response.
+    /// Surfaces an explicit error on non-2xx so callers don't have
+    /// to remember to check the status code. Used by handlers that
+    /// hit pure-HTTP endpoints (`/admin/encryption/status`,
+    /// `/admin/*` debugging surfaces) without a dedicated RPC verb.
+    pub async fn get_json<T: serde::de::DeserializeOwned>(&self, path: &str) -> anyhow::Result<T> {
+        let resp = self
+            .build_request(reqwest::Method::GET, path)
+            .send()
+            .await?;
+        let status = resp.status();
+        if !status.is_success() {
+            let body = resp.text().await.unwrap_or_default();
+            anyhow::bail!("HTTP {status} on {path}: {body}");
+        }
+        let parsed: T = resp.json().await?;
+        Ok(parsed)
+    }
+
     fn build_request(&self, method: reqwest::Method, path: &str) -> reqwest::RequestBuilder {
         let url = format!("{}{}", self.http_base, path);
         let mut req = self.http.request(method, &url);

@@ -235,8 +235,10 @@ async fn async_main(_worker_threads: usize) -> anyhow::Result<()> {
     // `hub_client` is consumed below by the Hub auth middleware
     // wiring (§2). §3-§7 wire on top of the same handle.
 
-    // Create Nexus server state
-    let nexus_server = Arc::new(NexusServer::new(
+    // Create Nexus server state. Construct mutably so we can stash
+    // boot-resolved config (encryption-at-rest fingerprint) before
+    // sharing the handle as `Arc`.
+    let mut nexus_server_owned = NexusServer::new(
         executor.clone(),
         engine_arc,
         database_manager_arc,
@@ -245,7 +247,18 @@ async fn async_main(_worker_threads: usize) -> anyhow::Result<()> {
         jwt_manager.clone(),
         audit_logger.clone(),
         config.root_user.clone(),
-    ));
+    );
+    nexus_server_owned.set_encryption_config(config.encryption.clone());
+    if config.encryption.enabled {
+        if let Some(fp) = config.encryption.fingerprint.as_deref() {
+            info!(
+                fingerprint = fp,
+                source = ?config.encryption.source,
+                "encryption-at-rest: master key resolved"
+            );
+        }
+    }
+    let nexus_server = Arc::new(nexus_server_owned);
 
     // Start expired API keys cleanup job (runs every hour)
     // Only start if authentication is enabled
@@ -385,6 +398,15 @@ async fn async_main(_worker_threads: usize) -> anyhow::Result<()> {
             Json(serde_json::json!({"message": "Debug endpoint received", "body": body}))
         }))
         .route("/cypher", post(api::cypher::execute_cypher))
+        // Encryption-at-rest status: read-only, reports the
+        // boot-time KeyProvider source + master-key fingerprint.
+        // Storage-layer wiring lands in follow-up tasks
+        // (-storage-hooks, -wal, -indexes); the endpoint surface
+        // is stable from day one.
+        .route(
+            "/admin/encryption/status",
+            get(api::encryption::status),
+        )
         .route("/test-handler", get(|| async {
             tracing::debug!("Handler called!");
             "Handler called successfully"

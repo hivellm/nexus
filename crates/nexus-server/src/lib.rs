@@ -126,6 +126,14 @@ pub struct NexusServer {
     /// unbounded Cypher through a single keep-alive connection and
     /// wedge the engine.
     pub admission: Arc<crate::middleware::AdmissionQueue>,
+
+    /// Encryption-at-rest configuration as resolved at boot —
+    /// provider source + key fingerprint, never the key bytes
+    /// themselves. Surfaced via the `/admin/encryption/status`
+    /// endpoint so operators can verify two replicas are using
+    /// the same master key without leaking it. Standalone
+    /// deployments leave this at the default (`enabled = false`).
+    pub encryption_config: crate::config::EncryptionConfig,
 }
 
 impl NexusServer {
@@ -231,7 +239,20 @@ impl NexusServer {
             admission: Arc::new(crate::middleware::AdmissionQueue::new(
                 crate::middleware::AdmissionConfig::from_env(),
             )),
+            // Default-disabled — main.rs overrides via
+            // `set_encryption_config` after parsing the runtime
+            // Config. Tests can leave this at the default.
+            encryption_config: crate::config::EncryptionConfig::default(),
         }
+    }
+
+    /// Install the encryption-at-rest configuration resolved at
+    /// boot. Called from `main.rs` after `Config::from_env`. The
+    /// status endpoint reads from this field; nothing in the
+    /// engine path consumes it yet (the storage hooks land in a
+    /// separate follow-up).
+    pub fn set_encryption_config(&mut self, cfg: crate::config::EncryptionConfig) {
+        self.encryption_config = cfg;
     }
 
     /// Install (or clear) the V2 cluster controller. Called from the

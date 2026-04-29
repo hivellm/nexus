@@ -15,6 +15,57 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > SDK versions all read 1.15.0. The release branch retains its
 > original `release/v1.2.0` name to keep upstream PR refs stable.
 
+### Added — `phase8_encryption-at-rest-cli` (status surface)
+
+- **Operator surface for encryption-at-rest configuration.** The
+  cryptographic core + rotation runner already shipped; this commit
+  ships the boot-resolution + status endpoint + CLI subcommand so
+  operators can verify their key configuration without waiting on
+  the storage-hook follow-ups.
+- New `EncryptionConfig` struct in `crates/nexus-server/src/config.rs`
+  with `enabled`, `source` (env / file), and `fingerprint` fields.
+  Resolved at server boot via the new `resolve_encryption_config()`
+  helper: parses `NEXUS_ENCRYPT_AT_REST=true`, picks `NEXUS_KEY_FILE`
+  over `NEXUS_DATA_KEY`, instantiates the matching `KeyProvider`,
+  validates the master key, computes a SHA-256-derived fingerprint
+  (`nexus:` + first 16 hex digits of the digest — safe to log).
+- `Config::from_env()` now invokes the resolver and panics with
+  `ERR_ENCRYPTION_BOOT` on a malformed / missing key. An operator
+  who set `NEXUS_ENCRYPT_AT_REST=true` and got a typo'd key path
+  must NEVER see the server start in plaintext mode.
+- `NexusServer` carries a new `encryption_config` field; `main.rs`
+  populates it before wrapping the handle in `Arc` and logs the
+  fingerprint at boot when encryption is enabled.
+- New API endpoint `GET /admin/encryption/status` returning a
+  versioned `EncryptionStatusReport`: `enabled`, `source`,
+  `fingerprint`, `storage_surfaces` (empty today; populated by the
+  storage-hook follow-ups), `schema_version: 1`. Optional fields
+  use `skip_serializing_if` so the JSON shape stays clean for the
+  default-disabled case.
+- `nexus admin encryption status` CLI subcommand calls the new
+  endpoint via the new `NexusClient::get_json` helper. Supports
+  `--json` output. Pretty-prints the source / fingerprint or a
+  hint about how to enable encryption when disabled.
+- 10 new tests cover: fingerprint determinism + per-key
+  independence + no-key-byte leak; env-var resolution disabled
+  case; env-var resolution with a hex key (records source +
+  fingerprint); bad-format rejection; status-handler JSON shape +
+  field names + `skip_serializing_if` behaviour. Tests use a
+  shared `Mutex` to serialise env-var mutation against the
+  process-wide global.
+- `docs/security/ENCRYPTION_AT_REST.md` § "Activation" rewritten
+  with the live recipe + fingerprint explainer; follow-up table
+  marks `-cli` as **partial**.
+- `crates/nexus-server` gained a `sha2 = "0.10"` dep (paired with
+  the workspace `hkdf 0.12` digest 0.10 ecosystem; coexists with
+  nexus-core's `sha2 = "0.11"` for argon2/API keys).
+- Migration / rotation / mixed-mode-rejection subcommands stay
+  carved to `phase8_encryption-at-rest-storage-hooks`; the CLI
+  must not expose actions the engine cannot yet honour.
+- Quality gates: `cargo +nightly test -p nexus-server --lib encryption`
+  10/10 green; `cargo +nightly clippy -p nexus-server -p nexus-cli
+  --all-targets -- -D warnings` clean.
+
 ### Added — `phase8_encryption-at-rest-rotation`
 
 - **Online key rotation** built on top of the encryption-at-rest

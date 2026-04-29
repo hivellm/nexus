@@ -57,6 +57,11 @@ rmp-serde.workspace = true
 chrono.workspace = true
 uuid = { version = "1.10", features = ["v4", "serde"] }
 argon2 = "0.5"
+# Master-key fingerprint for `/admin/encryption/status`
+# (phase8_encryption-at-rest-cli). Pinned to 0.10 to share the
+# digest 0.10 ecosystem with `hkdf` (the EaR KDF). Coexists with
+# nexus-core's `sha2 = "0.11"` (auth path) — Cargo resolves both.
+sha2 = "0.10"
 
 # HiveHub.Cloud integration (phase5_hub-integration §1)
 hivehub-internal-sdk = "1.0.0"

@@ -14,6 +14,7 @@ pub mod cypher_test;
 pub mod data;
 pub mod database;
 pub mod debug;
+pub mod encryption;
 pub mod export;
 pub mod graph_correlation;
 #[cfg(test)]
