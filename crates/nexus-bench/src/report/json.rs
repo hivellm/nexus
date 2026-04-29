@@ -48,7 +48,7 @@ impl JsonReport {
     }
 }
 
-fn iso8601_now() -> String {
+pub(crate) fn iso8601_now() -> String {
     use std::time::{SystemTime, UNIX_EPOCH};
     let d = SystemTime::now()
         .duration_since(UNIX_EPOCH)

@@ -4,6 +4,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::harness::ScenarioResult;
 
+pub mod concurrent_report;
 pub mod json;
 pub mod markdown;
 

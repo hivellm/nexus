@@ -154,6 +154,8 @@ Nexus native RPC vs Neo4j Bolt, both in Docker, shared tiny dataset (100 nodes /
 
 Top wins: `aggregation.avg_score_a` 12.5× · `aggregation.count_all` 11.1× · `ecosystem.call_in_transactions` 10.0× · `aggregation.stdev_score` 9.1× · `aggregation.min_max_score` 8.3×. Closest margin still Nexus-ahead: `traversal.two_hop_chain` 1.8×. Full report at [`target/bench/report.md`](target/bench/report.md) after running [`crates/nexus-bench/README.md`](crates/nexus-bench/README.md).
 
+> The 74-test cross-bench numbers under [`docs/performance/BENCHMARK_NEXUS_VS_NEO4J.md`](docs/performance/BENCHMARK_NEXUS_VS_NEO4J.md) (the older Dec-2025 record) are flagged stale and pending re-run on v1.15.0+; reproduction recipe + concurrent-load matrix scaffold ships with [`scripts/benchmarks/run-vs-neo4j.sh`](scripts/benchmarks/run-vs-neo4j.sh).
+
 ### Security + Ops
 - **API keys + JWT + RBAC** with rate limiting (1k/min, 10k/hour default).
 - **Audit logging** — fail-open with `nexus_audit_log_failures_total` metric; never converts IO pressure into mass 500s. Rationale: [`docs/security/SECURITY_AUDIT.md §5`](docs/security/SECURITY_AUDIT.md).

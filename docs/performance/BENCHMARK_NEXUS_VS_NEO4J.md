@@ -1,7 +1,25 @@
 # Nexus vs Neo4j Performance Benchmark Report
 
-**Date**: December 1, 2025
-**Nexus Version**: 0.12.0
+> ⚠️ **Stale numbers warning** (recorded 2026-04-29).
+>
+> The headline tables in this document — "Nexus 4.15× avg, 42.74×
+> max vs Neo4j" — were captured **2025-12-01 against Nexus v0.12.0**,
+> *before* the phase-9 fix that lifted mixed-read throughput from
+> 162 → 603.91 qps (3.7×) and the global-executor-lock work
+> documented in [`PERFORMANCE_ANALYSIS.md`](./PERFORMANCE_ANALYSIS.md).
+> The numbers below are kept for historical continuity; **do not
+> quote them as current performance claims**.
+>
+> A re-run on Nexus v1.15.0+ requires the methodology and tooling
+> in the new ["Methodology + Reproduction"](#methodology--reproduction)
+> appendix at the bottom of this document. The orchestrator script
+> [`scripts/benchmarks/run-vs-neo4j.sh`](../../scripts/benchmarks/run-vs-neo4j.sh)
+> drives a serial 74-scenario sweep plus a 1 / 4 / 16 / 64 worker
+> concurrent-load matrix and emits machine-readable JSON keyed for
+> regression detection.
+
+**Date**: December 1, 2025 *(stale — see warning above)*
+**Nexus Version**: 0.12.0 *(stale — current is 1.15.0)*
 **Neo4j Version**: Community Edition
 **Test Configuration**: 1 warmup run, 3 benchmark runs per test
 
@@ -343,3 +361,148 @@ The incompatibilities are primarily due to:
 **Report Generated**: December 1, 2025
 **Total Benchmark Time**: ~2 minutes
 **CSV Export**: `benchmark-results-2025-12-01-031930.csv`
+
+---
+
+## Methodology + Reproduction
+
+> Added 2026-04-29 by `phase7_rerun-neo4j-bench-post-phase9`. This
+> appendix replaces the implicit ad-hoc methodology used for the
+> original December 2025 run. Every future re-run must follow the
+> contract below so the numbers stay comparable across releases.
+
+### Test environment contract
+
+A reproducible run captures the host environment in
+`bench-out/environment.txt` before any measurement begins:
+
+| Field | Source | Why |
+|---|---|---|
+| `date` | UTC timestamp | run identity |
+| `host`, `os`, `cpu`, `cpu_cores`, `ram_kb` | `lscpu` / `sysctl` / `free` | hardware delta vs the v0.12 record |
+| `cargo`, `java` | `--version` strings | toolchain delta |
+| `nexus_rpc_addr`, `neo4j_url` | env vars | endpoint identity |
+
+Nexus must run a **release build** of `nexus-server`. The CLI
+binary refuses to run when compiled with `debug_assertions` (override
+with `NEXUS_BENCH_ALLOW_DEBUG=1`, never use that flag for published
+numbers). Neo4j Community ships JIT-compiled by default; record the
+JVM tier from `java -version` so a future regression diff can spot a
+JDK swap.
+
+### Serial 74-scenario sweep
+
+The single-threaded harness is in `nexus-bench`. The seed catalogue
+under `crates/nexus-bench/src/scenarios/` declares 74 scenarios
+across 16 categories (creation, match, aggregation, traversal,
+string, math, list, null, case, union, optional, with, unwind,
+merge, type-conv, write).
+
+**Both engines** receive the identical Cypher; the harness wraps
+each call in `tokio::time::timeout` with a hard ceiling of 30 s and
+clamps measured iterations to ≤ 500 per scenario. Row-count
+divergence between scenario expectation and engine output aborts
+that scenario with a loud `ERR_BENCH_OUTPUT_DIVERGENCE` rather than
+silently affecting latency numbers — a single shape change cannot
+sneak into the report.
+
+```bash
+# Reproduce — both servers must already be bound + reachable.
+NEXUS_RPC_ADDR=127.0.0.1:15475 \
+NEO4J_URL=bolt://127.0.0.1:7687 \
+NEO4J_PASSWORD=password \
+bash scripts/benchmarks/run-vs-neo4j.sh
+```
+
+Outputs the serial pass to `bench-out/serial-74.{json,md}`.
+JSON schema is versioned (`schema_version: 1`) — see
+[`crates/nexus-bench/src/report/json.rs`](../../crates/nexus-bench/src/report/json.rs).
+
+### Concurrent-load matrix (1 / 4 / 16 / 64 workers)
+
+Single-threaded p50/p95 understate the system-throughput story.
+The phase-9 work landed mostly on the *concurrency* axis (executor
+lock, mixed-read throughput); a serial driver cannot exercise it.
+
+The concurrent harness lives in
+[`crates/nexus-bench/src/concurrent.rs`](../../crates/nexus-bench/src/concurrent.rs).
+Each cell builds **N independent clients** (one per worker; client
+state is never shared across threads), runs them against the
+chosen scenario for a fixed wall-clock window, and aggregates per-
+worker latency samples + the cross-worker total iteration count
+into qps. Hard ceilings: `MAX_WORKERS = 256`, `MAX_DURATION = 120 s`.
+
+The cell payload, defined by [`ConcurrentResult`](../../crates/nexus-bench/src/concurrent.rs):
+
+```text
+scenario_id   engine   workers   wall_ms    iterations   qps
+p50_us        p95_us   p99_us    min_us     max_us       mean_us
+rows_returned cpu_util_estimate_pct
+```
+
+`cpu_util_estimate_pct` is populated **outside** the harness — the
+orchestrator script samples the server's CPU usage independently
+and patches it into the JSON post-run.
+
+The recommended grid for the published numbers:
+
+| Workers | Wall window | Notes |
+|---|---|---|
+| 1 | 15 s | baseline; should match the serial p50 within noise |
+| 4 | 15 s | typical web tier |
+| 16 | 15 s | RAG / multi-tenant SaaS |
+| 64 | 15 s | stress test; surfaces lock contention |
+
+### Diagnosing remaining gaps
+
+The phase-9 retrospective ([`BENCHMARK_RESULTS_PHASE9.md`](./BENCHMARK_RESULTS_PHASE9.md))
+flagged three categories where Nexus was still behind Neo4j after
+the executor-lock fix:
+
+1. **`COUNT` / `AVG` / `GROUP BY` aggregations**: 18-45 % slower.
+   Re-run hypothesis: the hash-join + columnar fast paths added in
+   phase-9 narrow the gap; verify with the `aggregation.*`
+   scenarios.
+2. **Relationship traversal on dense super-nodes**: 37-57 %
+   behind. Re-run hypothesis: the executor lock removal lifts the
+   bottleneck under concurrency but the serial baseline regression
+   is unchanged; flag as a follow-up if the numbers stay flat.
+3. **Variable-length path enumeration on cyclic graphs**:
+   pathological enumeration paths in the planner. Re-run flag:
+   skip-list this with a `--exclude scenario_id` flag in the
+   orchestrator if the planner has not yet shipped the dedicated
+   fix.
+
+Every regression in the new run should be tagged in the JSON output
+with the diagnosing category so a future operator can land a
+follow-up issue without re-deriving the gap.
+
+### JSON schema for regression detection
+
+Both reports (serial + concurrent) ship as JSON with explicit
+`schema_version` fields. A regression detector parsing
+`bench-out/*.json` should reject a payload whose schema is not 1.
+Adding a column requires bumping the schema version and updating
+`crates/nexus-bench/tests/` fixtures.
+
+### Hardware caveat
+
+The original December 2025 numbers were taken on a Windows 11 box
+with 32 GB RAM. Re-runs should target a reference Linux box (the
+[helm chart resource defaults](../../deploy/helm/nexus/values.yaml)
+were sized against that target) so production deployments translate
+cleanly. A re-run on a different box must record the delta in
+`environment.txt` so future readers can normalise.
+
+### Cross-references
+
+- [`crates/nexus-bench/`](../../crates/nexus-bench/) — serial
+  harness + concurrent harness + JSON / Markdown emitters.
+- [`scripts/benchmarks/run-vs-neo4j.sh`](../../scripts/benchmarks/run-vs-neo4j.sh)
+  — orchestrator.
+- [`PERFORMANCE_V1.md`](./PERFORMANCE_V1.md) — kernel-level (SIMD,
+  parser, FTS) numbers.
+- [`KNN_RECALL.md`](./KNN_RECALL.md) — HNSW recall + latency
+  methodology, paired with the latency claims here.
+- [`PERFORMANCE_ANALYSIS.md`](./PERFORMANCE_ANALYSIS.md) — phase-9
+  diagnosis that triggered this re-run requirement.

@@ -25,6 +25,7 @@
 //!
 //! See `docs/benchmarks/README.md` for the full operator workflow.
 
+pub mod concurrent;
 pub mod dataset;
 pub mod harness;
 pub mod report;
@@ -38,9 +39,16 @@ pub mod client;
 #[cfg(feature = "live-bench")]
 pub mod divergence;
 
+pub use concurrent::{
+    ClientFactory, ConcurrentResult, ConcurrentRunConfig, MAX_DURATION as MAX_CONCURRENT_DURATION,
+    MAX_WORKERS, run_concurrent,
+};
 pub use dataset::{Dataset, SmallDataset, TinyDataset, VectorSmallDataset};
 pub use harness::{HarnessError, RunConfig, ScenarioResult};
-pub use report::{Classification, ComparativeRow, json::JsonReport, markdown::MarkdownReport};
+pub use report::{
+    Classification, ComparativeRow, concurrent_report::ConcurrentJsonReport, json::JsonReport,
+    markdown::MarkdownReport,
+};
 pub use scenario::{Scenario, ScenarioBuilder};
 
 #[cfg(feature = "live-bench")]

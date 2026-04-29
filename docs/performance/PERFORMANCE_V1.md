@@ -262,3 +262,8 @@ Full kernel spec + parity-test invariants: [docs/specs/simd-dispatch.md](specs/s
   reproduction recipe for the HNSW index. Latency numbers above are
   the kernel-level dot/L2 measurements; the recall doc covers
   end-to-end search quality on SIFT1M and GloVe-200d.
+- [`BENCHMARK_NEXUS_VS_NEO4J.md`](./BENCHMARK_NEXUS_VS_NEO4J.md) —
+  74-scenario serial sweep + 1/4/16/64 worker concurrent-load
+  matrix. The numbers there capture the *integrated engine + RPC
+  + planner* path; the kernel measurements above are the
+  microscopic floor those numbers sit on top of.
