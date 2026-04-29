@@ -486,6 +486,7 @@ ORDER BY confidence DESC
 ### Performance
 - [`docs/performance/PERFORMANCE_V1.md`](docs/performance/PERFORMANCE_V1.md) — throughput, latency, vs-Neo4j benchmark matrix.
 - [`docs/performance/MEMORY_TUNING.md`](docs/performance/MEMORY_TUNING.md) — cache sizes, page budgets, Docker memtest.
+- [`docs/performance/KNN_RECALL.md`](docs/performance/KNN_RECALL.md) — HNSW recall@1/10/100 + latency p50/p95/p99 on SIFT1M and GloVe-200d.
 
 ### Deployment
 - [`deploy/helm/nexus/`](deploy/helm/nexus/README.md) — official Helm chart (single-node + sharded cluster topology).

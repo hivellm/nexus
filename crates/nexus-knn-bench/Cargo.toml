@@ -1,0 +1,41 @@
+[package]
+name = "nexus-knn-bench"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "KNN recall + latency benchmark for the Nexus HNSW index (SIFT1M, GloVe)"
+
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(FALSE)'] }
+
+# This crate is a developer tool, not a runtime dependency. Unlike
+# `nexus-bench` (Nexus ↔ Neo4j RPC comparison, no core dep), this
+# benchmark drives the *engine-level* HNSW index in-process so it can
+# sweep parameters that aren't exposed over RPC (M, ef_construction,
+# ef_search). The `nexus-core` dep is therefore intentional.
+
+[lib]
+name = "nexus_knn_bench"
+path = "src/lib.rs"
+
+[[bin]]
+name = "knn-recall"
+path = "src/bin/knn-recall.rs"
+
+[dependencies]
+nexus-core = { workspace = true }
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+anyhow.workspace = true
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+clap = { version = "4.5", features = ["derive", "env"] }
+byteorder = "1.5"
+rand = "0.8"
+
+[dev-dependencies]
+tempfile = "3"

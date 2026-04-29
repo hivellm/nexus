@@ -255,3 +255,10 @@ cargo +nightly bench -p nexus-core --bench parser_tokenize -- --quick
 ```
 
 Full kernel spec + parity-test invariants: [docs/specs/simd-dispatch.md](specs/simd-dispatch.md).
+
+## Related
+
+- [`KNN_RECALL.md`](./KNN_RECALL.md) — recall@k methodology and
+  reproduction recipe for the HNSW index. Latency numbers above are
+  the kernel-level dot/L2 measurements; the recall doc covers
+  end-to-end search quality on SIFT1M and GloVe-200d.

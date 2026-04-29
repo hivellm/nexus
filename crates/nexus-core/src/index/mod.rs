@@ -530,8 +530,35 @@ impl KnnIndex {
         Ok(())
     }
 
-    /// Search for k nearest neighbors using cosine similarity
+    /// Default `ef` (size of the dynamic candidate list at search time).
+    /// Larger values trade latency for recall.
+    pub const DEFAULT_EF_SEARCH: usize = 50;
+
+    /// Search for k nearest neighbors using cosine similarity.
+    ///
+    /// Uses [`KnnIndex::DEFAULT_EF_SEARCH`] as the HNSW `ef` parameter.
+    /// For tunable recall/latency tradeoffs, use
+    /// [`KnnIndex::search_knn_with_ef`].
     pub fn search_knn(&self, query: &[f32], k: usize) -> Result<Vec<(u64, f32)>> {
+        self.search_knn_with_ef(query, k, Self::DEFAULT_EF_SEARCH)
+    }
+
+    /// Search for k nearest neighbors with an explicit HNSW `ef` parameter.
+    ///
+    /// `ef_search` controls the size of the dynamic candidate list during
+    /// the descent. The HNSW algorithm requires `ef_search >= k`; values
+    /// below `k` are silently raised to `k` so the caller never gets
+    /// fewer results than requested.
+    ///
+    /// Recall and latency both grow with `ef_search`. Typical sweep
+    /// ranges for production tuning are `ef_search ∈ {50, 100, 200, 400}`
+    /// — see `crates/nexus-knn-bench` for the full Pareto methodology.
+    pub fn search_knn_with_ef(
+        &self,
+        query: &[f32],
+        k: usize,
+        ef_search: usize,
+    ) -> Result<Vec<(u64, f32)>> {
         if query.len() != self.dimension {
             return Err(Error::InvalidId(format!(
                 "Query dimension mismatch: expected {}, got {}",
@@ -540,24 +567,22 @@ impl KnnIndex {
             )));
         }
 
+        let ef = ef_search.max(k);
         let start_time = std::time::Instant::now();
 
         let hnsw = self.hnsw.read();
         let index_to_node = self.index_to_node.read();
 
-        // Search using HNSW - using search method with ef parameter
-        let search_results = hnsw.search(query, k, 50);
+        let search_results = hnsw.search(query, k, ef);
 
         let mut results = Vec::new();
         for neighbour in search_results {
             if let Some(&node_id) = index_to_node.get(&neighbour.d_id) {
-                // Convert distance to similarity (1 - distance for cosine)
                 let similarity = 1.0 - neighbour.distance;
                 results.push((node_id, similarity));
             }
         }
 
-        // Update search time statistics
         let search_time_us = start_time.elapsed().as_micros() as f64;
         let mut stats = self.stats.write();
         stats.avg_search_time_us = (stats.avg_search_time_us + search_time_us) / 2.0;
@@ -1092,6 +1117,38 @@ mod tests {
         );
         assert_eq!(results[0].0, 1); // Most similar to query
         assert!(results[0].1 > 0.9); // High similarity
+    }
+
+    #[test]
+    fn test_knn_index_search_with_ef_matches_default() {
+        let index = KnnIndex::new(3).unwrap();
+        index.add_vector(1, vec![1.0, 0.0, 0.0]).unwrap();
+        index.add_vector(2, vec![0.0, 1.0, 0.0]).unwrap();
+        index.add_vector(3, vec![0.0, 0.0, 1.0]).unwrap();
+
+        let query = vec![1.0, 0.0, 0.0];
+        let default_results = index.search_knn(&query, 2).unwrap();
+        let explicit_results = index
+            .search_knn_with_ef(&query, 2, KnnIndex::DEFAULT_EF_SEARCH)
+            .unwrap();
+        assert_eq!(default_results, explicit_results);
+    }
+
+    #[test]
+    fn test_knn_index_search_with_ef_clamps_below_k() {
+        let index = KnnIndex::new(3).unwrap();
+        index.add_vector(1, vec![1.0, 0.0, 0.0]).unwrap();
+        index.add_vector(2, vec![0.0, 1.0, 0.0]).unwrap();
+        index.add_vector(3, vec![0.0, 0.0, 1.0]).unwrap();
+
+        // ef_search=1 with k=2 must still produce up to k results
+        // because the implementation raises ef to k internally.
+        let results = index
+            .search_knn_with_ef(&vec![1.0, 0.0, 0.0], 2, 1)
+            .unwrap();
+        assert!(!results.is_empty());
+        assert!(results.len() <= 2);
+        assert_eq!(results[0].0, 1);
     }
 
     #[test]
