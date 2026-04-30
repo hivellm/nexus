@@ -72,6 +72,14 @@ jobs:
         run: cargo nextest run --workspace --all-targets --test-threads 4
         env:
           NEXTEST_TIMEOUT: 300s
+      # tck_runner is a cucumber-driven (`harness = false`) binary
+      # that nextest cannot enumerate via its `--list` protocol —
+      # see `.config/nextest.toml` for the exclusion. Run it via
+      # plain `cargo test` so the spatial TCK suite still executes
+      # in CI.
+      - name: Run cucumber TCK runner
+        timeout-minutes: 10
+        run: cargo test -p nexus-core --test tck_runner
       - name: Run doc tests
         run: cargo test --workspace --doc
       - name: Upload test report

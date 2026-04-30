@@ -11,8 +11,17 @@ retries = 0
 # Fail fast by default
 fail-fast = true
 
+# Exclude the cucumber-driven `tck_runner` binary from nextest
+# discovery. It is `harness = false` and runs cucumber's own main
+# instead of libtest, so it does not implement the `--list` /
+# `<name>: test` discovery protocol that nextest expects. The
+# binary is exercised separately in CI via plain `cargo test
+# -p nexus-core --test tck_runner`.
+default-filter = 'not binary(tck_runner)'
+
 [profile.ci]
 # CI profile with more conservative settings
 test-threads = 2
 retries = 1
 fail-fast = false
+default-filter = 'not binary(tck_runner)'
