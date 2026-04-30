@@ -37,7 +37,8 @@ curl -X POST http://localhost:15474/cypher \
 
 | Tag | Contents |
 |---|---|
-| `latest` | Latest stable release (currently `v1.14.0`). |
+| `latest` | Latest stable release (currently `v2.0.0`). |
+| `v2.0.0`  | Phase-8 ship train: encryption-at-rest core + KMS + WAL, quantified-path patterns with mode keywords, query-plan cache. |
 | `v1.14.0` | Geospatial predicates + `spatial.*` procedures slice A. |
 | `v1.13.0` | FTS async writer + crash-recovery harness. |
 | `v1.12.0` | FTS auto-maintenance on CREATE / SET / REMOVE / DELETE. |

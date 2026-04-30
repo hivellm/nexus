@@ -5,15 +5,15 @@ All notable changes to Nexus will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [1.2.0] — 2026-04-28
+## [2.0.0] — 2026-04-30
 
-> Note: this entry tracks the `release/v1.2.0` release branch.
-> Previous interim relabel to `1.15.0` (under
-> `phase7_reconcile-version-strings`) is reverted here: workspace
-> `Cargo.toml`, every first-party SDK manifest, and every SDK
-> README compat banner have been brought back to `1.2.0` so the
-> released artifact, the branch name, and the CHANGELOG heading
-> agree.
+> **Major version bump**: 1.x → 2.0.0. Marks the first phase-8
+> ship train (encryption-at-rest core + KMS + WAL, quantified
+> path patterns with mode keywords, query-plan cache). The 1.15
+> interim line is collapsed into this entry; the previous
+> `release/v1.2.0` branch name continues to host the cut for
+> compat with upstream PR refs, and every workspace + SDK
+> manifest now reads `2.0.0`.
 
 ### Added — `phase8_query-plan-cache`
 

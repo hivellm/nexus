@@ -10,7 +10,7 @@
 > The numbers below are kept for historical continuity; **do not
 > quote them as current performance claims**.
 >
-> A re-run on Nexus v1.15.0+ requires the methodology and tooling
+> A re-run on Nexus v2.0.0+ requires the methodology and tooling
 > in the new ["Methodology + Reproduction"](#methodology--reproduction)
 > appendix at the bottom of this document. The orchestrator script
 > [`scripts/benchmarks/run-vs-neo4j.sh`](../../scripts/benchmarks/run-vs-neo4j.sh)
@@ -19,7 +19,7 @@
 > regression detection.
 
 **Date**: December 1, 2025 *(stale — see warning above)*
-**Nexus Version**: 0.12.0 *(stale — current is 1.15.0)*
+**Nexus Version**: 0.12.0 *(stale — current is 2.0.0)*
 **Neo4j Version**: Community Edition
 **Test Configuration**: 1 warmup run, 3 benchmark runs per test
 

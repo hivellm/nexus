@@ -7,7 +7,7 @@
 
 Official Python SDK for Nexus graph database.
 
-> **Compatibility:** SDK 1.2.0 ↔ `nexus-server` 1.2.0. SDK and
+> **Compatibility:** SDK 2.0.0 ↔ `nexus-server` 2.0.0. SDK and
 > server move in lockstep on the same X.Y.Z train. See
 > [`docs/COMPATIBILITY_MATRIX.md`](../../docs/COMPATIBILITY_MATRIX.md).
 

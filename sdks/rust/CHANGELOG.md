@@ -5,7 +5,7 @@ All notable changes to the Rust SDK are documented in this file.
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 Versioning: [SemVer](https://semver.org/spec/v2.0.0.html).
 
-## [1.2.0] — 2026-04-25
+## [2.0.0] — 2026-04-25
 
 ### Fixed
 

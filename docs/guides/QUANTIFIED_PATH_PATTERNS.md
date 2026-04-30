@@ -1,6 +1,8 @@
 # Quantified Path Patterns (QPP)
 
-> Status: **slices 1, 2, 3a shipped in 1.15.0**. Anonymous-body
+> Status: **fully shipped in 2.0.0** (path modes WALK / TRAIL /
+> ACYCLIC / SIMPLE landed via
+> `phase8_quantified-path-patterns-execution`). Anonymous-body
 > shape lowers to the legacy `*m..n` operator at parse time.
 > Single-relationship and multi-hop bodies with named/labelled
 > inner nodes execute via the dedicated `QuantifiedExpand`
@@ -196,7 +198,7 @@ If you are coming from Neo4j 5.9+:
    MATCH (a)( (x)-[:T]->(y) WHERE x.age > y.age ){1,5}(b)
    RETURN a, b
 
-   -- Workaround on Nexus 1.15.0
+   -- Workaround on Nexus 2.0.0
    MATCH (a)( (x)-[:T]->(y) ){1,5}(b)
    WHERE all(idx IN range(0, length(x) - 1)
              WHERE x[idx].age > y[idx].age)

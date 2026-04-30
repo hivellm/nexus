@@ -67,7 +67,7 @@ RollingUpdate`). Persistent data survives upgrades.
 ```bash
 helm upgrade nexus ./deploy/helm/nexus \
   --reuse-values \
-  --set image.tag=v1.15.0
+  --set image.tag=v2.0.0
 ```
 
 For cluster mode upgrades, flip `cluster.bootstrapMode: join` after
@@ -78,7 +78,7 @@ subsequent upgrades must NOT re-bootstrap.
 helm upgrade nexus ./deploy/helm/nexus \
   -f ./deploy/helm/nexus/values-cluster.yaml \
   --set cluster.bootstrapMode=join \
-  --set image.tag=v1.15.0
+  --set image.tag=v2.0.0
 ```
 
 Roll back if the new image misbehaves:

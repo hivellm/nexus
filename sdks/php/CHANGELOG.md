@@ -6,7 +6,7 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 Versioning: [SemVer](https://semver.org/spec/v2.0.0.html) via Git tags
 (Composer resolves `^1.0` from the `v1.0.0` repo tag).
 
-## [1.2.0] — 2026-04-25
+## [2.0.0] — 2026-04-25
 
 ### Changed (BREAKING)
 

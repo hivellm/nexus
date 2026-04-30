@@ -16,17 +16,17 @@ Nexus ships **one canonical version train** for the Rust workspace
 
 | Surface | Source of truth | Current value |
 |---------|-----------------|---------------|
-| Workspace crate version | `Cargo.toml` `[workspace.package].version` | `1.15.0` |
-| `nexus-server` Docker image | server release workflow → mirrors workspace | `1.15.0` |
-| Rust SDK (`nexus-sdk` on crates.io) | `sdks/rust/Cargo.toml` | `1.15.0` |
-| Python SDK (`hivehub-nexus-sdk` on PyPI) | `sdks/python/pyproject.toml` | `1.15.0` |
-| TypeScript SDK (`@hivehub/nexus-sdk` on npm) | `sdks/typescript/package.json` | `1.15.0` |
-| Go SDK (`github.com/hivellm/nexus-go`) | `sdks/go/go.mod` + git tag | `1.15.0` |
-| C# SDK (`Nexus.SDK` on NuGet) | `sdks/csharp/Nexus.SDK.csproj` | `1.15.0` |
-| PHP SDK (`hivellm/nexus-php` on Packagist) | `sdks/php/composer.json` | `1.15.0` |
+| Workspace crate version | `Cargo.toml` `[workspace.package].version` | `2.0.0` |
+| `nexus-server` Docker image | server release workflow → mirrors workspace | `2.0.0` |
+| Rust SDK (`nexus-sdk` on crates.io) | `sdks/rust/Cargo.toml` | `2.0.0` |
+| Python SDK (`hivehub-nexus-sdk` on PyPI) | `sdks/python/pyproject.toml` | `2.0.0` |
+| TypeScript SDK (`@hivehub/nexus-sdk` on npm) | `sdks/typescript/package.json` | `2.0.0` |
+| Go SDK (`github.com/hivellm/nexus-go`) | `sdks/go/go.mod` + git tag | `2.0.0` |
+| C# SDK (`Nexus.SDK` on NuGet) | `sdks/csharp/Nexus.SDK.csproj` | `2.0.0` |
+| PHP SDK (`hivellm/nexus-php` on Packagist) | `sdks/php/composer.json` | `2.0.0` |
 | `nexus-protocol` crate | `crates/nexus-protocol/Cargo.toml` | tracks workspace |
-| README status badge | `README.md` line 8 | `v1.15.0` |
-| `CHANGELOG.md` top heading | `## [X.Y.Z] — YYYY-MM-DD` | `[1.15.0] — 2026-04-28` |
+| README status badge | `README.md` line 8 | `v2.0.0` |
+| `CHANGELOG.md` top heading | `## [X.Y.Z] — YYYY-MM-DD` | `[2.0.0] — 2026-04-30` |
 
 The CI gate `scripts/ci/check_version_consistency.sh` verifies the
 top three (workspace, README badge, CHANGELOG heading) match on

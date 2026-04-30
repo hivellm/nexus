@@ -3,7 +3,7 @@
 #
 # HOW TO BUILD:
 #   docker build -t nexus:latest .
-#   docker build -t nexus:v1.14.0 -t nexus:latest .
+#   docker build -t nexus:v2.0.0 -t nexus:latest .
 #
 # The `# syntax=docker/dockerfile:1.6` header opts into the
 # `RUN --mount=type=cache` frontend so the cargo registry + target
@@ -75,6 +75,7 @@ COPY crates/nexus-server ./crates/nexus-server
 COPY crates/nexus-protocol ./crates/nexus-protocol
 COPY crates/nexus-cli ./crates/nexus-cli
 COPY crates/nexus-bench ./crates/nexus-bench
+COPY crates/nexus-knn-bench ./crates/nexus-knn-bench
 
 # Build in release mode.
 #
