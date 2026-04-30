@@ -21,8 +21,14 @@ pub struct QueryOptimizer {
     indexes: Arc<IndexManager>,
     /// Statistics collector
     stats: StatisticsCollector,
-    /// Query plan cache
-    plan_cache: std::collections::HashMap<String, OptimizationResult>,
+    /// Process-wide query-plan cache
+    /// (`phase8_query-plan-cache`). LRU + generation invalidation +
+    /// atomic stats live in [`crate::executor::planner::cache::PlanCache`].
+    /// Constructed via [`PlanCache::from_env`] by default so the
+    /// `NEXUS_PLAN_CACHE_ENTRIES` and `NEXUS_PLAN_CACHE_DISABLE`
+    /// knobs work without per-call rewiring; tests inject a
+    /// custom-capacity cache via the `with_plan_cache` constructor.
+    plan_cache: Arc<crate::executor::planner::cache::PlanCache<OptimizationResult>>,
     /// Adaptive optimization settings
     adaptive_settings: AdaptiveSettings,
 }
@@ -154,23 +160,22 @@ impl Default for AdaptiveSettings {
 }
 
 impl QueryOptimizer {
-    /// Create a new query optimizer
+    /// Create a new query optimizer with the env-configured
+    /// process-wide plan cache.
     pub fn new(
         catalog: Arc<Catalog>,
         storage: Arc<RecordStore>,
         indexes: Arc<IndexManager>,
     ) -> Self {
-        Self {
+        Self::with_plan_cache(
             catalog,
             storage,
             indexes,
-            stats: StatisticsCollector::new(),
-            plan_cache: HashMap::new(),
-            adaptive_settings: AdaptiveSettings::default(),
-        }
+            Arc::new(crate::executor::planner::cache::PlanCache::from_env()),
+        )
     }
 
-    /// Create a new query optimizer with custom settings
+    /// Create a new query optimizer with custom settings.
     pub fn new_with_settings(
         catalog: Arc<Catalog>,
         storage: Arc<RecordStore>,
@@ -182,8 +187,29 @@ impl QueryOptimizer {
             storage,
             indexes,
             stats: StatisticsCollector::new(),
-            plan_cache: HashMap::new(),
+            plan_cache: Arc::new(crate::executor::planner::cache::PlanCache::from_env()),
             adaptive_settings: settings,
+        }
+    }
+
+    /// Build an optimizer that shares an externally-owned
+    /// [`PlanCache`]. Used by the engine to give every executor
+    /// instance the same cache so warmups in one connection
+    /// benefit the next, and by tests to inject a deterministic
+    /// fixed-capacity cache.
+    pub fn with_plan_cache(
+        catalog: Arc<Catalog>,
+        storage: Arc<RecordStore>,
+        indexes: Arc<IndexManager>,
+        plan_cache: Arc<crate::executor::planner::cache::PlanCache<OptimizationResult>>,
+    ) -> Self {
+        Self {
+            catalog,
+            storage,
+            indexes,
+            stats: StatisticsCollector::new(),
+            plan_cache,
+            adaptive_settings: AdaptiveSettings::default(),
         }
     }
 
@@ -191,12 +217,13 @@ impl QueryOptimizer {
     pub fn optimize(&mut self, query: &Query) -> Result<OptimizationResult> {
         let start_time = std::time::Instant::now();
 
-        // Check plan cache first
-        let query_hash = self.hash_query(query);
-        if self.adaptive_settings.enable_plan_cache {
-            if let Some(cached_result) = self.plan_cache.get(&query_hash) {
-                return Ok(cached_result.clone());
-            }
+        // Check plan cache first. Lookup goes through the shared
+        // process-wide cache; counters tick atomically so multi-
+        // threaded executors do not need to coordinate.
+        if self.adaptive_settings.enable_plan_cache
+            && let Some(cached_result) = self.plan_cache.lookup(&query.cypher)
+        {
+            return Ok(cached_result);
         }
 
         // Collect statistics if needed
@@ -226,15 +253,11 @@ impl QueryOptimizer {
             },
         };
 
-        // Cache the result if enabled
+        // Cache the result if enabled. The shared cache handles
+        // LRU bookkeeping + generation stamping internally; this
+        // call site does not have to track size or evictions.
         if self.adaptive_settings.enable_plan_cache {
-            if self.plan_cache.len() >= self.adaptive_settings.max_cache_size {
-                // Remove oldest entry (simple LRU approximation)
-                if let Some(key) = self.plan_cache.keys().next().cloned() {
-                    self.plan_cache.remove(&key);
-                }
-            }
-            self.plan_cache.insert(query_hash, result.clone());
+            self.plan_cache.insert(&query.cypher, result.clone());
         }
 
         Ok(result)
@@ -252,17 +275,44 @@ impl QueryOptimizer {
         crate::executor::planner::cache::hash_canonicalised(&query.cypher).to_string()
     }
 
-    /// Clear the plan cache
+    /// Drop every entry in the shared plan cache. Operator-facing
+    /// surface for `db.planCache.clear()`.
     pub fn clear_cache(&mut self) {
         self.plan_cache.clear();
     }
 
-    /// Get cache statistics
+    /// Bump the planner generation. Called by schema-change paths
+    /// (`CREATE INDEX`, `DROP INDEX`, label / type / key registry
+    /// mutations) so cached entries stamped under the previous
+    /// generation evict on next lookup.
+    pub fn bump_plan_cache_generation(&self) {
+        self.plan_cache.bump_generation();
+    }
+
+    /// Borrow the shared plan cache so callers (the engine, the
+    /// `db.planCache.*` procedures, the `/stats` endpoint) can
+    /// inspect or mutate it without re-resolving from the env.
+    pub fn plan_cache(
+        &self,
+    ) -> &Arc<crate::executor::planner::cache::PlanCache<OptimizationResult>> {
+        &self.plan_cache
+    }
+
+    /// Get cache statistics. Combines the shared LRU stats with
+    /// the optimizer-side `max_cache_size` setting so the legacy
+    /// `CacheStats` shape continues to work.
     pub fn get_cache_stats(&self) -> CacheStats {
+        let s = self.plan_cache.stats();
+        let total = s.hits + s.misses;
+        let hit_rate = if total == 0 {
+            0.0
+        } else {
+            s.hits as f64 / total as f64
+        };
         CacheStats {
-            cache_size: self.plan_cache.len(),
-            max_cache_size: self.adaptive_settings.max_cache_size,
-            hit_rate: 0.0, // Would need to track hits/misses
+            cache_size: s.size,
+            max_cache_size: s.capacity,
+            hit_rate,
         }
     }
 
@@ -881,7 +931,7 @@ mod tests {
         let optimizer = QueryOptimizer::new_with_settings(catalog, storage, indexes, settings);
         assert!(optimizer.adaptive_settings.enable_plan_cache);
         assert_eq!(optimizer.adaptive_settings.max_cache_size, 500);
-        assert!(optimizer.plan_cache.is_empty());
+        assert_eq!(optimizer.plan_cache.stats().size, 0);
     }
 
     #[test]

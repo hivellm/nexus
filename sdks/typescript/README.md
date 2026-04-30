@@ -5,7 +5,7 @@ Official TypeScript/JavaScript SDK for [Nexus Graph Database](https://github.com
 [![npm version](https://img.shields.io/npm/v/@hivehub/nexus-sdk.svg)](https://www.npmjs.com/package/@hivehub/nexus-sdk)
 [![License: Apache 2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
 
-> **Compatibility:** SDK 1.15.0 ↔ `nexus-server` 1.15.0. SDK and
+> **Compatibility:** SDK 1.2.0 ↔ `nexus-server` 1.2.0. SDK and
 > server move in lockstep on the same X.Y.Z train. See
 > [`docs/COMPATIBILITY_MATRIX.md`](../../docs/COMPATIBILITY_MATRIX.md).
 

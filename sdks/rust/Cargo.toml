@@ -6,7 +6,7 @@
 # module still imports as `nexus_sdk` (see `[lib] name` below)
 # so existing code stays source-compatible.
 name = "nexus-graph-sdk"
-version = "1.15.0"
+version = "1.2.0"
 edition = "2024"
 authors = ["Nexus Contributors"]
 description = "Official Rust SDK for Nexus graph database"
@@ -29,7 +29,7 @@ tokio = { version = "1.40", features = ["full"] }
 # path-dependency also carries a published version specifier. The
 # path is anchored at `../../crates/nexus-protocol` because the
 # workspace crates live under `crates/` since the 2026-04 reshuffle.
-nexus-protocol = { path = "../../crates/nexus-protocol", version = "1.14.0" }
+nexus-protocol = { path = "../../crates/nexus-protocol", version = "1.2.0" }
 
 # Async trait for the Transport interface
 async-trait = "0.1"

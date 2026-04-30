@@ -354,6 +354,24 @@ pub struct QuantifiedGroup {
     /// rejects the lowering when a predicate is present.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub where_clause: Option<Expression>,
+    /// Path-traversal mode parsed from the optional preceding
+    /// `WALK | TRAIL | ACYCLIC | SIMPLE` keyword (or
+    /// `REPEATABLE_ELEMENTS | DIFFERENT_RELATIONSHIPS |
+    /// DIFFERENT_NODES_AND_RELATIONSHIPS` in the GQL aliases). When
+    /// no keyword is written, defaults to
+    /// [`crate::executor::types::QppMode::Walk`] — the historical
+    /// engine behaviour.
+    #[serde(default)]
+    pub mode: crate::executor::types::QppMode,
+    /// `true` when the parser saw an explicit mode keyword
+    /// (`WALK | TRAIL | ACYCLIC | SIMPLE`) preceding the QPP
+    /// group; `false` for the implicit-WALK default. Used by
+    /// `try_lower_to_var_length_rel` to decide whether to keep
+    /// the legacy `*m..n` fast path on (implicit only) or force
+    /// the dedicated `QuantifiedExpand` operator (any explicit
+    /// keyword, including `WALK`).
+    #[serde(default)]
+    pub mode_explicit: bool,
 }
 
 impl QuantifiedGroup {
@@ -383,6 +401,21 @@ impl QuantifiedGroup {
         // per-iteration predicate, and silently dropping the
         // predicate would produce wrong rows.
         if self.where_clause.is_some() {
+            return None;
+        }
+        // Any explicit path-mode keyword (`WALK | TRAIL | ACYCLIC
+        // | SIMPLE`) routes through the dedicated
+        // `QuantifiedExpand` operator. The legacy variable-length-
+        // path operator does not honour mode keywords (it has no
+        // visited-set tracking), and even an explicit `WALK`
+        // selects QPP-flavoured semantics that the legacy operator
+        // does not match (the legacy operator collapses paths via
+        // wavefront dedup, which the explicit-WALK contract on
+        // QuantifiedExpand does not). The implicit (no-keyword)
+        // default keeps the lowering on so the textbook anonymous-
+        // body shape continues to take the legacy path byte-for-
+        // byte unchanged.
+        if self.mode_explicit {
             return None;
         }
         // Must be exactly Node, Relationship, Node.

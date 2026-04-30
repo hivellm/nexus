@@ -2629,6 +2629,7 @@ impl<'a> QueryPlanner<'a> {
                                     min_length,
                                     max_length,
                                     optional: is_optional,
+                                    mode: crate::executor::types::QppMode::Walk,
                                 });
                             } else {
                                 // Use VariableLengthPath operator for
@@ -4169,6 +4170,7 @@ fn build_quantified_expand_operator(
         min_length,
         max_length,
         optional: is_optional,
+        mode: group.mode,
     })
 }
 

@@ -35,13 +35,22 @@ MATCH (n:Person)-[:KNOWS*]->(m:Person)   -- Unbounded
 MATCH (n:Person)-[:KNOWS+]->(m:Person)   -- One or more
 MATCH (n:Person)-[:KNOWS?]->(m:Person)   -- Zero or one
 
--- Quantified Path Patterns (Cypher 25 / GQL) ✅ slice 1 IMPLEMENTED
--- Anonymous-body shape collapses to legacy *m..n at parse time.
+-- Quantified Path Patterns (Cypher 25 / GQL) ✅ FULLY IMPLEMENTED
+-- Anonymous-body shape collapses to legacy *m..n at parse time;
+-- named / labelled / multi-hop bodies route through the dedicated
+-- QuantifiedExpand operator.
 MATCH (a)( ()-[:KNOWS]->() ){1,5}(b)
 MATCH (a)( ()<-[:OWNS]-() ){1,3}(b)
 MATCH (a)( ()-[r:KNOWS]->() ){2,4}(b) RETURN length(r)
--- Named/labelled inner nodes return ERR_QPP_NOT_IMPLEMENTED
--- (slice 2 — phase6_opencypher-quantified-path-patterns).
+MATCH (a)( (m:Person)-[:KNOWS]->(n:Person) ){1,3}(b) RETURN m, n
+
+-- Path-mode keywords (phase8_quantified-path-patterns-execution):
+-- WALK | TRAIL | ACYCLIC | SIMPLE precede the QPP group and
+-- constrain repeated edges / nodes across the matched path.
+MATCH (a)WALK    ( ()-[:KNOWS]->() ){1,5}(b)   -- revisits OK (default)
+MATCH (a)TRAIL   ( ()-[:KNOWS]->() ){1,5}(b)   -- no edge revisits
+MATCH (a)ACYCLIC ( ()-[:KNOWS]->() ){1,5}(b)   -- no node revisits
+MATCH (a)SIMPLE  ( ()-[:KNOWS]->() ){1,5}(b)   -- no edge AND no node revisits
 -- See docs/guides/QUANTIFIED_PATH_PATTERNS.md for the full surface.
 
 -- Multiple patterns
@@ -61,11 +70,18 @@ Relationship ::=
     '<-[' Variable? ':' Type Properties? Quantifier? ']-'  |  // directed in
     '-[' Variable? ':' Type Properties? Quantifier? ']-'      // undirected
 
-QuantifiedGroup ::= '(' Pattern ')' Quantifier
-    -- Cypher 25 / GQL. Slice 1 only collapses anonymous-body
-    -- shapes ( ( ()-[:T]->() ){m,n} ) to a quantified relationship.
-    -- Named/labelled inner nodes need the slice-2 QuantifiedExpand
-    -- operator and surface ERR_QPP_NOT_IMPLEMENTED until then.
+QuantifiedGroup ::= PathMode? '(' Pattern ')' Quantifier
+    -- Cypher 25 / GQL. Anonymous-body shapes still collapse to
+    -- the legacy *m..n quantifier at parse time when no path
+    -- mode keyword precedes them; explicit mode keywords (and
+    -- any named / labelled / multi-hop body) route through the
+    -- dedicated QuantifiedExpand operator with per-frame
+    -- visited-set tracking.
+
+PathMode ::= 'WALK'    -- revisits OK (implicit default)
+           | 'TRAIL'   -- no edge revisits
+           | 'ACYCLIC' -- no node revisits
+           | 'SIMPLE'  -- no edge AND no node revisits
 
 Quantifier ::= '*' Int? ('..' Int?)?  -- legacy *m..n shorthand
              | '{' Int (',' Int?)? '}'  -- explicit range
@@ -1515,6 +1531,38 @@ distinct keys), never to the empty string.
 Cache-warming failures inside the executor hot path
 (`Executor::execute` lazy warmup) are similarly logged and counted
 under `site="warm_cache_lazy"` instead of being silently dropped.
+
+## Plan cache (`phase8_query-plan-cache`)
+
+Every query goes through a process-wide LRU plan cache before
+hitting the optimizer. Repeated parameterised queries — the
+typical RAG / hot-endpoint shape — hit the cache and skip the
+parse + plan cost on every call after the first.
+
+| Knob | Default | Effect |
+|---|---|---|
+| `NEXUS_PLAN_CACHE_ENTRIES` | `1024` | LRU bound (number of cached plans). |
+| `NEXUS_PLAN_CACHE_DISABLE` | unset | When `1` / `true` / `yes`, every lookup misses and every insert is a no-op. Counters keep ticking so an operator who flips the knob mid-flight sees the hit-rate drop. |
+
+**Key**: `xxh3_64` of the canonicalised query text. Canonicaliser
+strips comments, collapses whitespace runs, and trims leading /
+trailing whitespace — see `crates/nexus-core/src/executor/planner/cache.rs`
+for the per-rule documentation. Parameter *values* are not part
+of the key; parameter *names* are (different `$x` / `$y` produce
+different plans).
+
+**Invalidation**: a `planner_generation: AtomicU64` bumps on
+schema-change hooks (CREATE / DROP INDEX, label / type / key
+registry mutations); cached entries stamp their generation on
+populate and surface as misses on the next lookup if the
+generation moved. Full flush via `PlanCache::clear()` is the
+operator-emergency escape.
+
+**Stats**: `PlanCache::stats()` returns
+`{ hits, misses, evictions, size, capacity, enabled, generation }`.
+Counters are monotonic across the process lifetime — `clear()`
+drops entries but does not reset hit / miss totals so trend lines
+stay clean.
 
 ## Performance Characteristics
 

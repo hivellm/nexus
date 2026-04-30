@@ -352,6 +352,14 @@ pub enum Operator {
         /// Optional flag carried through from the surrounding
         /// `OPTIONAL MATCH`; preserves NULLs when no body matches.
         optional: bool,
+        /// Path-traversal mode (`WALK` / `TRAIL` / `ACYCLIC` /
+        /// `SIMPLE`). Defaults to [`QppMode::Walk`] when the parser
+        /// did not see an explicit keyword — matches the
+        /// pre-`phase8_quantified-path-patterns-execution` engine
+        /// behaviour byte-for-byte. The other three modes track
+        /// visited edges and / or nodes per BFS frame; see
+        /// [`QppMode`] for the per-mode contract.
+        mode: QppMode,
     },
     /// Call a procedure
     CallProcedure {
@@ -518,6 +526,60 @@ pub struct QppNodeSpec {
     pub labels: Vec<String>,
     /// Property-equality filter applied per accepted iteration.
     pub properties: Option<parser::PropertyMap>,
+}
+
+/// Path-traversal mode applied to a Quantified Path Pattern. Cypher
+/// 25 / GQL surface keywords map directly:
+///
+/// | Keyword | Mode      | What is forbidden          |
+/// |---------|-----------|----------------------------|
+/// | `WALK`  | `Walk`    | nothing (default)          |
+/// | `TRAIL` | `Trail`   | repeated **edges**         |
+/// | `ACYCLIC` | `Acyclic` | repeated **nodes**       |
+/// | `SIMPLE` | `Simple` | repeated edges AND nodes   |
+///
+/// The default when no keyword is written is `Walk` — matches
+/// Neo4j 5.x's `MATCH` semantics. The operator implementation
+/// tracks visited edges (TRAIL / SIMPLE) and / or visited nodes
+/// (ACYCLIC / SIMPLE) per BFS frame so two frames can independently
+/// reach the same end node via different sub-paths.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize, Default)]
+pub enum QppMode {
+    /// `WALK` — no restrictions; nodes and edges can repeat. The
+    /// implicit default when no path-mode keyword is written, and
+    /// the only behaviour the engine supported pre-`phase8_quantified-
+    /// path-patterns-execution`.
+    #[default]
+    Walk,
+    /// `TRAIL` — every edge in a matched path is unique. Nodes can
+    /// repeat (so figure-eight shapes still match if the crossing
+    /// node is visited via different edges).
+    Trail,
+    /// `ACYCLIC` — every node in a matched path is unique. Edges
+    /// can repeat in principle, though in a simple graph that does
+    /// not actually occur because two edges between the same node
+    /// pair would force a node revisit.
+    Acyclic,
+    /// `SIMPLE` — both edges AND nodes must be unique. Equivalent
+    /// to `TRAIL ∩ ACYCLIC`; the strictest of the four modes.
+    Simple,
+}
+
+impl QppMode {
+    /// `true` when the mode forbids repeated edges across a single
+    /// matched path. Exposed for the operator to decide whether the
+    /// per-frame `visited_edges` set is needed.
+    #[must_use]
+    pub fn forbids_edge_revisit(self) -> bool {
+        matches!(self, QppMode::Trail | QppMode::Simple)
+    }
+
+    /// `true` when the mode forbids repeated nodes across a single
+    /// matched path.
+    #[must_use]
+    pub fn forbids_node_revisit(self) -> bool {
+        matches!(self, QppMode::Acyclic | QppMode::Simple)
+    }
 }
 
 /// Relationship direction

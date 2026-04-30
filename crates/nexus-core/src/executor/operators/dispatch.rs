@@ -314,6 +314,7 @@ impl Executor {
                 min_length,
                 max_length,
                 optional,
+                mode,
             } => {
                 self.execute_quantified_expand(
                     context,
@@ -325,6 +326,7 @@ impl Executor {
                     *min_length,
                     *max_length,
                     *optional,
+                    *mode,
                 )?;
             }
             Operator::CallProcedure {

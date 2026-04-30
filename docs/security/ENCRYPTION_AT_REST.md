@@ -1,14 +1,15 @@
 # Encryption at rest
 
-> **Status (2026-04-29)**: cryptographic core shipped under
+> **Status (2026-04-30)**: cryptographic core shipped under
 > `phase8_encryption-at-rest`; online key rotation shipped under
 > `phase8_encryption-at-rest-rotation`; AWS / GCP / Vault KMS
-> adapters shipped under `phase8_encryption-at-rest-kms`. Storage-
-> layer hooks (catalog, record stores, WAL, B-tree / Tantivy /
-> HNSW indexes) and the migration CLI are tracked under separate
-> follow-up tasks listed at the bottom of this document. The
-> contracts below are stable; the follow-ups consume them without
-> changing any public API.
+> adapters shipped under `phase8_encryption-at-rest-kms`; WAL
+> append + replay shipped under `phase8_encryption-at-rest-wal`.
+> Storage-layer hooks for the LMDB catalog, mmap-backed record
+> stores, B-tree / Tantivy / HNSW indexes, and the migration CLI
+> are tracked under separate follow-up tasks listed at the bottom
+> of this document. The contracts below are stable; the follow-ups
+> consume them without changing any public API.
 
 Encryption at rest means every byte the engine writes to disk is
 ciphertext, and every byte it reads back is decrypted before
@@ -278,6 +279,64 @@ Mixed mode (some files encrypted, others plaintext) is rejected
 on startup with a clear error so an operator who half-migrated a
 deployment notices immediately.
 
+### WAL encryption (v3 frame format)
+
+Shipped under `phase8_encryption-at-rest-wal` in
+[`crates/nexus-core/src/wal/mod.rs`](../../crates/nexus-core/src/wal/mod.rs).
+Encrypted WAL files use a new v3 frame:
+
+```text
+  [magic:1 = 0x00]              — shared with v2; tells the reader to consult the algo byte
+  [algo:1 = 0x03]               — `Aes256GcmCrc32C`; dispatches to the v3 decoder
+  [type:1]                      — `WalEntryType`
+  [plain_len:4 LE]              — original payload length
+  [crc_plain:4 LE]              — CRC32C over the plaintext (end-to-end)
+  [ciphertext_with_tag: plain_len + 16]   — AES-256-GCM seal over the bincoded entry
+```
+
+Total frame length: `27 + plain_len`.
+
+**AAD** (additional authenticated data) covers
+`[type, plain_len_le4, crc_plain_le4, frame_offset_le8]` — 17
+bytes. Binding the offset means a tamperer who relocates a frame
+to a different position triggers an AEAD failure. Binding the
+plaintext CRC means a tamperer who flips bits in the ciphertext
+*and* the CRC field still cannot fake a valid frame.
+
+**Nonce derivation**: `PageNonce::new(file_id = FileId::Wal,
+page_offset = frame_offset_in_file, generation = 1)`. Nonce
+uniqueness is guaranteed by the WAL's append-only invariant: each
+frame gets a unique offset between truncations.
+
+**WAL key rotation contract**: a `Wal::truncate()` resets frame
+offsets to `PAGE_HEADER_LEN`. Re-using the same database key
+across a truncate would reuse `(key, nonce)` for fresh frames —
+catastrophic for AES-GCM. Operators **must** pair every WAL
+truncate with a key rotation; the rotation runner shipped under
+`phase8_encryption-at-rest-rotation` already coordinates with the
+checkpoint epoch, so the production code path automatically gets
+this guarantee. Test code may truncate without rotating — see
+`v3_append_then_replay_after_truncate_starts_fresh_offsets` for the
+shape, and the WAL test fixture `make_encrypted_wal` for the
+constructor pattern.
+
+**On-disk header**: encrypted WAL files start with a 16-byte
+`NXCP` page header (`FileId::Wal`, generation `1`) so the boot
+inventory scanner classifies them as `Encrypted`. The header is
+written by `Wal::with_cipher` on file creation, validated on
+file reopen, and rewritten by `truncate()` — the file is always a
+valid encrypted-WAL file for the inventory's purposes.
+
+**Replay tolerance**:
+
+| Failure | Outcome |
+|---|---|
+| Short read mid-frame body | Treated as truncation: file is shrunk to the previous frame boundary, recover returns the entries it could decode. Parity with v1/v2 CRC-mismatch behaviour. |
+| AEAD failure on a frame whose body extends to EOF | Treated as truncation (kill-9 mid-write produces this shape). |
+| AEAD failure on a frame followed by more frames | `ERR_WAL_AEAD` — wholesale tamper or wrong key; recover refuses to continue. |
+| Plaintext CRC mismatch after successful AEAD | `ERR_WAL_CRC` — hard integrity failure (the ciphertext authenticated under the AAD-bound CRC, but the recovered plaintext does not match). |
+| `with_cipher` on an existing plaintext WAL | `ERR_WAL_HEADER` — refuse to open; the operator forgot to rotate the WAL alongside the encryption flag flip. |
+
 ### Mixed-mode detection (boot invariant)
 
 Shipped under `phase8_encryption-at-rest-storage-hooks` at
@@ -355,7 +414,7 @@ storage-hook follow-up.
 |---|---|---|
 | `phase8_encryption-at-rest` | **shipped** | Crypto core: `KeyProvider`, KDF, AES-GCM page cipher, `EncryptedPageStream`. 36 unit tests. |
 | `phase8_encryption-at-rest-storage-hooks` | **partial** | Boot-time mixed-mode invariant scanner shipped at [`crates/nexus-core/src/storage/crypto/inventory.rs`](../../crates/nexus-core/src/storage/crypto/inventory.rs). Walks the data directory at boot, classifies every file by its first page header (`Empty` / `Plaintext` / `Encrypted`), refuses to start when the on-disk state contradicts the encryption flag (mixed-mode, encrypted-files-with-flag-off, plaintext-files-with-flag-on). Result surfaces on `/admin/encryption/status` as a counts-only inventory summary. Actual page-stream wiring into the LMDB catalog, mmap-backed record stores, and page-cache buffer pool is blocked on a storage-layer refactor (LMDB has no engine-side page hook; record stores mutate `MmapMut` in place; the page cache has no real disk backing yet) — tracked in a follow-up architecture task. |
-| `phase8_encryption-at-rest-wal` | follow-up | WAL append + replay through the page stream. |
+| `phase8_encryption-at-rest-wal` | **shipped** | WAL append + replay encrypted via a v3 frame format (`Aes256GcmCrc32C` algo). v3 layout: `[magic:1=0x00][algo:1=0x03][type:1][plain_len:4][crc_plain:4][ciphertext_with_tag: plain_len + 16]`. Plaintext CRC32C is bound into the AAD alongside the frame's file offset, so a tamperer who relocates a frame triggers an AEAD failure. Encrypted WAL files start with a 16-byte `NXCP` page header so the boot inventory scanner classifies them as `Encrypted`. Recover tolerates kill-9 truncation by treating an EOF-aligned AEAD failure as the truncation point (parity with the existing CRC-mismatch behaviour); mid-WAL AEAD failures surface `ERR_WAL_AEAD`. v1/v2 plaintext frames continue to replay byte-for-byte unchanged on the plaintext path. 10 new v3 tests covering round-trip, leak audit, wrong-key detection, mid-WAL tamper, trailing-frame truncation, plaintext / encrypted constructor mismatch, truncate preserves header, and post-truncate replay. See `crates/nexus-core/src/wal/mod.rs`. |
 | `phase8_encryption-at-rest-indexes` | **partial** | R-tree shipped via [`EncryptedFilePageStore`](../../crates/nexus-core/src/index/rtree/encrypted_store.rs) (12 unit tests; parallel to the unencrypted `FilePageStore`; slot 8224 B). B-tree is in-memory today (no on-disk format to encrypt); Tantivy needs a custom `Directory` adapter; HNSW (`hnsw_rs`) lacks a streaming-IO seam. The R-tree pattern is the template the others adopt as their IO seams land. |
 | `phase8_encryption-at-rest-kms` | **shipped** | AWS KMS (`aws-sdk-kms`), GCP KMS (`google-cloud-kms`), and HashiCorp Vault transit (`vaultrs`) adapters in [`crates/nexus-core/src/storage/crypto/kms/`](../../crates/nexus-core/src/storage/crypto/kms/). Each behind its own Cargo feature (`kms-aws` / `kms-gcp` / `kms-vault`); operator config via `NEXUS_KMS_PROVIDER` + per-provider env vars. 24 new tests (13 unit-tested config-validation paths + 8 unit + 3 ignored-by-default integration tests against localstack / GCP KMS emulator / `vault dev`). |
 | `phase8_encryption-at-rest-rotation` | **shipped** | Online key rotation with two-key window. `EncryptedPageStream::install_secondary` + `RotationRunner` + `PageStore` trait + checkpoint + throttle. 9 unit tests. |

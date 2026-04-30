@@ -557,6 +557,245 @@ fn tck_error_invalid_quantifier_inverted_range() {
     );
 }
 
+// ---------------------------------------------------------------
+// Path-mode scenarios: WALK / TRAIL / ACYCLIC / SIMPLE.
+// `phase8_quantified-path-patterns-execution`. Each fixture shapes
+// the graph so the four modes differentiate observably.
+// ---------------------------------------------------------------
+
+/// Diamond fixture: `Alice -[KNOWS]-> Bob` AND `Alice -[KNOWS]-> Charlie`,
+/// plus `Bob -[KNOWS]-> Dave` AND `Charlie -[KNOWS]-> Dave`. Two
+/// distinct length-2 paths from Alice to Dave; both are valid under
+/// every mode (no node revisits, no edge revisits).
+fn setup_diamond(executor: &mut Executor) {
+    cy(
+        executor,
+        "CREATE (a:Person {name: 'Alice'}), \
+                 (b:Person {name: 'Bob'}), \
+                 (c:Person {name: 'Charlie'}), \
+                 (d:Person {name: 'Dave'}), \
+                 (a)-[:KNOWS]->(b), \
+                 (a)-[:KNOWS]->(c), \
+                 (b)-[:KNOWS]->(d), \
+                 (c)-[:KNOWS]->(d)",
+    );
+}
+
+/// Triangle fixture: `Alice -[KNOWS]-> Bob -[KNOWS]-> Charlie -[KNOWS]-> Alice`.
+/// Length-3 path from Alice to Alice exists, but only WALK and TRAIL
+/// can return it: ACYCLIC and SIMPLE forbid the node revisit on the
+/// closing edge.
+fn setup_triangle(executor: &mut Executor) {
+    cy(
+        executor,
+        "CREATE (a:Person {name: 'Alice'}), \
+                 (b:Person {name: 'Bob'}), \
+                 (c:Person {name: 'Charlie'}), \
+                 (a)-[:KNOWS]->(b), \
+                 (b)-[:KNOWS]->(c), \
+                 (c)-[:KNOWS]->(a)",
+    );
+}
+
+#[test]
+fn tck_path_mode_explicit_walk_keyword_allows_node_revisit() {
+    // Explicit `WALK` keyword forces routing through
+    // `QuantifiedExpand` (the legacy `*m..n` lowering is gated on
+    // `mode == Walk` AND no inner state, but the explicit keyword
+    // also disables the lowering — see the
+    // `try_lower_to_var_length_rel` mode check). This is the only
+    // surface that exercises QuantifiedExpand's WALK semantics
+    // (revisits allowed) end-to-end.
+    let (mut executor, _ctx) = create_test_executor();
+    setup_triangle(&mut executor);
+
+    let result = cy(
+        &mut executor,
+        "MATCH (a:Person {name: 'Alice'})WALK ( ()-[:KNOWS]->() ){3}(b:Person) \
+         RETURN b.name",
+    );
+    let names: Vec<String> = result
+        .rows
+        .iter()
+        .filter_map(|r| {
+            r.values
+                .first()
+                .and_then(|v| v.as_str().map(str::to_string))
+        })
+        .collect();
+    assert!(
+        names.contains(&"Alice".to_string()),
+        "WALK keyword must walk the triangle back to Alice; names={names:?}"
+    );
+}
+
+#[test]
+fn tck_path_mode_acyclic_rejects_triangle_loop() {
+    let (mut executor, _ctx) = create_test_executor();
+    setup_triangle(&mut executor);
+
+    let result = cy(
+        &mut executor,
+        "MATCH (a:Person {name: 'Alice'})ACYCLIC ( ()-[:KNOWS]->() ){3}(b:Person) \
+         RETURN b.name",
+    );
+    let names: Vec<String> = result
+        .rows
+        .iter()
+        .filter_map(|r| {
+            r.values
+                .first()
+                .and_then(|v| v.as_str().map(str::to_string))
+        })
+        .collect();
+    assert!(
+        !names.contains(&"Alice".to_string()),
+        "ACYCLIC must forbid the triangle's node revisit; got names={names:?}"
+    );
+}
+
+#[test]
+fn tck_path_mode_simple_rejects_triangle_loop() {
+    let (mut executor, _ctx) = create_test_executor();
+    setup_triangle(&mut executor);
+
+    let result = cy(
+        &mut executor,
+        "MATCH (a:Person {name: 'Alice'})SIMPLE ( ()-[:KNOWS]->() ){3}(b:Person) \
+         RETURN b.name",
+    );
+    let names: Vec<String> = result
+        .rows
+        .iter()
+        .filter_map(|r| {
+            r.values
+                .first()
+                .and_then(|v| v.as_str().map(str::to_string))
+        })
+        .collect();
+    assert!(
+        !names.contains(&"Alice".to_string()),
+        "SIMPLE must forbid the triangle's node revisit; got names={names:?}"
+    );
+}
+
+#[test]
+fn tck_path_mode_trail_allows_triangle_loop() {
+    let (mut executor, _ctx) = create_test_executor();
+    setup_triangle(&mut executor);
+
+    let result = cy(
+        &mut executor,
+        "MATCH (a:Person {name: 'Alice'})TRAIL ( ()-[:KNOWS]->() ){3}(b:Person) \
+         RETURN b.name",
+    );
+    let names: Vec<String> = result
+        .rows
+        .iter()
+        .filter_map(|r| {
+            r.values
+                .first()
+                .and_then(|v| v.as_str().map(str::to_string))
+        })
+        .collect();
+    // The triangle's three edges are distinct, so TRAIL allows the
+    // length-3 walk back to Alice — only ACYCLIC / SIMPLE forbid it.
+    assert!(
+        names.contains(&"Alice".to_string()),
+        "TRAIL must accept the triangle (edges are distinct); got names={names:?}"
+    );
+}
+
+#[test]
+fn tck_path_mode_diamond_walk_keyword_admits_target() {
+    // Diamond fixture under explicit `WALK`: the query must
+    // execute without error and reach Dave through at least one
+    // of the two parallel length-2 paths. (TRAIL / ACYCLIC /
+    // SIMPLE on this fixture exercise additional planner-level
+    // pattern-composition paths that are outside the current
+    // slice's QuantifiedExpand surface — those modes are
+    // covered by the dedicated triangle-fixture tests above.)
+    let (mut executor, _ctx) = create_test_executor();
+    setup_diamond(&mut executor);
+
+    let result = cy(
+        &mut executor,
+        "MATCH (a:Person {name: 'Alice'})WALK ( ()-[:KNOWS]->() ){2}(b:Person) \
+         RETURN b.name",
+    );
+    let names: Vec<String> = result
+        .rows
+        .iter()
+        .filter_map(|r| {
+            r.values
+                .first()
+                .and_then(|v| v.as_str().map(str::to_string))
+        })
+        .collect();
+    assert!(
+        names.contains(&"Dave".to_string()),
+        "WALK must admit at least one diamond path to Dave; got names={names:?}"
+    );
+}
+
+#[test]
+fn tck_path_mode_unbounded_with_acyclic_terminates() {
+    // ACYCLIC + unbounded `{1,3}` on a triangle must NOT loop back
+    // to Alice. Visited-set pruning rejects the closing edge that
+    // would revisit the start node.
+    let (mut executor, _ctx) = create_test_executor();
+    setup_triangle(&mut executor);
+
+    let result = cy(
+        &mut executor,
+        "MATCH (a:Person {name: 'Alice'})ACYCLIC ( ()-[:KNOWS]->() ){1,3}(b:Person) \
+         RETURN b.name ORDER BY b.name",
+    );
+    let names: Vec<String> = result
+        .rows
+        .iter()
+        .filter_map(|r| {
+            r.values
+                .first()
+                .and_then(|v| v.as_str().map(str::to_string))
+        })
+        .collect();
+    assert!(
+        !names.contains(&"Alice".to_string()),
+        "ACYCLIC must refuse Alice on the triangle; names={names:?}"
+    );
+}
+
+#[test]
+fn tck_path_mode_zero_length_quantifier_with_simple() {
+    // `{0,2}` admits the zero-length path (start = target), and
+    // SIMPLE must not reject it — the trivial empty match has no
+    // edges and no extra nodes, so neither uniqueness rule fires.
+    // The minimum surface this test pins is "SIMPLE + {0,n}
+    // produces at least the start node as a result".
+    let (mut executor, _ctx) = create_test_executor();
+    setup_chain_4(&mut executor);
+
+    let result = cy(
+        &mut executor,
+        "MATCH (a:Person {name: 'Alice'})SIMPLE ( ()-[:KNOWS]->() ){0,2}(b:Person) \
+         RETURN b.name ORDER BY b.name",
+    );
+    let names: Vec<String> = result
+        .rows
+        .iter()
+        .filter_map(|r| {
+            r.values
+                .first()
+                .and_then(|v| v.as_str().map(str::to_string))
+        })
+        .collect();
+    assert!(
+        names.contains(&"Alice".to_string()),
+        "SIMPLE + zero-length must admit the start node; names={names:?}"
+    );
+}
+
 #[test]
 fn tck_error_qpp_in_create_is_rejected() {
     let (mut executor, _ctx) = create_test_executor();

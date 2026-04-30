@@ -39,7 +39,7 @@ use crate::executor::Executor;
 use crate::executor::context::{ExecutionContext, RelationshipInfo};
 use crate::executor::parser::{self, PropertyMap};
 use crate::executor::push_with_row_cap;
-use crate::executor::types::{Direction, QppHopSpec, QppNodeSpec};
+use crate::executor::types::{Direction, QppHopSpec, QppMode, QppNodeSpec};
 
 /// Per-query safety cap on iteration depth when the quantifier is
 /// unbounded (`*` / `+` / `{m,}`). Picking `64` mirrors the
@@ -62,6 +62,7 @@ impl Executor {
         min_length: usize,
         max_length: usize,
         optional: bool,
+        mode: QppMode,
     ) -> Result<()> {
         debug_assert_eq!(
             inner_nodes.len(),
@@ -122,32 +123,65 @@ impl Executor {
                 }
             };
 
-            // BFS frame:
-            //   (current_node, iteration_count, nodes_per_position, rels_per_hop)
-            // - `nodes_per_position[p]` = list of nodes seen at body
-            //   position p, one per iteration. Length always equals
-            //   `iteration_count` for `p < hops.len()`, and
-            //   `iteration_count` for the closing position too
-            //   (every accepted iteration appends one entry to every
-            //   position list).
-            // - `rels_per_hop[h]` = same shape for each hop.
-            type Frame = (u64, usize, Vec<Vec<u64>>, Vec<Vec<u64>>);
+            // BFS frame: see `Frame` doc-comment below.
+            //
+            // `path_nodes` / `path_edges` are populated only when the
+            // mode requires uniqueness tracking (TRAIL / ACYCLIC /
+            // SIMPLE). The helpers `mode.forbids_*_revisit()` answer
+            // the per-mode question once at the top of the loop;
+            // every extension consults the per-frame sets to reject
+            // a revisit before pushing a new frame.
+            //
+            // Two frames that reach the same `(node, iteration)` via
+            // distinct sub-paths can have different visited sets and
+            // thus extend into different futures. Wavefront dedup
+            // (the WALK-mode optimisation) collapses them — that is
+            // safe in WALK because every path is allowed, but unsafe
+            // in TRAIL / ACYCLIC / SIMPLE where one collapsed path
+            // could have admitted further extensions that the other
+            // could not. The dedup HashSet is therefore consulted
+            // only when `mode == QppMode::Walk`.
+            type Frame = (
+                u64,           // current_node
+                usize,         // iteration count
+                Vec<Vec<u64>>, // nodes_per_position
+                Vec<Vec<u64>>, // rels_per_hop
+                Vec<u64>,      // path_nodes (modes that forbid node revisits)
+                Vec<u64>,      // path_edges (modes that forbid edge revisits)
+            );
             let mut queue: VecDeque<Frame> = VecDeque::new();
+            let initial_path_nodes = if mode.forbids_node_revisit() {
+                vec![source_id]
+            } else {
+                Vec::new()
+            };
             queue.push_back((
                 source_id,
                 0,
                 vec![Vec::new(); inner_nodes.len()],
                 vec![Vec::new(); hops.len()],
+                initial_path_nodes,
+                Vec::new(),
             ));
 
-            // Wavefront dedup: `(node, iteration)`. Cycle policy is
-            // NODES_CAN_REPEAT, so we only collapse paths that share
-            // both endpoint and iteration count.
+            // Wavefront dedup is correctness-critical *only* in WALK
+            // mode (different paths to the same `(node, iteration)`
+            // collapse to one). The other three modes drop dedup so
+            // distinct paths with distinct visited sets each get a
+            // chance to extend — see the `Frame` doc-comment above.
             let mut visited: HashSet<(u64, usize)> = HashSet::new();
-            visited.insert((source_id, 0));
+            if matches!(mode, QppMode::Walk) {
+                visited.insert((source_id, 0));
+            }
 
-            while let Some((current_node, iteration, nodes_per_pos, rels_per_hop)) =
-                queue.pop_front()
+            while let Some((
+                current_node,
+                iteration,
+                nodes_per_pos,
+                rels_per_hop,
+                path_nodes,
+                path_edges,
+            )) = queue.pop_front()
             {
                 if iteration >= min_length
                     && iteration <= effective_max
@@ -238,6 +272,48 @@ impl Executor {
                         }
                     }
 
+                    // Mode-aware uniqueness check. The walk produces
+                    // a sequence of new edges (`hop_rels`) and new
+                    // nodes (`intermediate ++ [end_node]`). Reject
+                    // the walk if it would reintroduce a node or an
+                    // edge already on the path-so-far, depending on
+                    // the active mode.
+                    if mode.forbids_edge_revisit() {
+                        let mut seen_intra = HashSet::new();
+                        let mut violates = false;
+                        for rid in &hop_rels {
+                            if !seen_intra.insert(*rid) || path_edges.contains(rid) {
+                                violates = true;
+                                break;
+                            }
+                        }
+                        if violates {
+                            continue;
+                        }
+                    }
+                    if mode.forbids_node_revisit() {
+                        // The new path nodes contributed by this
+                        // walk are the intermediate nodes plus the
+                        // end node. The starting node of the walk
+                        // (`current_node`) is already in
+                        // `path_nodes` from the previous iteration
+                        // and must not be re-added.
+                        let mut seen_intra = HashSet::new();
+                        let mut violates = false;
+                        for nid in hop_nodes_intermediate
+                            .iter()
+                            .chain(std::iter::once(&end_node))
+                        {
+                            if !seen_intra.insert(*nid) || path_nodes.contains(nid) {
+                                violates = true;
+                                break;
+                            }
+                        }
+                        if violates {
+                            continue;
+                        }
+                    }
+
                     let next_iteration = iteration + 1;
                     let mut new_nodes_per_pos = nodes_per_pos.clone();
                     // Position 0 is the START of this iteration.
@@ -254,13 +330,33 @@ impl Executor {
                         new_rels_per_hop[i].push(*rid);
                     }
 
+                    let mut new_path_nodes = path_nodes.clone();
+                    if mode.forbids_node_revisit() {
+                        new_path_nodes.extend(
+                            hop_nodes_intermediate
+                                .iter()
+                                .chain(std::iter::once(&end_node)),
+                        );
+                    }
+                    let mut new_path_edges = path_edges.clone();
+                    if mode.forbids_edge_revisit() {
+                        new_path_edges.extend(hop_rels.iter());
+                    }
+
                     let visit_key = (end_node, next_iteration);
-                    if visited.insert(visit_key) {
+                    let push = if matches!(mode, QppMode::Walk) {
+                        visited.insert(visit_key)
+                    } else {
+                        true
+                    };
+                    if push {
                         queue.push_back((
                             end_node,
                             next_iteration,
                             new_nodes_per_pos,
                             new_rels_per_hop,
+                            new_path_nodes,
+                            new_path_edges,
                         ));
                     }
                 }

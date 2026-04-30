@@ -747,6 +747,7 @@ impl Executor {
                     min_length,
                     max_length,
                     optional,
+                    mode,
                 } => {
                     self.execute_quantified_expand(
                         &mut context,
@@ -758,6 +759,7 @@ impl Executor {
                         *min_length,
                         *max_length,
                         *optional,
+                        *mode,
                     )?;
                 }
                 Operator::CallProcedure {

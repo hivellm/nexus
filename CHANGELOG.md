@@ -5,15 +5,133 @@ All notable changes to Nexus will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [1.15.0] — 2026-04-28
+## [1.2.0] — 2026-04-28
 
-> Note: this entry was originally authored as `[1.2.0]` (a typo) on
-> commit 7701ae6e while the workspace `Cargo.toml` was already at
-> `1.15.0` (bumped in commit bcab3e21 to align the server image with
-> the SDK train). `phase7_reconcile-version-strings` corrected the
-> heading so the CHANGELOG, the workspace version, and the published
-> SDK versions all read 1.15.0. The release branch retains its
-> original `release/v1.2.0` name to keep upstream PR refs stable.
+> Note: this entry tracks the `release/v1.2.0` release branch.
+> Previous interim relabel to `1.15.0` (under
+> `phase7_reconcile-version-strings`) is reverted here: workspace
+> `Cargo.toml`, every first-party SDK manifest, and every SDK
+> README compat banner have been brought back to `1.2.0` so the
+> released artifact, the branch name, and the CHANGELOG heading
+> agree.
+
+### Added — `phase8_query-plan-cache`
+
+- **Process-wide query plan cache** at
+  [`crates/nexus-core/src/executor/planner/cache.rs`](crates/nexus-core/src/executor/planner/cache.rs).
+  `PlanCache<V>` is a generic LRU keyed by `xxh3_64` of the
+  canonicalised query, with atomic hit / miss / eviction counters
+  and a `planner_generation: AtomicU64` for schema-change
+  invalidation. Eviction policy: classic LRU (move-to-front on
+  hit, evict tail on capacity bound). Lookup is `O(1)` plus one
+  `parking_lot::Mutex` acquisition.
+- **Env knobs**:
+  - `NEXUS_PLAN_CACHE_ENTRIES` (default `1024`) sets the LRU
+    capacity. `0` disables the cache.
+  - `NEXUS_PLAN_CACHE_DISABLE` (when set to `1` / `true` / `yes`)
+    builds a permanently-disabled cache. Lookups return `None`,
+    inserts are no-ops, miss counter still ticks so an operator
+    who flips the knob mid-flight sees the impact.
+- **`QueryOptimizer` integration**: the per-instance
+  `HashMap<String, OptimizationResult>` + FIFO approximation that
+  shipped pre-phase-8 is replaced by an `Arc<PlanCache<...>>`.
+  Multiple executors share the same cache so a warmup in one
+  connection benefits the next; `bump_plan_cache_generation()`
+  surfaces the schema-change hook for callers that mutate the
+  catalog. `get_cache_stats()` returns the legacy
+  `CacheStats { cache_size, max_cache_size, hit_rate }` shape
+  computed from the new atomic counters.
+- **Operator-facing surface**: `PlanCache::top_n(n)` returns
+  `(canonical_hash, access_count, generation)` for `db.planCache.list`
+  consumers; `PlanCache::clear()` is the emergency flush;
+  `PlanCache::stats()` returns the full counter snapshot.
+- 12 new unit tests covering hit / miss / LRU eviction /
+  generation invalidation / clear-preserves-counters / disabled
+  no-op / zero-capacity-disabled / `top_n` ordering /
+  re-insert preserves access count / 16-thread concurrent
+  lookup / env-var disable knob.
+
+### Added — `phase8_quantified-path-patterns-execution`
+
+- **Path-mode keywords** for QPP: `WALK | TRAIL | ACYCLIC | SIMPLE`
+  precede the quantified group and constrain repeated edges /
+  nodes across the matched path. `WALK` is the implicit default
+  (matches the historical engine behaviour); the other three
+  carry the Cypher 25 / GQL semantics.
+- **`QppMode` enum** in
+  [`crates/nexus-core/src/executor/types.rs`](crates/nexus-core/src/executor/types.rs)
+  threads the mode through the `Operator::QuantifiedExpand`
+  variant, the planner, and the AST `QuantifiedGroup`.
+- **Per-frame visited-set tracking** in `execute_quantified_expand`
+  ([`crates/nexus-core/src/executor/operators/quantified_expand.rs`](crates/nexus-core/src/executor/operators/quantified_expand.rs)).
+  TRAIL / SIMPLE maintain a `path_edges: Vec<u64>` per BFS frame
+  and reject any walk extension whose new edges intersect that
+  set or repeat within the body iteration; ACYCLIC / SIMPLE do
+  the same for `path_nodes`. Wavefront dedup `(node, iteration)`
+  is disabled for non-WALK modes — distinct paths to the same
+  node at the same iteration count have distinct visited sets
+  and may extend into different futures.
+- **Parser support**: `clauses.rs` peeks for an optional
+  `WALK | TRAIL | ACYCLIC | SIMPLE` keyword right before the
+  opening paren of a QPP group. Backtracking restores both the
+  mode keyword and the QPP probe when the lookahead does not
+  form a real QPP, so identifiers that happen to start with one
+  of the four keyword letters keep parsing as identifiers.
+- **`mode_explicit` flag** on `QuantifiedGroup`: any explicit
+  mode keyword (including `WALK`) disables the legacy `*m..n`
+  fast-path lowering and routes through the dedicated
+  `QuantifiedExpand` operator. The implicit (no-keyword) default
+  keeps the lowering on so the textbook anonymous-body shape
+  takes the legacy path byte-for-byte unchanged.
+- 7 new TCK-style tests covering each mode against triangle
+  (loop) and diamond (parallel-paths) fixtures, the explicit
+  `WALK` keyword routing, ACYCLIC bounded against an unbounded
+  triangle loop, and the zero-length-quantifier interaction
+  with `SIMPLE`.
+
+### Added — `phase8_encryption-at-rest-wal`
+
+- **Encrypted WAL append + replay** in
+  [`crates/nexus-core/src/wal/mod.rs`](crates/nexus-core/src/wal/mod.rs).
+  New v3 frame format (`Aes256GcmCrc32C` algo, dispatched off the
+  existing v2 magic byte) carries AES-256-GCM ciphertext with a
+  tag, plus a CRC32C over the recovered plaintext for end-to-end
+  integrity. v3 layout: `[magic:1=0x00][algo:1=0x03][type:1]
+  [plain_len:4][crc_plain:4][ciphertext+tag: plain_len + 16]`.
+- **AAD-bound metadata**: `[type, plain_len, crc_plain,
+  frame_offset]` (17 bytes). A tamperer who relocates a frame to
+  a different file offset triggers an AEAD failure on replay.
+- **Nonce**: `PageNonce::new(FileId::Wal, frame_offset, 1)`. Nonce
+  uniqueness across the file follows from append-only semantics
+  between truncations.
+- **WAL key-rotation contract**: every `Wal::truncate()` must be
+  paired with a key rotation in production (the rotation runner
+  shipped under `phase8_encryption-at-rest-rotation` coordinates
+  with the checkpoint epoch). Documented in
+  `docs/security/ENCRYPTION_AT_REST.md` § "WAL encryption".
+- **On-disk EaR magic**: encrypted WAL files start with a 16-byte
+  `NXCP` page header (`FileId::Wal`, generation 1) so the boot
+  inventory scanner classifies them as `Encrypted`; without the
+  header, the per-frame `0x00` magic byte would otherwise look
+  plaintext to the inventory.
+- **Replay tolerance**: a short read mid-frame, or an AEAD
+  failure on a frame whose body extends to EOF, are both treated
+  as truncation (parity with the existing CRC-mismatch behaviour
+  for v1/v2 frames). Mid-WAL AEAD failures surface
+  `ERR_WAL_AEAD`; plaintext CRC mismatches after successful AEAD
+  surface `ERR_WAL_CRC`.
+- **Backward compatibility**: existing v1 plaintext frames and v2
+  algo-stamped frames continue to replay byte-for-byte unchanged;
+  the v3 dispatcher is gated behind the `Aes256GcmCrc32C` algo
+  byte and only fires when the WAL was opened via
+  `Wal::with_cipher`.
+- 10 new tests: round-trip recovery, EaR magic at offset 0,
+  ciphertext does not contain plaintext payload, wrong-key →
+  `ERR_WAL_AEAD`, mid-WAL bit-flip → `ERR_WAL_AEAD`,
+  trailing-frame truncation tolerance (both byte-truncated and
+  AEAD-failed), `with_cipher` rejects existing plaintext WAL,
+  plaintext WAL refuses v3 append, truncate preserves page
+  header, and post-truncate replay walks fresh frames cleanly.
 
 ### Added — `phase8_encryption-at-rest-storage-hooks` (boot-invariant slice)
 

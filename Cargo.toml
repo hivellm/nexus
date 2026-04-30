@@ -14,7 +14,7 @@ exclude = [
 ]
 
 [workspace.package]
-version = "1.15.0"
+version = "1.2.0"
 edition = "2024"
 authors = ["HiveLLM Contributors <team@hivellm.org>"]
 license = "Apache-2.0"

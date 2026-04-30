@@ -830,9 +830,26 @@ impl CypherParser {
             // paren must be followed by a quantifier token (`{m,n}`,
             // `*`, `+`, `?`). Anything else is not a QPP — we restore
             // position and let the caller terminate the pattern.
+            //
+            // An optional path-mode keyword (`WALK | TRAIL | ACYCLIC
+            // | SIMPLE`) may precede the opening paren: e.g.
+            // `(a)TRAIL ((x)-[r]->(y)){2,5}(b)`. The keyword is
+            // consumed only when a QPP group actually follows; if
+            // the lookahead does not form a QPP the keyword
+            // characters are restored alongside the rest of the
+            // backtrack.
+            let mode_save_pos = self.pos;
+            let mode_save_line = self.line;
+            let mode_save_column = self.column;
+            let parsed_mode = self.try_parse_qpp_mode_keyword()?;
+            self.skip_whitespace();
             if self.peek_char() == Some('(') {
                 match self.try_parse_qpp_group()? {
-                    Some(group) => {
+                    Some(mut group) => {
+                        if let Some(m) = parsed_mode {
+                            group.mode = m;
+                            group.mode_explicit = true;
+                        }
                         // Slice-1 QPP normalisation
                         // (`phase6_opencypher-quantified-path-patterns`):
                         // when the group is the textbook
@@ -865,12 +882,26 @@ impl CypherParser {
                         continue;
                     }
                     None => {
+                        // The mode keyword (if any) was consumed
+                        // optimistically; the lookahead did not
+                        // form a real QPP, so unwind to before the
+                        // keyword and let the outer loop terminate
+                        // the pattern normally.
                         self.pos = saved_pos;
                         self.line = saved_line;
                         self.column = saved_column;
                         break;
                     }
                 }
+            }
+            // No QPP group at this position — restore mode-keyword
+            // consumption so the outer pattern parser sees the
+            // tokens it expects (a `WALK` / `TRAIL` / `ACYCLIC` /
+            // `SIMPLE` here was a false positive).
+            if parsed_mode.is_some() {
+                self.pos = mode_save_pos;
+                self.line = mode_save_line;
+                self.column = mode_save_column;
             }
 
             // Restore position if no relationship, comma, or QPP found
@@ -1011,7 +1042,49 @@ impl CypherParser {
             inner: inner.elements,
             quantifier,
             where_clause,
+            mode: crate::executor::types::QppMode::default(),
+            mode_explicit: false,
         }))
+    }
+
+    /// Optionally consume a path-mode keyword (`WALK | TRAIL |
+    /// ACYCLIC | SIMPLE`) at the current position. Returns `Some`
+    /// when one was consumed (caller should pair it with a QPP
+    /// group), `None` otherwise. The function does not validate
+    /// that a QPP follows — the caller decides whether to honour
+    /// the keyword or restore the pre-keyword position.
+    fn try_parse_qpp_mode_keyword(&mut self) -> Result<Option<crate::executor::types::QppMode>> {
+        use crate::executor::types::QppMode;
+        let save_pos = self.pos;
+        let save_line = self.line;
+        let save_column = self.column;
+        for (kw, mode) in [
+            ("WALK", QppMode::Walk),
+            ("TRAIL", QppMode::Trail),
+            ("ACYCLIC", QppMode::Acyclic),
+            ("SIMPLE", QppMode::Simple),
+        ] {
+            if self.peek_keyword(kw) {
+                self.parse_keyword()?;
+                // Demand whitespace after the keyword so identifiers
+                // that start with one of these letters (e.g. a node
+                // variable named `Walking`) do not falsely match.
+                let after = self.peek_char();
+                if after
+                    .map(|c| c == ' ' || c == '\t' || c == '(')
+                    .unwrap_or(false)
+                {
+                    return Ok(Some(mode));
+                }
+                // Identifier-like continuation — not the keyword we
+                // wanted. Restore and signal absence.
+                self.pos = save_pos;
+                self.line = save_line;
+                self.column = save_column;
+                return Ok(None);
+            }
+        }
+        Ok(None)
     }
 
     /// Parse node pattern

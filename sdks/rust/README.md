@@ -8,7 +8,7 @@
 
 Official Rust SDK for Nexus graph database.
 
-> **Compatibility:** SDK 1.15.0 ↔ `nexus-server` 1.15.0. SDK and
+> **Compatibility:** SDK 1.2.0 ↔ `nexus-server` 1.2.0. SDK and
 > server move in lockstep on the same X.Y.Z train; mismatches
 > within the same `MAJOR.MINOR` are usually fine but only the
 > exact-match build is in the test matrix. See
