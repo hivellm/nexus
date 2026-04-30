@@ -43,7 +43,9 @@ def main() -> int:
     queries = generate(args.seed + 1, args.query_count, args.dim)
     write_fvecs(args.out / "base.fvecs", base)
     write_fvecs(args.out / "queries.fvecs", queries)
-    print(f"[knn-smoke] wrote base={args.base_count} queries={args.query_count} dim={args.dim} -> {args.out}")
+    print(
+        f"[knn-smoke] wrote base={args.base_count} queries={args.query_count} dim={args.dim} -> {args.out}"
+    )
     return 0
 
 

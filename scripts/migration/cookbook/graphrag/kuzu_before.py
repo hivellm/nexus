@@ -23,28 +23,22 @@ def main() -> None:
     db = kuzu.Database("./graphrag.kz")
     conn = kuzu.Connection(db)
 
-    conn.execute(
-        """
+    conn.execute("""
         CREATE NODE TABLE IF NOT EXISTS Document(
             id        SERIAL PRIMARY KEY,
             title     STRING,
             body      STRING,
             embedding FLOAT[768]
         );
-        """
-    )
-    conn.execute(
-        """
+        """)
+    conn.execute("""
         CREATE REL TABLE IF NOT EXISTS Next(FROM Document TO Document);
-        """
-    )
+        """)
 
-    conn.execute(
-        """
+    conn.execute("""
         CALL CREATE_HNSW_INDEX('Document', 'doc_embedding', 'embedding',
                                mu := 16, efc := 200);
-        """
-    )
+        """)
 
     # ... corpus loading + embedding omitted ...
 

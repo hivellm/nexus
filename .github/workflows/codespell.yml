@@ -51,5 +51,5 @@ jobs:
         run: |
           codespell \
             --skip="*.lock,*.json,*.map,*.yaml,*.yml,*.min.js,target,node_modules,.git,dist,gui/dist,*/dist/*,vendor,*/vendor/*,obj,*/obj/*,*.AssemblyInfo.cs" \
-            --ignore-words-list="crate,ser,deser,FPR,ue,te,ot,nd,fo,bu,RETRUN,afterAll"
+            --ignore-words-list="crate,ser,deser,FPR,ue,te,ot,nd,fo,bu,RETRUN,afterAll,re-used,re-use,re-uses,pre-emptively"
 

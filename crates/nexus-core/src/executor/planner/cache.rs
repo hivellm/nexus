@@ -343,7 +343,7 @@ impl<V: Clone> PlanCache<V> {
     ///   `yes`, returns a fully disabled cache regardless of the
     ///   entries knob. Useful for ops emergencies and debugging.
     /// * `NEXUS_PLAN_CACHE_ENTRIES` — capacity. Defaults to
-    ///   [`DEFAULT_PLAN_CACHE_ENTRIES`] when unset or unparseable.
+    ///   [`DEFAULT_PLAN_CACHE_ENTRIES`] when unset or unparsable.
     #[must_use]
     pub fn from_env() -> Self {
         let disabled = std::env::var("NEXUS_PLAN_CACHE_DISABLE")

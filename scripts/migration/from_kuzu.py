@@ -79,14 +79,10 @@ class NodeSpec:
     @classmethod
     def parse(cls, raw: str) -> "NodeSpec":
         if ":" not in raw:
-            raise ValueError(
-                f"--node expects 'Label:path.csv', got {raw!r}"
-            )
+            raise ValueError(f"--node expects 'Label:path.csv', got {raw!r}")
         label, _, path = raw.partition(":")
         if not label or not path:
-            raise ValueError(
-                f"--node expects 'Label:path.csv', got {raw!r}"
-            )
+            raise ValueError(f"--node expects 'Label:path.csv', got {raw!r}")
         return cls(label=label, csv_path=Path(path))
 
 
@@ -121,6 +117,7 @@ class RelSpec:
 
 # Cypher emission
 # ---------------
+
 
 def emit_load_csv_node(spec: NodeSpec, id_property: str = "id") -> str:
     return (
@@ -173,6 +170,7 @@ def write_load_csv_driver(
 
 # CSV streaming
 # -------------
+
 
 def stream_node_rows(
     spec: NodeSpec, id_property: str = "id"
@@ -336,10 +334,9 @@ def _parse_kuzu_kwargs(rest: str) -> dict[str, str]:
 # CLI
 # ---
 
+
 def _make_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(
-        description="Migrate a Kùzu export into Nexus."
-    )
+    parser = argparse.ArgumentParser(description="Migrate a Kùzu export into Nexus.")
     sub = parser.add_subparsers(dest="command", required=True)
 
     load = sub.add_parser(
@@ -347,7 +344,9 @@ def _make_parser() -> argparse.ArgumentParser:
         help="Emit LOAD CSV driver script(s) under --out-dir.",
     )
     load.add_argument("--node", action="append", default=[], help="Label:path.csv")
-    load.add_argument("--rel", action="append", default=[], help="Src-TYPE-Dst:path.csv")
+    load.add_argument(
+        "--rel", action="append", default=[], help="Src-TYPE-Dst:path.csv"
+    )
     load.add_argument("--out-dir", type=Path, default=Path("migrated"))
     load.add_argument("--id-property", default="id")
 
@@ -356,7 +355,9 @@ def _make_parser() -> argparse.ArgumentParser:
         help="Stream the CSV into a running Nexus server via the SDK.",
     )
     bulk.add_argument("--node", action="append", default=[], help="Label:path.csv")
-    bulk.add_argument("--rel", action="append", default=[], help="Src-TYPE-Dst:path.csv")
+    bulk.add_argument(
+        "--rel", action="append", default=[], help="Src-TYPE-Dst:path.csv"
+    )
     bulk.add_argument(
         "--target",
         default="nexus://localhost:15475",

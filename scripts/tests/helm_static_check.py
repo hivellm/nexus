@@ -93,7 +93,9 @@ def check_chart_yaml(chart: Path) -> bool:
         fail(f"Chart.yaml type must be application, got {data.get('type')!r}")
         ok = False
     if ok:
-        info(f"Chart.yaml ok ({data['name']} {data['version']} appVersion={data['appVersion']})")
+        info(
+            f"Chart.yaml ok ({data['name']} {data['version']} appVersion={data['appVersion']})"
+        )
     return ok
 
 
@@ -126,7 +128,11 @@ def strip_helm(text: str) -> str:
     for line in text.splitlines():
         # Drop full-line directives entirely (`{{- if ... -}}`).
         stripped = line.strip()
-        if stripped.startswith("{{") and stripped.endswith("}}") and ":" not in stripped:
+        if (
+            stripped.startswith("{{")
+            and stripped.endswith("}}")
+            and ":" not in stripped
+        ):
             continue
         # Replace inline directives with an inert token so indentation
         # and the surrounding YAML scaffolding survive the rewrite.

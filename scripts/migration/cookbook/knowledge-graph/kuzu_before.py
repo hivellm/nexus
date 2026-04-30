@@ -21,8 +21,7 @@ def main() -> None:
     db = kuzu.Database("./kg.kz")
     conn = kuzu.Connection(db)
 
-    conn.execute(
-        """
+    conn.execute("""
         CREATE NODE TABLE IF NOT EXISTS Paper(
             id SERIAL PRIMARY KEY,
             title STRING,
@@ -30,28 +29,23 @@ def main() -> None:
             embedding FLOAT[768]
         );
         CREATE REL TABLE IF NOT EXISTS Cites(FROM Paper TO Paper);
-        """
-    )
-    conn.execute(
-        """
+        """)
+    conn.execute("""
         CALL CREATE_HNSW_INDEX('Paper', 'paper_embedding', 'embedding',
                                mu := 32, efc := 400);
         CALL CREATE_FTS_INDEX('Paper', 'paper_fts', ['title', 'abstract'],
                               stemmer := 'english');
-        """
-    )
+        """)
 
     query_vec: list[float] = [0.0] * 768
 
-    fts_hits = conn.execute(
-        """
+    fts_hits = conn.execute("""
         CALL QUERY_FTS_INDEX('Paper', 'paper_fts', 'graph databases')
         YIELD node, score
         RETURN node.id AS id, node.title AS title, score
         ORDER BY score DESC
         LIMIT 50
-        """
-    ).get_as_df()
+        """).get_as_df()
 
     knn_hits = conn.execute(
         """

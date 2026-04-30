@@ -309,7 +309,7 @@ uniqueness is guaranteed by the WAL's append-only invariant: each
 frame gets a unique offset between truncations.
 
 **WAL key rotation contract**: a `Wal::truncate()` resets frame
-offsets to `PAGE_HEADER_LEN`. Re-using the same database key
+offsets to `PAGE_HEADER_LEN`. Reusing the same database key
 across a truncate would reuse `(key, nonce)` for fresh frames —
 catastrophic for AES-GCM. Operators **must** pair every WAL
 truncate with a key rotation; the rotation runner shipped under

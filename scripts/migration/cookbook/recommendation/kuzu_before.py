@@ -22,8 +22,7 @@ def main() -> None:
     db = kuzu.Database("./recsys.kz")
     conn = kuzu.Connection(db)
 
-    conn.execute(
-        """
+    conn.execute("""
         CREATE NODE TABLE IF NOT EXISTS User(id SERIAL PRIMARY KEY, name STRING);
         CREATE NODE TABLE IF NOT EXISTS Product(
             id SERIAL PRIMARY KEY,
@@ -31,8 +30,7 @@ def main() -> None:
             embedding FLOAT[256]
         );
         CREATE REL TABLE IF NOT EXISTS Purchased(FROM User TO Product, qty INT64);
-        """
-    )
+        """)
 
     # Behavioural recall: products bought by users similar to me
     # within 4 hops of my purchase graph.
