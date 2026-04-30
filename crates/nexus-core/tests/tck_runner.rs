@@ -563,6 +563,15 @@ fn main() {
     // runtime + tokio current-thread executor + Engine setup have
     // overflowed in CI. Spawn a worker thread with an 8 MiB stack
     // and run the async runtime there.
+    //
+    // Cucumber's `run_and_exit` parses `std::env::args()` through
+    // its own clap-derived CLI which rejects libtest flags like
+    // `--test-threads=10` that `cargo test -- ...` injects into
+    // every test binary (including this `harness = false` one).
+    // Pass an explicit empty `cli::Opts` via `with_cli` so cucumber
+    // skips argv parsing entirely; the shape we actually want is
+    // "no filter, default writer, default runner, default parser",
+    // which is exactly what `Opts::default()` produces.
     let handle = std::thread::Builder::new()
         .name("tck-runner".into())
         .stack_size(8 * 1024 * 1024)
@@ -572,7 +581,13 @@ fn main() {
                 .build()
                 .expect("build tokio runtime");
             rt.block_on(async {
+                let cli: cucumber::cli::Opts<
+                    cucumber::parser::basic::Cli,
+                    cucumber::runner::basic::Cli,
+                    cucumber::writer::basic::Cli,
+                > = cucumber::cli::Opts::default();
                 SpatialWorld::cucumber()
+                    .with_cli(cli)
                     .fail_on_skipped()
                     .run_and_exit("tests/tck/spatial")
                     .await;
