@@ -27,7 +27,7 @@ use axum::extract::State;
 use serde::Serialize;
 
 use crate::NexusServer;
-use crate::config::{EncryptionConfig, EncryptionSource};
+use crate::config::{EncryptionConfig, EncryptionInventorySummary, EncryptionSource};
 
 /// JSON shape returned by `GET /admin/encryption/status`. Stable
 /// across releases; new fields are additive.
@@ -48,6 +48,13 @@ pub struct EncryptionStatusReport {
     /// `enabled = false`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub fingerprint: Option<String>,
+    /// On-disk inventory recovered at boot — counts of plaintext /
+    /// encrypted / empty files in the data directory. `None` when
+    /// the boot scan was skipped or the data dir was missing. The
+    /// counts let operators verify the data dir is in the expected
+    /// state without exposing per-file paths to a remote caller.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub inventory: Option<EncryptionInventorySummary>,
     /// Phase-8 storage-layer wiring is staged across multiple
     /// follow-up tasks. This array enumerates the on-disk surfaces
     /// that have been wired into the encrypted-page stream so far —
@@ -67,6 +74,7 @@ impl From<&EncryptionConfig> for EncryptionStatusReport {
             enabled: cfg.enabled,
             source: cfg.source.clone(),
             fingerprint: cfg.fingerprint.clone(),
+            inventory: cfg.inventory.clone(),
             storage_surfaces: Vec::new(),
             schema_version: 1,
         }
@@ -101,6 +109,7 @@ mod tests {
                 name: "NEXUS_DATA_KEY".into(),
             }),
             fingerprint: Some("nexus:0123456789abcdef".into()),
+            inventory: None,
         };
         let r = EncryptionStatusReport::from(&cfg);
         assert!(r.enabled);
@@ -119,6 +128,11 @@ mod tests {
                 path: "/etc/nexus/master.key".into(),
             }),
             fingerprint: Some("nexus:abcd1234".into()),
+            inventory: Some(EncryptionInventorySummary {
+                empty: 1,
+                plaintext: 0,
+                encrypted: 4,
+            }),
         };
         let r = EncryptionStatusReport::from(&cfg);
         let json = serde_json::to_value(&r).expect("serialise");
@@ -131,6 +145,11 @@ mod tests {
         // omitting it would let consumers special-case the empty
         // case in subtle ways.
         assert!(json.get("storage_surfaces").is_some());
+        // `inventory` is present iff the boot scan ran. Counts
+        // surface as flat fields; no per-file path leakage.
+        assert_eq!(json["inventory"]["empty"], 1);
+        assert_eq!(json["inventory"]["plaintext"], 0);
+        assert_eq!(json["inventory"]["encrypted"], 4);
     }
 
     #[test]

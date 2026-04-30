@@ -96,6 +96,28 @@ hkdf = "0.12"
 sha2_010 = { package = "sha2", version = "0.10", default-features = false }
 zeroize = { version = "1.8", features = ["zeroize_derive"] }
 
+# KMS adapters (phase8_encryption-at-rest-kms). Each is feature-gated
+# at the consumer (nexus-core) so default builds do not pay the
+# transitive-dep cost. Operators who actually deploy with a managed
+# KMS opt in via `--features kms-aws|kms-gcp|kms-vault`.
+#
+# AWS: official `aws-sdk-kms` + `aws-config` for SigV4 + endpoint
+# resolution. `behavior-version-latest` keeps the SDK on its newest
+# default-config track without us pinning the version label here.
+aws-config = { version = "1.5", default-features = false, features = ["behavior-version-latest", "rustls"] }
+aws-sdk-kms = { version = "1.49", default-features = false, features = ["behavior-version-latest", "rustls"] }
+# GCP: `google-cloud-kms` (the `google-cloud-rust` family). Pulls
+# its own auth via `google-cloud-auth`, both under default features
+# so service-account / metadata-server flows work out of the box.
+google-cloud-kms = "0.6"
+google-cloud-auth = "0.17"
+google-cloud-gax = "0.19"
+# Vault: `vaultrs` covers the transit secret engine (encrypt /
+# decrypt / sign endpoints) which is the API we need for the DEK
+# pattern.
+vaultrs = "0.7"
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+
 [profile.release]
 opt-level = 3
 lto = "thin"

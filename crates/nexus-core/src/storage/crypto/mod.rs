@@ -81,8 +81,11 @@
 
 pub mod aes_gcm;
 pub mod encrypted_file;
+pub mod inventory;
 pub mod kdf;
 pub mod key_provider;
+#[cfg(any(feature = "kms-aws", feature = "kms-gcp", feature = "kms-vault"))]
+pub mod kms;
 pub mod rotation;
 
 pub use aes_gcm::{
@@ -90,6 +93,10 @@ pub use aes_gcm::{
 };
 pub use encrypted_file::{
     EncryptedPageStream, FileId, KeySource, PageBuffer, PageHeader, PageStreamError,
+};
+pub use inventory::{
+    FileEncryptionState, InventoryError, InventoryReport, classify_file, enforce_uniform_state,
+    scan_directory, scan_paths,
 };
 pub use kdf::{DatabaseKey, KdfError, MasterKey, derive_database_key};
 pub use key_provider::{

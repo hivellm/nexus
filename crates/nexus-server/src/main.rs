@@ -248,15 +248,34 @@ async fn async_main(_worker_threads: usize) -> anyhow::Result<()> {
         audit_logger.clone(),
         config.root_user.clone(),
     );
-    nexus_server_owned.set_encryption_config(config.encryption.clone());
-    if config.encryption.enabled {
-        if let Some(fp) = config.encryption.fingerprint.as_deref() {
+    // Boot-time encryption invariant: scan the data dir for the
+    // EaR magic, reject mixed-mode and flag-mismatch databases.
+    // Runs after engine + database-manager init so a fresh boot
+    // (where the engine creates zero-byte files) classifies cleanly
+    // as "empty"; the engine itself does not write through the
+    // encrypted page stream yet (storage-layer wiring is a separate
+    // track), so the only way to see encrypted files today is for
+    // the operator to have laid them down out-of-band — which is
+    // exactly what the check is here to catch.
+    let encryption_cfg = config::enforce_data_dir_invariants(
+        config.encryption.clone(),
+        std::path::Path::new(&data_dir),
+    )?;
+    nexus_server_owned.set_encryption_config(encryption_cfg.clone());
+    if encryption_cfg.enabled {
+        if let Some(fp) = encryption_cfg.fingerprint.as_deref() {
             info!(
                 fingerprint = fp,
-                source = ?config.encryption.source,
+                source = ?encryption_cfg.source,
+                inventory = ?encryption_cfg.inventory,
                 "encryption-at-rest: master key resolved"
             );
         }
+    } else if let Some(inv) = &encryption_cfg.inventory {
+        info!(
+            inventory = ?inv,
+            "encryption-at-rest: disabled — data directory inventory clean"
+        );
     }
     let nexus_server = Arc::new(nexus_server_owned);
 

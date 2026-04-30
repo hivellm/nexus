@@ -100,6 +100,16 @@ tikv-jemalloc-ctl = { version = "0.6", features = ["use_std", "stats"], optional
 [features]
 default = []
 memory-profiling = ["dep:tikv-jemallocator", "dep:tikv-jemalloc-ctl"]
+# Re-export of nexus-core's KMS adapter features so operators can
+# build `nexus-server` with managed-KMS support without naming the
+# core crate at the cargo CLI: `cargo build --features kms-vault`
+# (or `kms` for all three). Each feature compiles in the matching
+# `resolve_kms_*` branch in `config.rs`; the no-op stubs surface a
+# clear "not built with feature" error otherwise.
+kms-aws = ["nexus-core/kms-aws"]
+kms-gcp = ["nexus-core/kms-gcp"]
+kms-vault = ["nexus-core/kms-vault"]
+kms = ["kms-aws", "kms-gcp", "kms-vault"]
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["test-util"] }

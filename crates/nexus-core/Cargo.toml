@@ -27,6 +27,16 @@ s2s = []
 slow-tests = []
 benchmarks = []
 testing = []  # Enable testing module for integration tests
+# KMS adapters (phase8_encryption-at-rest-kms). Each adapter is
+# behind its own feature so default builds — the dev / CI matrix —
+# do not pay the SDK transitive-dep cost. Operators flipping
+# encryption-at-rest on with a managed KMS opt in by enabling the
+# matching feature at build time. `kms` is a roll-up that turns all
+# three on for "build everything" CI lanes.
+kms-aws = ["dep:aws-config", "dep:aws-sdk-kms"]
+kms-gcp = ["dep:google-cloud-kms", "dep:google-cloud-auth", "dep:google-cloud-gax"]
+kms-vault = ["dep:vaultrs"]
+kms = ["kms-aws", "kms-gcp", "kms-vault"]
 
 [dependencies]
 # Storage
@@ -104,6 +114,16 @@ zstd = "0.13"
 
 # HTTP framework (for middleware)
 axum = { version = "0.8", optional = true }
+
+# KMS adapters (phase8_encryption-at-rest-kms). All optional and
+# pulled in only when the matching `kms-*` feature is enabled — see
+# the `[features]` table above for the gating contract.
+aws-config = { workspace = true, optional = true }
+aws-sdk-kms = { workspace = true, optional = true }
+google-cloud-kms = { workspace = true, optional = true }
+google-cloud-auth = { workspace = true, optional = true }
+google-cloud-gax = { workspace = true, optional = true }
+vaultrs = { workspace = true, optional = true }
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["test-util", "rt-multi-thread"] }

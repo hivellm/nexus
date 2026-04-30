@@ -15,6 +15,88 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > SDK versions all read 1.15.0. The release branch retains its
 > original `release/v1.2.0` name to keep upstream PR refs stable.
 
+### Added — `phase8_encryption-at-rest-storage-hooks` (boot-invariant slice)
+
+- **Boot-time encryption inventory scanner** at
+  [`crates/nexus-core/src/storage/crypto/inventory.rs`](crates/nexus-core/src/storage/crypto/inventory.rs).
+  Walks the data directory before the executor opens any record
+  store, reads the first 16 bytes of each regular file, and
+  classifies the file as `Empty` / `Plaintext` /
+  `Encrypted { file_id, generation }` based on the EaR magic.
+- **Mixed-mode rejection** via `enforce_uniform_state`: refuses
+  to boot when at least one plaintext file sits alongside at
+  least one encrypted file (`ERR_ENCRYPTION_MIXED_MODE`),
+  rejects a flag-flipped configuration whose on-disk state
+  contradicts the boot config (`ERR_ENCRYPTION_UNEXPECTED_ENCRYPTED`
+  / `ERR_ENCRYPTION_NOT_INITIALIZED`).
+- **`enforce_data_dir_invariants`** in
+  [`crates/nexus-server/src/config.rs`](crates/nexus-server/src/config.rs)
+  drives the scan from the boot path; the resulting
+  `EncryptionInventorySummary { empty, plaintext, encrypted }`
+  rides along on `EncryptionConfig` and surfaces over
+  `GET /admin/encryption/status` as a counts-only `inventory`
+  field. Per-file paths land in the boot log line on error;
+  never sent over the network.
+- **Status quo on the actual page-stream wiring**: the catalog
+  (LMDB has no engine-side page hook), record stores (mutate
+  `MmapMut` in place — no buffer pool yet), page cache (no real
+  disk backing today), and the matching round-trip / crash-
+  recovery / benchmark items are all blocked on a storage-layer
+  refactor that is too large to land in this slice. The
+  inventory scanner is the floor those wirings will report
+  against once they ship; until then, every boot proves the
+  data directory is uniform and the operator surface honestly
+  reflects "no surfaces wired yet" via the empty
+  `storage_surfaces` array.
+- 19 new tests: 15 unit tests covering `classify_file` (empty /
+  short / plaintext / encrypted recovery), `scan_paths` /
+  `scan_directory` (skip list + recursion + missing-dir
+  tolerance), and `enforce_uniform_state` (every cell of the
+  decision matrix); 4 server-side tests covering
+  `enforce_data_dir_invariants` (clean dir, mixed mode,
+  encrypted-with-flag-off, uniform success).
+- Operator-facing docs at
+  [`docs/security/ENCRYPTION_AT_REST.md`](docs/security/ENCRYPTION_AT_REST.md)
+  § "Mixed-mode detection (boot invariant)" — decision matrix
+  + sample status JSON.
+
+### Added — `phase8_encryption-at-rest-kms`
+
+- **AWS KMS, GCP KMS, and HashiCorp Vault adapters** for the
+  `KeyProvider` trait at
+  [`crates/nexus-core/src/storage/crypto/kms/`](crates/nexus-core/src/storage/crypto/kms/).
+  DEK pattern: each adapter holds a wrapped data-key blob on
+  disk + a reference to a KMS-owned KEK; at boot the adapter
+  calls the KMS once to unwrap the DEK and caches the 32-byte
+  plaintext for the process lifetime. Transient KMS outages
+  after boot do not affect serving traffic.
+- **Feature-gated.** `kms-aws` (`aws-sdk-kms` + `aws-config`),
+  `kms-gcp` (`google-cloud-kms`), `kms-vault` (`vaultrs`); the
+  roll-up `kms` enables all three. Default builds skip the SDKs
+  entirely so dev / CI compile times are unaffected.
+- **Operator config** via `NEXUS_KMS_PROVIDER` ∈ `aws|gcp|vault`
+  plus per-provider `NEXUS_KMS_*` env vars. Boot resolution
+  precedence: KMS > `NEXUS_KEY_FILE` > `NEXUS_DATA_KEY`. An
+  unknown provider, or one whose feature is not built in,
+  surfaces a hard fail at boot — no silent fall-through to
+  plaintext.
+- **`EncryptionSource::Kms { provider, label }`** added to
+  `nexus-server::config` so `/admin/encryption/status` reports
+  which KMS unwrapped the master key. The label is the
+  adapter's `KeyProvider::label()` — provider-specific
+  identifier safe to log (KMS key ARN, GCP key resource path,
+  Vault transit mount/key); never the master key itself.
+- 24 new tests: 13 unit tests covering the shared `KmsError`
+  taxonomy + per-provider config-validation paths, 8 server-
+  side encryption tests covering the new resolution branches +
+  `EncryptionSource::Kms` JSON serialisation, and 3 ignored-by-
+  default integration tests against localstack (AWS), the
+  google-cloud-kms emulator (GCP), and `vault dev` (Vault).
+- Operator-facing docs at
+  [`docs/security/ENCRYPTION_AT_REST.md`](docs/security/ENCRYPTION_AT_REST.md)
+  § "KMS adapters" — recipes for one-shot DEK provisioning per
+  provider and a structured error catalogue.
+
 ### Added — `phase8_query-plan-cache` (canonicaliser slice)
 
 - **Cypher canonicaliser landed at
