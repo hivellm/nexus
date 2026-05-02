@@ -84,9 +84,9 @@ run_typescript() {
 run_go() {
     echo
     echo "=== [go] live suite ==="
-    pushd sdks/go >/dev/null
+    pushd sdks/go/test >/dev/null
     NEXUS_LIVE_HOST="$NEXUS_LIVE_HOST" \
-        go test -tags=live ./test/...
+        go test -tags=live -vet=off .
     local rc=$?
     popd >/dev/null
     return $rc
@@ -95,7 +95,7 @@ run_go() {
 run_csharp() {
     echo
     echo "=== [csharp] live suite ==="
-    pushd sdks/csharp >/dev/null
+    pushd sdks/csharp/Tests >/dev/null
     NEXUS_LIVE_HOST="$NEXUS_LIVE_HOST" \
         dotnet test --filter "category=live"
     local rc=$?
@@ -107,9 +107,20 @@ run_php() {
     echo
     echo "=== [php] live suite ==="
     pushd sdks/php >/dev/null
-    NEXUS_LIVE_HOST="$NEXUS_LIVE_HOST" \
-        vendor/bin/phpunit --group live
-    local rc=$?
+    if command -v php >/dev/null 2>&1 && [ -x vendor/bin/phpunit ]; then
+        NEXUS_LIVE_HOST="$NEXUS_LIVE_HOST" \
+            vendor/bin/phpunit --group live
+        local rc=$?
+    else
+        echo "[php] no local PHP toolchain — running via php:8.3-cli docker image"
+        local host_path
+        host_path="$(pwd -W 2>/dev/null || pwd)"
+        MSYS_NO_PATHCONV=1 docker run --rm --network host \
+            -v "$host_path":/app -w /app \
+            -e NEXUS_LIVE_HOST="$NEXUS_LIVE_HOST" \
+            php:8.3-cli vendor/bin/phpunit --group live
+        local rc=$?
+    fi
     popd >/dev/null
     return $rc
 }

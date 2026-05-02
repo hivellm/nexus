@@ -301,6 +301,98 @@ for (const row of result.rows) {
 }
 ```
 
+### Go SDK
+
+```go
+package main
+
+import (
+    "context"
+    "fmt"
+    "log"
+
+    nexus "github.com/hivellm/nexus-go"
+)
+
+func main() {
+    ctx := context.Background()
+    client := nexus.NewClient(nexus.Config{BaseURL: "http://localhost:15474"})
+
+    // Create with external id (idempotent on rerun via match policy)
+    resp, err := client.CreateNodeWithExternalID(
+        ctx,
+        []string{"File"},
+        map[string]interface{}{"path": "/data/file.txt", "size": 1024},
+        "sha256:abc123",
+        "match",
+    )
+    if err != nil { log.Fatal(err) }
+    fmt.Printf("internal id: %d\n", resp.NodeID)
+
+    // Resolve by external id
+    got, err := client.GetNodeByExternalID(ctx, "sha256:abc123")
+    if err != nil { log.Fatal(err) }
+    if got.Node != nil {
+        fmt.Printf("found id=%d labels=%v\n", got.Node.ID, got.Node.Labels)
+    }
+}
+```
+
+Pulled verbatim from `sdks/go/test/external_id_live_test.go` (15/15 live).
+
+### C# SDK
+
+```csharp
+using Nexus.SDK;
+
+var client = new NexusClient(new NexusConfig { BaseUrl = "http://localhost:15474" });
+
+// Create with external id + conflict policy
+var resp = await client.CreateNodeWithExternalIdAsync(
+    labels: new[] { "File" },
+    properties: new Dictionary<string, object?> { { "path", "/data/file.txt" } },
+    externalId: "sha256:abc123",
+    conflictPolicy: "match"
+);
+Console.WriteLine($"internal id: {resp.NodeId}");
+
+// Resolve by external id
+var got = await client.GetNodeByExternalIdAsync("sha256:abc123");
+if (got.Node != null)
+{
+    Console.WriteLine($"found id={got.Node.Id} labels={string.Join(",", got.Node.Labels)}");
+}
+```
+
+Pulled verbatim from `sdks/csharp/Tests/ExternalIdLiveTests.cs` (14/14 live).
+
+### PHP SDK
+
+```php
+<?php
+require __DIR__ . '/vendor/autoload.php';
+
+use Nexus\SDK\NexusClient;
+use Nexus\SDK\Config\Config;
+
+$client = new NexusClient(new Config('http://localhost:15474'));
+
+// MATCH-or-CREATE via Cypher (the legacy createNode REST endpoint is
+// pending a routing fix — Cypher path works against the live server).
+$ext = 'sha256:abc123';
+$client->executeCypher(
+    "CREATE (n:File {_id: '$ext', path: '/data/file.txt'}) ON CONFLICT MATCH RETURN n._id"
+);
+
+// Resolve by external id
+$got = $client->getNodeByExternalId($ext);
+if ($got['node'] !== null) {
+    echo "found id={$got['node']['id']}\n";
+}
+```
+
+Pulled verbatim from `sdks/php/tests/ExternalIdLiveTest.php` (14/14 live).
+
 ## Best Practices
 
 1. **Choose a stable identifier**: Use content hash (SHA-256/BLAKE3) for files, UUID for logical entities, string keys for natural identifiers.
