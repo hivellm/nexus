@@ -5,6 +5,32 @@ All notable changes to the C# SDK are documented in this file.
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 Versioning: [SemVer](https://semver.org/spec/v2.0.0.html).
 
+## [2.2.0] — 2026-05-01
+
+### Added
+
+- **Live integration test suite** `sdks/csharp/Tests/ExternalIdLiveTests.cs` —
+  14 xUnit tests gated on `NEXUS_LIVE_HOST` env var
+  (`[Trait("category","live")]` / `[LiveFact]`).  Run with
+  `dotnet test --filter "category=live"`.
+- Tests cover all six `ExternalId` variants (sha256, blake3, sha512, uuid,
+  str, bytes), all three conflict policies (`error`/`match`/`replace` — including
+  property-update regression guard for commit `fd001344`), Cypher `_id`
+  round-trip via `ExecuteCypherAsync`, length-cap rejection (str > 256 B,
+  bytes > 64 B, empty uuid), and absent-id null-node behaviour.
+- README quick-start section for external ids.
+
+## [2.1.0] — 2026-04-25
+
+### Added
+
+- `CreateNodeWithExternalIdAsync` / `GetNodeByExternalIdAsync` helpers
+  (phase9_external-node-ids).
+- `CreateNodeRequest.ExternalId` + `ConflictPolicy` DTO fields
+  (`[JsonIgnore(Condition = WhenWritingNull)]`).
+- `GetNodeByExternalIdResponse` model.
+- Unit tests for DTO serialisation and URL encoding.
+
 ## [2.0.0] — 2026-04-25
 
 ### Changed (BREAKING)

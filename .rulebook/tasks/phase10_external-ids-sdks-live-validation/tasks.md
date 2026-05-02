@@ -31,22 +31,22 @@
 - [x] 4.7 Update `sdks/go/CHANGELOG.md`
 
 ## 5. C# SDK live coverage
-- [ ] 5.1 Create `sdks/csharp/Tests/ExternalIdLiveTests.cs` with `[Trait("category", "live")]` so xUnit can filter via `dotnet test --filter "category=live"`
-- [ ] 5.2 Test all six `ExternalId` variants via `CreateNodeWithExternalIdAsync` + `GetNodeByExternalIdAsync`
-- [ ] 5.3 Test all three conflict policies; REPLACE overwrite
-- [ ] 5.4 Test Cypher `_id` round-trip via `ExecuteCypherAsync`
-- [ ] 5.5 Test length caps
-- [ ] 5.6 Update `sdks/csharp/README.md` quickstart
-- [ ] 5.7 Bump `sdks/csharp/Nexus.SDK.csproj` version + CHANGELOG entry
+- [x] 5.1 Create `sdks/csharp/Tests/ExternalIdLiveTests.cs` with `[Trait("category", "live")]` so xUnit can filter via `dotnet test --filter "category=live"`
+- [x] 5.2 Test all six `ExternalId` variants via `CreateNodeWithExternalIdAsync` + `GetNodeByExternalIdAsync`
+- [x] 5.3 Test all three conflict policies; REPLACE overwrite
+- [x] 5.4 Test Cypher `_id` round-trip via `ExecuteCypherAsync`
+- [x] 5.5 Test length caps
+- [x] 5.6 Update `sdks/csharp/README.md` quickstart
+- [x] 5.7 Bump `sdks/csharp/Nexus.SDK.csproj` version + CHANGELOG entry
 
 ## 6. PHP SDK live coverage
-- [ ] 6.1 Create `sdks/php/tests/ExternalIdLiveTest.php` with `@group live` so PHPUnit can filter via `vendor/bin/phpunit --group live`
-- [ ] 6.2 Test all six `ExternalId` variants via `createNodeWithExternalId` + `getNodeByExternalId`
-- [ ] 6.3 Test all three conflict policies; REPLACE overwrite
-- [ ] 6.4 Test Cypher `_id` round-trip
-- [ ] 6.5 Test length caps
-- [ ] 6.6 Update `sdks/php/README.md` quickstart
-- [ ] 6.7 Update `sdks/php/composer.json` version + CHANGELOG entry
+- [x] 6.1 Create `sdks/php/tests/ExternalIdLiveTest.php` with `@group live` so PHPUnit can filter via `vendor/bin/phpunit --group live`
+- [x] 6.2 Test all six `ExternalId` variants via `createNodeWithExternalId` + `getNodeByExternalId`
+- [x] 6.3 Test all three conflict policies; REPLACE overwrite
+- [x] 6.4 Test Cypher `_id` round-trip
+- [x] 6.5 Test length caps
+- [x] 6.6 Update `sdks/php/README.md` quickstart
+- [x] 6.7 Update `sdks/php/composer.json` version + CHANGELOG entry
 
 ## 7. Documentation
 - [ ] 7.1 Extend `docs/guides/EXTERNAL_IDS.md` with one verified-working snippet per SDK (each pulled from its live test)

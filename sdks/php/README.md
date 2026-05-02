@@ -2,7 +2,7 @@
 
 Official PHP client library for [Nexus](https://github.com/hivellm/nexus), a high-performance Neo4j-compatible graph database.
 
-> **Compatibility:** SDK 2.0.0 ↔ `nexus-server` 2.0.0. SDK and
+> **Compatibility:** SDK 2.1.0 ↔ `nexus-server` 2.1.0. SDK and
 > server move in lockstep on the same X.Y.Z train. See
 > [`docs/COMPATIBILITY_MATRIX.md`](../../docs/COMPATIBILITY_MATRIX.md).
 
@@ -98,6 +98,39 @@ $nodes = $client->batchCreateNodes([
 ]);
 
 echo "Created " . count($nodes) . " nodes\n";
+```
+
+### External IDs
+
+Nodes can carry a caller-supplied external id in prefixed string form.
+Supported variants: `sha256:<64-hex>`, `blake3:<64-hex>`, `sha512:<128-hex>`,
+`uuid:<canonical>`, `str:<utf8 ≤256 B>`, `bytes:<hex ≤128 chars>`.
+
+```php
+$client = new NexusClient(new Config(baseUrl: 'http://localhost:15474'));
+
+// Create via Cypher with an external id
+$result = $client->executeCypher(
+    "CREATE (n:Document {_id: 'str:doc-phase10', title: 'Phase 10 spec'}) RETURN n._id"
+);
+echo $result->rows[0][0] . "\n"; // str:doc-phase10
+
+// Retrieve by external id
+$resp = $client->getNodeByExternalId('str:doc-phase10');
+if ($resp['node'] !== null) {
+    echo "Node id: " . $resp['node']['id'] . "\n";
+}
+
+// Conflict policies via Cypher ON CONFLICT
+$client->executeCypher(
+    "CREATE (n:Document {_id: 'str:doc-phase10', title: 'Updated'}) ON CONFLICT REPLACE RETURN n._id"
+);
+```
+
+Run the live test suite (requires a running server):
+
+```bash
+NEXUS_LIVE_HOST=http://localhost:15474 vendor/bin/phpunit --group live
 ```
 
 ### Creating Relationships

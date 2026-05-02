@@ -2,7 +2,7 @@
 
 Official .NET client library for [Nexus](https://github.com/hivellm/nexus), a high-performance Neo4j-compatible graph database.
 
-> **Compatibility:** SDK 2.0.0 ↔ `nexus-server` 2.0.0. SDK and
+> **Compatibility:** SDK 2.1.0 ↔ `nexus-server` 2.1.0. SDK and
 > server move in lockstep on the same X.Y.Z train. See
 > [`docs/COMPATIBILITY_MATRIX.md`](../../docs/COMPATIBILITY_MATRIX.md).
 
@@ -110,6 +110,41 @@ foreach (var row in result.Rows)
 }
 
 Console.WriteLine($"Query took {result.Stats?.ExecutionTimeMs:F2}ms");
+```
+
+## External IDs
+
+Nodes can carry a caller-supplied external id in prefixed string form.
+Supported variants: `sha256:<64-hex>`, `blake3:<64-hex>`, `sha512:<128-hex>`,
+`uuid:<canonical>`, `str:<utf8 ≤256 B>`, `bytes:<hex ≤128 chars>`.
+
+```csharp
+await using var client = new NexusClient(new NexusClientConfig
+{
+    BaseUrl = "http://localhost:15474",
+});
+
+// Create a node with a stable external id
+var create = await client.CreateNodeWithExternalIdAsync(
+    labels: new List<string> { "Document" },
+    properties: new Dictionary<string, object?> { ["title"] = "Phase 10 spec" },
+    externalId: $"str:doc-phase10",
+    conflictPolicy: "replace");   // "error" | "match" | "replace"
+
+// Retrieve by external id
+var resp = await client.GetNodeByExternalIdAsync("str:doc-phase10");
+Console.WriteLine($"Found node: {resp.Node?.Id}");
+
+// Cypher _id round-trip
+var result = await client.ExecuteCypherAsync(
+    "CREATE (n:Doc {_id: 'str:doc-phase10-cypher'}) RETURN n._id");
+Console.WriteLine(result.Rows[0][0]?.ToString()); // str:doc-phase10-cypher
+```
+
+Run the live test suite (requires a running server):
+
+```bash
+NEXUS_LIVE_HOST=http://localhost:15474 dotnet test --filter "category=live"
 ```
 
 ## Usage Examples

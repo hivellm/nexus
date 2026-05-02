@@ -110,7 +110,8 @@ class QueryResult
     public function __construct(
         public array $columns = [],
         public array $rows = [],
-        public ?QueryStats $stats = null
+        public ?QueryStats $stats = null,
+        public ?string $error = null
     ) {
     }
 
@@ -126,7 +127,8 @@ class QueryResult
         return new self(
             columns: $data['columns'] ?? [],
             rows: $data['rows'] ?? [],
-            stats: $stats
+            stats: $stats,
+            error: $data['error'] ?? null
         );
     }
 }
