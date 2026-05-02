@@ -44,7 +44,7 @@
 - [x] 6.3 `docs/development/RELEASE_PROCESS.md` "Cross-SDK release" section points at `RELEASE_2.1.0.md` as the worked example
 - [x] 6.4 Top-level `CHANGELOG.md` `[2.1.0]` gains a Fixed bullet covering the PHP + C# route fix and the SDK manifest realignment
 
-## 7. Tail (mandatory - enforced by rulebook v5.3.0)
-- [x] 7.1 `RELEASE_2.1.0.md` plus the `RELEASE_PROCESS.md` cross-link cover the implementation
-- [x] 7.2 Tests landed in §2.6-2.7 (PHP + C# regression coverage via existing live + unit suites) and §5.2-5.6 (the cross-image smoke gates)
-- [x] 7.3 All tests run and pass: 60 C# unit + 14 C# live + 14 PHP live + 17 Python live + 16 TS live + 15 Go live + 14 Rust live + 25 REST + 29 demo + 9 WAL replay = **213 PASS / 0 FAIL**
+## 7. Tail (mandatory — enforced by rulebook v5.3.0)
+- [x] 7.1 Update or create documentation covering the implementation (`docs/development/RELEASE_2.1.0.md` plus `RELEASE_PROCESS.md` cross-link)
+- [x] 7.2 Write tests covering the new behavior (PHP + C# regression coverage via existing live + unit suites in §2.6-2.7; cross-image smoke gates in §5.2-5.6)
+- [x] 7.3 Run tests and confirm they pass — 60 C# unit + 14 C# live + 14 PHP live + 17 Python live + 16 TS live + 15 Go live + 14 Rust live + 25 REST + 29 demo + 9 WAL replay = **213 PASS / 0 FAIL**
