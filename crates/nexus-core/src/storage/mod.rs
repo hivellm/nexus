@@ -19,10 +19,13 @@ use tracing;
 
 pub mod adjacency_list;
 pub mod crypto;
+pub mod external_id;
 pub mod graph_engine;
 pub mod property_store;
 pub mod row_lock;
 pub mod write_buffer;
+
+pub use external_id::{ConflictPolicy, ExternalId};
 
 /// Size of a node record in bytes (32 bytes)
 pub const NODE_RECORD_SIZE: usize = 32;
@@ -290,6 +293,16 @@ impl RecordStore {
         self.next_node_id.fetch_add(1, Ordering::SeqCst)
     }
 
+    /// Peek at the next node ID without consuming it.
+    ///
+    /// Used by the peek-then-allocate pattern in
+    /// `create_node_with_label_bits_inner` to write the external-id index
+    /// entry before committing the id allocation.  Valid only in the
+    /// single-writer model.
+    pub fn peek_next_node_id(&self) -> u64 {
+        self.next_node_id.load(Ordering::SeqCst)
+    }
+
     /// Allocate a new relationship ID
     pub fn allocate_rel_id(&mut self) -> u64 {
         self.next_rel_id.fetch_add(1, Ordering::SeqCst)
@@ -493,8 +506,36 @@ impl RecordStore {
         Ok(*bytemuck::from_bytes(bytes))
     }
 
-    /// Delete a node (mark as deleted)
+    /// Delete a node (mark as deleted).
+    ///
+    /// Does **not** clean up the external-id index.  Use
+    /// [`RecordStore::delete_node_with_catalog`] when the node may carry an
+    /// external id.
     pub fn delete_node(&mut self, node_id: u64) -> Result<()> {
+        let mut record = self.read_node(node_id)?;
+        record.mark_deleted();
+        self.write_node(node_id, &record)
+    }
+
+    /// Delete a node and atomically remove its external-id index entries.
+    ///
+    /// Opens a write transaction on the catalog LMDB env, calls
+    /// [`ExternalIdIndex::delete`] (a no-op when the node has no external id),
+    /// then marks the node record as deleted — all within the same logical
+    /// operation.  The catalog write transaction is committed before the
+    /// in-memory record is updated, which is safe because the record store
+    /// is single-writer.
+    pub fn delete_node_with_catalog(
+        &mut self,
+        node_id: u64,
+        catalog: &crate::catalog::Catalog,
+    ) -> Result<()> {
+        // Remove external-id mappings first (while the node is still "live").
+        let mut wtxn = catalog.write_txn()?;
+        catalog.external_id_index().delete(&mut wtxn, node_id)?;
+        wtxn.commit()?;
+
+        // Mark the record as deleted.
         let mut record = self.read_node(node_id)?;
         record.mark_deleted();
         self.write_node(node_id, &record)
@@ -589,37 +630,20 @@ impl RecordStore {
         labels: Vec<String>,
         properties: serde_json::Value,
     ) -> Result<u64> {
-        let node_id = self.allocate_node_id();
-
-        // Create node record
-        let mut record = NodeRecord::new();
-
-        // Set label bits (for now, just use simple bit setting)
-        // In a full implementation, this would map label names to IDs
+        // Compute label bits from label names (positional mapping).
+        let mut label_bits = 0u64;
         for (i, _label) in labels.iter().enumerate() {
             if i < 64 {
-                record.label_bits |= 1u64 << i;
+                label_bits |= 1u64 << i;
             }
         }
-
-        // Store properties and get property pointer
-        record.prop_ptr = if properties.is_object() && !properties.as_object().unwrap().is_empty() {
-            self.property_store.write().unwrap().store_properties(
-                node_id,
-                property_store::EntityType::Node,
-                properties,
-            )?
-        } else {
-            0
-        };
-
-        // Set first relationship pointer to 0 (no relationships yet)
-        record.first_rel_ptr = 0;
-
-        // Write the record to storage
-        self.write_node(node_id, &record)?;
-
-        Ok(node_id)
+        self.create_node_with_label_bits_inner(
+            label_bits,
+            properties,
+            None,
+            ConflictPolicy::Error,
+            None,
+        )
     }
 
     /// Create a new node with pre-computed label bits
@@ -629,13 +653,155 @@ impl RecordStore {
         label_bits: u64,
         properties: serde_json::Value,
     ) -> Result<u64> {
+        self.create_node_with_label_bits_inner(
+            label_bits,
+            properties,
+            None,
+            ConflictPolicy::Error,
+            None,
+        )
+    }
+
+    /// Create a node carrying an optional external id with a specified conflict policy.
+    ///
+    /// When `external_id` is `None` the behaviour is identical to
+    /// [`RecordStore::create_node`].  When it is `Some(ext)`:
+    ///
+    /// - `catalog` is used to open a write transaction on the LMDB env.
+    /// - The external-id index is consulted via `put_if_absent`.
+    /// - If no entry exists the mapping is committed together with the new record.
+    /// - If an entry already exists, `policy` decides the outcome:
+    ///   - [`ConflictPolicy::Error`] — returns [`Error::ExternalIdConflict`].
+    ///   - [`ConflictPolicy::Match`] — returns the existing internal id.
+    ///   - [`ConflictPolicy::Replace`] — overwrites properties, returns existing id.
+    pub fn create_node_with_external_id(
+        &mut self,
+        _tx: &mut crate::transaction::Transaction,
+        labels: Vec<String>,
+        properties: serde_json::Value,
+        external_id: Option<ExternalId>,
+        policy: ConflictPolicy,
+        catalog: &crate::catalog::Catalog,
+    ) -> Result<u64> {
+        let mut label_bits = 0u64;
+        for (i, _label) in labels.iter().enumerate() {
+            if i < 64 {
+                label_bits |= 1u64 << i;
+            }
+        }
+        self.create_node_with_label_bits_inner(
+            label_bits,
+            properties,
+            external_id,
+            policy,
+            Some(catalog),
+        )
+    }
+
+    /// Create a node with pre-computed label bits and an optional external id.
+    ///
+    /// Fast-path variant used by the executor (which already has label bits
+    /// computed).  Conflict-policy semantics mirror
+    /// [`RecordStore::create_node_with_external_id`].
+    pub fn create_node_with_label_bits_and_external_id(
+        &mut self,
+        _tx: &mut crate::transaction::Transaction,
+        label_bits: u64,
+        properties: serde_json::Value,
+        external_id: Option<ExternalId>,
+        policy: ConflictPolicy,
+        catalog: &crate::catalog::Catalog,
+    ) -> Result<u64> {
+        self.create_node_with_label_bits_inner(
+            label_bits,
+            properties,
+            external_id,
+            policy,
+            Some(catalog),
+        )
+    }
+
+    /// Central implementation used by all node-creation paths.
+    ///
+    /// `catalog` is required only when `external_id` is `Some`.  Passing
+    /// `None` for the catalog with a `Some` external id falls through to
+    /// plain creation (the external-id is ignored) — this should not occur in
+    /// production code but keeps the function total.
+    fn create_node_with_label_bits_inner(
+        &mut self,
+        label_bits: u64,
+        properties: serde_json::Value,
+        external_id: Option<ExternalId>,
+        policy: ConflictPolicy,
+        catalog: Option<&crate::catalog::Catalog>,
+    ) -> Result<u64> {
+        // ── External-id path ──────────────────────────────────────────────────
+        //
+        // peek-then-allocate:
+        //  1. Read next_node_id without consuming it (the probe id).
+        //  2. Call put_if_absent with the probe id inside a catalog write txn.
+        //  3a. No conflict → allocate (consume the id), write record, commit.
+        //  3b. Conflict → dispatch on policy without allocating.
+        //
+        // Single-writer model means no other thread changes next_node_id
+        // between step 1 and step 3a.
+        if let (Some(ext), Some(cat)) = (&external_id, catalog) {
+            let probe_id = self.next_node_id.load(Ordering::SeqCst);
+            let mut wtxn = cat.write_txn()?;
+            let idx = cat.external_id_index();
+
+            match idx.put_if_absent(&mut wtxn, ext, probe_id)? {
+                None => {
+                    // No conflict — consume the id and write the record.
+                    let node_id = self.allocate_node_id();
+                    debug_assert_eq!(
+                        node_id, probe_id,
+                        "single-writer invariant violated between probe and alloc"
+                    );
+
+                    let prop_ptr = self.store_properties_if_any(node_id, &properties)?;
+                    let mut record = NodeRecord::new();
+                    record.label_bits = label_bits;
+                    record.prop_ptr = prop_ptr;
+
+                    tracing::debug!("create_node (ext): node_id={node_id}, prop_ptr={prop_ptr}");
+
+                    self.write_node(node_id, &record)?;
+                    wtxn.commit()?;
+                    return Ok(node_id);
+                }
+                Some(existing_id) => {
+                    // Conflict — abort the catalog txn.
+                    drop(wtxn);
+                    return match policy {
+                        ConflictPolicy::Error => Err(Error::ExternalIdConflict {
+                            existing_internal_id: existing_id,
+                            attempted_external_id: ext.to_string(),
+                        }),
+                        ConflictPolicy::Match => Ok(existing_id),
+                        ConflictPolicy::Replace => {
+                            if properties.is_object()
+                                && !properties.as_object().map(|m| m.is_empty()).unwrap_or(true)
+                            {
+                                self.property_store
+                                    .write()
+                                    .map_err(|_| Error::storage("property store lock poisoned"))?
+                                    .store_properties(
+                                        existing_id,
+                                        property_store::EntityType::Node,
+                                        properties,
+                                    )?;
+                            }
+                            Ok(existing_id)
+                        }
+                    };
+                }
+            }
+        }
+
+        // ── Plain creation (no external id, or catalog not supplied) ─────────
         let node_id = self.allocate_node_id();
 
-        // Create node record
-        let mut record = NodeRecord::new();
-        record.label_bits = label_bits;
-
-        // Phase 1 Optimization: Batch property storage check (avoid multiple is_object checks)
         let has_properties = properties.is_object()
             && properties
                 .as_object()
@@ -643,46 +809,58 @@ impl RecordStore {
                 .unwrap_or(false);
 
         tracing::debug!(
-            "create_node_with_label_bits: node_id={}, has_properties={}, properties={:?}",
-            node_id,
-            has_properties,
-            properties
+            "create_node_with_label_bits_inner: node_id={node_id}, \
+             has_properties={has_properties}"
         );
 
-        // Store properties and get property pointer
-        record.prop_ptr = if has_properties {
-            let prop_ptr = self.property_store.write().unwrap().store_properties(
-                node_id,
-                property_store::EntityType::Node,
-                properties,
-            )?;
-            tracing::debug!(
-                "create_node_with_label_bits: node_id={}, stored properties, prop_ptr={}",
-                node_id,
-                prop_ptr
-            );
-            prop_ptr
+        let prop_ptr = if has_properties {
+            let p = self
+                .property_store
+                .write()
+                .map_err(|_| Error::storage("property store lock poisoned"))?
+                .store_properties(node_id, property_store::EntityType::Node, properties)?;
+            tracing::debug!("create_node_with_label_bits_inner: node_id={node_id}, prop_ptr={p}");
+            p
         } else {
-            tracing::debug!(
-                "create_node_with_label_bits: node_id={}, no properties to store, prop_ptr=0",
-                node_id
-            );
             0
         };
 
-        // Write the record
+        let mut record = NodeRecord::new();
+        record.label_bits = label_bits;
+        record.prop_ptr = prop_ptr;
+
         self.write_node(node_id, &record)?;
 
-        // Verify the prop_ptr was written correctly
         if let Ok(verify_record) = self.read_node(node_id) {
             tracing::debug!(
-                "create_node_with_label_bits: node_id={}, after write_node, read back prop_ptr={}",
-                node_id,
+                "create_node_with_label_bits_inner: node_id={node_id}, \
+                 verified prop_ptr={}",
                 verify_record.prop_ptr
             );
         }
 
         Ok(node_id)
+    }
+
+    /// Helper: store properties and return the property pointer (0 when empty).
+    fn store_properties_if_any(&self, node_id: u64, properties: &serde_json::Value) -> Result<u64> {
+        let has = properties.is_object()
+            && properties
+                .as_object()
+                .map(|m| !m.is_empty())
+                .unwrap_or(false);
+        if has {
+            self.property_store
+                .write()
+                .map_err(|_| Error::storage("property store lock poisoned"))?
+                .store_properties(
+                    node_id,
+                    property_store::EntityType::Node,
+                    properties.clone(),
+                )
+        } else {
+            Ok(0)
+        }
     }
 
     /// Create a new relationship
@@ -1689,5 +1867,327 @@ mod tests {
         assert_eq!(stats.rel_count, 1);
         assert!(stats.nodes_file_size > 0);
         assert!(stats.rels_file_size > 0);
+    }
+
+    // ── External-id tests (items 2.8) ─────────────────────────────────────────
+
+    /// Build an isolated (RecordStore, Catalog) pair that do not share any
+    /// LMDB environment with other tests.
+    fn create_ext_id_fixtures() -> (RecordStore, crate::catalog::Catalog, TestContext) {
+        let ctx = TestContext::new();
+        let store_path = ctx.path().join("store");
+        let catalog_path = ctx.path().join("catalog");
+        std::fs::create_dir_all(&store_path).unwrap();
+        std::fs::create_dir_all(&catalog_path).unwrap();
+
+        let store = RecordStore::new(&store_path).unwrap();
+        let catalog = crate::catalog::Catalog::with_isolated_path(
+            &catalog_path,
+            crate::catalog::CATALOG_MMAP_INITIAL_SIZE,
+        )
+        .unwrap();
+        (store, catalog, ctx)
+    }
+
+    fn make_uuid_ext_id(byte: u8) -> ExternalId {
+        ExternalId::try_uuid([byte; 16]).unwrap()
+    }
+
+    fn make_str_ext_id(s: &str) -> ExternalId {
+        ExternalId::try_str(s.to_string()).unwrap()
+    }
+
+    /// Insert with a new external id: both forward and reverse entries must
+    /// be present after creation.
+    #[test]
+    fn test_create_with_external_id_assigns_and_persists() {
+        let (mut store, catalog, _ctx) = create_ext_id_fixtures();
+        let ext = make_uuid_ext_id(0xAA);
+        let mut tx_mgr = crate::transaction::TransactionManager::new().unwrap();
+        let mut tx = tx_mgr.begin_write().unwrap();
+
+        let node_id = store
+            .create_node_with_external_id(
+                &mut tx,
+                vec!["Person".to_string()],
+                serde_json::json!({"name": "Alice"}),
+                Some(ext.clone()),
+                ConflictPolicy::Error,
+                &catalog,
+            )
+            .unwrap();
+
+        // Forward lookup.
+        let rtxn = catalog.read_txn().unwrap();
+        let found = catalog
+            .external_id_index()
+            .get_internal(&rtxn, &ext)
+            .unwrap();
+        assert_eq!(
+            found,
+            Some(node_id),
+            "forward entry must map to the new node"
+        );
+
+        // Reverse lookup.
+        let rev = catalog
+            .external_id_index()
+            .get_external(&rtxn, node_id)
+            .unwrap();
+        assert_eq!(
+            rev,
+            Some(ext),
+            "reverse entry must map back to the external id"
+        );
+    }
+
+    /// ConflictPolicy::Error on duplicate must surface ExternalIdConflict and
+    /// must not write a new record.
+    #[test]
+    fn test_conflict_policy_error_returns_typed_error() {
+        let (mut store, catalog, _ctx) = create_ext_id_fixtures();
+        let ext = make_uuid_ext_id(0x01);
+        let mut tx_mgr = crate::transaction::TransactionManager::new().unwrap();
+        let mut tx = tx_mgr.begin_write().unwrap();
+
+        let first_id = store
+            .create_node_with_external_id(
+                &mut tx,
+                vec![],
+                serde_json::Value::Object(Default::default()),
+                Some(ext.clone()),
+                ConflictPolicy::Error,
+                &catalog,
+            )
+            .unwrap();
+
+        let err = store
+            .create_node_with_external_id(
+                &mut tx,
+                vec![],
+                serde_json::Value::Object(Default::default()),
+                Some(ext.clone()),
+                ConflictPolicy::Error,
+                &catalog,
+            )
+            .unwrap_err();
+
+        match err {
+            crate::error::Error::ExternalIdConflict {
+                existing_internal_id,
+                attempted_external_id,
+            } => {
+                assert_eq!(existing_internal_id, first_id);
+                assert!(
+                    attempted_external_id.contains("uuid:"),
+                    "error string must include the external id display form"
+                );
+            }
+            other => panic!("expected ExternalIdConflict, got {other:?}"),
+        }
+
+        // No extra node should have been allocated.
+        assert_eq!(
+            store.peek_next_node_id(),
+            first_id + 1,
+            "id counter must not advance on conflict"
+        );
+    }
+
+    /// ConflictPolicy::Match returns the existing id without writing anything.
+    #[test]
+    fn test_conflict_policy_match_returns_existing_id() {
+        let (mut store, catalog, _ctx) = create_ext_id_fixtures();
+        let ext = make_uuid_ext_id(0x02);
+        let mut tx_mgr = crate::transaction::TransactionManager::new().unwrap();
+        let mut tx = tx_mgr.begin_write().unwrap();
+
+        let first_id = store
+            .create_node_with_external_id(
+                &mut tx,
+                vec![],
+                serde_json::json!({"v": 1}),
+                Some(ext.clone()),
+                ConflictPolicy::Error,
+                &catalog,
+            )
+            .unwrap();
+
+        let matched_id = store
+            .create_node_with_external_id(
+                &mut tx,
+                vec![],
+                serde_json::json!({"v": 99}),
+                Some(ext.clone()),
+                ConflictPolicy::Match,
+                &catalog,
+            )
+            .unwrap();
+
+        assert_eq!(matched_id, first_id, "Match must return the existing id");
+        // Id counter must not have advanced.
+        assert_eq!(store.peek_next_node_id(), first_id + 1);
+    }
+
+    /// ConflictPolicy::Replace overwrites properties but keeps the same
+    /// internal id.
+    #[test]
+    fn test_conflict_policy_replace_overwrites_properties_and_keeps_id() {
+        let (mut store, catalog, _ctx) = create_ext_id_fixtures();
+        let ext = make_str_ext_id("doc:001");
+        let mut tx_mgr = crate::transaction::TransactionManager::new().unwrap();
+        let mut tx = tx_mgr.begin_write().unwrap();
+
+        let first_id = store
+            .create_node_with_label_bits_and_external_id(
+                &mut tx,
+                0b1,
+                serde_json::json!({"name": "old"}),
+                Some(ext.clone()),
+                ConflictPolicy::Error,
+                &catalog,
+            )
+            .unwrap();
+
+        let replaced_id = store
+            .create_node_with_label_bits_and_external_id(
+                &mut tx,
+                0b1,
+                serde_json::json!({"name": "new"}),
+                Some(ext.clone()),
+                ConflictPolicy::Replace,
+                &catalog,
+            )
+            .unwrap();
+
+        assert_eq!(replaced_id, first_id, "Replace must return the existing id");
+
+        // Properties must reflect the new value.
+        let props = store
+            .property_store
+            .read()
+            .unwrap()
+            .load_properties(first_id, property_store::EntityType::Node)
+            .unwrap()
+            .expect("node must have properties after Replace");
+        assert_eq!(
+            props.get("name").and_then(|v| v.as_str()),
+            Some("new"),
+            "Replace must overwrite the property store"
+        );
+    }
+
+    /// delete_node_with_catalog removes forward and reverse entries atomically.
+    #[test]
+    fn test_delete_removes_external_id_from_both_maps() {
+        let (mut store, catalog, _ctx) = create_ext_id_fixtures();
+        let ext = make_str_ext_id("file:abc");
+        let mut tx_mgr = crate::transaction::TransactionManager::new().unwrap();
+        let mut tx = tx_mgr.begin_write().unwrap();
+
+        let node_id = store
+            .create_node_with_external_id(
+                &mut tx,
+                vec![],
+                serde_json::Value::Object(Default::default()),
+                Some(ext.clone()),
+                ConflictPolicy::Error,
+                &catalog,
+            )
+            .unwrap();
+
+        store.delete_node_with_catalog(node_id, &catalog).unwrap();
+
+        let rtxn = catalog.read_txn().unwrap();
+        assert_eq!(
+            catalog
+                .external_id_index()
+                .get_internal(&rtxn, &ext)
+                .unwrap(),
+            None,
+            "forward entry must be absent after delete"
+        );
+        assert_eq!(
+            catalog
+                .external_id_index()
+                .get_external(&rtxn, node_id)
+                .unwrap(),
+            None,
+            "reverse entry must be absent after delete"
+        );
+    }
+
+    /// delete_then_recreate: after deleting a node its external id can be
+    /// reused for a new node without conflict.
+    #[test]
+    fn test_delete_then_recreate_with_same_external_id_succeeds() {
+        let (mut store, catalog, _ctx) = create_ext_id_fixtures();
+        let ext = make_str_ext_id("reuse:key");
+        let mut tx_mgr = crate::transaction::TransactionManager::new().unwrap();
+        let mut tx = tx_mgr.begin_write().unwrap();
+
+        let first_id = store
+            .create_node_with_external_id(
+                &mut tx,
+                vec![],
+                serde_json::Value::Object(Default::default()),
+                Some(ext.clone()),
+                ConflictPolicy::Error,
+                &catalog,
+            )
+            .unwrap();
+
+        store.delete_node_with_catalog(first_id, &catalog).unwrap();
+
+        // Recreating with the same external id must succeed.
+        let second_id = store
+            .create_node_with_external_id(
+                &mut tx,
+                vec![],
+                serde_json::Value::Object(Default::default()),
+                Some(ext.clone()),
+                ConflictPolicy::Error,
+                &catalog,
+            )
+            .unwrap();
+
+        assert_ne!(second_id, first_id, "new node must get a fresh internal id");
+
+        let rtxn = catalog.read_txn().unwrap();
+        assert_eq!(
+            catalog
+                .external_id_index()
+                .get_internal(&rtxn, &ext)
+                .unwrap(),
+            Some(second_id),
+            "forward entry must point to the new node"
+        );
+    }
+
+    /// create_node (without external id) must leave the external-id index
+    /// untouched — no false reverse entry for that node.
+    #[test]
+    fn test_no_external_id_doesnt_touch_index() {
+        let (mut store, catalog, _ctx) = create_ext_id_fixtures();
+        let mut tx_mgr = crate::transaction::TransactionManager::new().unwrap();
+        let mut tx = tx_mgr.begin_write().unwrap();
+
+        let node_id = store
+            .create_node(
+                &mut tx,
+                vec!["Label".to_string()],
+                serde_json::json!({"x": 1}),
+            )
+            .unwrap();
+
+        let rtxn = catalog.read_txn().unwrap();
+        let rev = catalog
+            .external_id_index()
+            .get_external(&rtxn, node_id)
+            .unwrap();
+        assert_eq!(
+            rev, None,
+            "plain create_node must not insert a reverse entry"
+        );
     }
 }

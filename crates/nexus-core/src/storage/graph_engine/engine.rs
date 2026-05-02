@@ -131,6 +131,51 @@ impl GraphStorageEngine {
         Ok(node_id)
     }
 
+    /// Create a new node with an optional external id.
+    ///
+    /// When `external_id` is `None` this is identical to
+    /// [`GraphStorageEngine::create_node`].  When it is `Some`, the catalog's
+    /// external-id index is updated atomically according to `policy`.
+    pub fn create_node_with_external_id(
+        &mut self,
+        label_id: u32,
+        external_id: Option<crate::catalog::external_id::ExternalId>,
+        policy: crate::storage::ConflictPolicy,
+        catalog: &crate::catalog::Catalog,
+    ) -> Result<NodeId> {
+        if let Some(ref ext) = external_id {
+            let probe_id = self.next_node_id.load(Ordering::SeqCst);
+            let mut wtxn = catalog.write_txn()?;
+            match catalog
+                .external_id_index()
+                .put_if_absent(&mut wtxn, ext, probe_id)?
+            {
+                None => {
+                    let node_id = self.next_node_id.fetch_add(1, Ordering::SeqCst);
+                    debug_assert_eq!(node_id, probe_id);
+                    self.ensure_node_capacity(node_id)?;
+                    let node = NodeRecord::new(node_id, label_id);
+                    self.write_node_record(node_id, &node)?;
+                    wtxn.commit()?;
+                    return Ok(node_id);
+                }
+                Some(existing_id) => {
+                    drop(wtxn);
+                    return match policy {
+                        crate::storage::ConflictPolicy::Error => Err(Error::ExternalIdConflict {
+                            existing_internal_id: existing_id,
+                            attempted_external_id: ext.to_string(),
+                        }),
+                        crate::storage::ConflictPolicy::Match
+                        | crate::storage::ConflictPolicy::Replace => Ok(existing_id),
+                    };
+                }
+            }
+        }
+        // No external id — plain creation.
+        self.create_node(label_id)
+    }
+
     /// Create a relationship between two nodes
     pub fn create_relationship(
         &mut self,

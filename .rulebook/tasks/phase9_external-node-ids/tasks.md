@@ -9,14 +9,14 @@
 - [x] 1.8 Unit tests: insert / lookup / duplicate-rejection / delete / reopen-and-reload / forward-reverse consistency
 
 ## 2. Storage: node creation paths
-- [ ] 2.1 Add `RecordStore::create_node_with_external_id` accepting `Option<ExternalId>` and a `ConflictPolicy { Error, Match, Replace }`
-- [ ] 2.2 Refactor `create_node` and `create_node_with_label_bits` (`crates/nexus-core/src/storage/mod.rs:585-680`) to delegate to the new function with `None`
-- [ ] 2.3 On `Match`: return the existing internal id without writing a record
-- [ ] 2.4 On `Replace`: reuse the internal id, overwrite properties through the property store, leave label bits as-is unless the caller passes new ones
-- [ ] 2.5 On `Error`: surface a typed `ExternalIdConflict { existing_internal_id, attempted_external_id }` error
-- [ ] 2.6 Update `delete_node` to remove both the forward and reverse external-id entries atomically
-- [ ] 2.7 Mirror the new path in `crates/nexus-core/src/storage/graph_engine/engine.rs:119` and `crates/nexus-core/src/graph/core.rs:352`
-- [ ] 2.8 Unit tests: each conflict policy, delete-then-recreate, concurrent insert race (single-writer model — verify ordering)
+- [x] 2.1 Add `RecordStore::create_node_with_external_id` accepting `Option<ExternalId>` and a `ConflictPolicy { Error, Match, Replace }`
+- [x] 2.2 Refactor `create_node` and `create_node_with_label_bits` (`crates/nexus-core/src/storage/mod.rs:585-680`) to delegate to the new function with `None`
+- [x] 2.3 On `Match`: return the existing internal id without writing a record
+- [x] 2.4 On `Replace`: reuse the internal id, overwrite properties through the property store, leave label bits as-is unless the caller passes new ones
+- [x] 2.5 On `Error`: surface a typed `ExternalIdConflict { existing_internal_id, attempted_external_id }` error
+- [x] 2.6 Update `delete_node` to remove both the forward and reverse external-id entries atomically
+- [x] 2.7 Mirror the new path in `crates/nexus-core/src/storage/graph_engine/engine.rs:119` and `crates/nexus-core/src/graph/core.rs:352`
+- [x] 2.8 Unit tests: each conflict policy, delete-then-recreate, concurrent insert race (single-writer model — verify ordering)
 
 ## 3. Engine + transaction integration
 - [ ] 3.1 Extend `engine::crud::create_node` (`crates/nexus-core/src/engine/crud.rs:356`) and `create_node_with_transaction` (`:366`) with `external_id: Option<ExternalId>` and `policy: ConflictPolicy`

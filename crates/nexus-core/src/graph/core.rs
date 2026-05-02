@@ -350,11 +350,21 @@ impl Graph {
 
     /// Create a new node in the graph
     pub fn create_node(&self, labels: Vec<String>) -> Result<NodeId> {
-        // Allocate a new node ID
-        let node_id = self.store.borrow_mut().allocate_node_id();
-        let node_id = NodeId::new(node_id);
+        self.create_node_with_external_id(labels, None, crate::storage::ConflictPolicy::Error)
+    }
 
-        // Get or create label IDs
+    /// Create a new node in the graph with an optional external id.
+    ///
+    /// When `external_id` is `None` this is identical to
+    /// [`Graph::create_node`].  When it is `Some`, the catalog's
+    /// external-id index is updated atomically per `policy`.
+    pub fn create_node_with_external_id(
+        &self,
+        labels: Vec<String>,
+        external_id: Option<crate::catalog::external_id::ExternalId>,
+        policy: crate::storage::ConflictPolicy,
+    ) -> Result<NodeId> {
+        // Resolve label ids and build label_bits.
         let mut label_bits = 0u64;
         for label in &labels {
             let label_id = self.catalog.get_or_create_label(label)?;
@@ -363,20 +373,65 @@ impl Graph {
             }
         }
 
-        // Create node record
+        if let Some(ref ext) = external_id {
+            let probe_id = self.store.borrow().peek_next_node_id();
+            let mut wtxn = self.catalog.write_txn()?;
+            match self
+                .catalog
+                .external_id_index()
+                .put_if_absent(&mut wtxn, ext, probe_id)?
+            {
+                None => {
+                    // Consume the id.
+                    let raw_id = self.store.borrow_mut().allocate_node_id();
+                    debug_assert_eq!(raw_id, probe_id);
+                    let node_id = NodeId::new(raw_id);
+
+                    let record = NodeRecord {
+                        label_bits,
+                        first_rel_ptr: u64::MAX,
+                        prop_ptr: u64::MAX,
+                        ..Default::default()
+                    };
+                    self.store
+                        .borrow_mut()
+                        .write_node(node_id.value(), &record)?;
+                    wtxn.commit()?;
+
+                    let node = Node::new(node_id, labels);
+                    self.node_cache.write().insert(node_id, node);
+                    return Ok(node_id);
+                }
+                Some(existing_raw) => {
+                    drop(wtxn);
+                    return match policy {
+                        crate::storage::ConflictPolicy::Error => {
+                            Err(crate::error::Error::ExternalIdConflict {
+                                existing_internal_id: existing_raw,
+                                attempted_external_id: ext.to_string(),
+                            })
+                        }
+                        crate::storage::ConflictPolicy::Match
+                        | crate::storage::ConflictPolicy::Replace => Ok(NodeId::new(existing_raw)),
+                    };
+                }
+            }
+        }
+
+        // Plain creation (no external id).
+        let node_id = self.store.borrow_mut().allocate_node_id();
+        let node_id = NodeId::new(node_id);
+
         let record = NodeRecord {
             label_bits,
-            first_rel_ptr: u64::MAX, // No relationships yet
-            prop_ptr: u64::MAX,      // No properties yet
+            first_rel_ptr: u64::MAX,
+            prop_ptr: u64::MAX,
             ..Default::default()
         };
-
-        // Write to storage
         self.store
             .borrow_mut()
             .write_node(node_id.value(), &record)?;
 
-        // Create in-memory node
         let node = Node::new(node_id, labels);
         self.node_cache.write().insert(node_id, node);
 

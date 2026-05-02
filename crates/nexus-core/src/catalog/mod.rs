@@ -1119,6 +1119,20 @@ impl Catalog {
     pub fn verify_external_ids(&self) -> Result<()> {
         self.external_id_index.verify_consistency()
     }
+
+    /// Open a write transaction on the catalog LMDB environment.
+    ///
+    /// Callers that need to write external-id index entries in the same
+    /// LMDB transaction as other catalog mutations should use this to
+    /// obtain an `RwTxn` and then commit it when done.
+    pub fn write_txn(&self) -> Result<heed::RwTxn<'_>> {
+        Ok(self.env.write_txn()?)
+    }
+
+    /// Open a read transaction on the catalog LMDB environment.
+    pub fn read_txn(&self) -> Result<heed::RoTxn<'_>> {
+        Ok(self.env.read_txn()?)
+    }
 }
 
 impl Default for Catalog {

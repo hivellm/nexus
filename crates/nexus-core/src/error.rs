@@ -138,6 +138,21 @@ pub enum Error {
     /// installed [`crate::cluster::QuotaProvider`] denies a write.
     #[error("Quota exceeded: {0}")]
     QuotaExceeded(String),
+
+    /// An external id already maps to a different node.
+    ///
+    /// Returned when `ConflictPolicy::Error` is active and the supplied
+    /// external id is already present in the catalog index.
+    #[error(
+        "external id conflict: {attempted_external_id} already maps to internal id \
+         {existing_internal_id}"
+    )]
+    ExternalIdConflict {
+        /// The internal id that already holds the external id.
+        existing_internal_id: u64,
+        /// Display form of the external id that the caller attempted to assign.
+        attempted_external_id: String,
+    },
 }
 
 impl Error {
