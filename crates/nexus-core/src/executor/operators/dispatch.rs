@@ -187,7 +187,11 @@ impl Executor {
                     );
                 }
             }
-            Operator::Create { pattern } => {
+            Operator::Create {
+                pattern,
+                external_id_expr: _,
+                conflict_policy: _,
+            } => {
                 // phase6_opencypher-subquery-transactions — CREATE
                 // reachable through the dispatch path comes from
                 // nested subqueries (e.g. `CALL { … CREATE … }`).

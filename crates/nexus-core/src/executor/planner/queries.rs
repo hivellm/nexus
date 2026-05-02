@@ -753,6 +753,8 @@ impl<'a> QueryPlanner<'a> {
                     insert_pos + i,
                     Operator::Create {
                         pattern: create_pattern,
+                        external_id_expr: None,
+                        conflict_policy: crate::executor::parser::AstConflictPolicy::Error,
                     },
                 );
             }

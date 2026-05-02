@@ -25,7 +25,7 @@
 - [x] 3.4 Add transaction-rollback path that removes the external-id entry if the node creation aborts
 
 ## 4. Cypher executor
-- [ ] 4.1 Reserve `_id` as a magic property in `crates/nexus-core/src/executor/parser/` and forbid user-defined `_id` properties unless `compat.allow_user_underscore_id = true`
+- [x] 4.1 Reserve `_id` as a magic property in `crates/nexus-core/src/executor/parser/` and forbid user-defined `_id` properties unless `compat.allow_user_underscore_id = true`
 - [ ] 4.2 Parse `_id` value as one of: quoted prefixed string (`'sha256:abc…'`), parameter (`$external_id`), or function call (`hash('blake3', $bytes)`) — emit a clear error otherwise
 - [ ] 4.3 Add an optional clause modifier `CREATE (n:Label {_id: $x}) ON CONFLICT MATCH|REPLACE|ERROR` (default `ERROR`)
 - [ ] 4.4 Implement the `CREATE` operator branch in `crates/nexus-core/src/executor/operators/create.rs` to call the new storage path

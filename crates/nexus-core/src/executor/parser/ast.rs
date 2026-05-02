@@ -6,6 +6,21 @@ use crate::{Error, Result};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
+/// How to resolve a duplicate `_id` on `CREATE`.
+///
+/// Mirrors [`crate::storage::external_id::ConflictPolicy`] at the AST
+/// level so the executor does not depend on the storage type directly.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub enum AstConflictPolicy {
+    /// Return an error — the default when `ON CONFLICT` is omitted.
+    #[default]
+    Error,
+    /// Return the existing node unchanged; do not write a new record.
+    Match,
+    /// Reuse the existing internal id and overwrite properties.
+    Replace,
+}
+
 /// Abstract Syntax Tree for Cypher queries
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct CypherQuery {
@@ -176,6 +191,20 @@ pub enum QueryHint {
 pub struct CreateClause {
     /// Pattern to create
     pub pattern: Pattern,
+    /// Expression that evaluates to the external id string (`_id` magic
+    /// property extracted from the first node's property map at parse
+    /// time).  Only `Expression::Literal(Literal::String(_))` and
+    /// `Expression::Parameter(_)` are valid at execution time; anything
+    /// else was already rejected by the parser.
+    ///
+    /// `None` when no `_id` was present in the pattern — behaviour is
+    /// identical to before this feature.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub external_id_expr: Option<Expression>,
+    /// Conflict-resolution policy for the external id.  Defaults to
+    /// `Error` when the `ON CONFLICT` clause is absent.
+    #[serde(default)]
+    pub conflict_policy: AstConflictPolicy,
 }
 
 /// MERGE clause for match-or-create operations

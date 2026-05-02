@@ -232,6 +232,12 @@ pub enum Operator {
     Create {
         /// Pattern to create
         pattern: parser::Pattern,
+        /// External-id expression extracted from the `_id` magic property.
+        /// `None` means no external id — behaviour is identical to before
+        /// this feature was introduced.
+        external_id_expr: Option<parser::Expression>,
+        /// Conflict resolution policy when the external id already exists.
+        conflict_policy: parser::AstConflictPolicy,
     },
     /// Delete nodes (without detaching relationships)
     Delete {

@@ -232,7 +232,12 @@ impl Executor {
 
         // Check if first operator is CREATE standalone (no MATCH before)
         // If so, execute it directly and populate result_set
-        if let Some(Operator::Create { pattern }) = operators.first() {
+        if let Some(Operator::Create {
+            pattern,
+            external_id_expr: _,
+            conflict_policy: _,
+        }) = operators.first()
+        {
             let existing_rows = self.materialize_rows_from_variables(&context);
             if existing_rows.is_empty() {
                 // CREATE standalone - create nodes and relationships directly
@@ -577,7 +582,11 @@ impl Executor {
                 } => {
                     self.execute_union(&mut context, left, right, *distinct)?;
                 }
-                Operator::Create { pattern } => {
+                Operator::Create {
+                    pattern,
+                    external_id_expr: _,
+                    conflict_policy: _,
+                } => {
                     // Skip if already executed in the first block
                     if operators
                         .first()
@@ -1234,6 +1243,8 @@ impl Executor {
                     // Add CREATE operator (don't execute directly)
                     operators.push(Operator::Create {
                         pattern: create_clause.pattern.clone(),
+                        external_id_expr: create_clause.external_id_expr.clone(),
+                        conflict_policy: create_clause.conflict_policy,
                     });
                 }
                 parser::Clause::Merge(merge_clause) => {

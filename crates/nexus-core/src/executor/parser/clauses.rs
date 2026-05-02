@@ -558,7 +558,11 @@ impl CypherParser {
         self.skip_whitespace();
         let pattern = self.parse_pattern()?;
 
-        Ok(CreateClause { pattern })
+        Ok(CreateClause {
+            pattern,
+            external_id_expr: None,
+            conflict_policy: AstConflictPolicy::Error,
+        })
     }
 
     /// Parse MERGE clause
