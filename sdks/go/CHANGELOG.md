@@ -6,6 +6,20 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 Versioning: [SemVer](https://semver.org/spec/v2.0.0.html) via Git tags
 (Go modules read `v1.0.0` and up from the repo tag).
 
+## [Unreleased] — phase10
+
+### Added
+
+- `sdks/go/test/external_id_live_test.go` — 15 live integration tests
+  (build tag `live`) covering all six `ExternalId` variants
+  (sha256/blake3/sha512/uuid/str/bytes), all three conflict policies
+  (error/match/replace), Cypher `_id` round-trip, length-cap rejection
+  (str >256 bytes, bytes >64 bytes, empty uuid payload), and absent
+  external-id GET.  Gate on `NEXUS_LIVE_HOST` env var — skipped when unset.
+  Run with: `NEXUS_LIVE_HOST=http://localhost:15474 go test -tags=live -v ./test/...`
+- README `External IDs` quickstart section with copy-pasteable snippet for
+  `CreateNodeWithExternalID`, `GetNodeByExternalID`, and Cypher `_id` usage.
+
 ## [2.0.0] — 2026-04-25
 
 ### Changed (BREAKING)

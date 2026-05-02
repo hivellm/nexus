@@ -5,6 +5,25 @@ All notable changes to the Python SDK are documented in this file.
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 Versioning: [SemVer](https://semver.org/spec/v2.0.0.html).
 
+## [2.1.1] — 2026-05-01
+
+### Added
+
+- **Live integration test suite** `nexus_sdk/tests/test_external_id_live.py`
+  (phase10 §2): 14 tests covering all six `ExternalId` variants
+  (`sha256`, `blake3`, `sha512`, `uuid`, `str`, `bytes`) via
+  `create_node_with_external_id` + `get_node_by_external_id` round-trips,
+  all three conflict policies (`error`/`match`/`replace` — the `replace`
+  property-overwrite check is a regression guard for commit `fd001344`),
+  Cypher `_id` literal round-trip via `execute_cypher`, length-cap
+  validation for `str` > 256 bytes / `bytes` > 64 bytes / empty `uuid`
+  payload, and absent-id `node=None` contract.
+- `pytest.mark.live` marker registered in `pyproject.toml`; gate is
+  `NEXUS_LIVE_HOST` env var so unit-only CI is unaffected.
+- **README quick-start section** "External IDs (phase10)" with
+  copy-pasteable examples for create, match, replace, Cypher `_id`, and
+  absent-id lookup — pulled directly from the live test suite.
+
 ## [2.0.0] — 2026-04-25
 
 ### Changed (BREAKING)

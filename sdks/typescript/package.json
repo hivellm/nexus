@@ -1,6 +1,6 @@
 {
   "name": "@hivehub/nexus-sdk",
-  "version": "2.0.0",
+  "version": "2.1.1",
   "description": "Official TypeScript/JavaScript SDK for Nexus Graph Database",
   "main": "dist/index.js",
   "module": "dist/index.mjs",
@@ -21,6 +21,7 @@
     "build": "tsup src/index.ts --format cjs,esm --dts --clean",
     "dev": "tsup src/index.ts --format cjs,esm --dts --watch",
     "test": "vitest run",
+    "test:live": "NEXUS_LIVE_HOST=http://localhost:15474 vitest run tests/external-id.live.test.ts",
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage",
     "lint": "eslint src/**/*.ts",

@@ -5,6 +5,30 @@ All notable changes to the Nexus TypeScript SDK will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.1.1] - 2026-05-01
+
+### Added
+
+- **Live integration test suite** `tests/external-id.live.test.ts` (phase10 §3):
+  - 16 vitest cases covering all six `ExternalId` variants (sha256, blake3,
+    sha512, uuid, str, bytes) via `createNodeWithExternalId` +
+    `getNodeByExternalId` round-trips.
+  - All three conflict policies (`error`, `match`, `replace`), including a
+    regression guard for the `replace` prop-ptr fix (commit `fd001344`) that
+    reads back the updated property value.
+  - Cypher `CREATE (n {_id: '...'}) RETURN n._id` round-trip via
+    `executeCypher` — value is compared positionally because the server
+    normalises the column alias to `result`.
+  - `MATCH ... RETURN n._id` null-projection check for plain nodes.
+  - Cypher-created node lookup via `getNodeByExternalId`.
+  - Length-cap rejection tests for `str` > 256 bytes, `bytes` > 64 bytes,
+    and empty `uuid:` payload.
+  - Absent-id returns `null` node (not an HTTP error).
+  - Suite is gated on `NEXUS_LIVE_HOST` env var so unit-only CI passes
+    without a running container.
+- `npm run test:live` script: runs the live suite against
+  `http://localhost:15474`.
+
 ## [1.0.0] - 2026-04-19
 
 ### Added

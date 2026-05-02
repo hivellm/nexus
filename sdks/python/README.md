@@ -7,7 +7,7 @@
 
 Official Python SDK for Nexus graph database.
 
-> **Compatibility:** SDK 2.0.0 ↔ `nexus-server` 2.0.0. SDK and
+> **Compatibility:** SDK 2.1.0 ↔ `nexus-server` 2.1.0. SDK and
 > server move in lockstep on the same X.Y.Z train. See
 > [`docs/COMPATIBILITY_MATRIX.md`](../../docs/COMPATIBILITY_MATRIX.md).
 
@@ -77,6 +77,81 @@ async def main():
         print(f"Created node with ID: {create_response.node_id}")
 
 asyncio.run(main())
+```
+
+### External IDs (phase10)
+
+Nexus lets every node carry a caller-supplied **external id** — a
+content-addressed or domain-scoped key that survives internal id
+reassignment and enables idempotent ingest. Six variants are supported:
+`sha256`, `blake3`, `sha512`, `uuid`, `str`, `bytes`.
+
+```python
+import asyncio, uuid
+from nexus_sdk import NexusClient
+
+async def main():
+    async with NexusClient("http://localhost:15474") as client:
+        ext_id = f"uuid:{uuid.uuid4()}"
+
+        # Create a node with an external id (conflict_policy defaults to "error")
+        create = await client.create_node_with_external_id(
+            labels=["Document"],
+            properties={"title": "Annual Report", "year": 2026},
+            external_id=ext_id,
+        )
+        print(f"Created node_id={create.node_id}")
+
+        # Resolve back: GET /data/nodes/by-external-id
+        lookup = await client.get_node_by_external_id(ext_id)
+        assert lookup.node is not None
+        assert lookup.node.id == create.node_id
+        print(f"Resolved id={lookup.node.id}, props={lookup.node.properties}")
+
+        # Idempotent re-ingest with conflict_policy="match"
+        match = await client.create_node_with_external_id(
+            labels=["Document"],
+            properties={"title": "ignored"},
+            external_id=ext_id,
+            conflict_policy="match",
+        )
+        assert match.node_id == create.node_id  # same node returned
+
+        # Update-or-create with conflict_policy="replace"
+        replace = await client.create_node_with_external_id(
+            labels=["Document"],
+            properties={"title": "Annual Report — Revised", "year": 2026},
+            external_id=ext_id,
+            conflict_policy="replace",
+        )
+        assert replace.node_id == create.node_id  # id preserved, props updated
+
+        # Cypher CREATE with _id literal; RETURN n._id projects the prefixed string
+        cyp_id = "sha256:" + "a" * 64
+        result = await client.execute_cypher(
+            f"CREATE (n:File {{_id: '{cyp_id}', name: 'report.pdf'}}) RETURN n._id"
+        )
+        assert result.rows[0][0] == cyp_id
+
+asyncio.run(main())
+```
+
+Absent-id lookup returns `node=None` (no error):
+
+```python
+lookup = await client.get_node_by_external_id("uuid:00000000-0000-0000-0000-000000000000")
+assert lookup.node is None
+```
+
+Length caps: `str` payload max 256 bytes, `bytes` payload max 64 bytes
+(hex-encoded), `uuid` must be a canonical UUID string. Violations are
+surfaced as `response.error` (HTTP 200, non-null `error` field).
+
+Run the full live suite:
+
+```bash
+NEXUS_LIVE_HOST=http://localhost:15474 pytest \
+    sdks/python/nexus_sdk/tests/test_external_id_live.py -v -m live
 ```
 
 ### With Authentication

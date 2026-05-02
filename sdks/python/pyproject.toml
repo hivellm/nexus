@@ -9,7 +9,7 @@ build-backend = "setuptools.build_meta"
 # The Python import path is still `nexus_sdk` — `pip install
 # hivehub-nexus-sdk` followed by `from nexus_sdk import NexusClient`.
 name = "hivehub-nexus-sdk"
-version = "2.0.0"
+version = "2.1.1"
 description = "Official Python SDK for Nexus graph database"
 readme = "README.md"
 requires-python = ">=3.8"
@@ -79,4 +79,7 @@ target-version = "py38"
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 asyncio_mode = "auto"
+markers = [
+    "live: live integration tests — require NEXUS_LIVE_HOST env var to be set",
+]
 

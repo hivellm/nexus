@@ -5,7 +5,7 @@ Official TypeScript/JavaScript SDK for [Nexus Graph Database](https://github.com
 [![npm version](https://img.shields.io/npm/v/@hivehub/nexus-sdk.svg)](https://www.npmjs.com/package/@hivehub/nexus-sdk)
 [![License: Apache 2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
 
-> **Compatibility:** SDK 2.0.0 ↔ `nexus-server` 2.0.0. SDK and
+> **Compatibility:** SDK 2.1.0 ↔ `nexus-server` 2.1.0. SDK and
 > server move in lockstep on the same X.Y.Z train. See
 > [`docs/COMPATIBILITY_MATRIX.md`](../../docs/COMPATIBILITY_MATRIX.md).
 
@@ -299,6 +299,55 @@ const dbClient = new NexusClient({
 });
 // All operations will use 'mydb'
 const result = await dbClient.executeCypher('MATCH (n) RETURN n LIMIT 10', {});
+```
+
+### External Ids (Phase 9 / Phase 10)
+
+Nodes can carry a caller-supplied external id. The id uses a type prefix
+(`sha256`, `blake3`, `sha512`, `uuid`, `str`, or `bytes`) so the engine can
+validate the payload.
+
+```typescript
+import { NexusClient } from '@hivehub/nexus-sdk';
+
+const client = new NexusClient({ baseUrl: 'http://localhost:15474' });
+
+// Create a node with a UUID external id
+const created = await client.createNodeWithExternalId(
+  ['Document'],
+  { title: 'Hello World', status: 'draft' },
+  `uuid:${crypto.randomUUID()}`,
+);
+console.log('Internal node id:', created.node_id);
+
+// Look up the same node by its external id
+const lookup = await client.getNodeByExternalId(`uuid:${created.node_id}`);
+// lookup.node contains { id, labels, properties }
+
+// Conflict policies
+// "error" (default) — rejects duplicates
+// "match"           — returns existing node id unchanged
+// "replace"         — overwrites properties, returns same node id
+await client.createNodeWithExternalId(
+  ['Document'],
+  { title: 'Updated', status: 'published' },
+  'str:my-natural-key',
+  'replace',
+);
+
+// External ids via Cypher
+const result = await client.executeCypher(
+  "CREATE (n:Doc {_id: 'str:my-doc-key', name: 'example'}) RETURN n._id",
+);
+// result.rows[0][result.columns[0]] === 'str:my-doc-key'
+```
+
+Run the live integration suite against a running container:
+
+```bash
+npm run test:live
+# or with a custom host:
+NEXUS_LIVE_HOST=http://my-nexus-host:15474 npx vitest run tests/external-id.live.test.ts
 ```
 
 ## Configuration Options

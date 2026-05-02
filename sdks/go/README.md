@@ -2,7 +2,7 @@
 
 Official Go client library for [Nexus](https://github.com/hivellm/nexus), a high-performance Neo4j-compatible graph database.
 
-> **Compatibility:** SDK 2.0.0 ↔ `nexus-server` 2.0.0. SDK and
+> **Compatibility:** SDK 2.1.0 ↔ `nexus-server` 2.1.0. SDK and
 > server move in lockstep on the same X.Y.Z train. See
 > [`docs/COMPATIBILITY_MATRIX.md`](../../docs/COMPATIBILITY_MATRIX.md).
 
@@ -720,9 +720,73 @@ type QueryStats struct {
 }
 ```
 
+## External IDs (phase 10)
+
+Nexus supports six external-id variants that let you attach a stable,
+caller-controlled key to any node.  The key is stored as a prefixed string
+(`sha256:<hex>`, `blake3:<hex>`, `sha512:<hex>`, `uuid:<canonical>`,
+`str:<utf8>`, `bytes:<hex>`).
+
+```go
+ctx := context.Background()
+client := nexus.NewClient(nexus.Config{BaseURL: "http://localhost:15474"})
+defer client.Close()
+
+// Create a node keyed by a natural string id.
+resp, err := client.CreateNodeWithExternalID(ctx,
+    []string{"Document"},
+    map[string]interface{}{"title": "Design Doc"},
+    "str:design-doc-v1",
+    "error", // conflict_policy: "error" | "match" | "replace"
+)
+if err != nil {
+    log.Fatal(err)
+}
+fmt.Printf("created node_id=%d\n", resp.NodeID)
+
+// Resolve the same node by its external id later.
+got, err := client.GetNodeByExternalID(ctx, "str:design-doc-v1")
+if err != nil {
+    log.Fatal(err)
+}
+if got.Node != nil {
+    fmt.Printf("found node labels=%v\n", got.Node.Labels)
+}
+
+// Idempotent upsert: replace properties on re-ingest.
+_, err = client.CreateNodeWithExternalID(ctx,
+    []string{"Document"},
+    map[string]interface{}{"title": "Design Doc — rev 2"},
+    "str:design-doc-v1",
+    "replace",
+)
+if err != nil {
+    log.Fatal(err)
+}
+
+// Cypher round-trip: _id is a first-class property alias.
+result, err := client.ExecuteCypher(ctx,
+    "CREATE (n:Doc {_id: 'sha256:"+strings.Repeat("a", 64)+"'}) RETURN n._id",
+    nil,
+)
+if err != nil {
+    log.Fatal(err)
+}
+fmt.Println(result.Rows[0][0]) // sha256:aaa...
+```
+
+Run the live integration suite against a running Nexus server:
+
+```bash
+NEXUS_LIVE_HOST=http://localhost:15474 go test -tags=live -v ./test/...
+```
+
+The suite is skipped automatically when `NEXUS_LIVE_HOST` is unset, so
+`go test ./...` (CI without a server) remains green.
+
 ## Testing
 
-Run tests with:
+Run unit tests with:
 
 ```bash
 go test -v

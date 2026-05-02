@@ -199,9 +199,22 @@ func (c *Client) doRequest(ctx context.Context, method, path string, body interf
 		reqBody = bytes.NewReader(jsonData)
 	}
 
-	reqURL, err := url.JoinPath(c.baseURL, path)
+	// Split the optional query string off the path before JoinPath
+	// runs — url.JoinPath percent-encodes `?` as `%3F` and folds the
+	// query into the path segment, which breaks endpoints like
+	// `/data/nodes/by-external-id?external_id=...` (the server then
+	// 404s because the entire string is treated as a route segment).
+	pathOnly, rawQuery := path, ""
+	if idx := bytes.IndexByte([]byte(path), '?'); idx >= 0 {
+		pathOnly = path[:idx]
+		rawQuery = path[idx+1:]
+	}
+	reqURL, err := url.JoinPath(c.baseURL, pathOnly)
 	if err != nil {
 		return nil, fmt.Errorf("failed to build URL: %w", err)
+	}
+	if rawQuery != "" {
+		reqURL = reqURL + "?" + rawQuery
 	}
 
 	req, err := http.NewRequestWithContext(ctx, method, reqURL, reqBody)
@@ -375,11 +388,21 @@ type CreateNodeResponse struct {
 	Error   *string `json:"error,omitempty"`
 }
 
+// ExternalIDNode is the node payload returned by
+// GET /data/nodes/by-external-id. The dedicated type is necessary
+// because the server sends `id` as a u64 integer while the Cypher-row
+// shaped `Node` carries `id` as a string (legacy executor-row format).
+type ExternalIDNode struct {
+	ID         uint64                 `json:"id"`
+	Labels     []string               `json:"labels"`
+	Properties map[string]interface{} `json:"properties"`
+}
+
 // GetNodeByExternalIDResponse holds the response from GET /data/nodes/by-external-id.
 type GetNodeByExternalIDResponse struct {
-	Node    *Node   `json:"node"`
-	Message string  `json:"message"`
-	Error   *string `json:"error,omitempty"`
+	Node    *ExternalIDNode `json:"node"`
+	Message string          `json:"message"`
+	Error   *string         `json:"error,omitempty"`
 }
 
 // CreateNode creates a new node with the given labels and properties.
