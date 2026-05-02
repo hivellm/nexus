@@ -213,6 +213,15 @@ pub struct Engine {
     pub(crate) relaxed_constraint_enforcement: bool,
     /// Keeps temporary directory alive for Engine::new(). None for persistent storage.
     _temp_dir: Option<tempfile::TempDir>,
+    /// External-id reservations made during the current session write
+    /// transaction.  Each entry is `(internal_id, external_id)` as recorded
+    /// inside `create_node_inner` when `put_if_absent` succeeded.
+    ///
+    /// On session-transaction abort, `rollback_external_id_reservations`
+    /// iterates this list and removes each mapping from the catalog index so
+    /// no dangling forward/reverse entries are left behind.  The field is
+    /// cleared (drained) by both the commit and abort paths.
+    pub(crate) pending_external_ids: Vec<(u64, crate::storage::external_id::ExternalId)>,
 }
 
 impl Engine {
@@ -309,6 +318,7 @@ impl Engine {
             property_type_constraints: Vec::new(),
             relaxed_constraint_enforcement: false,
             _temp_dir: None,
+            pending_external_ids: Vec::new(),
         };
 
         // Configure cache in executor for relationship index access
@@ -316,6 +326,7 @@ impl Engine {
         // For now, the executor will use the cache when available via direct access
 
         engine.rebuild_indexes_from_storage()?;
+        engine.recover_external_ids_from_wal()?;
 
         // phase6_opencypher-advanced-types §3.5 — install the
         // composite-B-tree registry on the executor so `db.indexes()`
@@ -493,9 +504,11 @@ impl Engine {
             property_type_constraints: Vec::new(),
             relaxed_constraint_enforcement: false,
             _temp_dir: None,
+            pending_external_ids: Vec::new(),
         };
 
         engine.rebuild_indexes_from_storage()?;
+        engine.recover_external_ids_from_wal()?;
 
         // phase6_opencypher-advanced-types §3.5 — install the
         // composite-B-tree registry on the executor so `db.indexes()`
@@ -545,6 +558,85 @@ impl Engine {
 
             if !label_ids.is_empty() {
                 self.indexes.label_index.add_node(node_id, &label_ids)?;
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Replay `ExternalIdAssigned` WAL entries to rebuild the catalog's
+    /// external-id index after a crash.
+    ///
+    /// LMDB is itself crash-safe: if the LMDB write-transaction committed
+    /// before the crash, the mapping is already present and
+    /// `put_if_absent` will silently skip the duplicate.  If LMDB had not
+    /// committed (e.g. the process was killed between the storage write
+    /// and the LMDB commit), this replay re-installs the mapping from the
+    /// WAL so the catalog index is consistent with the on-disk records.
+    ///
+    /// Called once at engine startup, after WAL flush, before any
+    /// queries are served.
+    pub fn recover_external_ids_from_wal(&mut self) -> Result<()> {
+        use crate::catalog::external_id::ExternalId;
+
+        // We must flush the async WAL first so all frames are on disk.
+        self.flush_async_wal()?;
+
+        // Recover WAL entries from disk.  We clone the path so the borrow
+        // on `self.wal` can be released before we iterate.
+        let wal_path = self.wal.path().to_path_buf();
+        let mut replay_wal = wal::Wal::new(&wal_path)?;
+        let entries = match replay_wal.recover() {
+            Ok(e) => e,
+            Err(e) => {
+                tracing::warn!("external-id WAL recovery: could not read WAL: {e}");
+                return Ok(());
+            }
+        };
+
+        for entry in &entries {
+            if let wal::WalEntry::ExternalIdAssigned {
+                internal_id,
+                external_id_bytes,
+            } = entry
+            {
+                let ext = match ExternalId::from_bytes(external_id_bytes) {
+                    Ok(e) => e,
+                    Err(e) => {
+                        tracing::warn!(
+                            "external-id WAL recovery: bad bytes for node {internal_id}: {e}"
+                        );
+                        continue;
+                    }
+                };
+                // put_if_absent is idempotent: if the entry is already in the
+                // catalog (normal case), it returns `Some(existing_id)` and
+                // we do nothing.  If absent (crash before LMDB commit), it
+                // inserts the mapping.
+                match self.catalog.write_txn() {
+                    Ok(mut wtxn) => {
+                        let idx = self.catalog.external_id_index();
+                        match idx.put_if_absent(&mut wtxn, &ext, *internal_id) {
+                            Ok(_) => {
+                                if let Err(e) = wtxn.commit() {
+                                    tracing::warn!(
+                                        "external-id WAL recovery: commit failed for node {internal_id}: {e}"
+                                    );
+                                }
+                            }
+                            Err(e) => {
+                                tracing::warn!(
+                                    "external-id WAL recovery: put_if_absent failed for node {internal_id}: {e}"
+                                );
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        tracing::warn!(
+                            "external-id WAL recovery: could not open catalog txn for node {internal_id}: {e}"
+                        );
+                    }
+                }
             }
         }
 
@@ -3335,6 +3427,10 @@ impl Engine {
                     // Apply pending index updates in batch before commit (Phase 1 optimization)
                     self.apply_pending_index_updates(&mut session)?;
 
+                    // 3.4: External-id reservations are now permanent — clear
+                    // the pending list so no stale entries carry over.
+                    self.pending_external_ids.clear();
+
                     // Commit transaction
                     session.commit_transaction()?;
 
@@ -3417,6 +3513,11 @@ impl Engine {
                     if let Err(e) = self.storage.flush() {
                         tracing::warn!("Failed to flush storage: {}", e);
                     }
+
+                    // 3.4: Undo any external-id reservations made during
+                    // this transaction before the storage records are
+                    // deleted, so the catalog index stays consistent.
+                    self.rollback_external_id_reservations();
 
                     // Rollback transaction (abort the transaction)
                     session.rollback_transaction()?;

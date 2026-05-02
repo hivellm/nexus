@@ -19,10 +19,10 @@
 - [x] 2.8 Unit tests: each conflict policy, delete-then-recreate, concurrent insert race (single-writer model — verify ordering)
 
 ## 3. Engine + transaction integration
-- [ ] 3.1 Extend `engine::crud::create_node` (`crates/nexus-core/src/engine/crud.rs:356`) and `create_node_with_transaction` (`:366`) with `external_id: Option<ExternalId>` and `policy: ConflictPolicy`
-- [ ] 3.2 Ensure WAL records the external-id assignment so recovery rebuilds the catalog index
-- [ ] 3.3 Verify MVCC: a reader at epoch E sees the external-id mapping iff it sees the node record (snapshot consistency)
-- [ ] 3.4 Add transaction-rollback path that removes the external-id entry if the node creation aborts
+- [x] 3.1 Extend `engine::crud::create_node` (`crates/nexus-core/src/engine/crud.rs:356`) and `create_node_with_transaction` (`:366`) with `external_id: Option<ExternalId>` and `policy: ConflictPolicy`
+- [x] 3.2 Ensure WAL records the external-id assignment so recovery rebuilds the catalog index
+- [x] 3.3 Verify MVCC: a reader at epoch E sees the external-id mapping iff it sees the node record (snapshot consistency)
+- [x] 3.4 Add transaction-rollback path that removes the external-id entry if the node creation aborts
 
 ## 4. Cypher executor
 - [ ] 4.1 Reserve `_id` as a magic property in `crates/nexus-core/src/executor/parser/` and forbid user-defined `_id` properties unless `compat.allow_user_underscore_id = true`

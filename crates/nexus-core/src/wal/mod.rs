@@ -158,6 +158,11 @@ pub enum WalEntryType {
     RTreeDelete = 0x51,
     /// R-tree bulk-load completed marker.
     RTreeBulkLoadDone = 0x52,
+    /// External-id assignment (phase9_external-node-ids §3.2).
+    /// Appended immediately after the paired `CreateNode` entry so that
+    /// crash recovery can rebuild the catalog external-id index even if the
+    /// LMDB write had not been flushed to disk.
+    ExternalIdAssigned = 0x60,
     /// Checkpoint marker
     Checkpoint = 0xFF,
 }
@@ -309,6 +314,23 @@ pub enum WalEntry {
         /// Root page id of the freshly-built tree.
         root_page_id: u64,
     },
+    /// External-id assignment (phase9_external-node-ids §3.2).
+    ///
+    /// Emitted immediately after the corresponding `CreateNode` entry
+    /// whenever a caller-supplied external id was stored.  On crash
+    /// recovery the replay path calls
+    /// `catalog.external_id_index().put_if_absent` with these values
+    /// to rebuild the catalog mapping independently of whether the
+    /// LMDB environment had been synced before the crash.
+    ///
+    /// `external_id_bytes` is the wire encoding produced by
+    /// [`crate::catalog::external_id::ExternalId::to_bytes`].
+    ExternalIdAssigned {
+        /// The internal node id the mapping points to.
+        internal_id: u64,
+        /// Wire-encoded external id (discriminator + payload).
+        external_id_bytes: Vec<u8>,
+    },
 }
 
 impl WalEntry {
@@ -332,6 +354,7 @@ impl WalEntry {
             Self::RTreeInsert { .. } => WalEntryType::RTreeInsert,
             Self::RTreeDelete { .. } => WalEntryType::RTreeDelete,
             Self::RTreeBulkLoadDone { .. } => WalEntryType::RTreeBulkLoadDone,
+            Self::ExternalIdAssigned { .. } => WalEntryType::ExternalIdAssigned,
         }
     }
 
