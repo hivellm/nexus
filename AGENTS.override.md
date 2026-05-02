@@ -4,6 +4,81 @@
 Add your custom rules and team conventions here.
 This file is never overwritten by `rulebook init` or `rulebook update`.
 
+## Agent & Team Usage (HIGH PRECEDENCE — applies every turn)
+
+**Default to delegation.** Do not implement, research, or test directly in the main conversation when an agent or team can do it. The main conversation is an orchestrator, not an executor.
+
+### When to spawn agents (mandatory triggers)
+
+Spawn an agent (foreground via `Agent` tool) whenever ANY of these apply:
+
+1. **Read-only exploration spanning 3+ files or open-ended search** → `Explore` or `researcher` (haiku). Do NOT batch-read with `Read` + `Grep` in main when an agent can return a focused summary.
+2. **Implementation of a discrete unit of work** (function, module, fix, refactor) → `implementer` (sonnet). Main conversation NEVER writes production code directly.
+3. **Test writing or coverage work** → `tester` (sonnet).
+4. **Documentation generation/updates** → `docs-writer` (haiku).
+5. **Code review after implementation** → `code-reviewer` (sonnet) or `feature-dev:code-reviewer`.
+6. **Architecture decisions, ADRs, scalability analysis** → `architect` (opus).
+7. **Build/CI failures, dependency conflicts** → `build-engineer`.
+8. **Security audits, dependency CVEs** → `security-reviewer` (haiku).
+9. **Performance profiling, hot-path optimization** → `performance-engineer`.
+10. **DB schema, migrations, query tuning** → `database-architect` or `migration-engineer`.
+11. **API design (REST/GraphQL, OpenAPI specs)** → `api-designer`.
+12. **Refactors / code-smell elimination** → `refactoring-agent` or `code-simplifier`.
+13. **UX / accessibility audits** → `ux-reviewer` / `accessibility-reviewer`.
+14. **i18n / translation** → `i18n-engineer`.
+15. **Cortex grounding before non-trivial work** → `cortex:cortex-context-curator` / `cortex:cortex-historian` / `cortex:cortex-lawkeeper`.
+
+### Parallelization (mandatory)
+
+When two or more agent calls are independent, **launch them in a single message with multiple `Agent` tool blocks** (parallel). Examples:
+
+- "Audit dependencies AND review accessibility" → `security-reviewer` + `accessibility-reviewer` in one message.
+- "Implement feature X (touches 4 files in 2 subsystems)" → split into 2 sub-tasks, dispatch `implementer` agents in parallel after upstream sub-task completes.
+- "Research codebase patterns AND fetch ADR history" → `researcher` + `cortex:cortex-historian` in parallel.
+
+Never serialize independent work — it wastes wall-clock time AND main-context tokens.
+
+### When to use Teams (multi-agent coordination)
+
+Use `team-lead` + Team (`TeamCreate`) when:
+
+- The work has 3+ specialists collaborating with hand-offs (e.g. researcher → implementer → tester → reviewer).
+- Sub-agents need to communicate via `SendMessage` (background agents WITHOUT a team cannot coordinate — see `.claude/rules/multi-agent-teams.md`).
+- A long-running task benefits from a dedicated coordinator (frees main context).
+
+Standard team composition: `team-lead` (orchestrator, opus) + `researcher` (haiku) + `implementer` (sonnet) + `tester` (sonnet) + optional `code-reviewer` (sonnet).
+
+`CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1` is required and already set by rulebook.
+
+### Background vs foreground
+
+- **Foreground** (default): when results gate the next step (research, planning, single implementation).
+- **Background** (`run_in_background: true`): when work is genuinely independent and parent has other work to do meanwhile. Background agents MUST be either `team-lead` OR carry `team_name` — enforced by `PreToolUse` hook.
+
+### Skill & agent creation (proactive)
+
+Create new agents/skills under `.claude/agents/` or `.claude/skills/` when you notice:
+
+- A repeating task pattern (3+ occurrences) that has no matching agent → propose a new specialist agent with concrete `description` and tool list.
+- A repeating multi-step workflow (build, deploy, audit, etc.) → propose a new skill in `.claude/skills/<name>/SKILL.md`.
+- A gap in coverage relative to the current work (e.g. missing `protobuf-engineer`, `grpc-tester`) → propose with rationale.
+
+Surface the proposal to the user concisely: "Pattern X repeats often — want me to create agent/skill Y with tools Z?" Wait for approval before writing.
+
+### Forbidden in main conversation
+
+- Implementing non-trivial production code directly (>30 lines or touching 2+ files) — delegate to `implementer`.
+- Running 3+ sequential `Read`/`Grep` queries to map out a subsystem — delegate to `Explore`/`researcher`.
+- Writing test files directly — delegate to `tester`.
+- Writing docs/CHANGELOG entries directly — delegate to `docs-writer`.
+- Running long agents serially when they could run in parallel.
+
+### Why
+
+Main-conversation context is the scarcest resource. Every `Read`/`Grep`/`Edit` in main consumes tokens that compound across the session. Agents are isolated context windows that return compressed summaries — they pay the token cost on their side, not yours. Parallelizing independent agents collapses wall-clock time. Teams enable specialist coordination that single-agent calls can't reproduce.
+
+**Heuristic**: if you're about to make 3+ tool calls that another agent could absorb, stop and dispatch the agent instead.
+
 <!-- MIGRATED-FROM-CLAUDE-MD on 2026-04-18T03:07:48.590Z by rulebook v5.3.0 -->
 <!-- The following directives were extracted from your previous CLAUDE.md. -->
 <!-- They are now imported by the new CLAUDE.md via @AGENTS.override.md, so -->
