@@ -5,24 +5,40 @@ All notable changes to the Python SDK are documented in this file.
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 Versioning: [SemVer](https://semver.org/spec/v2.0.0.html).
 
-## [2.1.1] — 2026-05-01
+## [2.1.0] — 2026-05-02
 
-### Added
+### Added — `phase9_external-node-ids`
 
-- **Live integration test suite** `nexus_sdk/tests/test_external_id_live.py`
-  (phase10 §2): 14 tests covering all six `ExternalId` variants
-  (`sha256`, `blake3`, `sha512`, `uuid`, `str`, `bytes`) via
-  `create_node_with_external_id` + `get_node_by_external_id` round-trips,
-  all three conflict policies (`error`/`match`/`replace` — the `replace`
-  property-overwrite check is a regression guard for commit `fd001344`),
-  Cypher `_id` literal round-trip via `execute_cypher`, length-cap
-  validation for `str` > 256 bytes / `bytes` > 64 bytes / empty `uuid`
-  payload, and absent-id `node=None` contract.
+- **`NexusClient.create_node_with_external_id(labels, properties, external_id, conflict_policy=None)`**
+  convenience wrapper around `POST /data/nodes` with `external_id` +
+  `conflict_policy` fields. Accepts the prefixed external-id string form
+  (`sha256:<hex>`, `blake3:<hex>`, `sha512:<hex>`, `uuid:<canonical>`,
+  `str:<utf8 ≤256 B>`, `bytes:<hex ≤128 chars>`); `conflict_policy` is
+  `"error"` (default), `"match"`, or `"replace"`.
+- **`NexusClient.get_node_by_external_id(external_id)`** — resolves a
+  node by its prefixed external-id string via
+  `GET /data/nodes/by-external-id`; returns `node=None` when absent.
+- New `nexus_sdk.models` types: `ExternalIdConflictPolicy` enum and
+  matching DTO fields on `CreateNodeRequest`. Re-exported from package
+  root.
+- Unit tests for request body composition and URL encoding.
+
+### Added — `phase10_external-id-live-suite`
+
+- **Live integration test suite** `nexus_sdk/tests/test_external_id_live.py`:
+  14 tests covering all six `ExternalId` variants (`sha256`, `blake3`,
+  `sha512`, `uuid`, `str`, `bytes`) via `create_node_with_external_id` +
+  `get_node_by_external_id` round-trips, all three conflict policies
+  (`error`/`match`/`replace` — the `replace` property-overwrite check is
+  a regression guard for commit `fd001344`), Cypher `_id` literal
+  round-trip via `execute_cypher`, length-cap validation for `str` > 256
+  bytes / `bytes` > 64 bytes / empty `uuid` payload, and absent-id
+  `node=None` contract.
 - `pytest.mark.live` marker registered in `pyproject.toml`; gate is
   `NEXUS_LIVE_HOST` env var so unit-only CI is unaffected.
-- **README quick-start section** "External IDs (phase10)" with
-  copy-pasteable examples for create, match, replace, Cypher `_id`, and
-  absent-id lookup — pulled directly from the live test suite.
+- **README quick-start section** "External IDs" with copy-pasteable
+  examples for create, match, replace, Cypher `_id`, and absent-id
+  lookup — pulled directly from the live test suite.
 
 ## [2.0.0] — 2026-04-25
 

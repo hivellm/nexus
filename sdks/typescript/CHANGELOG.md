@@ -5,11 +5,28 @@ All notable changes to the Nexus TypeScript SDK will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [2.1.1] - 2026-05-01
+## [2.1.0] - 2026-05-02
 
-### Added
+### Added — `phase9_external-node-ids`
 
-- **Live integration test suite** `tests/external-id.live.test.ts` (phase10 §3):
+- **`NexusClient.createNodeWithExternalId(labels, properties, externalId, conflictPolicy?)`**
+  helper around `POST /data/nodes` with the new `external_id` +
+  `conflict_policy` request fields. Accepts the prefixed external-id
+  string form (`sha256:<hex>`, `blake3:<hex>`, `sha512:<hex>`,
+  `uuid:<canonical>`, `str:<utf8 ≤256 B>`, `bytes:<hex ≤128 chars>`);
+  `conflictPolicy` is `'error'` (default), `'match'`, or `'replace'`.
+- **`NexusClient.getNodeByExternalId(externalId)`** — resolves a node by
+  its prefixed external-id string via `GET /data/nodes/by-external-id`;
+  returns `{ node: null }` when absent.
+- New types in `src/types.ts`: `ExternalId` string template type,
+  `ConflictPolicy` union, optional fields on `CreateNodeRequest`.
+- HTTP transport sets `external_id` / `conflict_policy` query and body
+  parameters; binary RPC stays compatible (no shape change).
+- Unit tests for request body composition and URL encoding.
+
+### Added — `phase10_external-id-live-suite`
+
+- **Live integration test suite** `tests/external-id.live.test.ts`:
   - 16 vitest cases covering all six `ExternalId` variants (sha256, blake3,
     sha512, uuid, str, bytes) via `createNodeWithExternalId` +
     `getNodeByExternalId` round-trips.

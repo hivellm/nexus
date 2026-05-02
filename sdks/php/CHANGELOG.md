@@ -6,13 +6,26 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 Versioning: [SemVer](https://semver.org/spec/v2.0.0.html) via Git tags
 (Composer resolves `^1.0` from the `v1.0.0` repo tag).
 
-## [2.2.0] — 2026-05-01
+## [2.1.0] — 2026-05-02
 
-### Added
+### Added — `phase9_external-node-ids`
+
+- `NexusClient::createNodeWithExternalId(labels, properties, externalId, conflictPolicy)`
+  convenience wrapper around `POST /data/nodes`. Accepts the prefixed
+  external-id string form (`sha256:<hex>`, `blake3:<hex>`, `sha512:<hex>`,
+  `uuid:<canonical>`, `str:<utf8 ≤256 B>`, `bytes:<hex ≤128 chars>`);
+  `conflictPolicy` is `'error'` (default), `'match'`, or `'replace'`.
+- `NexusClient::getNodeByExternalId(externalId)` — resolves a node by its
+  prefixed external-id string via `GET /data/nodes/by-external-id`;
+  returns `['node' => null]` when absent.
+- Unit tests for request body composition and URL encoding
+  (`tests/ExternalIdTest.php`).
+
+### Added — `phase10_external-id-live-suite`
 
 - **Live integration test suite** `sdks/php/tests/ExternalIdLiveTest.php` —
   14 PHPUnit tests annotated `@group live`, gated on `NEXUS_LIVE_HOST` env
-  var.  Run with `NEXUS_LIVE_HOST=http://localhost:15474 vendor/bin/phpunit --group live`.
+  var. Run with `NEXUS_LIVE_HOST=http://localhost:15474 vendor/bin/phpunit --group live`.
 - Tests cover all six `ExternalId` variants (sha256, blake3, sha512, uuid,
   str, bytes) via Cypher `CREATE … RETURN n._id` + `getNodeByExternalId`
   round-trip; all three conflict policies (`error`/`match`/`replace` — including
@@ -20,16 +33,6 @@ Versioning: [SemVer](https://semver.org/spec/v2.0.0.html) via Git tags
   `ON CONFLICT` syntax; `_id` Cypher round-trip; length-cap rejection
   (str > 256 B, bytes > 64 B, empty uuid); and absent-id null-node behaviour.
 - README quick-start section for external ids.
-
-## [2.1.0] — 2026-04-25
-
-### Added
-
-- `NexusClient::createNodeWithExternalId()` convenience wrapper
-  (phase9_external-node-ids).
-- `NexusClient::getNodeByExternalId()` — resolves a node by its prefixed
-  external id string via `GET /data/nodes/by-external-id`.
-- Unit tests for request body composition and URL encoding.
 
 ## [2.0.0] — 2026-04-25
 

@@ -6,16 +6,34 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 Versioning: [SemVer](https://semver.org/spec/v2.0.0.html) via Git tags
 (Go modules read `v1.0.0` and up from the repo tag).
 
-## [Unreleased] — phase10
+## [2.1.0] — 2026-05-02
 
-### Added
+### Added — `phase9_external-node-ids`
+
+- **`Client.CreateNodeWithExternalID(ctx, labels, props, externalID, conflictPolicy)`**
+  helper around `POST /data/nodes` with the new `external_id` +
+  `conflict_policy` request fields. Accepts the prefixed external-id
+  string form (`sha256:<hex>`, `blake3:<hex>`, `sha512:<hex>`,
+  `uuid:<canonical>`, `str:<utf8 ≤256 B>`, `bytes:<hex ≤128 chars>`);
+  `conflictPolicy` is `""` / `"error"` (default), `"match"`, or
+  `"replace"`.
+- **`Client.GetNodeByExternalID(ctx, externalID)`** — resolves a node by
+  its prefixed external-id string via `GET /data/nodes/by-external-id`;
+  returns `node == nil` when absent (no HTTP error).
+- `CreateNodeRequest.ExternalID` + `CreateNodeRequest.ConflictPolicy`
+  fields with `omitempty` JSON tags so legacy callers stay
+  wire-compatible.
+- Test coverage in `sdks/go/test/test_sdk.go` and unit tests for URL
+  encoding.
+
+### Added — `phase10_external-id-live-suite`
 
 - `sdks/go/test/external_id_live_test.go` — 15 live integration tests
   (build tag `live`) covering all six `ExternalId` variants
   (sha256/blake3/sha512/uuid/str/bytes), all three conflict policies
   (error/match/replace), Cypher `_id` round-trip, length-cap rejection
   (str >256 bytes, bytes >64 bytes, empty uuid payload), and absent
-  external-id GET.  Gate on `NEXUS_LIVE_HOST` env var — skipped when unset.
+  external-id GET. Gate on `NEXUS_LIVE_HOST` env var — skipped when unset.
   Run with: `NEXUS_LIVE_HOST=http://localhost:15474 go test -tags=live -v ./test/...`
 - README `External IDs` quickstart section with copy-pasteable snippet for
   `CreateNodeWithExternalID`, `GetNodeByExternalID`, and Cypher `_id` usage.

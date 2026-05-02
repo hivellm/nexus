@@ -5,13 +5,27 @@ All notable changes to the C# SDK are documented in this file.
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 Versioning: [SemVer](https://semver.org/spec/v2.0.0.html).
 
-## [2.2.0] — 2026-05-01
+## [2.1.0] — 2026-05-02
 
-### Added
+### Added — `phase9_external-node-ids`
+
+- `CreateNodeWithExternalIdAsync(labels, properties, externalId, conflictPolicy)`
+  / `GetNodeByExternalIdAsync(externalId)` helpers. Accept the prefixed
+  external-id string form (`sha256:<hex>`, `blake3:<hex>`, `sha512:<hex>`,
+  `uuid:<canonical>`, `str:<utf8 ≤256 B>`, `bytes:<hex ≤128 chars>`);
+  `conflictPolicy` is `"error"` (default), `"match"`, or `"replace"`.
+- `CreateNodeRequest.ExternalId` + `CreateNodeRequest.ConflictPolicy` DTO
+  fields (`[JsonIgnore(Condition = WhenWritingNull)]`) so legacy callers
+  stay wire-compatible.
+- `GetNodeByExternalIdResponse` model.
+- Unit tests for DTO serialisation and URL encoding
+  (`Tests/ExternalIdTests.cs`).
+
+### Added — `phase10_external-id-live-suite`
 
 - **Live integration test suite** `sdks/csharp/Tests/ExternalIdLiveTests.cs` —
   14 xUnit tests gated on `NEXUS_LIVE_HOST` env var
-  (`[Trait("category","live")]` / `[LiveFact]`).  Run with
+  (`[Trait("category","live")]` / `[LiveFact]`). Run with
   `dotnet test --filter "category=live"`.
 - Tests cover all six `ExternalId` variants (sha256, blake3, sha512, uuid,
   str, bytes), all three conflict policies (`error`/`match`/`replace` — including
@@ -19,17 +33,6 @@ Versioning: [SemVer](https://semver.org/spec/v2.0.0.html).
   round-trip via `ExecuteCypherAsync`, length-cap rejection (str > 256 B,
   bytes > 64 B, empty uuid), and absent-id null-node behaviour.
 - README quick-start section for external ids.
-
-## [2.1.0] — 2026-04-25
-
-### Added
-
-- `CreateNodeWithExternalIdAsync` / `GetNodeByExternalIdAsync` helpers
-  (phase9_external-node-ids).
-- `CreateNodeRequest.ExternalId` + `ConflictPolicy` DTO fields
-  (`[JsonIgnore(Condition = WhenWritingNull)]`).
-- `GetNodeByExternalIdResponse` model.
-- Unit tests for DTO serialisation and URL encoding.
 
 ## [2.0.0] — 2026-04-25
 

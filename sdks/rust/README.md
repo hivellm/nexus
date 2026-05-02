@@ -83,6 +83,62 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 ```
 
+### External IDs
+
+Nodes can carry a caller-supplied stable identifier in prefixed string form.
+Supported variants: `sha256:<64-hex>`, `blake3:<64-hex>`, `sha512:<128-hex>`,
+`uuid:<canonical>`, `str:<utf8 ≤256 B>`, `bytes:<hex ≤128 chars>`.
+
+```rust
+use std::collections::HashMap;
+use nexus_sdk::{NexusClient, Value};
+
+let client = NexusClient::new("http://127.0.0.1:15474")?;
+
+// Create with an external id (default conflict policy: "error").
+let mut props = HashMap::new();
+props.insert("title".to_string(), Value::String("Phase 10 spec".to_string()));
+let resp = client
+    .create_node_with_external_id(
+        vec!["Document".to_string()],
+        props.clone(),
+        "str:doc-phase10",
+        None,
+    )
+    .await?;
+println!("created node id={}", resp.node_id);
+
+// Idempotent re-creation: ON CONFLICT MATCH returns the existing node.
+client
+    .create_node_with_external_id(
+        vec!["Document".to_string()],
+        props,
+        "str:doc-phase10",
+        Some("match"),
+    )
+    .await?;
+
+// Resolve by external id (returns `node: None` when absent).
+let lookup = client.get_node_by_external_id("str:doc-phase10").await?;
+if let Some(node) = lookup.node {
+    println!("resolved internal id={}", node.id);
+}
+
+// Cypher round-trip works too: `RETURN n._id` projects the prefixed string.
+let result = client
+    .execute_cypher(
+        "CREATE (n:Document {_id: 'str:doc-cypher'}) RETURN n._id",
+        None,
+    )
+    .await?;
+```
+
+Live integration suite (requires a running server):
+
+```bash
+NEXUS_LIVE_HOST=http://localhost:15474 cargo test --test external_id_live -- --nocapture
+```
+
 ### With Authentication
 
 ```rust

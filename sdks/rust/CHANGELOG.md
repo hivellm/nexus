@@ -7,7 +7,25 @@ Versioning: [SemVer](https://semver.org/spec/v2.0.0.html).
 
 ## [2.1.0] — 2026-05-02
 
-### Added
+### Added — `phase9_external-node-ids`
+
+- **`NexusClient::create_node_with_external_id(labels, properties, external_id, conflict_policy)`**
+  helper. Accepts the prefixed external-id string form (`sha256:<hex>`,
+  `blake3:<hex>`, `sha512:<hex>`, `uuid:<canonical>`, `str:<utf8 ≤256 B>`,
+  `bytes:<hex ≤128 chars>`); `conflict_policy` is `"error"` (default),
+  `"match"`, or `"replace"`. Wires `POST /data/nodes` with the new
+  `external_id` + `conflict_policy` request fields.
+- **`NexusClient::get_node_by_external_id(external_id)`** helper —
+  resolves a node by its prefixed external-id string via
+  `GET /data/nodes/by-external-id`. Returns `node: None` when absent
+  (no HTTP error).
+- `CreateNodeRequest::external_id` + `CreateNodeRequest::conflict_policy`
+  fields (`#[serde(skip_serializing_if = "Option::is_none")]`) so legacy
+  callers stay wire-compatible.
+- README quick-start "External IDs" section with a copy-pasteable Cypher
+  + helper round-trip example.
+
+### Added — `phase10_external-id-live-suite`
 
 - **Phase 10 live external-id suite.** New
   `tests/external_id_live.rs` ships 14 live integration tests that
