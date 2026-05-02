@@ -9,7 +9,7 @@
 
     <!-- Package Metadata -->
     <PackageId>Nexus.SDK</PackageId>
-    <Version>2.2.0</Version>
+    <Version>2.1.0</Version>
     <Authors>HiveLLM Contributors</Authors>
     <Company>HiveLLM</Company>
     <Copyright>Copyright © HiveLLM Contributors</Copyright>

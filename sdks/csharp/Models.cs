@@ -297,6 +297,27 @@ public class GetNodeByExternalIdResponse
 }
 
 /// <summary>
+/// Response from <c>GET /data/nodes?id=&lt;id&gt;</c>. The server
+/// returns 200 with <c>node: null</c> when the id is absent — callers
+/// check <see cref="Node"/> rather than catching for missing ids.
+/// Phase 11 §2.5.
+/// </summary>
+public class GetNodeResponse
+{
+    /// <summary>The matched node, or null when the id is absent.</summary>
+    [JsonPropertyName("node")]
+    public Node? Node { get; set; }
+
+    /// <summary>Status message from the server.</summary>
+    [JsonPropertyName("message")]
+    public string Message { get; set; } = string.Empty;
+
+    /// <summary>Error message, if any.</summary>
+    [JsonPropertyName("error")]
+    public string? Error { get; set; }
+}
+
+/// <summary>
 /// Request body for batch node creation.
 /// </summary>
 public class BatchNodesRequest

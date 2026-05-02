@@ -200,9 +200,11 @@ public class RetryableNexusClient : IDisposable
     #region Node Operations
 
     /// <summary>
-    /// Creates a new node with automatic retry.
+    /// Creates a new node with automatic retry. Phase 11 §2 — returns
+    /// the server's <see cref="CreateNodeResponse"/> envelope, not a
+    /// <see cref="Node"/>.
     /// </summary>
-    public async Task<Node> CreateNodeAsync(
+    public async Task<CreateNodeResponse> CreateNodeAsync(
         List<string> labels,
         Dictionary<string, object?> properties,
         CancellationToken cancellationToken = default)
@@ -213,10 +215,12 @@ public class RetryableNexusClient : IDisposable
     }
 
     /// <summary>
-    /// Retrieves a node by ID with automatic retry.
+    /// Retrieves a node by ID with automatic retry. Phase 11 §2.5 —
+    /// returns the server envelope; <c>response.Node</c> is null when
+    /// the id is absent.
     /// </summary>
-    public async Task<Node> GetNodeAsync(
-        string id,
+    public async Task<GetNodeResponse> GetNodeAsync(
+        ulong id,
         CancellationToken cancellationToken = default)
     {
         return await ExecuteWithRetryAsync(
@@ -225,27 +229,35 @@ public class RetryableNexusClient : IDisposable
     }
 
     /// <summary>
-    /// Updates a node with automatic retry.
+    /// Updates a node with automatic retry. Phase 11 §2.5.
     /// </summary>
-    public async Task<Node> UpdateNodeAsync(
-        string id,
+    public async Task UpdateNodeAsync(
+        ulong id,
         Dictionary<string, object?> properties,
         CancellationToken cancellationToken = default)
     {
-        return await ExecuteWithRetryAsync(
-            ct => _client.UpdateNodeAsync(id, properties, ct),
+        await ExecuteWithRetryAsync(
+            async ct =>
+            {
+                await _client.UpdateNodeAsync(id, properties, ct);
+                return true;
+            },
             cancellationToken);
     }
 
     /// <summary>
-    /// Deletes a node with automatic retry.
+    /// Deletes a node with automatic retry. Phase 11 §2.5.
     /// </summary>
     public async Task DeleteNodeAsync(
-        string id,
+        ulong id,
         CancellationToken cancellationToken = default)
     {
         await ExecuteWithRetryAsync(
-            ct => _client.DeleteNodeAsync(id, ct),
+            async ct =>
+            {
+                await _client.DeleteNodeAsync(id, ct);
+                return true;
+            },
             cancellationToken);
     }
 

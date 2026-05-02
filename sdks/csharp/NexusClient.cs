@@ -167,27 +167,33 @@ public class NexusClient : IDisposable, IAsyncDisposable
     /// <summary>
     /// Creates a new node with the given labels and properties.
     /// </summary>
+    /// <remarks>
+    /// Phase 11 §2.4 — POSTs to <c>/data/nodes</c> (the legacy
+    /// <c>/nodes</c> route was retired before phase 9). Returns
+    /// <see cref="CreateNodeResponse"/> matching the server envelope —
+    /// not a full <see cref="Node"/> object.
+    /// </remarks>
     /// <param name="labels">Node labels.</param>
     /// <param name="properties">Node properties.</param>
     /// <param name="cancellationToken">Cancellation token.</param>
-    /// <returns>Created node.</returns>
-    public async Task<Node> CreateNodeAsync(
+    /// <returns>Server response with the new node id.</returns>
+    public async Task<CreateNodeResponse> CreateNodeAsync(
         List<string> labels,
         Dictionary<string, object?> properties,
         CancellationToken cancellationToken = default)
     {
-        var requestBody = new
+        var requestBody = new CreateNodeRequest
         {
-            labels,
-            properties
+            Labels = labels,
+            Properties = properties,
         };
 
         var response = await DoRequestAsync(
-            HttpMethod.Post, "/nodes", requestBody, cancellationToken);
+            HttpMethod.Post, "/data/nodes", requestBody, cancellationToken);
 
-        return await response.Content.ReadFromJsonAsync<Node>(
+        return await response.Content.ReadFromJsonAsync<CreateNodeResponse>(
             cancellationToken: cancellationToken)
-            ?? throw new NexusException("Failed to deserialize node");
+            ?? throw new NexusException("Failed to deserialize create-node response");
     }
 
     /// <summary>
@@ -253,43 +259,52 @@ public class NexusClient : IDisposable, IAsyncDisposable
     }
 
     /// <summary>
-    /// Retrieves a node by its ID.
+    /// Retrieves a node by its internal id.
     /// </summary>
-    /// <param name="id">Node ID.</param>
+    /// <remarks>
+    /// Phase 11 §2.5 — server route is
+    /// <c>GET /data/nodes?id=&lt;id&gt;</c> with a <c>{node, message,
+    /// error}</c> envelope. Returns <see cref="GetNodeResponse"/>;
+    /// callers check <c>response.Node</c> rather than catching for
+    /// missing ids (server returns 200 with <c>node: null</c>).
+    /// </remarks>
+    /// <param name="id">Internal node id.</param>
     /// <param name="cancellationToken">Cancellation token.</param>
-    /// <returns>Node.</returns>
-    public async Task<Node> GetNodeAsync(
-        string id,
+    public async Task<GetNodeResponse> GetNodeAsync(
+        ulong id,
         CancellationToken cancellationToken = default)
     {
         var response = await DoRequestAsync(
-            HttpMethod.Get, $"/nodes/{Uri.EscapeDataString(id)}", null, cancellationToken);
+            HttpMethod.Get,
+            $"/data/nodes?id={id}",
+            null,
+            cancellationToken);
 
-        return await response.Content.ReadFromJsonAsync<Node>(
+        return await response.Content.ReadFromJsonAsync<GetNodeResponse>(
             cancellationToken: cancellationToken)
-            ?? throw new NexusException("Failed to deserialize node");
+            ?? throw new NexusException("Failed to deserialize get-node response");
     }
 
     /// <summary>
     /// Updates a node's properties.
     /// </summary>
-    /// <param name="id">Node ID.</param>
+    /// <remarks>
+    /// Phase 11 §2.5 — server route is <c>PUT /data/nodes</c> with
+    /// <c>{node_id, properties}</c> in the body. There is no
+    /// <c>/nodes/{id}</c> URL form.
+    /// </remarks>
+    /// <param name="id">Internal node id.</param>
     /// <param name="properties">New properties.</param>
     /// <param name="cancellationToken">Cancellation token.</param>
-    /// <returns>Updated node.</returns>
-    public async Task<Node> UpdateNodeAsync(
-        string id,
+    public async Task UpdateNodeAsync(
+        ulong id,
         Dictionary<string, object?> properties,
         CancellationToken cancellationToken = default)
     {
-        var requestBody = new { properties };
+        var requestBody = new { node_id = id, properties };
 
-        var response = await DoRequestAsync(
-            HttpMethod.Put, $"/nodes/{Uri.EscapeDataString(id)}", requestBody, cancellationToken);
-
-        return await response.Content.ReadFromJsonAsync<Node>(
-            cancellationToken: cancellationToken)
-            ?? throw new NexusException("Failed to deserialize node");
+        await DoRequestAsync(
+            HttpMethod.Put, "/data/nodes", requestBody, cancellationToken);
     }
 
     /// <summary>
@@ -298,11 +313,12 @@ public class NexusClient : IDisposable, IAsyncDisposable
     /// <param name="id">Node ID.</param>
     /// <param name="cancellationToken">Cancellation token.</param>
     public async Task DeleteNodeAsync(
-        string id,
+        ulong id,
         CancellationToken cancellationToken = default)
     {
+        var requestBody = new { node_id = id };
         await DoRequestAsync(
-            HttpMethod.Delete, $"/nodes/{Uri.EscapeDataString(id)}", null, cancellationToken);
+            HttpMethod.Delete, "/data/nodes", requestBody, cancellationToken);
     }
 
     /// <summary>

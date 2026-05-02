@@ -23,7 +23,7 @@ try {
     $client->ping();
     echo "✓ Connected successfully\n\n";
 
-    // Create nodes
+    // Create nodes — createNode now returns CreateNodeResponse {nodeId, message, error}.
     echo "--- Creating Nodes ---\n";
     $alice = $client->createNode(
         labels: ['Person'],
@@ -33,7 +33,7 @@ try {
             'city' => 'San Francisco'
         ]
     );
-    echo "Created: {$alice->properties['name']} (ID: {$alice->id})\n";
+    echo "Created: Alice (ID: {$alice->nodeId})\n";
 
     $bob = $client->createNode(
         labels: ['Person'],
@@ -43,20 +43,20 @@ try {
             'city' => 'New York'
         ]
     );
-    echo "Created: {$bob->properties['name']} (ID: {$bob->id})\n";
+    echo "Created: Bob (ID: {$bob->nodeId})\n";
 
     // Create relationship
     echo "\n--- Creating Relationship ---\n";
     $rel = $client->createRelationship(
-        startNode: $alice->id,
-        endNode: $bob->id,
+        startNode: $alice->nodeId,
+        endNode: $bob->nodeId,
         type: 'KNOWS',
         properties: [
             'since' => '2020',
             'strength' => 0.8
         ]
     );
-    echo "Created: {$alice->properties['name']} -[{$rel->type}]-> {$bob->properties['name']}\n";
+    echo "Created: Alice -[{$rel->type}]-> Bob\n";
 
     // Query data
     echo "\n--- Querying Data ---\n";
@@ -71,21 +71,23 @@ try {
     }
     echo "Query took {$result->stats?->executionTimeMs}ms\n";
 
-    // Get node by ID
+    // Get node by ID — returns GetNodeResponse {node, message, error}.
     echo "\n--- Reading Node ---\n";
-    $node = $client->getNode($alice->id);
-    echo "Retrieved: {$node->properties['name']}\n";
+    $resp = $client->getNode($alice->nodeId);
+    if ($resp->node !== null) {
+        echo "Retrieved: {$resp->node->properties['name']}\n";
+    }
 
-    // Update node
+    // Update node — returns the raw {message, error} envelope.
     echo "\n--- Updating Node ---\n";
-    $updated = $client->updateNode(
-        id: $alice->id,
+    $client->updateNode(
+        id: $alice->nodeId,
         properties: [
             'age' => 29,
             'city' => 'Los Angeles'
         ]
     );
-    echo "Updated: {$updated->properties['name']} is now {$updated->properties['age']} years old and lives in {$updated->properties['city']}\n";
+    echo "Updated Alice's age to 29 (Los Angeles)\n";
 
     // Query with relationships
     echo "\n--- Querying Relationships ---\n";
@@ -103,11 +105,11 @@ try {
     $client->deleteRelationship($rel->id);
     echo "✓ Deleted relationship\n";
 
-    $client->deleteNode($alice->id);
-    echo "✓ Deleted Alice\n";
+    $client->deleteNode($alice->nodeId);
+    echo "Deleted Alice\n";
 
-    $client->deleteNode($bob->id);
-    echo "✓ Deleted Bob\n";
+    $client->deleteNode($bob->nodeId);
+    echo "Deleted Bob\n";
 
     echo "\n✓ Example completed successfully\n";
 

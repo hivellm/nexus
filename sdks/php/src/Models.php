@@ -34,6 +34,62 @@ class Node
 }
 
 /**
+ * Response from POST /data/nodes — the server returns a node_id +
+ * message + optional error envelope, not a full Node object. Phase 11
+ * §2.1 — restored after the 2.0/2.1 ports incorrectly tried to
+ * deserialise the response as a `Node`.
+ */
+class CreateNodeResponse
+{
+    public function __construct(
+        public int $nodeId = 0,
+        public string $message = '',
+        public ?string $error = null
+    ) {
+    }
+
+    /**
+     * @param array<string, mixed> $data
+     */
+    public static function fromArray(array $data): self
+    {
+        return new self(
+            nodeId: (int) ($data['node_id'] ?? 0),
+            message: (string) ($data['message'] ?? ''),
+            error: isset($data['error']) ? (string) $data['error'] : null
+        );
+    }
+}
+
+/**
+ * Response from GET /data/nodes?id=<id> — the envelope wraps an
+ * optional Node. `error` is set on lookup failure; `node` is null when
+ * the id is absent.
+ */
+class GetNodeResponse
+{
+    public function __construct(
+        public ?Node $node = null,
+        public string $message = '',
+        public ?string $error = null
+    ) {
+    }
+
+    /**
+     * @param array<string, mixed> $data
+     */
+    public static function fromArray(array $data): self
+    {
+        $rawNode = $data['node'] ?? null;
+        return new self(
+            node: is_array($rawNode) ? Node::fromArray($rawNode) : null,
+            message: (string) ($data['message'] ?? ''),
+            error: isset($data['error']) ? (string) $data['error'] : null
+        );
+    }
+}
+
+/**
  * Represents a graph relationship.
  */
 class Relationship

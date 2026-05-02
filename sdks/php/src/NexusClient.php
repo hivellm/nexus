@@ -150,7 +150,7 @@ class NexusClient
         array $properties,
         ?string $externalId = null,
         ?string $conflictPolicy = null
-    ): Node {
+    ): CreateNodeResponse {
         $body = [
             'labels' => $labels,
             'properties' => $properties,
@@ -162,8 +162,8 @@ class NexusClient
             $body['conflict_policy'] = $conflictPolicy;
         }
 
-        $response = $this->doRequest('POST', '/nodes', $body);
-        return Node::fromArray($response);
+        $response = $this->doRequest('POST', '/data/nodes', $body);
+        return CreateNodeResponse::fromArray($response);
     }
 
     /**
@@ -185,7 +185,7 @@ class NexusClient
         array $properties,
         string $externalId,
         ?string $conflictPolicy = null
-    ): Node {
+    ): CreateNodeResponse {
         return $this->createNode($labels, $properties, $externalId, $conflictPolicy);
     }
 
@@ -207,37 +207,49 @@ class NexusClient
     }
 
     /**
-     * Get a node by ID.
+     * Get a node by its internal id.
+     *
+     * The server exposes node lookup as `GET /data/nodes?id=<id>` with
+     * a `{node, message, error}` envelope. The response's `node` field
+     * is null when the id is absent — this is NOT an HTTP error, so
+     * callers should check the returned `GetNodeResponse->node` rather
+     * than catch an exception. Phase 11 §2.2.
      *
      * @throws NexusApiException
      */
-    public function getNode(string $id): Node
+    public function getNode(int|string $id): GetNodeResponse
     {
-        $response = $this->doRequest('GET', '/nodes/' . urlencode($id));
-        return Node::fromArray($response);
+        $response = $this->doRequest('GET', '/data/nodes?id=' . urlencode((string) $id));
+        return GetNodeResponse::fromArray($response);
     }
 
     /**
      * Update a node's properties.
      *
+     * Server route is `PUT /data/nodes` with `{node_id, properties}`
+     * in the body — there is no `/nodes/{id}` URL form. Phase 11 §2.3.
+     *
      * @param array<string, mixed> $properties
      * @throws NexusApiException
+     * @return array<string, mixed> The raw `{message, error}` envelope.
      */
-    public function updateNode(string $id, array $properties): Node
+    public function updateNode(int|string $id, array $properties): array
     {
-        $body = ['properties' => $properties];
-        $response = $this->doRequest('PUT', '/nodes/' . urlencode($id), $body);
-        return Node::fromArray($response);
+        $body = ['node_id' => (int) $id, 'properties' => $properties];
+        return $this->doRequest('PUT', '/data/nodes', $body);
     }
 
     /**
      * Delete a node.
      *
+     * Server route is `DELETE /data/nodes` with `{node_id}` in the
+     * body. Phase 11 §2.3.
+     *
      * @throws NexusApiException
      */
-    public function deleteNode(string $id): void
+    public function deleteNode(int|string $id): void
     {
-        $this->doRequest('DELETE', '/nodes/' . urlencode($id));
+        $this->doRequest('DELETE', '/data/nodes', ['node_id' => (int) $id]);
     }
 
     /**
