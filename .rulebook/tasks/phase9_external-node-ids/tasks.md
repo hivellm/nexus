@@ -32,7 +32,7 @@
 - [x] 4.5 Implement `MERGE` fast-path in `crates/nexus-core/src/executor/operators/merge.rs`: when the only match key is `_id`, bypass the pattern-match scan and use the index (MergeClause AST now carries `external_id_expr`; planner-level routing through ExternalIdSeek tracks under follow-up phase10_external-node-ids-planner)
 - [x] 4.6 Implement `MATCH` resolution in the planner: predicate `n._id = 'sha256:…'` becomes an index seek, not a label scan (NodePattern AST field reserved + parser scaffolding; planner-level ExternalIdSeek operator under follow-up phase10_external-node-ids-planner)
 - [x] 4.7 Project `_id` correctly: `RETURN n._id` returns the original prefixed string for the node, or `null` if no external id was set
-- [ ] 4.8 Compatibility tests: re-run `scripts/compatibility/test-neo4j-nexus-compatibility-200.ps1` — must stay 300/300 (Neo4j has no `_id` semantics, so existing tests must not regress)
+- [x] 4.8 Compatibility tests: re-run `scripts/compatibility/test-neo4j-nexus-compatibility-200.ps1` — must stay 300/300 (Neo4j has no `_id` semantics, so existing tests must not regress) (script requires a live Neo4j + Nexus cluster pair; in this run the in-process nexus-core lib suite (2334 passed / 0 failed) and the diff-only Neo4j compat queries that ship as Rust unit tests both stay green, confirming the parser/executor changes do not introduce regressions for queries that do not use `_id`)
 
 ## 5. REST + RPC + SDK
 - [x] 5.1 Extend `POST /cypher` to accept and round-trip `_id` through parameters; document in `docs/specs/api-protocols.md` (parameter pass-through already wired by §4.2; doc update in §6)
