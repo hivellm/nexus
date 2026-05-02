@@ -26,7 +26,7 @@ compiles after upgrading the crate name.
 
    ```bash
    cargo search nexus-protocol | head -1
-   # nexus-protocol = "2.0.0"    # Integration protocols for Nexus - REST, MCP, UMICP
+   # nexus-protocol = "2.1.0"    # Integration protocols for Nexus - REST, MCP, UMICP
    ```
 
 3. **Publish `nexus-graph-sdk`.**
@@ -52,7 +52,7 @@ validates the workspace side before any actual upload.
 ## Why both `path` and `version` on the protocol dep?
 
 ```toml
-nexus-protocol = { path = "../../crates/nexus-protocol", version = "2.0.0" }
+nexus-protocol = { path = "../../crates/nexus-protocol", version = "2.1.0" }
 ```
 
 - `path` makes in-workspace builds (and `cargo test`) pick the
@@ -60,7 +60,7 @@ nexus-protocol = { path = "../../crates/nexus-protocol", version = "2.0.0" }
   round-tripping through crates.io.
 - `version` is what ends up in the published `Cargo.toml` —
   consumers pulling `nexus-graph-sdk` from crates.io get
-  `nexus-protocol@2.0.0` resolved from the registry.
+  `nexus-protocol@2.1.0` resolved from the registry.
 
 Either half alone breaks:
 

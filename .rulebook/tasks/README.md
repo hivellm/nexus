@@ -12,9 +12,9 @@
 | 🔄 | phase5_implement-cluster-mode | 93/125 | implement cluster mode |
 | ⬚ | phase5_implement-v1-gui | 0/55 | implement v1 gui |
 
-## phase6
+## phase10
 
 | Status | Task | Progress | Description |
 |--------|------|----------|-------------|
-| ⬚ | phase6_sdk-rust-publish-1.15.0 | 0/11 | sdk rust publish 1.15.0 |
+| ⬚ | phase10_external-ids-sdks-live-validation | 0/5 | external ids sdks live validation |
 

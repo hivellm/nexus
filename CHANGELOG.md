@@ -5,6 +5,27 @@ All notable changes to Nexus will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.1.0] — 2026-05-02
+
+> Ships **`phase9_external-node-ids`**: caller-supplied stable
+> identifiers (`_id`) on nodes, with `ON CONFLICT
+> ERROR|MATCH|REPLACE` policies, REST surface, Cypher
+> integration (`CREATE`/`MERGE`/`MATCH`), and parity helpers in
+> all six SDKs. Drop-in addition — pre-2.1 graphs and clients
+> keep working unchanged.
+
+### Added — `phase9_external-node-ids`
+
+- **External node identifiers**: Reserved `_id` property on nodes stores caller-supplied external IDs (stable, deduplication-friendly). `ExternalId` enum supports Hash (Blake3/SHA-256/SHA-512), Uuid, String (≤256 bytes), and Bytes (≤64 bytes) variants with 1-byte wire discriminator.
+- **Conflict policies on CREATE**: `ON CONFLICT ERROR | MATCH | REPLACE` modifier controls behavior when external ID already exists. ERROR (default) fails; MATCH returns existing node unchanged; REPLACE updates properties while preserving internal ID.
+- **Cypher parser + planner**: `CREATE (n {_id: '...'}) ON CONFLICT MATCH` and `MERGE (n {_id: '...'})` parse into reserved AST fields; planner extracts `_id` from `MERGE` clauses and routes pure-`_id` constraints to the external-ID index fast path. `MATCH (n {_id: ...})` and `MATCH (n) WHERE n._id = ...` auto-select the index.
+- **Server `/cypher` handler**: `CREATE` with `_id` flows through the storage external-ID path; `RETURN n._id` projects the value back via the catalog reverse map. Behaviour for nodes without external IDs is unchanged.
+- **REST endpoints**: `POST /data/nodes` accepts `external_id` + `conflict_policy` parameters; new `GET /data/nodes/by-external-id` endpoint for lookup. Both follow the existing 200-with-error response pattern (never 404).
+- **Catalog persistence**: Two LMDB sub-databases (`external_ids` forward, `internal_ids` reverse) in catalog with atomic WAL updates and replay-safe recovery. Engine restart and transaction rollback both restore the index to a consistent state. Bidirectional mapping keeps lookup at `O(log n)`.
+- **SDK parity (all six)**: `create_node_with_external_id(labels, properties, external_id, conflict_policy)` and `get_node_by_external_id(external_id)` helpers in Rust, Python, TypeScript, Go, C#, and PHP — same names, same conflict-policy enum, same return shape. Each SDK ships a dedicated test file (`test_external_id.*` / `external-id.test.ts` / `ExternalIdTests.cs` / `ExternalIdTest.php`).
+- **Compat verification**: Docker-based external-ID and WAL-replay smoke scripts under [`scripts/compatibility/test-external-ids-docker.{sh,py}`](scripts/compatibility/) and [`scripts/compatibility/test-wal-replay-docker.{sh,py}`](scripts/compatibility/). Neo4j 4.8 diff suite re-verified at 300/300.
+- **Docs**: [`docs/reference/external-node-ids.md`](docs/reference/external-node-ids.md) (reference) and the user-guide section on external IDs cover the wire format, conflict-policy semantics, and per-SDK usage examples.
+
 ## [2.0.0] — 2026-04-30
 
 > **Major version bump**: 1.x → 2.0.0. Marks the first phase-8
@@ -14,15 +35,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > `release/v1.2.0` branch name continues to host the cut for
 > compat with upstream PR refs, and every workspace + SDK
 > manifest now reads `2.0.0`.
-
-### Added — `phase9_external-node-ids`
-
-- **External node identifiers**: Reserved `_id` property on nodes stores caller-supplied external IDs (stable, deduplication-friendly). `ExternalId` enum supports Hash (Blake3/SHA-256/SHA-512), Uuid, String (≤256 bytes), and Bytes (≤64 bytes) variants with 1-byte wire discriminator.
-- **Conflict policies on CREATE**: `ON CONFLICT ERROR | MATCH | REPLACE` modifier controls behavior when external ID already exists. ERROR (default) fails; MATCH returns existing node unchanged; REPLACE updates properties while preserving internal ID.
-- **REST endpoints**: `POST /data/nodes` accepts `external_id` + `conflict_policy` parameters; new `GET /data/nodes/by-external-id` endpoint for lookup. Both follow existing 200-with-error response pattern (never 404).
-- **Catalog persistence**: Two LMDB sub-databases (`external_ids` forward, `internal_ids` reverse) in catalog with atomic WAL updates and replay-safe recovery. Bidirectional mapping maintains O(log n) index seek in Cypher planner.
-- **Cypher surface**: Nodes without external ID behave identically to pre-phase-9 behavior (no breaking changes). Query planner automatically selects external-ID index for `MATCH (n {_id: ...})` and `MATCH (n) WHERE n._id = ...` predicates. `MERGE` fast-paths on pure `_id` constraints.
-- **Rust SDK**: `create_node_with_external_id(labels, properties, external_id, conflict_policy)` and `get_node_by_external_id(external_id)` helpers. All SDKs (Python, TypeScript, Go, C#, PHP) updated with equivalent surface.
 
 ### Added — `phase8_query-plan-cache`
 

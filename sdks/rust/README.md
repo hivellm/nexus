@@ -8,7 +8,7 @@
 
 Official Rust SDK for Nexus graph database.
 
-> **Compatibility:** SDK 2.0.0 ↔ `nexus-server` 2.0.0. SDK and
+> **Compatibility:** SDK 2.1.0 ↔ `nexus-server` 2.1.0. SDK and
 > server move in lockstep on the same X.Y.Z train; mismatches
 > within the same `MAJOR.MINOR` are usually fine but only the
 > exact-match build is in the test matrix. See
@@ -25,7 +25,7 @@ Add to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-nexus-graph-sdk = "2.0.0"
+nexus-graph-sdk = "2.1.0"
 ```
 
 ## Transports
