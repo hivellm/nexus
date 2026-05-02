@@ -12,9 +12,9 @@
 | 🔄 | phase5_implement-cluster-mode | 93/125 | implement cluster mode |
 | ⬚ | phase5_implement-v1-gui | 0/55 | implement v1 gui |
 
-## phase10
+## phase11
 
 | Status | Task | Progress | Description |
 |--------|------|----------|-------------|
-| ⬚ | phase10_external-ids-sdks-live-validation | 0/5 | external ids sdks live validation |
+| ⬚ | phase11_publish-2.1.0 | 0/5 | publish 2.1.0 |
 
