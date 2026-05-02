@@ -226,6 +226,77 @@ public class NexusClientConfig
 }
 
 /// <summary>
+/// Request body for POST /data/nodes (create node with optional external id).
+/// </summary>
+public class CreateNodeRequest
+{
+    /// <summary>Node labels.</summary>
+    [JsonPropertyName("labels")]
+    public List<string> Labels { get; set; } = new();
+
+    /// <summary>Node properties.</summary>
+    [JsonPropertyName("properties")]
+    public Dictionary<string, object?> Properties { get; set; } = new();
+
+    /// <summary>
+    /// Optional caller-supplied external id in prefixed string form:
+    /// <c>sha256:&lt;hex&gt;</c>, <c>blake3:&lt;hex&gt;</c>, <c>sha512:&lt;hex&gt;</c>,
+    /// <c>uuid:&lt;canonical&gt;</c>, <c>str:&lt;utf8&gt;</c>, <c>bytes:&lt;hex&gt;</c>.
+    /// Omitted when null.
+    /// </summary>
+    [JsonPropertyName("external_id")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? ExternalId { get; set; }
+
+    /// <summary>
+    /// Optional conflict policy when <see cref="ExternalId"/> is set:
+    /// <c>"error"</c> (default), <c>"match"</c>, or <c>"replace"</c>.
+    /// Omitted when null.
+    /// </summary>
+    [JsonPropertyName("conflict_policy")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? ConflictPolicy { get; set; }
+}
+
+/// <summary>
+/// Response from POST /data/nodes.
+/// </summary>
+public class CreateNodeResponse
+{
+    /// <summary>Created node ID.</summary>
+    [JsonPropertyName("node_id")]
+    public ulong NodeId { get; set; }
+
+    /// <summary>Success message.</summary>
+    [JsonPropertyName("message")]
+    public string Message { get; set; } = string.Empty;
+
+    /// <summary>Error message, if any.</summary>
+    [JsonPropertyName("error")]
+    public string? Error { get; set; }
+}
+
+/// <summary>
+/// Response from GET /data/nodes/by-external-id.
+/// </summary>
+public class GetNodeByExternalIdResponse
+{
+    /// <summary>
+    /// The matched node, or <see langword="null"/> when no node was found.
+    /// </summary>
+    [JsonPropertyName("node")]
+    public Node? Node { get; set; }
+
+    /// <summary>Status message from the server.</summary>
+    [JsonPropertyName("message")]
+    public string Message { get; set; } = string.Empty;
+
+    /// <summary>Error message, if any.</summary>
+    [JsonPropertyName("error")]
+    public string? Error { get; set; }
+}
+
+/// <summary>
 /// Request body for batch node creation.
 /// </summary>
 public class BatchNodesRequest

@@ -191,6 +191,68 @@ public class NexusClient : IDisposable, IAsyncDisposable
     }
 
     /// <summary>
+    /// Creates a new node with a caller-supplied external id.
+    /// </summary>
+    /// <param name="labels">Node labels.</param>
+    /// <param name="properties">Node properties.</param>
+    /// <param name="externalId">
+    /// Prefixed string form: <c>sha256:&lt;hex&gt;</c>, <c>blake3:&lt;hex&gt;</c>,
+    /// <c>sha512:&lt;hex&gt;</c>, <c>uuid:&lt;canonical&gt;</c>, <c>str:&lt;utf8&gt;</c>,
+    /// <c>bytes:&lt;hex&gt;</c>.
+    /// </param>
+    /// <param name="conflictPolicy">
+    /// <c>"error"</c> (default), <c>"match"</c>, or <c>"replace"</c>.
+    /// Pass <see langword="null"/> to use the server default.
+    /// </param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>Response containing the new node id.</returns>
+    public async Task<CreateNodeResponse> CreateNodeWithExternalIdAsync(
+        List<string> labels,
+        Dictionary<string, object?> properties,
+        string externalId,
+        string? conflictPolicy = null,
+        CancellationToken cancellationToken = default)
+    {
+        var requestBody = new CreateNodeRequest
+        {
+            Labels = labels,
+            Properties = properties,
+            ExternalId = externalId,
+            ConflictPolicy = conflictPolicy,
+        };
+
+        var response = await DoRequestAsync(
+            HttpMethod.Post, "/data/nodes", requestBody, cancellationToken);
+
+        return await response.Content.ReadFromJsonAsync<CreateNodeResponse>(
+            cancellationToken: cancellationToken)
+            ?? throw new NexusException("Failed to deserialize create-node response");
+    }
+
+    /// <summary>
+    /// Resolves a node by its external id.
+    /// </summary>
+    /// <param name="externalId">
+    /// Prefixed string form matching what was supplied at creation time.
+    /// </param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>
+    /// Response whose <see cref="GetNodeByExternalIdResponse.Node"/> is
+    /// <see langword="null"/> when no matching node exists.
+    /// </returns>
+    public async Task<GetNodeByExternalIdResponse> GetNodeByExternalIdAsync(
+        string externalId,
+        CancellationToken cancellationToken = default)
+    {
+        var path = $"/data/nodes/by-external-id?external_id={Uri.EscapeDataString(externalId)}";
+        var response = await DoRequestAsync(HttpMethod.Get, path, null, cancellationToken);
+
+        return await response.Content.ReadFromJsonAsync<GetNodeByExternalIdResponse>(
+            cancellationToken: cancellationToken)
+            ?? throw new NexusException("Failed to deserialize get-node-by-external-id response");
+    }
+
+    /// <summary>
     /// Retrieves a node by its ID.
     /// </summary>
     /// <param name="id">Node ID.</param>

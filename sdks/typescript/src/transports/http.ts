@@ -115,6 +115,22 @@ export class HttpTransport implements Transport {
         );
         return jsonToNexus(data);
       }
+      // Phase9 §5.5 — external-id node operations.
+      case 'NODE_CREATE_EXT': {
+        // args[0] = JSON-encoded request body (Str)
+        const bodyStr = asString(args[0], 'NODE_CREATE_EXT', 0);
+        const body = JSON.parse(bodyStr) as Record<string, unknown>;
+        const { data } = await this.client.post('/data/nodes', body);
+        return jsonToNexus(data);
+      }
+      case 'NODE_GET_BY_EXT_ID': {
+        // args[0] = external_id value (Str)
+        const extId = asString(args[0], 'NODE_GET_BY_EXT_ID', 0);
+        const { data } = await this.client.get(
+          `/data/nodes/by-external-id?external_id=${encodeURIComponent(extId)}`
+        );
+        return jsonToNexus(data);
+      }
       default:
         throw new Error(
           `HTTP fallback does not know how to route '${cmd}' — add an entry to sdks/typescript/src/transports/http.ts`

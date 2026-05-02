@@ -14,6 +14,8 @@ import type {
   CreateDatabaseResponse,
   DropDatabaseResponse,
   SwitchDatabaseResponse,
+  CreateNodeResponse,
+  GetNodeByExternalIdResponse,
 } from './types';
 import {
   NexusSDKError,
@@ -147,6 +149,66 @@ export class NexusClient {
     const result = await this.executeCypher(cypher, { props: properties });
     if (result.rows.length === 0) throw new NexusSDKError('Failed to create node');
     return result.rows[0].n as Node;
+  }
+
+  /**
+   * Create a node with a caller-supplied external id (Phase9 §5.5).
+   *
+   * Issues `POST /data/nodes` with `external_id` and optional
+   * `conflict_policy` in the JSON body. Both fields use snake_case to
+   * match the server contract.
+   *
+   * @param labels - Node labels
+   * @param properties - Node properties
+   * @param externalId - Prefixed external id, e.g. `uuid:…`, `str:…`,
+   *   `sha256:…`, `blake3:…`, `sha512:…`, `bytes:…`
+   * @param conflictPolicy - `"error"` (default) | `"match"` | `"replace"`
+   */
+  async createNodeWithExternalId(
+    labels: string[],
+    properties: NodeProperties,
+    externalId: string,
+    conflictPolicy?: string,
+  ): Promise<CreateNodeResponse> {
+    const body: Record<string, unknown> = {
+      labels,
+      properties,
+      external_id: externalId,
+    };
+    if (conflictPolicy !== undefined) {
+      body.conflict_policy = conflictPolicy;
+    }
+    const resp = await this.transport.execute({
+      command: 'NODE_CREATE_EXT',
+      args: [nx.Str(JSON.stringify(body))],
+    });
+    const json = nexusToJson(resp.value) as Record<string, unknown>;
+    return {
+      node_id: json.node_id as number,
+      message: typeof json.message === 'string' ? json.message : '',
+      error: typeof json.error === 'string' ? json.error : undefined,
+    };
+  }
+
+  /**
+   * Resolve a node by its external id (Phase9 §5.5).
+   *
+   * Issues `GET /data/nodes/by-external-id?external_id=<urlencoded>`.
+   * Returns `node: null` when the external id is not registered.
+   *
+   * @param externalId - The prefixed external id to look up
+   */
+  async getNodeByExternalId(externalId: string): Promise<GetNodeByExternalIdResponse> {
+    const resp = await this.transport.execute({
+      command: 'NODE_GET_BY_EXT_ID',
+      args: [nx.Str(externalId)],
+    });
+    const json = nexusToJson(resp.value) as Record<string, unknown>;
+    return {
+      node: (json.node ?? null) as Node | null,
+      message: typeof json.message === 'string' ? json.message : '',
+      error: typeof json.error === 'string' ? json.error : undefined,
+    };
   }
 
   async getNode(id: number): Promise<Node | null> {

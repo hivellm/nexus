@@ -38,6 +38,10 @@ export type {
     DropDatabaseResponse,
     SessionDatabaseResponse,
     SwitchDatabaseResponse,
+    // External-id node types (Phase9 §5.5)
+    CreateNodeWithExternalIdRequest,
+    CreateNodeResponse,
+    GetNodeByExternalIdResponse,
 } from './types';
 
 export { defaultLocalEndpoint, parseEndpoint, endpointToString } from './transports/endpoint';

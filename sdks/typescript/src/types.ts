@@ -257,3 +257,53 @@ export interface SwitchDatabaseResponse {
   message: string;
 }
 
+// ============================================================================
+// External-id Node Types (Phase9 §5.5)
+// ============================================================================
+
+/**
+ * Request body for creating a node with an optional external id.
+ *
+ * `externalId` accepts the prefixed string form:
+ *   `sha256:<hex>`, `blake3:<hex>`, `sha512:<hex>`, `uuid:<canonical>`,
+ *   `str:<utf8>`, `bytes:<hex>`.
+ *
+ * `conflictPolicy` controls what happens when a node with the same
+ * external id already exists: `"error"` (default), `"match"`, `"replace"`.
+ */
+export interface CreateNodeWithExternalIdRequest {
+  /** Node labels */
+  labels: string[];
+  /** Node properties */
+  properties: NodeProperties;
+  /** Caller-supplied external id (required for this variant). */
+  external_id: string;
+  /** Conflict policy — omit to accept server default (`"error"`). */
+  conflict_policy?: string;
+}
+
+/**
+ * Response from `POST /data/nodes` (with or without external id).
+ */
+export interface CreateNodeResponse {
+  /** Assigned internal node id */
+  node_id: number;
+  /** Human-readable result message */
+  message: string;
+  /** Server error string — present only on failure */
+  error?: string;
+}
+
+/**
+ * Response from `GET /data/nodes/by-external-id`.
+ * `node` is `null` / absent when the external id is not registered.
+ */
+export interface GetNodeByExternalIdResponse {
+  /** Resolved node, or null when not found */
+  node: Node | null;
+  /** Human-readable result message */
+  message: string;
+  /** Server error string — present only on failure */
+  error?: string;
+}
+

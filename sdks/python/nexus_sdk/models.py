@@ -46,6 +46,22 @@ class CreateNodeRequest(BaseModel):
 
     labels: List[str] = Field(default_factory=list)
     properties: Dict[str, Any] = Field(default_factory=dict)
+    # Phase9 §5.5 — optional caller-supplied external id.
+    # Accepted prefixed forms: ``sha256:<hex>``, ``blake3:<hex>``,
+    # ``sha512:<hex>``, ``uuid:<canonical>``, ``str:<utf8>``, ``bytes:<hex>``.
+    external_id: Optional[str] = None
+    # Conflict policy when ``external_id`` is set:
+    # ``"error"`` (default), ``"match"``, or ``"replace"``.
+    conflict_policy: Optional[str] = None
+
+    def model_dump(self, **kwargs: Any) -> Dict[str, Any]:  # type: ignore[override]
+        """Serialize, omitting None fields so the server sees clean JSON."""
+        data = super().model_dump(**kwargs)
+        if data.get("external_id") is None:
+            data.pop("external_id", None)
+        if data.get("conflict_policy") is None:
+            data.pop("conflict_policy", None)
+        return data
 
 
 class CreateNodeResponse(BaseModel):
@@ -53,6 +69,15 @@ class CreateNodeResponse(BaseModel):
 
     node_id: int
     node: Optional[Node] = None
+    message: str = ""
+    error: Optional[str] = None
+
+
+class GetNodeByExternalIdResponse(BaseModel):
+    """Response from resolving a node by external id (Phase9 §5.5)."""
+
+    node: Optional[Node] = None
+    message: str = ""
     error: Optional[str] = None
 
 

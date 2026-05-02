@@ -31,6 +31,7 @@ from nexus_sdk.models import (
     Node,
     CreateNodeRequest,
     CreateNodeResponse,
+    GetNodeByExternalIdResponse,
     UpdateNodeRequest,
     UpdateNodeResponse,
     DeleteNodeResponse,
@@ -308,13 +309,23 @@ class NexusClient:
             return False
 
     async def create_node(
-        self, labels: List[str], properties: Dict[str, Any]
+        self,
+        labels: List[str],
+        properties: Dict[str, Any],
+        external_id: Optional[str] = None,
+        conflict_policy: Optional[str] = None,
     ) -> CreateNodeResponse:
         """Create a new node.
 
         Args:
             labels: Node labels
             properties: Node properties
+            external_id: Optional caller-supplied external id (Phase9 §5.5).
+                Accepted prefixed forms: ``sha256:<hex>``, ``blake3:<hex>``,
+                ``sha512:<hex>``, ``uuid:<canonical>``, ``str:<utf8>``,
+                ``bytes:<hex>``.
+            conflict_policy: Conflict policy when ``external_id`` is set:
+                ``"error"`` (default), ``"match"``, or ``"replace"``.
 
         Returns:
             CreateNodeResponse containing the created node ID
@@ -323,7 +334,12 @@ class NexusClient:
             ApiError: If the API returns an error
         """
         url = urljoin(self.base_url, "/data/nodes")
-        payload = CreateNodeRequest(labels=labels, properties=properties).model_dump()
+        payload = CreateNodeRequest(
+            labels=labels,
+            properties=properties,
+            external_id=external_id,
+            conflict_policy=conflict_policy,
+        ).model_dump()
 
         response = await self._execute_with_retry("POST", url, json=payload)
         status = response.status_code
@@ -331,6 +347,73 @@ class NexusClient:
         if status == 200:
             data = response.json()
             return CreateNodeResponse(**data)
+        else:
+            try:
+                error_text = response.text
+            except Exception:
+                error_text = f"HTTP {status}"
+            raise ApiError(error_text, status)
+
+    async def create_node_with_external_id(
+        self,
+        labels: List[str],
+        properties: Dict[str, Any],
+        external_id: str,
+        conflict_policy: Optional[str] = None,
+    ) -> CreateNodeResponse:
+        """Create a node with a caller-supplied external id (Phase9 §5.5).
+
+        Thin ergonomic wrapper around :meth:`create_node` that makes
+        ``external_id`` a required positional argument.
+
+        Args:
+            labels: Node labels
+            properties: Node properties
+            external_id: Prefixed external id string, e.g. ``uuid:…``,
+                ``str:…``, ``sha256:…``, ``blake3:…``, ``sha512:…``,
+                ``bytes:…``.
+            conflict_policy: One of ``"error"`` (default), ``"match"``,
+                or ``"replace"``.
+
+        Returns:
+            CreateNodeResponse containing the created node ID
+
+        Raises:
+            ApiError: If the API returns an error
+        """
+        return await self.create_node(
+            labels=labels,
+            properties=properties,
+            external_id=external_id,
+            conflict_policy=conflict_policy,
+        )
+
+    async def get_node_by_external_id(
+        self, external_id: str
+    ) -> GetNodeByExternalIdResponse:
+        """Resolve a node by its external id (Phase9 §5.5).
+
+        Issues ``GET /data/nodes/by-external-id?external_id=<urlencoded>``.
+
+        Args:
+            external_id: The prefixed external id to look up.
+
+        Returns:
+            GetNodeByExternalIdResponse — ``node`` is ``None`` when absent.
+
+        Raises:
+            ApiError: If the server returns a non-200 response.
+        """
+        from urllib.parse import urlencode
+
+        qs = urlencode({"external_id": external_id})
+        url = urljoin(self.base_url, f"/data/nodes/by-external-id?{qs}")
+        response = await self._execute_with_retry("GET", url)
+        status = response.status_code
+
+        if status == 200:
+            data = response.json()
+            return GetNodeByExternalIdResponse(**data)
         else:
             try:
                 error_text = response.text

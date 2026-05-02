@@ -114,8 +114,48 @@ func main() {
 		fmt.Println("⚠ WARNING - Rollback may not have worked")
 	}
 
+	// Test 9: CreateNodeWithExternalID
+	fmt.Print("9. CreateNodeWithExternalID: ")
+	extIDResp, err := client.CreateNodeWithExternalID(ctx,
+		[]string{"ExternalPerson"},
+		map[string]interface{}{"name": "Eve", "age": 27},
+		"str:eve-external-id",
+		"error",
+	)
+	if err != nil {
+		log.Fatal("FAILED - ", err)
+	}
+	if extIDResp.NodeID == 0 {
+		log.Fatal("FAILED - expected non-zero NodeID")
+	}
+	fmt.Printf("✓ OK - NodeID: %d\n", extIDResp.NodeID)
+
+	// Test 10: GetNodeByExternalID round-trip
+	fmt.Print("10. GetNodeByExternalID: ")
+	getExtResp, err := client.GetNodeByExternalID(ctx, "str:eve-external-id")
+	if err != nil {
+		log.Fatal("FAILED - ", err)
+	}
+	if getExtResp.Node == nil {
+		log.Fatal("FAILED - expected node to be present")
+	}
+	fmt.Printf("✓ OK - Retrieved node with labels: %v\n", getExtResp.Node.Labels)
+
+	// Test 11: CreateNodeWithExternalID conflict policy match
+	fmt.Print("11. CreateNodeWithExternalID conflict=match: ")
+	_, err = client.CreateNodeWithExternalID(ctx,
+		[]string{"ExternalPerson"},
+		map[string]interface{}{"name": "Eve", "age": 27},
+		"str:eve-external-id",
+		"match",
+	)
+	if err != nil {
+		log.Fatal("FAILED - ", err)
+	}
+	fmt.Println("✓ OK")
+
 	// Cleanup
-	fmt.Print("9. Cleanup: ")
+	fmt.Print("12. Cleanup: ")
 	result, err = client.ExecuteCypher(ctx, "MATCH (n) DETACH DELETE n", nil)
 	if err != nil {
 		log.Fatal("FAILED - ", err)

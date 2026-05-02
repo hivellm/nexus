@@ -355,6 +355,33 @@ func (c *Client) ExecuteCypherHTTP(ctx context.Context, query string, params map
 	return &result, nil
 }
 
+// CreateNodeRequest holds the body for the POST /data/nodes endpoint.
+//
+// ExternalID is the caller-supplied identifier in prefixed string form
+// (sha256:<hex>, blake3:<hex>, sha512:<hex>, uuid:<canonical>, str:<utf8>,
+// bytes:<hex>). Leave empty to omit the field. ConflictPolicy is one of
+// "error" (default), "match", or "replace"; leave empty to omit.
+type CreateNodeRequest struct {
+	Labels         []string               `json:"labels"`
+	Properties     map[string]interface{} `json:"properties"`
+	ExternalID     string                 `json:"external_id,omitempty"`
+	ConflictPolicy string                 `json:"conflict_policy,omitempty"`
+}
+
+// CreateNodeResponse holds the response from the POST /data/nodes endpoint.
+type CreateNodeResponse struct {
+	NodeID  uint64  `json:"node_id"`
+	Message string  `json:"message"`
+	Error   *string `json:"error,omitempty"`
+}
+
+// GetNodeByExternalIDResponse holds the response from GET /data/nodes/by-external-id.
+type GetNodeByExternalIDResponse struct {
+	Node    *Node   `json:"node"`
+	Message string  `json:"message"`
+	Error   *string `json:"error,omitempty"`
+}
+
 // CreateNode creates a new node with the given labels and properties.
 func (c *Client) CreateNode(ctx context.Context, labels []string, properties map[string]interface{}) (*Node, error) {
 	reqBody := map[string]interface{}{
@@ -374,6 +401,62 @@ func (c *Client) CreateNode(ctx context.Context, labels []string, properties map
 	}
 
 	return &node, nil
+}
+
+// CreateNodeWithExternalID creates a new node with a caller-supplied external id.
+//
+// externalID must be in prefixed string form (sha256:<hex>, blake3:<hex>,
+// sha512:<hex>, uuid:<canonical>, str:<utf8>, bytes:<hex>). Pass an empty
+// string to omit. conflictPolicy is one of "error" (default), "match", or
+// "replace"; pass an empty string to use the server default.
+func (c *Client) CreateNodeWithExternalID(
+	ctx context.Context,
+	labels []string,
+	properties map[string]interface{},
+	externalID string,
+	conflictPolicy string,
+) (*CreateNodeResponse, error) {
+	reqBody := CreateNodeRequest{
+		Labels:         labels,
+		Properties:     properties,
+		ExternalID:     externalID,
+		ConflictPolicy: conflictPolicy,
+	}
+
+	resp, err := c.doRequest(ctx, http.MethodPost, "/data/nodes", reqBody)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	var result CreateNodeResponse
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return nil, fmt.Errorf("failed to decode response: %w", err)
+	}
+
+	return &result, nil
+}
+
+// GetNodeByExternalID resolves a node by its external id.
+//
+// Returns a GetNodeByExternalIDResponse whose Node field is nil when no
+// matching node exists.
+func (c *Client) GetNodeByExternalID(ctx context.Context, externalID string) (*GetNodeByExternalIDResponse, error) {
+	escapedID := url.QueryEscape(externalID)
+	path := "/data/nodes/by-external-id?external_id=" + escapedID
+
+	resp, err := c.doRequest(ctx, http.MethodGet, path, nil)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	var result GetNodeByExternalIDResponse
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return nil, fmt.Errorf("failed to decode response: %w", err)
+	}
+
+	return &result, nil
 }
 
 // GetNode retrieves a node by its ID.

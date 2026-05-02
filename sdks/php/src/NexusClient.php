@@ -138,17 +138,72 @@ class NexusClient
      *
      * @param string[] $labels
      * @param array<string, mixed> $properties
+     * @param string|null $externalId Optional prefixed external id (e.g. "str:my-key",
+     *        "sha256:<hex>", "blake3:<hex>", "sha512:<hex>", "uuid:<canonical>",
+     *        "bytes:<hex>"). Omitted when null.
+     * @param string|null $conflictPolicy Optional conflict policy: "error" (default),
+     *        "match", or "replace". Omitted when null.
      * @throws NexusApiException
      */
-    public function createNode(array $labels, array $properties): Node
-    {
+    public function createNode(
+        array $labels,
+        array $properties,
+        ?string $externalId = null,
+        ?string $conflictPolicy = null
+    ): Node {
         $body = [
             'labels' => $labels,
             'properties' => $properties,
         ];
+        if ($externalId !== null) {
+            $body['external_id'] = $externalId;
+        }
+        if ($conflictPolicy !== null) {
+            $body['conflict_policy'] = $conflictPolicy;
+        }
 
         $response = $this->doRequest('POST', '/nodes', $body);
         return Node::fromArray($response);
+    }
+
+    /**
+     * Create a new node with a caller-supplied external id.
+     *
+     * Convenience wrapper around createNode() for the common case where
+     * an external id is required.
+     *
+     * @param string[] $labels
+     * @param array<string, mixed> $properties
+     * @param string $externalId Prefixed string form (e.g. "str:my-key",
+     *        "sha256:<hex>", "blake3:<hex>", "sha512:<hex>", "uuid:<canonical>",
+     *        "bytes:<hex>").
+     * @param string|null $conflictPolicy "error" (default), "match", or "replace".
+     * @throws NexusApiException
+     */
+    public function createNodeWithExternalId(
+        array $labels,
+        array $properties,
+        string $externalId,
+        ?string $conflictPolicy = null
+    ): Node {
+        return $this->createNode($labels, $properties, $externalId, $conflictPolicy);
+    }
+
+    /**
+     * Resolve a node by its external id.
+     *
+     * Returns null for the `node` key in the response when no matching
+     * node exists. The raw decoded response array is returned so callers
+     * can inspect the `message` and `error` fields as well.
+     *
+     * @return array{node: array<string, mixed>|null, message: string, error: string|null}
+     * @throws NexusApiException
+     */
+    public function getNodeByExternalId(string $externalId): array
+    {
+        $path = '/data/nodes/by-external-id?external_id=' . urlencode($externalId);
+        /** @var array{node: array<string, mixed>|null, message: string, error: string|null} */
+        return $this->doRequest('GET', $path);
     }
 
     /**
