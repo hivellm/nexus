@@ -356,6 +356,118 @@ data: {"row_count": 100000, "execution_time_ms": 5000}
 
 ---
 
+### Node Creation with External ID
+
+```http
+POST /data/nodes
+Content-Type: application/json
+```
+
+**Request**:
+```json
+{
+  "labels": ["File"],
+  "properties": {
+    "name": "document.pdf",
+    "size": 2048
+  },
+  "external_id": "sha256:abc123def456…",
+  "conflict_policy": "match"
+}
+```
+
+**Response** (201 Created):
+```json
+{
+  "node": {
+    "id": 42,
+    "labels": ["File"],
+    "properties": {
+      "name": "document.pdf",
+      "size": 2048
+    },
+    "external_id": "sha256:abc123def456…"
+  },
+  "created": true,
+  "execution_time_ms": 2
+}
+```
+
+**Response** (200 OK, with conflict_policy="match" and duplicate):
+```json
+{
+  "node": {
+    "id": 39,
+    "labels": ["File"],
+    "properties": {
+      "name": "document.pdf",
+      "size": 2048
+    },
+    "external_id": "sha256:abc123def456…"
+  },
+  "created": false,
+  "execution_time_ms": 1
+}
+```
+
+**Parameters**:
+- `external_id` (optional): Prefixed-string format (e.g., `"sha256:abc…"`, `"uuid:…"`, `"str:…"`)
+- `conflict_policy` (optional, default: `"error"`): One of `"error"`, `"match"`, `"replace"`
+  - `error`: Fail if external id exists
+  - `match`: Return existing node unchanged
+  - `replace`: Return existing node with updated properties
+
+**Status Codes**:
+- `201 Created`: Node created successfully
+- `200 OK`: Node matched or replaced (when conflict_policy is "match" or "replace")
+- `400 Bad Request`: Invalid labels, properties, or external_id format
+- `409 Conflict`: External ID already exists (when conflict_policy is "error")
+- `500 Internal Server Error`: Server error
+
+---
+
+### Get Node by External ID
+
+```http
+GET /data/nodes/by-external-id?external_id=sha256:abc123def456…
+```
+
+**Response** (200 OK, found):
+```json
+{
+  "node": {
+    "id": 42,
+    "labels": ["File"],
+    "properties": {
+      "name": "document.pdf",
+      "size": 2048
+    },
+    "external_id": "sha256:abc123def456…"
+  },
+  "error": null,
+  "execution_time_ms": 1
+}
+```
+
+**Response** (200 OK, not found):
+```json
+{
+  "node": null,
+  "error": null,
+  "execution_time_ms": 0
+}
+```
+
+**Query Parameters**:
+- `external_id` (required): The prefixed-string external ID to look up
+
+**Status Codes**:
+- `200 OK`: Query executed (node may be null if not found)
+- `400 Bad Request`: Missing or invalid external_id parameter
+- `500 Internal Server Error`: Server error
+
+---
+
 ## Error Codes
 
 ### Standard Error Response

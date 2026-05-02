@@ -410,6 +410,108 @@ MATCH (n:Person:Employee {name: 'Alice'})
 REMOVE n:Employee
 ```
 
+## Reserved `_id` Property and `ON CONFLICT` Clause
+
+**Nexus Extension**: The `_id` property is reserved and stores the external identifier of a node. This is a Nexus-specific feature with no direct Neo4j equivalent.
+
+### CREATE with External ID
+
+```cypher
+-- Create with hash-based external id
+CREATE (f:File {_id: 'sha256:abc123def456…', path: '/data/file.txt', size: 1024})
+RETURN f._id, f.path
+
+-- Create with UUID
+CREATE (d:Document {_id: 'uuid:550e8400-e29b-41d4-a716-446655440000', title: 'Report'})
+
+-- Create with string external id
+CREATE (u:User {_id: 'str:user-42', name: 'Alice'})
+
+-- Create with parameterized external id
+CREATE (n:Node {_id: $external_id, data: $data})
+RETURN n._id
+```
+
+### Accepted `_id` Formats
+
+The `_id` property accepts string literals or parameters with a prefixed format:
+
+- `'sha256:<hex_string>'` — 32-byte SHA-256 hash as hex (64 chars)
+- `'sha512:<hex_string>'` — 64-byte SHA-512 hash as hex (128 chars)
+- `'blake3:<hex_string>'` — 32-byte BLAKE3 hash as hex (64 chars)
+- `'uuid:<canonical>'` — UUID in canonical RFC 4122 format (e.g., `550e8400-e29b-41d4-a716-446655440000`)
+- `'str:<value>'` — Arbitrary string key ≤ 256 bytes UTF-8
+- `'bytes:<hex_string>'` — Opaque binary value ≤ 64 bytes as hex
+
+### ON CONFLICT Clause
+
+When a node is created with `_id`, the optional `ON CONFLICT` modifier controls the behavior if an external ID already exists:
+
+```cypher
+-- ERROR (default): fail if external id exists
+CREATE (n:File {_id: 'sha256:abc…', path: '/file.txt'})
+RETURN n._id
+
+-- MATCH: return the existing node, discard new properties
+CREATE (n:File {_id: 'sha256:abc…', path: '/newpath'}) ON CONFLICT MATCH
+RETURN n._id
+
+-- REPLACE: return the existing node, update properties
+CREATE (n:File {_id: 'sha256:abc…', path: '/newpath'}) ON CONFLICT REPLACE
+RETURN n._id
+```
+
+**Conflict Policy Semantics**:
+
+- **ERROR** (default): If a node with the same `_id` already exists, the operation fails with `ExternalIdConflict`. No node is created or modified.
+- **MATCH**: If a node with the same `_id` already exists, return that node unchanged. Any properties from the CREATE pattern are discarded. Idempotent for read-like checks.
+- **REPLACE**: If a node with the same `_id` already exists, update its properties with the provided values. The internal node ID remains unchanged. Labels are preserved unless explicitly redefined in the CREATE pattern.
+
+### Projecting `_id`
+
+```cypher
+-- Project the external id
+MATCH (n:File {_id: 'sha256:abc…'})
+RETURN n._id, n.path
+
+-- Project null when external id is absent
+MATCH (n:File)
+RETURN n._id  -- null for nodes without external id
+```
+
+### Index Seek on `_id` Predicates
+
+The query planner automatically uses the external-ID index when filtering by `_id`:
+
+```cypher
+-- Index seek (fast)
+MATCH (n {_id: 'sha256:abc…'})
+RETURN n
+
+-- Parameterized (also index seek)
+MATCH (n {_id: $external_id})
+RETURN n
+
+-- WHERE clause variant (index seek)
+MATCH (n) WHERE n._id = 'sha256:abc…'
+RETURN n
+```
+
+### MERGE with External ID
+
+```cypher
+-- Fast path: MERGE constrained only by _id
+MERGE (n:File {_id: 'sha256:abc…'})
+ON CREATE SET n.imported_at = timestamp()
+RETURN n._id
+
+-- MERGE creates when absent, matches when present (idempotent)
+MERGE (n:User {_id: 'uuid:1234…'})
+ON CREATE SET n.created_at = timestamp()
+ON MATCH SET n.last_seen = timestamp()
+RETURN n._id
+```
+
 ## Query Examples
 
 ### Example 1: Social Network

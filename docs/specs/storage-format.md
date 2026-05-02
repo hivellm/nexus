@@ -292,6 +292,54 @@ Examples:
 - "epoch" → Current epoch (u64)
 ```
 
+### External-ID Catalog Sub-Databases
+
+Two LMDB sub-databases store mappings between external and internal node identifiers:
+
+#### external_ids
+```
+Key: Encoded ExternalId (variable length)
+Value: u64 (internal node ID, little-endian)
+
+ExternalId Wire Encoding:
+┌─────────────┬──────────────────────────────────────┐
+│ Discriminator │         Variant Payload            │
+│    (1 byte)   │      (variable length)             │
+└─────────────┴──────────────────────────────────────┘
+
+Discriminator values:
+0x01 Hash      → Sub-discriminator (1 byte) + hash bytes
+  0x01 Blake3:   32 bytes (blake3_output_len)
+  0x02 Sha256:   32 bytes (sha256_output_len)
+  0x03 Sha512:   64 bytes (sha512_output_len)
+0x02 Uuid      → 16 bytes (RFC 4122 canonical)
+0x03 Str       → varint length (LEB128) + UTF-8 bytes (≤ 256 bytes)
+0x04 Bytes     → varint length (LEB128) + raw bytes (≤ 64 bytes)
+
+Examples:
+Hash(Blake3):     0x01 0x01 [32 bytes]
+Uuid:             0x02 [16 bytes]
+String("user-1"): 0x03 0x07 'u' 's' 'e' 'r' '-' '1' (varint 7, then 7 UTF-8 bytes)
+Bytes(...)        0x04 [varint] [N bytes]
+```
+
+#### internal_ids
+```
+Key: u64 (internal node ID, little-endian)
+Value: Encoded ExternalId (same format as external_ids values)
+
+Reverse mapping for efficient projection of n._id in query results.
+```
+
+**Length Constraints**:
+- String external IDs: maximum 256 bytes (UTF-8)
+- Bytes external IDs: maximum 64 bytes
+- Hash values: 32 bytes (Blake3, SHA-256) or 64 bytes (SHA-512)
+- Uuid values: fixed 16 bytes
+
+**Atomicity**:
+External-ID index updates are atomic with respect to WAL. When a node with an external ID is created or deleted, both forward (`external_ids`) and reverse (`internal_ids`) entries are written or removed as a single transaction commit.
+
 ## Index Formats
 
 ### Label Bitmap (RoaringBitmap)

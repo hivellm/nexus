@@ -131,6 +131,24 @@ Metadata:
 - Index definitions
 ```
 
+#### External Identity
+
+Nexus maintains two parallel id namespaces for each node:
+
+**Internal ID** (`u64`): Physical record offset in the node store, immutable and used for all graph traversal. Unchanged from the original architecture.
+
+**External ID** (optional `ExternalId` enum): Caller-supplied, unique per database. Supports four variants:
+- `Hash`: Blake3, SHA-256, or SHA-512 (32 or 64 bytes)
+- `Uuid`: 16-byte RFC 4122 form
+- `String`: UTF-8 up to 256 bytes
+- `Bytes`: Opaque binary up to 64 bytes
+
+**Storage**: Two LMDB sub-databases in the catalog:
+- `external_ids`: Maps encoded `ExternalId` → `u64` internal id (forward index)
+- `internal_ids`: Maps `u64` → encoded `ExternalId` (reverse index)
+
+**Semantics**: External IDs are optional per node; nodes without an external id behave identically to pre-phase-9 behavior. Both indexes are updated atomically during node create/delete and rebuilt on WAL replay. Conflict resolution (`ERROR`, `MATCH`, `REPLACE`) is enforced at the storage layer and surfaces through Cypher semantics.
+
 ### Page Cache
 
 4-8KB pages with eviction policies:

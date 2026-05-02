@@ -15,6 +15,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > compat with upstream PR refs, and every workspace + SDK
 > manifest now reads `2.0.0`.
 
+### Added — `phase9_external-node-ids`
+
+- **External node identifiers**: Reserved `_id` property on nodes stores caller-supplied external IDs (stable, deduplication-friendly). `ExternalId` enum supports Hash (Blake3/SHA-256/SHA-512), Uuid, String (≤256 bytes), and Bytes (≤64 bytes) variants with 1-byte wire discriminator.
+- **Conflict policies on CREATE**: `ON CONFLICT ERROR | MATCH | REPLACE` modifier controls behavior when external ID already exists. ERROR (default) fails; MATCH returns existing node unchanged; REPLACE updates properties while preserving internal ID.
+- **REST endpoints**: `POST /data/nodes` accepts `external_id` + `conflict_policy` parameters; new `GET /data/nodes/by-external-id` endpoint for lookup. Both follow existing 200-with-error response pattern (never 404).
+- **Catalog persistence**: Two LMDB sub-databases (`external_ids` forward, `internal_ids` reverse) in catalog with atomic WAL updates and replay-safe recovery. Bidirectional mapping maintains O(log n) index seek in Cypher planner.
+- **Cypher surface**: Nodes without external ID behave identically to pre-phase-9 behavior (no breaking changes). Query planner automatically selects external-ID index for `MATCH (n {_id: ...})` and `MATCH (n) WHERE n._id = ...` predicates. `MERGE` fast-paths on pure `_id` constraints.
+- **Rust SDK**: `create_node_with_external_id(labels, properties, external_id, conflict_policy)` and `get_node_by_external_id(external_id)` helpers. All SDKs (Python, TypeScript, Go, C#, PHP) updated with equivalent surface.
+
 ### Added — `phase8_query-plan-cache`
 
 - **Process-wide query plan cache** at

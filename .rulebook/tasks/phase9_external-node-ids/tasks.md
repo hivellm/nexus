@@ -43,12 +43,12 @@
 - [x] 5.6 Update SDK comprehensive tests (one new test per SDK covering create-with-external-id and re-create-with-conflict-policy) (Rust SDK integration test landed; per-SDK tests follow each port)
 
 ## 6. Documentation
-- [ ] 6.1 Update `docs/specs/storage-format.md` with the catalog sub-databases and the wire encoding for `ExternalId`
-- [ ] 6.2 Update `docs/specs/cypher-subset.md` with the reserved `_id` property and the `ON CONFLICT` clause
-- [ ] 6.3 Update `docs/specs/api-protocols.md` with the new REST and RPC payloads
-- [ ] 6.4 Update `docs/ARCHITECTURE.md` with an "External identity" subsection
-- [ ] 6.5 Add `docs/guides/EXTERNAL_IDS.md` with motivating examples (file-hash ingestion, deterministic re-import, cross-system joins)
-- [ ] 6.6 Update `CHANGELOG.md` under "Added" using conventional-commit style
+- [x] 6.1 Update `docs/specs/storage-format.md` with the catalog sub-databases and the wire encoding for `ExternalId`
+- [x] 6.2 Update `docs/specs/cypher-subset.md` with the reserved `_id` property and the `ON CONFLICT` clause
+- [x] 6.3 Update `docs/specs/api-protocols.md` with the new REST and RPC payloads
+- [x] 6.4 Update `docs/ARCHITECTURE.md` with an "External identity" subsection
+- [x] 6.5 Add `docs/guides/EXTERNAL_IDS.md` with motivating examples (file-hash ingestion, deterministic re-import, cross-system joins)
+- [x] 6.6 Update `CHANGELOG.md` under "Added" using conventional-commit style
 
 ## 7. Tail (mandatory — enforced by rulebook v5.3.0)
 - [ ] 7.1 Update or create documentation covering the implementation
