@@ -35,7 +35,12 @@ services:
       - nexus_root_password
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:15474/health"]
+      # Distroless image: no curl / grep. Bash built-ins only.
+      test:
+        - "CMD"
+        - "bash"
+        - "-c"
+        - "exec 3<>/dev/tcp/127.0.0.1/15474 && printf 'GET /health HTTP/1.0\\r\\nHost: localhost\\r\\n\\r\\n' >&3 && read -r line <&3 && [[ \"$$line\" == *'200 OK'* ]]"
       interval: 30s
       timeout: 10s
       retries: 3

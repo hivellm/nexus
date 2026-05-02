@@ -37,11 +37,13 @@ curl -X POST http://localhost:15474/cypher \
 
 | Tag | Contents |
 |---|---|
-| `latest` | Latest stable release (currently `v2.0.0`). |
-| `v2.0.0`  | Phase-8 ship train: encryption-at-rest core + KMS + WAL, quantified-path patterns with mode keywords, query-plan cache. |
+| `latest`, `2.1.0` | Phase 9 + 10 ship train: caller-supplied external node IDs (`_id`) with `ON CONFLICT ERROR/MATCH/REPLACE`, Cypher + REST integration, six-SDK parity helpers. PHP + C# SDK `/nodes` → `/data/nodes` route fix. 300/300 Neo4j 4.8 diff suite + 87/87 SDK live cases passing. |
+| `2.0.0`, `v2.0.0` | Phase-8 ship train: encryption-at-rest core + KMS + WAL, quantified-path patterns with mode keywords, query-plan cache. |
 | `v1.14.0` | Geospatial predicates + `spatial.*` procedures slice A. |
 | `v1.13.0` | FTS async writer + crash-recovery harness. |
 | `v1.12.0` | FTS auto-maintenance on CREATE / SET / REMOVE / DELETE. |
+
+Pin a specific tag (e.g. `hivehub/nexus:2.1.0`) for production. `latest` floats forward on every release.
 
 Every tag ships the HTTP API (`:15474`) and the binary RPC
 transport (`:15475`) the first-party SDKs use by default.
@@ -148,8 +150,14 @@ curl -sf http://localhost:15474/health | jq .status
 
 ## Features
 
-- **openCypher**: ~55 % of the openCypher surface (300/300 Neo4j
-  compatibility tests passing at v1.14).
+- **openCypher**: ~55 % of the openCypher surface (300/300 Neo4j 4.8
+  diff suite passing at `2.1.0`; `cargo +nightly test --workspace`
+  reports 2310 passed / 67 ignored / 0 failed).
+- **External node IDs (`_id`)**: caller-supplied stable identifiers on
+  nodes with `ON CONFLICT ERROR/MATCH/REPLACE` policies, REST surface
+  (`POST /data/nodes` + `GET /data/nodes/by-external-id`), Cypher
+  integration (`CREATE`/`MERGE`/`MATCH (n {_id: ...})`), and parity
+  helpers in all six first-party SDKs. New in `2.1.0`.
 - **Full-text search**: Tantivy-backed BM25 with per-index async
   writers, `db.index.fulltext.*` Neo4j-compatible procedure
   surface, and crash-recovery via WAL replay.
@@ -167,7 +175,8 @@ curl -sf http://localhost:15474/health | jq .status
   via the `DatabaseManager`.
 - **Binary RPC**: first-party SDKs (Python, TypeScript, Rust, Go,
   C#, PHP) speak `nexus://` natively for p95 sub-millisecond
-  round-trips.
+  round-trips. Every SDK at `2.1.0` is live-validated against the
+  tagged `hivehub/nexus:2.1.0` image (87 / 87 cases PASS).
 
 ## Links
 

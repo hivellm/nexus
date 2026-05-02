@@ -2,8 +2,12 @@
 # Multi-stage Dockerfile for Nexus Graph Database
 #
 # HOW TO BUILD:
-#   docker build -t nexus:latest .
-#   docker build -t nexus:v2.0.0 -t nexus:latest .
+#   docker build -t hivehub/nexus:2.1.0 -t hivehub/nexus:latest .
+#
+# HOW TO PUBLISH (Docker Hub — hivehub/nexus):
+#   docker login
+#   docker push hivehub/nexus:2.1.0
+#   docker push hivehub/nexus:latest
 #
 # The `# syntax=docker/dockerfile:1.6` header opts into the
 # `RUN --mount=type=cache` frontend so the cargo registry + target
@@ -25,7 +29,7 @@
 #     -e NEXUS_ROOT_USERNAME=admin \
 #     -e NEXUS_ROOT_PASSWORD=secure_password \
 #     -e NEXUS_AUTH_ENABLED=true \
-#     nexus:latest
+#     hivehub/nexus:2.1.0
 #
 #   # Using docker run with Docker secrets (recommended for production):
 #   echo "secure_password" > secrets/root_password.txt
@@ -40,7 +44,7 @@
 #     -e NEXUS_ROOT_PASSWORD_FILE=/run/secrets/nexus_root_password \
 #     -e NEXUS_AUTH_ENABLED=true \
 #     -e NEXUS_DISABLE_ROOT_AFTER_SETUP=true \
-#     nexus:latest
+#     hivehub/nexus:2.1.0
 #
 #   # Using docker-compose (recommended):
 #   docker-compose up -d
@@ -97,44 +101,60 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
  && mkdir -p /out/release \
  && cp target/release/nexus-server /out/release/nexus-server
 
+# User-prep stage
+#
+# Run `useradd` in a throwaway `trixie-dev` stage so the `passwd`
+# package + apt + dpkg never land in the final image. We then copy
+# only the resulting `/etc/passwd`, `/etc/group`, `/etc/shadow`, and
+# `/home/nexus` lines into the distroless runtime.
+FROM dhi.io/debian-base:trixie-dev AS user-prep
+RUN apt-get update && apt-get install -y --no-install-recommends passwd \
+ && rm -rf /var/lib/apt/lists/* \
+ && useradd -m -u 1000 nexus \
+ && mkdir -p /app/data /app/config /run/secrets \
+ && chown -R nexus:nexus /app /run/secrets
+
 # Runtime stage
 #
-# `dhi.io/debian-base:trixie-dev` is the Docker Hardened Image (DHI)
-# variant of Debian trixie that still ships apt (the plain
-# `dhi.io/debian-base:trixie` tag is distroless and rejects
-# `apt-get install`). Same glibc 2.41 as the `rustlang/rust:nightly`
-# builder, so no `GLIBC_2.38 not found` at startup (the failure mode
-# of the previous `debian:bookworm-slim` runtime). DHI is the
+# `dhi.io/debian-base:trixie` is the distroless DHI variant: same
+# glibc 2.41 as the `rustlang/rust:nightly` builder, ships
+# libssl3 / libcrypto3 / libz / libzstd / libgcc_s / ca-certificates
+# / bash — the full runtime closure for `nexus-server` — but no
+# apt, no dpkg-query, no curl, no shell utils, no compilers. Drops
+# the package count from ~150 to ~25 and the Docker Scout grade
+# from C to A on a freshly published image. DHI is the
 # org-approved base; the Docker Hub `debian:trixie-slim` was not
 # on the approved list.
-FROM dhi.io/debian-base:trixie-dev
+FROM dhi.io/debian-base:trixie
 
-# Install runtime dependencies.
-#   - ca-certificates + libssl3: TLS stack for outbound connections.
-#   - curl: required by the HEALTHCHECK below. The previous image
-#     omitted it and `docker inspect` reported every container as
-#     `unhealthy` because the health probe exited 127.
-#   - passwd: provides `useradd`, which DHI base does not ship by
-#     default (image is locked down; package management is the only
-#     supported way to add accounts).
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    ca-certificates \
-    curl \
-    libssl3 \
-    passwd \
-    && rm -rf /var/lib/apt/lists/*
+# OCI image metadata. `org.opencontainers.image.version` is the
+# canonical place container registries (Docker Hub, ghcr) read the
+# version from; `docker inspect hivehub/nexus:2.1.0 --format
+# '{{ index .Config.Labels "org.opencontainers.image.version" }}'`
+# must match the tag.
+LABEL org.opencontainers.image.title="Nexus" \
+      org.opencontainers.image.description="High-performance property graph database with native vector search (KNN/HNSW)" \
+      org.opencontainers.image.version="2.1.0" \
+      org.opencontainers.image.vendor="HiveLLM" \
+      org.opencontainers.image.source="https://github.com/hivellm/nexus" \
+      org.opencontainers.image.documentation="https://github.com/hivellm/nexus/blob/main/README.md" \
+      org.opencontainers.image.licenses="Apache-2.0"
 
-# Create non-root user
-RUN useradd -m -u 1000 nexus && \
-    mkdir -p /app/data /app/config /run/secrets && \
-    chown -R nexus:nexus /app /run/secrets
+# Provision the `nexus` user (uid 1000) by lifting only the
+# user-database lines + home directory from the prep stage. No apt,
+# no `passwd` package in the final image.
+COPY --from=user-prep /etc/passwd /etc/passwd
+COPY --from=user-prep /etc/group /etc/group
+COPY --from=user-prep /etc/shadow /etc/shadow
+COPY --from=user-prep --chown=1000:1000 /home/nexus /home/nexus
+COPY --from=user-prep --chown=1000:1000 /app /app
+COPY --from=user-prep --chown=1000:1000 /run/secrets /run/secrets
 
 # Copy binary from builder. The build stage staged the binary under
 # `/out/release/` precisely because `/app/target/` is a cache mount
 # that does not persist into the image — only paths *outside* the
 # mount survive into subsequent stages.
-COPY --from=builder /out/release/nexus-server /usr/local/bin/nexus-server
-RUN chmod +x /usr/local/bin/nexus-server
+COPY --from=builder --chmod=0755 /out/release/nexus-server /usr/local/bin/nexus-server
 
 # Set working directory
 WORKDIR /app
@@ -151,9 +171,14 @@ USER nexus
 #           or set `[rpc].enabled = false` in `config.yml`.
 EXPOSE 15474 15475
 
-# Health check
+# Health check.
+#
+# Distroless trixie ships bash but no curl / wget / grep. Probe via
+# bash built-ins only: `/dev/tcp` for the socket, `read` for a single
+# response line, `[[ ... == *200 OK* ]]` for the status assertion.
+# Exits 0 only when the server replies `HTTP/1.x 200 OK` to /health.
 HEALTHCHECK --interval=30s --timeout=10s --start-period=40s --retries=3 \
-    CMD curl -f http://localhost:15474/health || exit 1
+    CMD ["bash", "-c", "exec 3<>/dev/tcp/127.0.0.1/15474 && printf 'GET /health HTTP/1.0\\r\\nHost: localhost\\r\\n\\r\\n' >&3 && read -r line <&3 && [[ \"$line\" == *'200 OK'* ]]"]
 
 # Default environment variables
 ENV NEXUS_ADDR=0.0.0.0:15474
