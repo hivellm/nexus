@@ -637,6 +637,10 @@ async fn async_main(_worker_threads: usize) -> anyhow::Result<()> {
         // Data management endpoints
         .route("/data/nodes", get(api::data::get_node_by_id))
         .route("/data/nodes", post(api::data::create_node))
+        .route(
+            "/data/nodes/by-external-id",
+            get(api::data::get_node_by_external_id),
+        )
         .route("/data/nodes", put(api::data::update_node))
         .route("/data/nodes", delete(api::data::delete_node))
         .route("/data/relationships", post(api::data::create_rel))

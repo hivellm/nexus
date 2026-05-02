@@ -35,9 +35,9 @@
 - [ ] 4.8 Compatibility tests: re-run `scripts/compatibility/test-neo4j-nexus-compatibility-200.ps1` — must stay 300/300 (Neo4j has no `_id` semantics, so existing tests must not regress)
 
 ## 5. REST + RPC + SDK
-- [ ] 5.1 Extend `POST /cypher` to accept and round-trip `_id` through parameters; document in `docs/specs/api-protocols.md`
-- [ ] 5.2 Add convenience endpoint `GET /nodes/by-external-id/{id}` returning the node (404 when absent)
-- [ ] 5.3 Add `POST /nodes` (and the equivalent RPC op) accepting `{labels, properties, external_id, conflict_policy}` for callers that don't want to write Cypher
+- [x] 5.1 Extend `POST /cypher` to accept and round-trip `_id` through parameters; document in `docs/specs/api-protocols.md` (parameter pass-through already wired by §4.2; doc update in §6)
+- [x] 5.2 Add convenience endpoint `GET /nodes/by-external-id/{id}` returning the node (404 when absent)
+- [x] 5.3 Add `POST /nodes` (and the equivalent RPC op) accepting `{labels, properties, external_id, conflict_policy}` for callers that don't want to write Cypher (REST done; RPC op tracked under §5.4)
 - [ ] 5.4 Update `crates/nexus-protocol/` RPC schema (MessagePack) with the new fields, version-bumping the protocol minor number
 - [ ] 5.5 Update each SDK (`sdks/{rust,python,typescript,go,csharp,php}/`) to expose `externalId` / `external_id` on create + a `getByExternalId` helper
 - [ ] 5.6 Update SDK comprehensive tests (one new test per SDK covering create-with-external-id and re-create-with-conflict-policy)

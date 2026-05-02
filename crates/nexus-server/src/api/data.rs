@@ -90,6 +90,15 @@ pub struct CreateNodeRequest {
     #[serde(default)]
     #[allow(dead_code)]
     pub properties: HashMap<String, serde_json::Value>,
+    /// Optional caller-supplied external id (phase9_external-node-ids).
+    /// Accepts the prefixed string form: `sha256:<hex>`, `blake3:<hex>`,
+    /// `sha512:<hex>`, `uuid:<canonical>`, `str:<utf8>`, `bytes:<hex>`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub external_id: Option<String>,
+    /// Optional conflict policy when `external_id` is provided.
+    /// One of `error` (default), `match`, `replace`. Case-insensitive.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub conflict_policy: Option<String>,
 }
 
 impl CreateNodeRequest {
@@ -294,14 +303,53 @@ pub async fn create_node(
     let _start_time = Instant::now();
     log_operation("create_node", &format!("Labels: {:?}", request.labels));
 
+    // Parse optional external id and conflict policy.
+    let external_id = match request.external_id.as_deref() {
+        Some(s) => {
+            use std::str::FromStr;
+            match nexus_core::catalog::external_id::ExternalId::from_str(s) {
+                Ok(ext) => Some(ext),
+                Err(e) => {
+                    return Json(CreateNodeResponse {
+                        node_id: 0,
+                        message: "".to_string(),
+                        error: Some(format!("Invalid external_id `{}`: {}", s, e)),
+                    });
+                }
+            }
+        }
+        None => None,
+    };
+    let policy = match request.conflict_policy.as_deref() {
+        None | Some("") => nexus_core::storage::external_id::ConflictPolicy::Error,
+        Some(s) => match s.to_ascii_lowercase().as_str() {
+            "error" => nexus_core::storage::external_id::ConflictPolicy::Error,
+            "match" => nexus_core::storage::external_id::ConflictPolicy::Match,
+            "replace" => nexus_core::storage::external_id::ConflictPolicy::Replace,
+            other => {
+                return Json(CreateNodeResponse {
+                    node_id: 0,
+                    message: "".to_string(),
+                    error: Some(format!(
+                        "Invalid conflict_policy `{}` (expected error|match|replace)",
+                        other
+                    )),
+                });
+            }
+        },
+    };
+
     // Use the shared Engine instance to create the node
     let mut engine = server.engine.write().await;
+    let props = serde_json::Value::Object(request.properties.into_iter().collect());
 
-    // Create the node using the engine
-    match engine.create_node(
-        request.labels.clone(),
-        serde_json::Value::Object(request.properties.into_iter().collect()),
-    ) {
+    let result = if external_id.is_some() {
+        engine.create_node_with_external_id(request.labels.clone(), props, external_id, policy)
+    } else {
+        engine.create_node(request.labels.clone(), props)
+    };
+
+    match result {
         Ok(node_id) => {
             tracing::info!("Node created successfully with ID: {}", node_id);
             Json(CreateNodeResponse {
@@ -318,6 +366,115 @@ pub async fn create_node(
                 error: Some(format!("Failed to create node: {}", e)),
             })
         }
+    }
+}
+
+/// Resolve an external id to its internal node id (or 404).
+///
+/// `GET /data/nodes/by-external-id?external_id=sha256:abc…`
+///
+/// Phase9 §5.2 convenience endpoint — equivalent Cypher would be
+/// `MATCH (n {_id: 'sha256:abc…'}) RETURN n` once §4.6 (planner index
+/// seek) lands; until then this dedicated route avoids a label scan.
+pub async fn get_node_by_external_id(
+    State(server): State<Arc<NexusServer>>,
+    axum::extract::Query(params): axum::extract::Query<std::collections::HashMap<String, String>>,
+) -> Json<GetNodeResponse> {
+    use std::str::FromStr;
+
+    let raw = match params.get("external_id").or_else(|| params.get("ext_id")) {
+        Some(s) => s.clone(),
+        None => {
+            return Json(GetNodeResponse {
+                message: "".to_string(),
+                node: None,
+                error: Some(
+                    "Missing required query parameter `external_id` (or alias `ext_id`)"
+                        .to_string(),
+                ),
+            });
+        }
+    };
+
+    let ext = match nexus_core::catalog::external_id::ExternalId::from_str(&raw) {
+        Ok(e) => e,
+        Err(e) => {
+            return Json(GetNodeResponse {
+                message: "".to_string(),
+                node: None,
+                error: Some(format!("Invalid external_id `{}`: {}", raw, e)),
+            });
+        }
+    };
+
+    let mut engine = server.engine.write().await;
+    let internal = {
+        let txn = match engine.catalog.read_txn() {
+            Ok(t) => t,
+            Err(e) => {
+                return Json(GetNodeResponse {
+                    message: "".to_string(),
+                    node: None,
+                    error: Some(format!("Catalog read txn failed: {}", e)),
+                });
+            }
+        };
+        match engine.catalog.external_id_index().get_internal(&txn, &ext) {
+            Ok(Some(id)) => id,
+            Ok(None) => {
+                return Json(GetNodeResponse {
+                    message: "Node not found for external id".to_string(),
+                    node: None,
+                    error: None,
+                });
+            }
+            Err(e) => {
+                return Json(GetNodeResponse {
+                    message: "".to_string(),
+                    node: None,
+                    error: Some(format!("Catalog lookup failed: {}", e)),
+                });
+            }
+        }
+    };
+
+    match engine.get_node(internal) {
+        Ok(Some(node_record)) => {
+            let label_ids = node_record.get_labels();
+            let mut labels = Vec::new();
+            for label_id in label_ids {
+                if let Ok(Some(label_name)) = engine.catalog.get_label_name(label_id) {
+                    labels.push(label_name);
+                }
+            }
+            let properties = engine
+                .storage
+                .load_node_properties(internal)
+                .unwrap_or(None)
+                .unwrap_or_else(|| serde_json::Value::Object(serde_json::Map::new()));
+            Json(GetNodeResponse {
+                message: "Node retrieved successfully".to_string(),
+                node: Some(NodeData {
+                    id: internal,
+                    labels,
+                    properties,
+                }),
+                error: None,
+            })
+        }
+        Ok(None) => Json(GetNodeResponse {
+            message: format!(
+                "External id resolved to internal id {} but node record is missing",
+                internal
+            ),
+            node: None,
+            error: Some("Forward-reverse map inconsistency".to_string()),
+        }),
+        Err(e) => Json(GetNodeResponse {
+            message: "".to_string(),
+            node: None,
+            error: Some(format!("Failed to read node: {}", e)),
+        }),
     }
 }
 
@@ -674,6 +831,8 @@ mod tests {
             Json(CreateNodeRequest {
                 labels: vec![],
                 properties: HashMap::new(),
+                external_id: None,
+                conflict_policy: None,
             }),
         )
         .await;
@@ -706,6 +865,8 @@ mod tests {
             Json(CreateNodeRequest {
                 labels: vec!["Person".to_string()],
                 properties: props,
+                external_id: None,
+                conflict_policy: None,
             }),
         )
         .await;
@@ -823,6 +984,8 @@ mod tests {
             Json(CreateNodeRequest {
                 labels: vec!["Person".to_string()],
                 properties: props,
+                external_id: None,
+                conflict_policy: None,
             }),
         )
         .await;
@@ -855,6 +1018,8 @@ mod tests {
             Json(CreateNodeRequest {
                 labels: vec!["Marker".to_string()],
                 properties: HashMap::new(),
+                external_id: None,
+                conflict_policy: None,
             }),
         )
         .await;
@@ -870,5 +1035,102 @@ mod tests {
             got_b.node.is_none(),
             "server B should not see nodes created against server A"
         );
+    }
+
+    // phase9_external-node-ids §5.1 + §5.2 — external-id REST surface.
+
+    #[tokio::test]
+    async fn create_node_accepts_external_id_and_resolves_back() {
+        let server = build_test_server();
+        let ext = "uuid:33333333-3333-3333-3333-333333333333";
+
+        let mut props = HashMap::new();
+        props.insert("name".to_string(), json!("doc1"));
+        let create = create_node(
+            State(Arc::clone(&server)),
+            Json(CreateNodeRequest {
+                labels: vec!["Doc".to_string()],
+                properties: props,
+                external_id: Some(ext.to_string()),
+                conflict_policy: None,
+            }),
+        )
+        .await;
+        assert!(create.error.is_none(), "create failed: {:?}", create.error);
+
+        let mut q = HashMap::new();
+        q.insert("external_id".to_string(), ext.to_string());
+        let got = get_node_by_external_id(State(Arc::clone(&server)), axum::extract::Query(q))
+            .await
+            .0;
+        assert!(got.error.is_none(), "lookup error: {:?}", got.error);
+        let node = got.node.expect("node should be present");
+        assert_eq!(node.id, create.node_id);
+        assert_eq!(node.labels, vec!["Doc"]);
+    }
+
+    #[tokio::test]
+    async fn create_node_rejects_invalid_external_id() {
+        let server = build_test_server();
+        let response = create_node(
+            State(server),
+            Json(CreateNodeRequest {
+                labels: vec!["X".to_string()],
+                properties: HashMap::new(),
+                external_id: Some("not-a-prefix:zzz".to_string()),
+                conflict_policy: None,
+            }),
+        )
+        .await;
+        assert!(response.error.is_some());
+        assert!(
+            response
+                .error
+                .as_ref()
+                .map(|e| e.contains("Invalid external_id"))
+                .unwrap_or(false),
+            "expected 'Invalid external_id' in error, got: {:?}",
+            response.error
+        );
+    }
+
+    #[tokio::test]
+    async fn create_node_rejects_invalid_conflict_policy() {
+        let server = build_test_server();
+        let response = create_node(
+            State(server),
+            Json(CreateNodeRequest {
+                labels: vec!["X".to_string()],
+                properties: HashMap::new(),
+                external_id: Some("uuid:44444444-4444-4444-4444-444444444444".to_string()),
+                conflict_policy: Some("ignore".to_string()),
+            }),
+        )
+        .await;
+        assert!(
+            response
+                .error
+                .as_ref()
+                .map(|e| e.contains("Invalid conflict_policy"))
+                .unwrap_or(false),
+            "expected 'Invalid conflict_policy' in error, got: {:?}",
+            response.error
+        );
+    }
+
+    #[tokio::test]
+    async fn get_node_by_external_id_404_when_absent() {
+        let server = build_test_server();
+        let mut q = HashMap::new();
+        q.insert(
+            "external_id".to_string(),
+            "uuid:55555555-5555-5555-5555-555555555555".to_string(),
+        );
+        let got = get_node_by_external_id(State(server), axum::extract::Query(q))
+            .await
+            .0;
+        assert!(got.node.is_none());
+        assert!(got.error.is_none(), "missing != error");
+        assert!(got.message.contains("not found"));
     }
 }
