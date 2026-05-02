@@ -8,6 +8,7 @@ Scenario:
 - Each File can be tagged with multiple Tag nodes (str-keyed).
 - Re-running the same ingest produces the same graph (idempotency).
 """
+
 from __future__ import annotations
 
 import json
@@ -37,7 +38,12 @@ def section(title):
 
 def post_node(body):
     data = json.dumps(body).encode("utf-8")
-    req = urllib.request.Request(f"{HOST}/data/nodes", data=data, headers={"Content-Type": "application/json"}, method="POST")
+    req = urllib.request.Request(
+        f"{HOST}/data/nodes",
+        data=data,
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
     with urllib.request.urlopen(req) as resp:
         return json.loads(resp.read())
 
@@ -50,15 +56,30 @@ def get_by_ext(ext):
 
 def post_cypher(query, params=None):
     data = json.dumps({"query": query, "params": params or {}}).encode("utf-8")
-    req = urllib.request.Request(f"{HOST}/cypher", data=data, headers={"Content-Type": "application/json"}, method="POST")
+    req = urllib.request.Request(
+        f"{HOST}/cypher",
+        data=data,
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
     with urllib.request.urlopen(req) as resp:
         return json.loads(resp.read())
 
 
 def post_rel(source_id, target_id, rel_type, properties=None):
-    body = {"source_id": source_id, "target_id": target_id, "rel_type": rel_type, "properties": properties or {}}
+    body = {
+        "source_id": source_id,
+        "target_id": target_id,
+        "rel_type": rel_type,
+        "properties": properties or {},
+    }
     data = json.dumps(body).encode("utf-8")
-    req = urllib.request.Request(f"{HOST}/data/relationships", data=data, headers={"Content-Type": "application/json"}, method="POST")
+    req = urllib.request.Request(
+        f"{HOST}/data/relationships",
+        data=data,
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
     with urllib.request.urlopen(req) as resp:
         return json.loads(resp.read())
 
@@ -93,15 +114,22 @@ def main():
     # assertion below holds without this step; only the rel REST tests
     # depend on it.
     section("0. Allocate internal id 0 to a _Sentinel node")
-    r = post_node({"labels": ["_Sentinel"], "properties": {"note": "burns id 0 for rel validator"}})
+    r = post_node(
+        {
+            "labels": ["_Sentinel"],
+            "properties": {"note": "burns id 0 for rel validator"},
+        }
+    )
     check("sentinel created", r.get("error") is None, str(r))
 
     section("1. Create root Folder via REST (uuid external id)")
-    r = post_node({
-        "labels": ["Folder"],
-        "properties": {"path": "/imports/2026-q2", "owner": "alice"},
-        "external_id": folder_uuid,
-    })
+    r = post_node(
+        {
+            "labels": ["Folder"],
+            "properties": {"path": "/imports/2026-q2", "owner": "alice"},
+            "external_id": folder_uuid,
+        }
+    )
     folder_id = r["node_id"]
     check("Folder created with uuid external id", r.get("error") is None, str(r))
     check("Folder.node_id is a u64", isinstance(folder_id, int), str(folder_id))
@@ -126,14 +154,20 @@ def main():
     section("3. Create 2 Tags via REST (str external ids)")
     tag_names = {tag_pdf: "pdf", tag_archived: "archived"}
     for tag, tname in tag_names.items():
-        r = post_node({"labels": ["Tag"], "properties": {"name": tname}, "external_id": tag})
+        r = post_node(
+            {"labels": ["Tag"], "properties": {"name": tname}, "external_id": tag}
+        )
         check(f"Tag {tag} created", r.get("error") is None, str(r))
 
     section("4. Resolve every external id back to its internal id")
     folder = get_by_ext(folder_uuid)
     check("Folder resolves", folder["node"]["id"] == folder_id, str(folder))
     file_ids = {}
-    for sha, name in [(file_a_sha, "report.pdf"), (file_b_sha, "data.csv"), (file_c_sha, "diagram.png")]:
+    for sha, name in [
+        (file_a_sha, "report.pdf"),
+        (file_b_sha, "data.csv"),
+        (file_c_sha, "diagram.png"),
+    ]:
         f = get_by_ext(sha)
         file_ids[sha] = f["node"]["id"]
         check(
@@ -164,7 +198,9 @@ def main():
         check(f"TAGGED to {tag}", r.get("error") is None, str(r))
 
     section("7. Cypher MATCH counts edges")
-    r = post_cypher("MATCH (f:File)-[r:BELONGS_TO]->(folder:Folder) RETURN count(r) AS n")
+    r = post_cypher(
+        "MATCH (f:File)-[r:BELONGS_TO]->(folder:Folder) RETURN count(r) AS n"
+    )
     n = r["rows"][0][0] if r.get("rows") else None
     check("3 BELONGS_TO edges visible", n == 3, str(r))
 
@@ -208,7 +244,11 @@ def main():
     section("10. ON CONFLICT ERROR (default) rejects duplicate")
     q = f"CREATE (n:File {{_id: '{file_a_sha}', name: 'dup'}})"
     r = post_cypher(q)
-    check("Default conflict policy errored on duplicate", r.get("error") is not None, str(r))
+    check(
+        "Default conflict policy errored on duplicate",
+        r.get("error") is not None,
+        str(r),
+    )
 
     section("11. Project _id back: RETURN f._id, f.name")
     r = post_cypher("MATCH (f:File {name: 'data.csv'}) RETURN f._id, f.name")

@@ -193,7 +193,9 @@ async def test_conflict_policy_error_rejects_duplicate() -> None:
             conflict_policy="error",
         )
         # Server signals conflict via the body error field (HTTP 200).
-        assert second.error is not None, "Expected an error on duplicate with conflict_policy=error"
+        assert (
+            second.error is not None
+        ), "Expected an error on duplicate with conflict_policy=error"
 
 
 @pytest.mark.live
@@ -247,12 +249,12 @@ async def test_conflict_policy_replace_overwrites_properties() -> None:
         # old values survived a REPLACE).
         lookup: GetNodeByExternalIdResponse = await client.get_node_by_external_id(ext)
         assert lookup.node is not None
-        assert lookup.node.properties.get("colour") == "blue", (
-            "REPLACE did not overwrite 'colour' — fd001344 regression"
-        )
-        assert lookup.node.properties.get("version") == 2, (
-            "REPLACE did not overwrite 'version' — fd001344 regression"
-        )
+        assert (
+            lookup.node.properties.get("colour") == "blue"
+        ), "REPLACE did not overwrite 'colour' — fd001344 regression"
+        assert (
+            lookup.node.properties.get("version") == 2
+        ), "REPLACE did not overwrite 'version' — fd001344 regression"
 
 
 # ---------------------------------------------------------------------------
@@ -273,9 +275,9 @@ async def test_cypher_create_with_id_literal_round_trip() -> None:
         assert result.error is None, f"Cypher error: {result.error}"
         assert result.rows, "Expected at least one row"
         returned_id = result.rows[0][0]
-        assert returned_id == cyp_id, (
-            f"RETURN n._id did not project the prefixed string: {returned_id!r}"
-        )
+        assert (
+            returned_id == cyp_id
+        ), f"RETURN n._id did not project the prefixed string: {returned_id!r}"
 
 
 # ---------------------------------------------------------------------------
@@ -349,6 +351,8 @@ async def test_get_node_by_absent_external_id_returns_none() -> None:
     """should return node=None without raising when the external id was never inserted."""
     async with NexusClient(LIVE_HOST) as client:
         absent = f"uuid:{uuid.uuid4()}"
-        lookup: GetNodeByExternalIdResponse = await client.get_node_by_external_id(absent)
+        lookup: GetNodeByExternalIdResponse = await client.get_node_by_external_id(
+            absent
+        )
         # Server contract: miss -> node is None, no HTTP error.
         assert lookup.node is None, f"Expected None for absent id, got {lookup.node!r}"

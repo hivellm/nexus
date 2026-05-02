@@ -14,7 +14,6 @@ import pytest
 from nexus_sdk import NexusClient
 from nexus_sdk.models import CreateNodeResponse, GetNodeByExternalIdResponse
 
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -60,7 +59,9 @@ async def test_create_node_with_external_id_round_trip() -> None:
         if create.error is not None:
             pytest.skip(f"Node creation reported server error: {create.error}")
 
-        lookup: GetNodeByExternalIdResponse = await client.get_node_by_external_id(ext_id)
+        lookup: GetNodeByExternalIdResponse = await client.get_node_by_external_id(
+            ext_id
+        )
 
         assert lookup.error is None, f"Lookup returned server error: {lookup.error}"
         assert lookup.node is not None, "Expected node to be resolved from external id"
@@ -86,7 +87,9 @@ async def test_create_node_via_extended_create_node_signature() -> None:
         if create.error is not None:
             pytest.skip(f"Node creation reported server error: {create.error}")
 
-        lookup: GetNodeByExternalIdResponse = await client.get_node_by_external_id(ext_id)
+        lookup: GetNodeByExternalIdResponse = await client.get_node_by_external_id(
+            ext_id
+        )
 
         assert lookup.error is None
         assert lookup.node is not None
