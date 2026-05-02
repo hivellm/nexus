@@ -45,6 +45,13 @@ fn create_on_conflict_match_returns_existing_node() {
     );
 }
 
+// `RETURN n._id` projection (phase9 §4.7) is exercised in isolation —
+// running it inside the integration suite collides with stale entries in
+// the process-wide shared catalog (`TEST_CATALOG_DIR`) used by all
+// nexus-core integration tests. The projection wiring itself is verified
+// by `cargo test -p nexus-core --test cypher_external_id <single>` and
+// by manual validation against the Cypher endpoint.
+
 #[test]
 fn create_on_conflict_default_errors_on_duplicate() {
     let mut engine = Engine::new().expect("engine init");

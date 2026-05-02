@@ -100,6 +100,27 @@ impl Executor {
                     }
                 }
 
+                // phase9_external-node-ids §4.7 — `n._id` projects the
+                // external id (in its prefixed string form) from the
+                // catalog reverse map, NOT a regular property. Returns
+                // Null when the node has no external id.
+                if property == "_id" {
+                    if let Some(ref entity) = entity_opt {
+                        if let Some(node_id) = Self::extract_entity_id(entity) {
+                            if let Ok(txn) = self.catalog().read_txn() {
+                                if let Ok(Some(ext)) = self
+                                    .catalog()
+                                    .external_id_index()
+                                    .get_external(&txn, node_id)
+                                {
+                                    return Ok(Value::String(ext.to_string()));
+                                }
+                            }
+                        }
+                    }
+                    return Ok(Value::Null);
+                }
+
                 // Handle point accessor aliases (Neo4j compatibility)
                 // point.latitude should return y, point.longitude should return x
                 let actual_property = match property.as_str() {
