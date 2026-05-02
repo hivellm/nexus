@@ -253,7 +253,11 @@ impl<'a> QueryPlanner<'a> {
         let mut limit_count = None;
         let mut return_distinct = false;
         let mut unwind_operators = Vec::new(); // Collect UNWIND to insert after MATCH
-        let mut create_patterns = Vec::new(); // Collect CREATE to insert after MATCH
+        let mut create_patterns: Vec<(
+            crate::executor::parser::Pattern,
+            Option<crate::executor::parser::Expression>,
+            crate::executor::parser::AstConflictPolicy,
+        )> = Vec::new(); // Collect CREATE to insert after MATCH
         let mut with_operators: Vec<(Vec<ReturnItem>, bool, Option<Expression>)> = Vec::new(); // Collect WITH clauses with optional WHERE
         let mut with_has_aggregation = false; // Track if WITH clause has aggregation
         let mut with_aggregation_where: Option<Expression> = None; // Track WHERE from WITH with aggregation
@@ -363,7 +367,11 @@ impl<'a> QueryPlanner<'a> {
                 }
                 Clause::Create(create_clause) => {
                     // Collect CREATE patterns to add AFTER MATCH operators
-                    create_patterns.push(create_clause.pattern.clone());
+                    create_patterns.push((
+                        create_clause.pattern.clone(),
+                        create_clause.external_id_expr.clone(),
+                        create_clause.conflict_policy,
+                    ));
                 }
                 Clause::Delete(delete_clause) => {
                     // Extract variables to delete from the delete clause
@@ -748,13 +756,15 @@ impl<'a> QueryPlanner<'a> {
 
             // Insert CREATE operators before Project (or at end if no Project)
             let insert_pos = project_pos.unwrap_or(operators.len());
-            for (i, create_pattern) in create_patterns.into_iter().enumerate() {
+            for (i, (create_pattern, external_id_expr, conflict_policy)) in
+                create_patterns.into_iter().enumerate()
+            {
                 operators.insert(
                     insert_pos + i,
                     Operator::Create {
                         pattern: create_pattern,
-                        external_id_expr: None,
-                        conflict_policy: crate::executor::parser::AstConflictPolicy::Error,
+                        external_id_expr,
+                        conflict_policy,
                     },
                 );
             }

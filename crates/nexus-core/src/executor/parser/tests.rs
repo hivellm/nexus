@@ -2528,3 +2528,99 @@ fn create_spatial_index_legacy_form_still_parses() {
     let ix = first_create_index(&q);
     assert_eq!(ix.index_type.as_deref(), Some("spatial"));
 }
+
+// phase9_external-node-ids — section 4.2/4.3 parser tests for the
+// reserved `_id` property and the optional `ON CONFLICT` clause.
+
+fn first_create_clause(q: &CypherQuery) -> &CreateClause {
+    match &q.clauses[0] {
+        Clause::Create(c) => c,
+        other => panic!("expected CREATE clause, got {:?}", other),
+    }
+}
+
+#[test]
+fn parser_extracts_underscore_id_string_literal() {
+    let mut p = CypherParser::new("CREATE (n:File {_id: 'sha256:abc', name: 'a.txt'})".to_string());
+    let q = p.parse().unwrap();
+    let c = first_create_clause(&q);
+    match &c.external_id_expr {
+        Some(Expression::Literal(Literal::String(s))) => assert_eq!(s, "sha256:abc"),
+        other => panic!("expected string literal external_id_expr, got {:?}", other),
+    }
+    if let PatternElement::Node(np) = &c.pattern.elements[0] {
+        let props = np.properties.as_ref().expect("node has properties");
+        assert!(!props.properties.contains_key("_id"));
+        assert!(props.properties.contains_key("name"));
+    } else {
+        panic!("expected node pattern");
+    }
+}
+
+#[test]
+fn parser_extracts_underscore_id_parameter() {
+    let mut p = CypherParser::new("CREATE (n:File {_id: $ext_id})".to_string());
+    let q = p.parse().unwrap();
+    let c = first_create_clause(&q);
+    match &c.external_id_expr {
+        Some(Expression::Parameter(name)) => assert_eq!(name, "ext_id"),
+        other => panic!("expected parameter external_id_expr, got {:?}", other),
+    }
+}
+
+#[test]
+fn parser_rejects_non_string_underscore_id() {
+    let mut p = CypherParser::new("CREATE (n:File {_id: 42})".to_string());
+    assert!(p.parse().is_err(), "_id with integer must error");
+}
+
+#[test]
+fn parser_default_conflict_policy_is_error() {
+    let mut p = CypherParser::new("CREATE (n:File {_id: 'sha256:abc'})".to_string());
+    let q = p.parse().unwrap();
+    let c = first_create_clause(&q);
+    assert_eq!(c.conflict_policy, AstConflictPolicy::Error);
+}
+
+#[test]
+fn parser_on_conflict_match() {
+    let mut p =
+        CypherParser::new("CREATE (n:File {_id: 'sha256:abc'}) ON CONFLICT MATCH".to_string());
+    let q = p.parse().unwrap();
+    let c = first_create_clause(&q);
+    assert_eq!(c.conflict_policy, AstConflictPolicy::Match);
+}
+
+#[test]
+fn parser_on_conflict_replace() {
+    let mut p =
+        CypherParser::new("CREATE (n:File {_id: 'sha256:abc'}) ON CONFLICT REPLACE".to_string());
+    let q = p.parse().unwrap();
+    let c = first_create_clause(&q);
+    assert_eq!(c.conflict_policy, AstConflictPolicy::Replace);
+}
+
+#[test]
+fn parser_on_conflict_error_explicit() {
+    let mut p =
+        CypherParser::new("CREATE (n:File {_id: 'sha256:abc'}) ON CONFLICT ERROR".to_string());
+    let q = p.parse().unwrap();
+    let c = first_create_clause(&q);
+    assert_eq!(c.conflict_policy, AstConflictPolicy::Error);
+}
+
+#[test]
+fn parser_on_conflict_unknown_policy_errors() {
+    let mut p =
+        CypherParser::new("CREATE (n:File {_id: 'sha256:abc'}) ON CONFLICT IGNORE".to_string());
+    assert!(p.parse().is_err());
+}
+
+#[test]
+fn parser_create_without_id_has_no_external_id_expr() {
+    let mut p = CypherParser::new("CREATE (n:File {name: 'a.txt'})".to_string());
+    let q = p.parse().unwrap();
+    let c = first_create_clause(&q);
+    assert!(c.external_id_expr.is_none());
+    assert_eq!(c.conflict_policy, AstConflictPolicy::Error);
+}

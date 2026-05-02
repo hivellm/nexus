@@ -12,6 +12,39 @@ use super::ast::*;
 use crate::{Error, Result};
 use std::collections::HashMap;
 
+/// Extract the reserved `_id` property from the first node pattern in a
+/// CREATE clause, returning the parsed expression (and removing the entry
+/// from the property map). Only literal-string and parameter expressions
+/// are accepted; anything else is a parse error.
+///
+/// Returns `Ok(None)` when no node carries `_id`.
+fn extract_underscore_id_from_pattern(pattern: &mut Pattern) -> Result<Option<Expression>> {
+    let mut found: Option<Expression> = None;
+    for element in pattern.elements.iter_mut() {
+        if let PatternElement::Node(np) = element {
+            if let Some(prop_map) = np.properties.as_mut() {
+                if let Some(expr) = prop_map.properties.remove("_id") {
+                    if found.is_some() {
+                        return Err(Error::executor(
+                            "Cypher: _id may only appear once in CREATE pattern",
+                        ));
+                    }
+                    match &expr {
+                        Expression::Literal(Literal::String(_)) | Expression::Parameter(_) => {}
+                        _ => {
+                            return Err(Error::executor(
+                                "Cypher: _id must be a string literal or parameter",
+                            ));
+                        }
+                    }
+                    found = Some(expr);
+                }
+            }
+        }
+    }
+    Ok(found)
+}
+
 impl CypherParser {
     /// Create a new parser
     pub fn new(input: String) -> Self {
@@ -556,12 +589,36 @@ impl CypherParser {
     /// Parse CREATE clause
     pub(super) fn parse_create_clause(&mut self) -> Result<CreateClause> {
         self.skip_whitespace();
-        let pattern = self.parse_pattern()?;
+        let mut pattern = self.parse_pattern()?;
+
+        let external_id_expr = extract_underscore_id_from_pattern(&mut pattern)?;
+
+        self.skip_whitespace();
+        let conflict_policy = if self.peek_keyword("ON") && self.peek_keyword_at(1, "CONFLICT") {
+            self.parse_keyword()?;
+            self.skip_whitespace();
+            self.parse_keyword()?;
+            self.skip_whitespace();
+            let policy_kw = self.parse_keyword()?;
+            match policy_kw.to_ascii_uppercase().as_str() {
+                "ERROR" => AstConflictPolicy::Error,
+                "MATCH" => AstConflictPolicy::Match,
+                "REPLACE" => AstConflictPolicy::Replace,
+                other => {
+                    return Err(self.error(&format!(
+                        "ON CONFLICT must be followed by ERROR, MATCH, or REPLACE; got `{}`",
+                        other
+                    )));
+                }
+            }
+        } else {
+            AstConflictPolicy::Error
+        };
 
         Ok(CreateClause {
             pattern,
-            external_id_expr: None,
-            conflict_policy: AstConflictPolicy::Error,
+            external_id_expr,
+            conflict_policy,
         })
     }
 

@@ -234,10 +234,15 @@ impl Executor {
         // If so, execute it directly and populate result_set
         if let Some(Operator::Create {
             pattern,
-            external_id_expr: _,
+            external_id_expr,
             conflict_policy: _,
         }) = operators.first()
         {
+            if external_id_expr.is_some() {
+                return Err(crate::Error::executor(
+                    "CREATE with `_id` is parsed but not yet dispatched (phase9 4.4 pending)",
+                ));
+            }
             let existing_rows = self.materialize_rows_from_variables(&context);
             if existing_rows.is_empty() {
                 // CREATE standalone - create nodes and relationships directly
@@ -584,9 +589,14 @@ impl Executor {
                 }
                 Operator::Create {
                     pattern,
-                    external_id_expr: _,
+                    external_id_expr,
                     conflict_policy: _,
                 } => {
+                    if external_id_expr.is_some() {
+                        return Err(crate::Error::executor(
+                            "CREATE with `_id` is parsed but not yet dispatched (phase9 4.4 pending)",
+                        ));
+                    }
                     // Skip if already executed in the first block
                     if operators
                         .first()

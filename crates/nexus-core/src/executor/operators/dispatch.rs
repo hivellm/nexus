@@ -189,9 +189,14 @@ impl Executor {
             }
             Operator::Create {
                 pattern,
-                external_id_expr: _,
+                external_id_expr,
                 conflict_policy: _,
             } => {
+                if external_id_expr.is_some() {
+                    return Err(crate::Error::executor(
+                        "CREATE with `_id` is parsed but not yet dispatched (phase9 4.4 pending)",
+                    ));
+                }
                 // phase6_opencypher-subquery-transactions — CREATE
                 // reachable through the dispatch path comes from
                 // nested subqueries (e.g. `CALL { … CREATE … }`).
