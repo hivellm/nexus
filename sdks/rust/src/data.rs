@@ -14,6 +14,15 @@ pub struct CreateNodeRequest {
     /// Node properties
     #[serde(default)]
     pub properties: HashMap<String, Value>,
+    /// Optional caller-supplied external id (phase9_external-node-ids).
+    /// Prefixed string form: `sha256:<hex>`, `blake3:<hex>`, `sha512:<hex>`,
+    /// `uuid:<canonical>`, `str:<utf8>`, `bytes:<hex>`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub external_id: Option<String>,
+    /// Optional conflict policy when `external_id` is set:
+    /// `error` (default), `match`, or `replace`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub conflict_policy: Option<String>,
 }
 
 /// Create node response
@@ -152,7 +161,12 @@ impl NexusClient {
         labels: Vec<String>,
         properties: HashMap<String, Value>,
     ) -> Result<CreateNodeResponse> {
-        let request = CreateNodeRequest { labels, properties };
+        let request = CreateNodeRequest {
+            labels,
+            properties,
+            external_id: None,
+            conflict_policy: None,
+        };
 
         let url = self.get_base_url().join("/data/nodes")?;
         let mut request_builder = self.get_client().post(url).json(&request);
@@ -165,6 +179,75 @@ impl NexusClient {
         if status.is_success() {
             let result: CreateNodeResponse = response.json().await?;
             Ok(result)
+        } else {
+            let error_text = response
+                .text()
+                .await
+                .unwrap_or_else(|_| "Unknown error".to_string());
+            Err(NexusError::Api {
+                message: error_text,
+                status: status.as_u16(),
+            })
+        }
+    }
+
+    /// Create a node with a caller-supplied external id.
+    ///
+    /// `external_id` accepts the prefixed string form
+    /// (`sha256:<hex>`, `blake3:<hex>`, `sha512:<hex>`, `uuid:<canonical>`,
+    /// `str:<utf8>`, `bytes:<hex>`). `conflict_policy` is one of
+    /// `"error"` (default), `"match"`, or `"replace"`.
+    ///
+    /// Phase9 §5.5.
+    pub async fn create_node_with_external_id(
+        &self,
+        labels: Vec<String>,
+        properties: HashMap<String, Value>,
+        external_id: impl Into<String>,
+        conflict_policy: Option<&str>,
+    ) -> Result<CreateNodeResponse> {
+        let request = CreateNodeRequest {
+            labels,
+            properties,
+            external_id: Some(external_id.into()),
+            conflict_policy: conflict_policy.map(str::to_owned),
+        };
+
+        let url = self.get_base_url().join("/data/nodes")?;
+        let mut request_builder = self.get_client().post(url).json(&request);
+        request_builder = self.add_auth_headers(request_builder)?;
+        let response = self.execute_with_retry(request_builder).await?;
+        let status = response.status();
+        if status.is_success() {
+            Ok(response.json().await?)
+        } else {
+            let error_text = response
+                .text()
+                .await
+                .unwrap_or_else(|_| "Unknown error".to_string());
+            Err(NexusError::Api {
+                message: error_text,
+                status: status.as_u16(),
+            })
+        }
+    }
+
+    /// Resolve a node by external id (returns `node: None` when absent).
+    ///
+    /// Phase9 §5.5.
+    pub async fn get_node_by_external_id(
+        &self,
+        external_id: impl AsRef<str>,
+    ) -> Result<GetNodeResponse> {
+        let mut url = self.get_base_url().join("/data/nodes/by-external-id")?;
+        url.query_pairs_mut()
+            .append_pair("external_id", external_id.as_ref());
+        let mut request_builder = self.get_client().get(url);
+        request_builder = self.add_auth_headers(request_builder)?;
+        let response = self.execute_with_retry(request_builder).await?;
+        let status = response.status();
+        if status.is_success() {
+            Ok(response.json().await?)
         } else {
             let error_text = response
                 .text()

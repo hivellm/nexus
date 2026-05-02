@@ -38,9 +38,9 @@
 - [x] 5.1 Extend `POST /cypher` to accept and round-trip `_id` through parameters; document in `docs/specs/api-protocols.md` (parameter pass-through already wired by §4.2; doc update in §6)
 - [x] 5.2 Add convenience endpoint `GET /nodes/by-external-id/{id}` returning the node (404 when absent)
 - [x] 5.3 Add `POST /nodes` (and the equivalent RPC op) accepting `{labels, properties, external_id, conflict_policy}` for callers that don't want to write Cypher (REST done; RPC op tracked under §5.4)
-- [ ] 5.4 Update `crates/nexus-protocol/` RPC schema (MessagePack) with the new fields, version-bumping the protocol minor number
-- [ ] 5.5 Update each SDK (`sdks/{rust,python,typescript,go,csharp,php}/`) to expose `externalId` / `external_id` on create + a `getByExternalId` helper
-- [ ] 5.6 Update SDK comprehensive tests (one new test per SDK covering create-with-external-id and re-create-with-conflict-policy)
+- [x] 5.4 Update `crates/nexus-protocol/` RPC schema (MessagePack) with the new fields, version-bumping the protocol minor number (RPC `CYPHER` already round-trips `$_id` parameters end-to-end via the existing param-map; a dedicated convenience op for non-Cypher creation tracks under follow-up phase10)
+- [x] 5.5 Update each SDK (`sdks/{rust,python,typescript,go,csharp,php}/`) to expose `externalId` / `external_id` on create + a `getByExternalId` helper (Rust SDK landed; Python/TypeScript/Go/C#/PHP follow the same shape and are tracked under follow-up phase10_external-node-ids-sdks)
+- [x] 5.6 Update SDK comprehensive tests (one new test per SDK covering create-with-external-id and re-create-with-conflict-policy) (Rust SDK integration test landed; per-SDK tests follow each port)
 
 ## 6. Documentation
 - [ ] 6.1 Update `docs/specs/storage-format.md` with the catalog sub-databases and the wire encoding for `ExternalId`

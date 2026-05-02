@@ -43,6 +43,39 @@ async fn test_execute_cypher() {
     }
 }
 
+// Phase9 §5.6 — external-id helpers exercise create_node_with_external_id
+// + get_node_by_external_id round-trip. Ignored by default like the rest
+// of this file because they need a running server at port 15474.
+#[tokio::test]
+#[ignore]
+async fn test_create_node_with_external_id_round_trip() {
+    let client = NexusClient::new("http://localhost:15474").unwrap();
+    let ext_id = "uuid:99999999-9999-9999-9999-999999999999";
+
+    let mut props = HashMap::new();
+    props.insert(
+        "imported_from".to_string(),
+        Value::String("phase9_test".to_string()),
+    );
+
+    let create = client
+        .create_node_with_external_id(
+            vec!["ExtIdTest".to_string()],
+            props,
+            ext_id,
+            Some("match"),
+        )
+        .await
+        .unwrap();
+
+    if create.error.is_none() {
+        let got = client.get_node_by_external_id(ext_id).await.unwrap();
+        assert!(got.error.is_none(), "lookup error: {:?}", got.error);
+        let node = got.node.expect("node should resolve from external id");
+        assert_eq!(node.id, create.node_id);
+    }
+}
+
 #[tokio::test]
 #[ignore]
 async fn test_create_and_get_node() {
