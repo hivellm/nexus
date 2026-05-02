@@ -16,10 +16,60 @@ use crate::{Error, Result};
 use serde_json::{Map, Value};
 use std::collections::HashMap;
 
+/// Convert an AST-level conflict policy to the storage-level one.
+pub(in crate::executor) fn ast_conflict_policy_to_storage(
+    p: parser::AstConflictPolicy,
+) -> crate::storage::external_id::ConflictPolicy {
+    use crate::storage::external_id::ConflictPolicy;
+    match p {
+        parser::AstConflictPolicy::Error => ConflictPolicy::Error,
+        parser::AstConflictPolicy::Match => ConflictPolicy::Match,
+        parser::AstConflictPolicy::Replace => ConflictPolicy::Replace,
+    }
+}
+
 impl Executor {
+    /// Resolve a parsed `_id` expression (string-literal or parameter) into
+    /// an [`ExternalId`]. Anything else is rejected at parse time, so this
+    /// function only needs to handle those two cases.
+    pub(in crate::executor) fn resolve_external_id(
+        &self,
+        expr: &parser::Expression,
+        params: &std::collections::HashMap<String, serde_json::Value>,
+    ) -> Result<crate::storage::external_id::ExternalId> {
+        use std::str::FromStr;
+        let raw: String = match expr {
+            parser::Expression::Literal(parser::Literal::String(s)) => s.clone(),
+            parser::Expression::Parameter(name) => match params.get(name) {
+                Some(serde_json::Value::String(s)) => s.clone(),
+                Some(other) => {
+                    return Err(Error::executor(format!(
+                        "_id parameter `{}` must be a string, got {:?}",
+                        name, other
+                    )));
+                }
+                None => {
+                    return Err(Error::executor(format!(
+                        "_id parameter `{}` not provided",
+                        name
+                    )));
+                }
+            },
+            _ => {
+                return Err(Error::executor(
+                    "_id expression must be a string literal or parameter (parser invariant)",
+                ));
+            }
+        };
+        crate::storage::external_id::ExternalId::from_str(&raw)
+            .map_err(|e| Error::executor(format!("invalid _id `{}`: {}", raw, e)))
+    }
+
     pub(in crate::executor) fn execute_create_pattern_with_variables(
         &self,
         pattern: &parser::Pattern,
+        external_id: Option<crate::storage::external_id::ExternalId>,
+        policy: crate::storage::external_id::ConflictPolicy,
     ) -> Result<(
         std::collections::HashMap<String, u64>,
         std::collections::HashMap<String, RelationshipInfo>,
@@ -34,6 +84,8 @@ impl Executor {
             pattern,
             &mut created_nodes,
             &mut created_relationships,
+            external_id,
+            policy,
         )?;
 
         Ok((created_nodes, created_relationships))
@@ -45,10 +97,16 @@ impl Executor {
         pattern: &parser::Pattern,
         created_nodes: &mut std::collections::HashMap<String, u64>,
         created_relationships: &mut std::collections::HashMap<String, RelationshipInfo>,
+        external_id: Option<crate::storage::external_id::ExternalId>,
+        policy: crate::storage::external_id::ConflictPolicy,
     ) -> Result<()> {
         // PERFORMANCE OPTIMIZATION: Reuse shared transaction manager
         let mut tx_mgr = self.transaction_manager().lock();
         let mut tx = tx_mgr.begin_write()?;
+        // Tracks whether the external id has already been consumed by the
+        // first node in the pattern (a single CREATE may not assign the same
+        // external id to more than one node).
+        let ext_id_consumed = std::cell::Cell::new(false);
 
         // Phase 1 Optimization: Cache label lookups and batch catalog updates
         let mut label_cache: std::collections::HashMap<String, u32> =
@@ -191,12 +249,33 @@ impl Executor {
                     // Check constraints before creating node
                     self.check_constraints(&label_ids_for_update, &properties)?;
 
-                    // Create the node
-                    let node_id = self.store_mut().create_node_with_label_bits(
-                        &mut tx,
-                        label_bits,
-                        properties.clone(),
-                    )?;
+                    // Create the node — route through the external-id path when
+                    // an `_id` expression was present in the pattern.
+                    let node_id = if let Some(ref ext) = external_id {
+                        // Phase 4.4: only the first node in the pattern may
+                        // carry the external id; the parser places it there.
+                        let used = ext_id_consumed.replace(true);
+                        if used {
+                            return Err(Error::executor(
+                                "_id can be set on at most one node per CREATE pattern",
+                            ));
+                        }
+                        self.store_mut()
+                            .create_node_with_label_bits_and_external_id(
+                                &mut tx,
+                                label_bits,
+                                properties.clone(),
+                                Some(ext.clone()),
+                                policy,
+                                self.catalog(),
+                            )?
+                    } else {
+                        self.store_mut().create_node_with_label_bits(
+                            &mut tx,
+                            label_bits,
+                            properties.clone(),
+                        )?
+                    };
 
                     tracing::trace!(
                         "execute_create_pattern_internal: created node_id={}, variable={:?}",
@@ -665,6 +744,8 @@ impl Executor {
         &self,
         context: &mut ExecutionContext,
         pattern: &parser::Pattern,
+        external_id: Option<crate::storage::external_id::ExternalId>,
+        policy: crate::storage::external_id::ConflictPolicy,
     ) -> Result<()> {
         // Note: TransactionManager is now accessed via self.transaction_manager() (shared)
         use serde_json::Value as JsonValue;
@@ -900,11 +981,24 @@ impl Executor {
                                 JsonValue::Object(serde_json::Map::new())
                             };
 
-                            let node_id = self.store_mut().create_node_with_label_bits(
-                                &mut tx,
-                                label_bits,
-                                properties.clone(),
-                            )?;
+                            // Phase 4.4: route through external-id path when present.
+                            let node_id = if let Some(ref ext) = external_id {
+                                self.store_mut()
+                                    .create_node_with_label_bits_and_external_id(
+                                        &mut tx,
+                                        label_bits,
+                                        properties.clone(),
+                                        Some(ext.clone()),
+                                        policy,
+                                        self.catalog(),
+                                    )?
+                            } else {
+                                self.store_mut().create_node_with_label_bits(
+                                    &mut tx,
+                                    label_bits,
+                                    properties.clone(),
+                                )?
+                            };
                             // phase6_opencypher-subquery-transactions §3 —
                             // register the inverse op so a failing
                             // `CALL { … } IN TRANSACTIONS` batch can

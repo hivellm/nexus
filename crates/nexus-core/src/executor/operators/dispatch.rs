@@ -190,13 +190,14 @@ impl Executor {
             Operator::Create {
                 pattern,
                 external_id_expr,
-                conflict_policy: _,
+                conflict_policy,
             } => {
-                if external_id_expr.is_some() {
-                    return Err(crate::Error::executor(
-                        "CREATE with `_id` is parsed but not yet dispatched (phase9 4.4 pending)",
-                    ));
-                }
+                let resolved_external_id = if let Some(expr) = external_id_expr.as_ref() {
+                    Some(self.resolve_external_id(expr, &context.params)?)
+                } else {
+                    None
+                };
+                let policy = super::create::ast_conflict_policy_to_storage(*conflict_policy);
                 // phase6_opencypher-subquery-transactions — CREATE
                 // reachable through the dispatch path comes from
                 // nested subqueries (e.g. `CALL { … CREATE … }`).
@@ -226,10 +227,19 @@ impl Executor {
                 let context_has_scope = !context.variables.is_empty()
                     || context.result_set.rows.iter().any(|r| !r.values.is_empty());
                 if context_has_scope {
-                    self.execute_create_with_context(context, pattern)?;
+                    self.execute_create_with_context(
+                        context,
+                        pattern,
+                        resolved_external_id,
+                        policy,
+                    )?;
                 } else {
-                    let (created_nodes, created_rels) =
-                        self.execute_create_pattern_with_variables(pattern)?;
+                    let (created_nodes, created_rels) = self
+                        .execute_create_pattern_with_variables(
+                            pattern,
+                            resolved_external_id,
+                            policy,
+                        )?;
                     // Register inverse ops on the compensating-undo
                     // buffer (no-op outside a `CALL { … } IN
                     // TRANSACTIONS` batch). The empty-scope path

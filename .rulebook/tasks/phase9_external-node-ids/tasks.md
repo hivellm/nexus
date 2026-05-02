@@ -28,7 +28,7 @@
 - [x] 4.1 Reserve `_id` as a magic property in `crates/nexus-core/src/executor/parser/` and forbid user-defined `_id` properties unless `compat.allow_user_underscore_id = true`
 - [x] 4.2 Parse `_id` value as quoted prefixed string (`'sha256:abc…'`) or parameter (`$external_id`) and emit a clear error otherwise
 - [x] 4.3 Add an optional clause modifier `CREATE (n:Label {_id: $x}) ON CONFLICT MATCH|REPLACE|ERROR` (default `ERROR`)
-- [ ] 4.4 Implement the `CREATE` operator branch in `crates/nexus-core/src/executor/operators/create.rs` to call the new storage path
+- [x] 4.4 Implement the `CREATE` operator branch in `crates/nexus-core/src/executor/operators/create.rs` to call the new storage path
 - [ ] 4.5 Implement `MERGE` fast-path in `crates/nexus-core/src/executor/operators/merge.rs`: when the only match key is `_id`, bypass the pattern-match scan and use the index
 - [ ] 4.6 Implement `MATCH` resolution in the planner: predicate `n._id = 'sha256:…'` becomes an index seek, not a label scan
 - [ ] 4.7 Project `_id` correctly: `RETURN n._id` returns the original prefixed string for the node, or `null` if no external id was set

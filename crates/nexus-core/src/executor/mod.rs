@@ -235,19 +235,20 @@ impl Executor {
         if let Some(Operator::Create {
             pattern,
             external_id_expr,
-            conflict_policy: _,
+            conflict_policy,
         }) = operators.first()
         {
-            if external_id_expr.is_some() {
-                return Err(crate::Error::executor(
-                    "CREATE with `_id` is parsed but not yet dispatched (phase9 4.4 pending)",
-                ));
-            }
+            let resolved_external_id = if let Some(expr) = external_id_expr.as_ref() {
+                Some(self.resolve_external_id(expr, &context.params)?)
+            } else {
+                None
+            };
+            let policy = operators::create::ast_conflict_policy_to_storage(*conflict_policy);
             let existing_rows = self.materialize_rows_from_variables(&context);
             if existing_rows.is_empty() {
                 // CREATE standalone - create nodes and relationships directly
-                let (created_node_ids, created_rel_ids) =
-                    self.execute_create_pattern_with_variables(pattern)?;
+                let (created_node_ids, created_rel_ids) = self
+                    .execute_create_pattern_with_variables(pattern, resolved_external_id, policy)?;
 
                 // Collect all created entities (nodes and relationships)
                 let mut columns: Vec<String> = created_node_ids.keys().cloned().collect();
@@ -590,13 +591,15 @@ impl Executor {
                 Operator::Create {
                     pattern,
                     external_id_expr,
-                    conflict_policy: _,
+                    conflict_policy,
                 } => {
-                    if external_id_expr.is_some() {
-                        return Err(crate::Error::executor(
-                            "CREATE with `_id` is parsed but not yet dispatched (phase9 4.4 pending)",
-                        ));
-                    }
+                    let resolved_external_id = if let Some(expr) = external_id_expr.as_ref() {
+                        Some(self.resolve_external_id(expr, &context.params)?)
+                    } else {
+                        None
+                    };
+                    let policy =
+                        operators::create::ast_conflict_policy_to_storage(*conflict_policy);
                     // Skip if already executed in the first block
                     if operators
                         .first()
@@ -706,7 +709,12 @@ impl Executor {
                     );
 
                     // CREATE with MATCH context - use existing implementation
-                    self.execute_create_with_context(&mut context, pattern)?;
+                    self.execute_create_with_context(
+                        &mut context,
+                        pattern,
+                        resolved_external_id,
+                        policy,
+                    )?;
 
                     // If no RETURN clause follows, result_set is already populated above
                     // If RETURN follows, Project operator will handle it
