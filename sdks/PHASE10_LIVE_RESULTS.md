@@ -2,13 +2,14 @@
 
 | SDK        | File                                                | Tests   | Status | Runtime          |
 |------------|-----------------------------------------------------|---------|--------|------------------|
+| Rust       | `sdks/rust/tests/external_id_live.rs`               | 14 / 14 | PASS   | ~60ms (cargo test) |
 | Python     | `sdks/python/nexus_sdk/tests/test_external_id_live.py` | 14 / 14 | PASS   | ~4.4s (pytest)   |
 | TypeScript | `sdks/typescript/tests/external-id.live.test.ts`    | 16 / 16 | PASS   | ~98ms (vitest)   |
 | Go         | `sdks/go/test/external_id_live_test.go`             | 15 / 15 | PASS   | ~270ms (go test) |
 | C#         | `sdks/csharp/Tests/ExternalIdLiveTests.cs`          | 14 / 14 | PASS   | ~140ms (xunit)   |
 | PHP        | `sdks/php/tests/ExternalIdLiveTest.php`             | 14 / 14 | PASS   | ~570ms (phpunit) |
 
-Total live cases: **73**, all green against a single nexus-nexus container running at `http://localhost:15474` with `NEXUS_AUTH_ENABLED=false`.
+Total live cases: **87**, all green against a single nexus-nexus container running at `http://localhost:15474` with `NEXUS_AUTH_ENABLED=false`.
 
 ## Coverage matrix
 

@@ -5,6 +5,22 @@ All notable changes to the Rust SDK are documented in this file.
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 Versioning: [SemVer](https://semver.org/spec/v2.0.0.html).
 
+## [2.1.0] — 2026-05-02
+
+### Added
+
+- **Phase 10 live external-id suite.** New
+  `tests/external_id_live.rs` ships 14 live integration tests that
+  exercise the phase-9 external-id surface against a running Nexus
+  container. Coverage matches the other 5 SDKs: 6 ExternalId
+  variants (sha256/blake3/sha512/uuid/str/bytes), 3 ConflictPolicy
+  values (REPLACE asserts a property change to guard the
+  `fd001344` regression), Cypher `_id` round-trip, length-cap
+  rejection, absent-id null-node. Gated on `NEXUS_LIVE_HOST` env
+  var so unit-only runs do not require a server.
+- `scripts/sdks/run-live-suites.sh` now drives the Rust SDK
+  alongside the other 5.
+
 ## [2.0.0] — 2026-04-25
 
 ### Fixed

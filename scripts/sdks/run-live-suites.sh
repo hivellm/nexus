@@ -21,7 +21,7 @@ set -euo pipefail
 
 NEXUS_LIVE_HOST="${NEXUS_LIVE_HOST:-http://localhost:15474}"
 NEXUS_IMAGE="${NEXUS_IMAGE:-nexus-nexus}"
-SDKS="${SDKS:-python typescript go csharp php}"
+SDKS="${SDKS:-rust python typescript go csharp php}"
 CONTAINER="nexus-phase10-live"
 
 cleanup() {
@@ -58,6 +58,17 @@ curl -s -X POST "$NEXUS_LIVE_HOST/data/nodes" \
 
 PASS_SDKS=()
 FAIL_SDKS=()
+
+run_rust() {
+    echo
+    echo "=== [rust] live suite ==="
+    pushd sdks/rust >/dev/null
+    NEXUS_LIVE_HOST="$NEXUS_LIVE_HOST" \
+        cargo +nightly test --test external_id_live
+    local rc=$?
+    popd >/dev/null
+    return $rc
+}
 
 run_python() {
     echo
