@@ -24,6 +24,8 @@
 //! trait rather than resurrecting the dead module.
 
 pub mod constraints;
+pub mod external_id;
+pub mod external_id_index;
 
 /// Default LMDB `map_size` for a catalog environment — 100 MiB.
 ///
@@ -42,6 +44,7 @@ pub mod constraints;
 /// [`Catalog::with_map_size`] / [`Catalog::with_isolated_path`].
 pub const CATALOG_MMAP_INITIAL_SIZE: usize = 100 * 1024 * 1024;
 
+use crate::catalog::external_id_index::ExternalIdIndex;
 use crate::{Error, Result};
 use dashmap::DashMap;
 use heed::types::*;
@@ -152,6 +155,9 @@ pub struct Catalog {
     key_name_cache: Arc<DashMap<String, u32>>,
     /// In-memory cache for key ID -> name lookups (lock-free)
     key_id_cache: Arc<DashMap<u32, String>>,
+
+    /// External node id index (forward + reverse LMDB sub-databases).
+    external_id_index: Arc<ExternalIdIndex>,
 }
 
 impl Catalog {
@@ -285,7 +291,7 @@ impl Catalog {
         let env = unsafe {
             EnvOpenOptions::new()
                 .map_size(actual_map_size)
-                .max_dbs(15) // Increased for constraints, UDFs, and procedures databases
+                .max_dbs(17) // Increased for constraints, UDFs, procedures, and external-id databases
                 .max_readers(2048)
                 .open(&actual_path)?
         };
@@ -323,6 +329,9 @@ impl Catalog {
             Str,
             SerdeBincode<crate::graph::procedures::ProcedureSignature>,
         > = env.create_database(&mut wtxn, Some("procedures"))?;
+
+        // Create external-id index sub-databases (forward + reverse).
+        let external_id_index = ExternalIdIndex::open(&env, &mut wtxn)?;
 
         // Initialize metadata if not exists
         if metadata_db.get(&wtxn, "main")?.is_none() {
@@ -436,6 +445,7 @@ impl Catalog {
             type_id_cache,
             key_name_cache,
             key_id_cache,
+            external_id_index: Arc::new(external_id_index),
         })
     }
 
@@ -1090,6 +1100,25 @@ impl Catalog {
         wtxn.commit()?;
         Ok(())
     }
+
+    /// Return a reference to the external-id index.
+    ///
+    /// Use this to call `put_if_absent`, `get_internal`, `get_external`,
+    /// `delete`, and `iter`.  The index operates on caller-supplied
+    /// transactions so it participates in the same atomicity domain as
+    /// other catalog writes.
+    pub fn external_id_index(&self) -> &ExternalIdIndex {
+        &self.external_id_index
+    }
+
+    /// Verify that the external-id forward and reverse maps agree.
+    ///
+    /// In debug builds this is called automatically; in release builds
+    /// callers can invoke it explicitly (e.g. from a `--verify` CLI path
+    /// or during tests) to assert catalog integrity.
+    pub fn verify_external_ids(&self) -> Result<()> {
+        self.external_id_index.verify_consistency()
+    }
 }
 
 impl Default for Catalog {
@@ -1642,5 +1671,168 @@ mod tests {
         catalog.remove_procedure("custom.test").unwrap();
         let retrieved_after = catalog.get_procedure("custom.test").unwrap();
         assert!(retrieved_after.is_none());
+    }
+
+    // ── External-id index integration tests ───────────────────────────────────
+
+    #[test]
+    fn test_external_id_insert_and_lookup() {
+        use crate::catalog::external_id::{ExternalId, HashKind};
+        let (catalog, _dir) = create_isolated_test_catalog();
+
+        let ext = ExternalId::try_hash(HashKind::Sha256, vec![0xABu8; 32]).unwrap();
+        let internal_id = 42u64;
+
+        // Insert.
+        let mut wtxn = catalog.env.write_txn().unwrap();
+        let conflict = catalog
+            .external_id_index()
+            .put_if_absent(&mut wtxn, &ext, internal_id)
+            .unwrap();
+        wtxn.commit().unwrap();
+
+        assert_eq!(conflict, None, "first insert must not conflict");
+
+        // Forward lookup.
+        let rtxn = catalog.env.read_txn().unwrap();
+        let found = catalog
+            .external_id_index()
+            .get_internal(&rtxn, &ext)
+            .unwrap();
+        assert_eq!(found, Some(internal_id));
+
+        // Reverse lookup.
+        let found_ext = catalog
+            .external_id_index()
+            .get_external(&rtxn, internal_id)
+            .unwrap();
+        assert_eq!(found_ext, Some(ext));
+    }
+
+    #[test]
+    fn test_external_id_duplicate_rejection() {
+        use crate::catalog::external_id::ExternalId;
+        let (catalog, _dir) = create_isolated_test_catalog();
+
+        let ext = ExternalId::try_uuid([0x55u8; 16]).unwrap();
+
+        let mut wtxn = catalog.env.write_txn().unwrap();
+        catalog
+            .external_id_index()
+            .put_if_absent(&mut wtxn, &ext, 10)
+            .unwrap();
+        wtxn.commit().unwrap();
+
+        // Second insert of same external id — must return existing.
+        let mut wtxn2 = catalog.env.write_txn().unwrap();
+        let conflict = catalog
+            .external_id_index()
+            .put_if_absent(&mut wtxn2, &ext, 20)
+            .unwrap();
+        wtxn2.commit().unwrap();
+
+        assert_eq!(conflict, Some(10));
+    }
+
+    #[test]
+    fn test_external_id_delete_both_maps() {
+        use crate::catalog::external_id::ExternalId;
+        let (catalog, _dir) = create_isolated_test_catalog();
+
+        let ext = ExternalId::try_str("del-me".to_string()).unwrap();
+        let internal_id = 7u64;
+
+        let mut wtxn = catalog.env.write_txn().unwrap();
+        catalog
+            .external_id_index()
+            .put_if_absent(&mut wtxn, &ext, internal_id)
+            .unwrap();
+        wtxn.commit().unwrap();
+
+        let mut wtxn2 = catalog.env.write_txn().unwrap();
+        let deleted = catalog
+            .external_id_index()
+            .delete(&mut wtxn2, internal_id)
+            .unwrap();
+        wtxn2.commit().unwrap();
+
+        assert!(deleted);
+
+        let rtxn = catalog.env.read_txn().unwrap();
+        assert_eq!(
+            catalog
+                .external_id_index()
+                .get_internal(&rtxn, &ext)
+                .unwrap(),
+            None
+        );
+        assert_eq!(
+            catalog
+                .external_id_index()
+                .get_external(&rtxn, internal_id)
+                .unwrap(),
+            None
+        );
+    }
+
+    #[test]
+    fn test_external_id_reopen_and_reload() {
+        use crate::catalog::external_id::ExternalId;
+        let ctx = TestContext::new();
+        let path = ctx.path().to_path_buf();
+
+        let ext = ExternalId::try_str("persist-test".to_string()).unwrap();
+        let internal_id = 99u64;
+
+        // Write data and close.
+        {
+            let catalog = Catalog::with_isolated_path(&path, CATALOG_MMAP_INITIAL_SIZE).unwrap();
+            let mut wtxn = catalog.env.write_txn().unwrap();
+            catalog
+                .external_id_index()
+                .put_if_absent(&mut wtxn, &ext, internal_id)
+                .unwrap();
+            wtxn.commit().unwrap();
+            catalog.sync().unwrap();
+        }
+
+        // Reopen and verify.
+        {
+            let catalog = Catalog::with_isolated_path(&path, CATALOG_MMAP_INITIAL_SIZE).unwrap();
+            let rtxn = catalog.env.read_txn().unwrap();
+            assert_eq!(
+                catalog
+                    .external_id_index()
+                    .get_internal(&rtxn, &ext)
+                    .unwrap(),
+                Some(internal_id)
+            );
+            assert_eq!(
+                catalog
+                    .external_id_index()
+                    .get_external(&rtxn, internal_id)
+                    .unwrap(),
+                Some(ext)
+            );
+        }
+    }
+
+    #[test]
+    fn test_external_id_forward_reverse_consistency() {
+        use crate::catalog::external_id::ExternalId;
+        let (catalog, _dir) = create_isolated_test_catalog();
+
+        let mut wtxn = catalog.env.write_txn().unwrap();
+        for i in 0u64..5 {
+            let ext = ExternalId::try_str(format!("node-{i}")).unwrap();
+            catalog
+                .external_id_index()
+                .put_if_absent(&mut wtxn, &ext, i * 10)
+                .unwrap();
+        }
+        wtxn.commit().unwrap();
+
+        // Integrity check must pass.
+        catalog.verify_external_ids().unwrap();
     }
 }

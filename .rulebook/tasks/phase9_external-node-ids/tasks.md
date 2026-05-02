@@ -1,12 +1,12 @@
 ## 1. Catalog: ExternalId index
-- [ ] 1.1 Define `ExternalId` enum in `crates/nexus-core/src/catalog/external_id.rs` with variants `Hash(HashKind, [u8; N])`, `Uuid([u8; 16])`, `String(SmolStr<256>)`, `Bytes(BoundedVec<64>)` and a 1-byte discriminator on the wire
-- [ ] 1.2 Add `HashKind { Blake3, Sha256, Sha512 }` and parser/printer (`sha256:hex…`, `blake3:hex…`, `uuid:…`, `str:…`, `bytes:hex…`) with round-trip tests
-- [ ] 1.3 Implement length validation and reject zero-length / over-length values with a typed error
-- [ ] 1.4 Create LMDB sub-database `external_ids` in `crates/nexus-core/src/catalog/mod.rs` (key = encoded `ExternalId`, value = `u64` internal id, little-endian)
-- [ ] 1.5 Implement `ExternalIdIndex::put_if_absent`, `get`, `delete`, `iter` with transactional semantics matching the rest of the catalog
-- [ ] 1.6 Add reverse map `internal_ids` sub-database (key = `u64`, value = encoded `ExternalId`) for `n._id` projection without scanning
-- [ ] 1.7 Wire catalog open/close/recovery to load both sub-databases and add a startup integrity check (forward and reverse maps agree)
-- [ ] 1.8 Unit tests: insert / lookup / duplicate-rejection / delete / reopen-and-reload / forward-reverse consistency
+- [x] 1.1 Define `ExternalId` enum in `crates/nexus-core/src/catalog/external_id.rs` with variants `Hash(HashKind, [u8; N])`, `Uuid([u8; 16])`, `String(SmolStr<256>)`, `Bytes(BoundedVec<64>)` and a 1-byte discriminator on the wire
+- [x] 1.2 Add `HashKind { Blake3, Sha256, Sha512 }` and parser/printer (`sha256:hex…`, `blake3:hex…`, `uuid:…`, `str:…`, `bytes:hex…`) with round-trip tests
+- [x] 1.3 Implement length validation and reject zero-length / over-length values with a typed error
+- [x] 1.4 Create LMDB sub-database `external_ids` in `crates/nexus-core/src/catalog/mod.rs` (key = encoded `ExternalId`, value = `u64` internal id, little-endian)
+- [x] 1.5 Implement `ExternalIdIndex::put_if_absent`, `get`, `delete`, `iter` with transactional semantics matching the rest of the catalog
+- [x] 1.6 Add reverse map `internal_ids` sub-database (key = `u64`, value = encoded `ExternalId`) for `n._id` projection without scanning
+- [x] 1.7 Wire catalog open/close/recovery to load both sub-databases and add a startup integrity check (forward and reverse maps agree)
+- [x] 1.8 Unit tests: insert / lookup / duplicate-rejection / delete / reopen-and-reload / forward-reverse consistency
 
 ## 2. Storage: node creation paths
 - [ ] 2.1 Add `RecordStore::create_node_with_external_id` accepting `Option<ExternalId>` and a `ConflictPolicy { Error, Match, Replace }`
