@@ -783,7 +783,17 @@ impl RecordStore {
                             if properties.is_object()
                                 && !properties.as_object().map(|m| m.is_empty()).unwrap_or(true)
                             {
-                                self.property_store
+                                // store_properties may return a new offset
+                                // (when the new property bytes don't fit
+                                // in-place). Capture it and re-write the
+                                // NodeRecord so subsequent reads via
+                                // NodeRecord.prop_ptr see the fresh data
+                                // — without this the load path follows
+                                // the stale offset and reads the
+                                // pre-replace properties (phase9 §2.4
+                                // invariant).
+                                let new_prop_ptr = self
+                                    .property_store
                                     .write()
                                     .map_err(|_| Error::storage("property store lock poisoned"))?
                                     .store_properties(
@@ -791,6 +801,10 @@ impl RecordStore {
                                         property_store::EntityType::Node,
                                         properties,
                                     )?;
+                                if let Ok(mut record) = self.read_node(existing_id) {
+                                    record.prop_ptr = new_prop_ptr;
+                                    self.write_node(existing_id, &record)?;
+                                }
                             }
                             Ok(existing_id)
                         }
