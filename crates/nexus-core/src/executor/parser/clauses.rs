@@ -13,8 +13,8 @@ use crate::{Error, Result};
 use std::collections::HashMap;
 
 /// Extract the reserved `_id` property from the first node pattern in a
-/// CREATE clause, returning the parsed expression (and removing the entry
-/// from the property map). Only literal-string and parameter expressions
+/// CREATE / MERGE clause, removing it from the property map and returning
+/// the parsed expression. Only literal-string and parameter expressions
 /// are accepted; anything else is a parse error.
 ///
 /// Returns `Ok(None)` when no node carries `_id`.
@@ -26,7 +26,7 @@ fn extract_underscore_id_from_pattern(pattern: &mut Pattern) -> Result<Option<Ex
                 if let Some(expr) = prop_map.properties.remove("_id") {
                     if found.is_some() {
                         return Err(Error::executor(
-                            "Cypher: _id may only appear once in CREATE pattern",
+                            "Cypher: _id may only appear once in CREATE/MERGE pattern",
                         ));
                     }
                     match &expr {
@@ -663,10 +663,14 @@ impl CypherParser {
             None
         };
 
+        let mut pattern = pattern;
+        let external_id_expr = extract_underscore_id_from_pattern(&mut pattern)?;
+
         Ok(MergeClause {
             pattern,
             on_create,
             on_match,
+            external_id_expr,
         })
     }
 
@@ -1176,10 +1180,16 @@ impl CypherParser {
         self.skip_whitespace();
         self.expect_char(')')?;
 
+        // phase9_external-node-ids §4.6 — `external_id_expr` is populated
+        // by the clause-level extractor for CREATE / MERGE patterns.
+        // MATCH inline `{_id: …}` form is not yet routed through the
+        // external-id index seek; the property map keeps `_id` so the
+        // regular filter pipeline handles it (current behaviour).
         Ok(NodePattern {
             variable,
             labels,
             properties,
+            external_id_expr: None,
         })
     }
 

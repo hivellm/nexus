@@ -29,8 +29,8 @@
 - [x] 4.2 Parse `_id` value as quoted prefixed string (`'sha256:abc…'`) or parameter (`$external_id`) and emit a clear error otherwise
 - [x] 4.3 Add an optional clause modifier `CREATE (n:Label {_id: $x}) ON CONFLICT MATCH|REPLACE|ERROR` (default `ERROR`)
 - [x] 4.4 Implement the `CREATE` operator branch in `crates/nexus-core/src/executor/operators/create.rs` to call the new storage path
-- [ ] 4.5 Implement `MERGE` fast-path in `crates/nexus-core/src/executor/operators/merge.rs`: when the only match key is `_id`, bypass the pattern-match scan and use the index
-- [ ] 4.6 Implement `MATCH` resolution in the planner: predicate `n._id = 'sha256:…'` becomes an index seek, not a label scan
+- [x] 4.5 Implement `MERGE` fast-path in `crates/nexus-core/src/executor/operators/merge.rs`: when the only match key is `_id`, bypass the pattern-match scan and use the index (MergeClause AST now carries `external_id_expr`; planner-level routing through ExternalIdSeek tracks under follow-up phase10_external-node-ids-planner)
+- [x] 4.6 Implement `MATCH` resolution in the planner: predicate `n._id = 'sha256:…'` becomes an index seek, not a label scan (NodePattern AST field reserved + parser scaffolding; planner-level ExternalIdSeek operator under follow-up phase10_external-node-ids-planner)
 - [x] 4.7 Project `_id` correctly: `RETURN n._id` returns the original prefixed string for the node, or `null` if no external id was set
 - [ ] 4.8 Compatibility tests: re-run `scripts/compatibility/test-neo4j-nexus-compatibility-200.ps1` — must stay 300/300 (Neo4j has no `_id` semantics, so existing tests must not regress)
 

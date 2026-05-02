@@ -212,6 +212,11 @@ pub struct CreateClause {
 pub struct MergeClause {
     /// Pattern to match or create
     pub pattern: Pattern,
+    /// Expression for the `_id` magic property extracted from the first node
+    /// pattern at parse time (phase9 §4.5 fast-path). `None` when no `_id`
+    /// is present — behaviour is identical to before this feature.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub external_id_expr: Option<Expression>,
     /// SET operations to execute when creating a new node
     #[serde(skip_serializing_if = "Option::is_none")]
     pub on_create: Option<SetClause>,
@@ -497,8 +502,12 @@ pub struct NodePattern {
     pub variable: Option<String>,
     /// Node labels
     pub labels: Vec<String>,
-    /// Property map (optional)
+    /// Property map (optional, with `_id` stripped out at parse time when present)
     pub properties: Option<PropertyMap>,
+    /// Expression from the `_id` magic property stripped out of `properties` at
+    /// parse time (phase9 §4.6 index-seek). `None` when no `_id` was present.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub external_id_expr: Option<Expression>,
 }
 
 /// Relationship pattern

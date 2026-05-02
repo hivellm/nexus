@@ -2624,3 +2624,39 @@ fn parser_create_without_id_has_no_external_id_expr() {
     assert!(c.external_id_expr.is_none());
     assert_eq!(c.conflict_policy, AstConflictPolicy::Error);
 }
+
+// phase9_external-node-ids §4.5 — MERGE clause MUST also extract `_id`.
+
+#[test]
+fn parser_merge_extracts_underscore_id_string_literal() {
+    let mut p = CypherParser::new("MERGE (n:File {_id: 'sha256:abc'})".to_string());
+    let q = p.parse().unwrap();
+    let merge = match &q.clauses[0] {
+        Clause::Merge(m) => m,
+        other => panic!("expected MERGE clause, got {:?}", other),
+    };
+    match &merge.external_id_expr {
+        Some(Expression::Literal(Literal::String(s))) => assert_eq!(s, "sha256:abc"),
+        other => panic!(
+            "expected string literal external_id_expr on MERGE, got {:?}",
+            other
+        ),
+    }
+    if let PatternElement::Node(np) = &merge.pattern.elements[0] {
+        let props = np.properties.as_ref().expect("node has properties");
+        assert!(!props.properties.contains_key("_id"));
+    } else {
+        panic!("expected node pattern in MERGE");
+    }
+}
+
+#[test]
+fn parser_merge_without_underscore_id() {
+    let mut p = CypherParser::new("MERGE (n:File {name: 'a.txt'})".to_string());
+    let q = p.parse().unwrap();
+    let merge = match &q.clauses[0] {
+        Clause::Merge(m) => m,
+        other => panic!("expected MERGE, got {:?}", other),
+    };
+    assert!(merge.external_id_expr.is_none());
+}
