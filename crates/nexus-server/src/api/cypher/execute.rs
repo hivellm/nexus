@@ -230,10 +230,40 @@ pub async fn execute_cypher(
                                 });
                             }
                             nexus_core::executor::parser::PatternElement::Node(node_pattern) => {
-                                let mut current_nodes = match ensure_node_from_pattern(
+                                // phase9_external-node-ids §4.4 — resolve `_id`
+                                // (literal string or parameter) and the
+                                // ON CONFLICT clause from the parsed CreateClause
+                                // and route through create_node_with_external_id
+                                // when set; otherwise plain create_node.
+                                let resolved_ext_id = match create_clause.external_id_expr.as_ref()
+                                {
+                                    Some(expr) => {
+                                        match resolve_external_id_for_server(expr, &request.params)
+                                        {
+                                            Ok(ext) => Some(ext),
+                                            Err(err) => {
+                                                let execution_time =
+                                                    start_time.elapsed().as_millis() as u64;
+                                                tracing::error!("{}", err);
+                                                return Json(CypherResponse {
+                                                    columns: vec![],
+                                                    rows: vec![],
+                                                    execution_time_ms: execution_time,
+                                                    error: Some(err),
+                                                });
+                                            }
+                                        }
+                                    }
+                                    None => None,
+                                };
+                                let resolved_policy =
+                                    ast_conflict_policy_to_storage(create_clause.conflict_policy);
+                                let mut current_nodes = match ensure_node_from_pattern_with_ext_id(
                                     &mut engine,
                                     node_pattern,
                                     &mut variable_context,
+                                    resolved_ext_id,
+                                    resolved_policy,
                                 ) {
                                     Ok(nodes) => nodes,
                                     Err(err) => {
@@ -1180,13 +1210,34 @@ pub async fn execute_cypher(
                         } => {
                             if let Some(node_ids) = variable_context.get(variable) {
                                 if let Some(node_id) = node_ids.first() {
-                                    // Load node properties
-                                    match engine.storage.load_node_properties(*node_id) {
-                                        Ok(Some(props)) => props
-                                            .get(property)
-                                            .cloned()
-                                            .unwrap_or(serde_json::Value::Null),
-                                        _ => serde_json::Value::Null,
+                                    // phase9_external-node-ids §4.7 — `n._id`
+                                    // is sourced from the catalog reverse map,
+                                    // not from the regular property store.
+                                    if property == "_id" {
+                                        match engine.catalog.read_txn() {
+                                            Ok(txn) => {
+                                                match engine
+                                                    .catalog
+                                                    .external_id_index()
+                                                    .get_external(&txn, *node_id)
+                                                {
+                                                    Ok(Some(ext)) => {
+                                                        serde_json::Value::String(ext.to_string())
+                                                    }
+                                                    _ => serde_json::Value::Null,
+                                                }
+                                            }
+                                            Err(_) => serde_json::Value::Null,
+                                        }
+                                    } else {
+                                        // Load node properties
+                                        match engine.storage.load_node_properties(*node_id) {
+                                            Ok(Some(props)) => props
+                                                .get(property)
+                                                .cloned()
+                                                .unwrap_or(serde_json::Value::Null),
+                                            _ => serde_json::Value::Null,
+                                        }
                                     }
                                 } else {
                                     serde_json::Value::Null

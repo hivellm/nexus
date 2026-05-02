@@ -197,6 +197,70 @@ fn ensure_node_from_pattern(
     node_pattern: &nexus_core::executor::parser::NodePattern,
     variable_context: &mut HashMap<String, Vec<u64>>,
 ) -> Result<Vec<u64>, String> {
+    ensure_node_from_pattern_with_ext_id(
+        engine,
+        node_pattern,
+        variable_context,
+        None,
+        nexus_core::storage::external_id::ConflictPolicy::Error,
+    )
+}
+
+/// Resolve a `_id` expression (literal-string or parameter) into an
+/// [`ExternalId`]. Mirrors the executor's `Executor::resolve_external_id`
+/// but lives here because the server's CREATE/MERGE dispatch goes through
+/// the engine API directly and never reaches the executor's create
+/// operator. Without this the `_id` carried on the parsed AST would be
+/// silently dropped on /cypher requests.
+fn resolve_external_id_for_server(
+    expr: &nexus_core::executor::parser::Expression,
+    parameters: &HashMap<String, serde_json::Value>,
+) -> Result<nexus_core::catalog::external_id::ExternalId, String> {
+    use nexus_core::executor::parser::{Expression, Literal};
+    use std::str::FromStr;
+    let raw: String = match expr {
+        Expression::Literal(Literal::String(s)) => s.clone(),
+        Expression::Parameter(name) => match parameters.get(name) {
+            Some(serde_json::Value::String(s)) => s.clone(),
+            Some(other) => {
+                return Err(format!(
+                    "_id parameter `${}` must be a string, got {:?}",
+                    name, other
+                ));
+            }
+            None => {
+                return Err(format!("_id parameter `${}` not provided", name));
+            }
+        },
+        _ => {
+            return Err(
+                "_id expression must be a string literal or parameter (parser invariant)".into(),
+            );
+        }
+    };
+    nexus_core::catalog::external_id::ExternalId::from_str(&raw)
+        .map_err(|e| format!("invalid _id `{}`: {}", raw, e))
+}
+
+fn ast_conflict_policy_to_storage(
+    p: nexus_core::executor::parser::AstConflictPolicy,
+) -> nexus_core::storage::external_id::ConflictPolicy {
+    use nexus_core::executor::parser::AstConflictPolicy;
+    use nexus_core::storage::external_id::ConflictPolicy;
+    match p {
+        AstConflictPolicy::Error => ConflictPolicy::Error,
+        AstConflictPolicy::Match => ConflictPolicy::Match,
+        AstConflictPolicy::Replace => ConflictPolicy::Replace,
+    }
+}
+
+fn ensure_node_from_pattern_with_ext_id(
+    engine: &mut nexus_core::Engine,
+    node_pattern: &nexus_core::executor::parser::NodePattern,
+    variable_context: &mut HashMap<String, Vec<u64>>,
+    external_id: Option<nexus_core::catalog::external_id::ExternalId>,
+    policy: nexus_core::storage::external_id::ConflictPolicy,
+) -> Result<Vec<u64>, String> {
     if let Some(var_name) = &node_pattern.variable {
         if let Some(existing) = variable_context.get(var_name) {
             if !existing.is_empty() {
@@ -207,7 +271,18 @@ fn ensure_node_from_pattern(
 
     let properties = property_map_to_json(&node_pattern.properties);
 
-    match engine.create_node(node_pattern.labels.clone(), properties) {
+    let result = if external_id.is_some() {
+        engine.create_node_with_external_id(
+            node_pattern.labels.clone(),
+            properties,
+            external_id,
+            policy,
+        )
+    } else {
+        engine.create_node(node_pattern.labels.clone(), properties)
+    };
+
+    match result {
         Ok(node_id) => {
             if let Some(var_name) = &node_pattern.variable {
                 variable_context
