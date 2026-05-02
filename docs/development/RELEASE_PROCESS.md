@@ -80,6 +80,14 @@ A live cross-reference of which SDK versions speak to which
 server versions lives in
 [`docs/COMPATIBILITY_MATRIX.md`](../COMPATIBILITY_MATRIX.md).
 
+## Cross-SDK release
+
+The release adds a published-package fanout that the workspace bump alone does not cover. Six SDKs (Rust + Python + TypeScript + Go + C# + PHP) plus a Docker image plus a helm chart all need to ship from the same train.
+
+Worked example for `2.1.0`: see [`RELEASE_2.1.0.md`](./RELEASE_2.1.0.md). It enumerates the publish order (`nexus-protocol` -> Rust SDK -> Python -> TypeScript -> Go tag -> C# -> PHP tag -> Docker -> helm -> GitHub release), the registry-specific commands, the rollback procedure, and the smoke-test invocations the human operator runs before AND after each `publish` step.
+
+The orchestration script `scripts/sdks/run-live-suites.sh` runs every SDK's live integration suite against a tagged container. Phase 11 added a `NEXUS_IMAGE` env override so the same script can be aimed at the candidate release image (`NEXUS_IMAGE=nexus-nexus:2.1.0 bash scripts/sdks/run-live-suites.sh`). 87 SDK live cases + 25 REST + 29 demo + 9 WAL replay = the 150-test pre-publish gate.
+
 ## Why one train
 
 Earlier releases experimented with two trains (a "marketing"

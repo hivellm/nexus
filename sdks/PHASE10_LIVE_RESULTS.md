@@ -11,6 +11,9 @@
 
 Total live cases: **87**, all green against a single nexus-nexus container running at `http://localhost:15474` with `NEXUS_AUTH_ENABLED=false`.
 
+Phase 11 re-validation against the tagged `nexus-nexus:2.1.0` image:
+**6 / 6 SDKs PASS** plus `test-external-ids-docker.py` 25/25, `demo-external-ids-relationships.py` 29/29, `test-wal-replay-docker.py` 9/9 (each compat suite needs a fresh container — they re-use deterministic external ids that collide with prior live SDK runs on the shared catalog).
+
 ## Coverage matrix
 
 Every SDK suite exercises the same surface against the live server:

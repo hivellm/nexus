@@ -18,33 +18,33 @@
 - [x] 2.9 Re-run `dotnet test` for the C# tests — 60/60 unit + 14/14 live PASS
 
 ## 3. Publish dry-run per SDK
-- [ ] 3.1 Rust: `cargo publish --dry-run -p nexus-graph-sdk` (manifest path `sdks/rust/Cargo.toml`); capture the included file list
-- [ ] 3.2 Python: `python -m build` from `sdks/python/`, then `twine check dist/*`; capture wheel + sdist names and sizes
-- [ ] 3.3 TypeScript: `npm pack --dry-run` from `sdks/typescript/`; capture tarball file list and size
-- [ ] 3.4 Go: confirm `sdks/go/go.mod` module path matches the intended import path (`github.com/hivellm/nexus-go`); record the would-be tag (`v2.1.0`)
-- [ ] 3.5 C#: `dotnet pack -c Release` from `sdks/csharp/`; verify `bin/Release/Nexus.SDK.2.1.0.nupkg` produced and contains LICENSE + README + XML docs
-- [ ] 3.6 PHP: `composer validate --strict` from `sdks/php/`; confirm composer.json shape is registry-clean
+- [x] 3.1 Rust: `cargo publish --dry-run` blocks on unpublished `nexus-protocol = "^2.1.0"` (crates.io currently has 2.0.0 / 1.14.0). Documented in §6 release order — `nexus-protocol` MUST publish before `nexus-graph-sdk`. Local manifest verified clean.
+- [x] 3.2 Python: `python -m build` produced `hivehub_nexus_sdk-2.1.0.tar.gz` + `hivehub_nexus_sdk-2.1.0-py3-none-any.whl`. `twine check` reports PASSED on both.
+- [x] 3.3 TypeScript: `npm pack --dry-run` produces `hivehub-nexus-sdk-2.1.0.tgz` (66.7 kB, 32 files, name `@hivehub/nexus-sdk` v2.1.0).
+- [x] 3.4 Go: `go.mod` module is `github.com/hivellm/nexus-go`, go directive `1.21`. Release tag will be `v2.1.0` once tagged.
+- [x] 3.5 C#: `dotnet pack -c Release` produced `bin/Release/Nexus.SDK.2.1.0.nupkg` + `.snupkg` symbols package.
+- [x] 3.6 PHP: `composer validate --strict` reports valid (only the informational "version field present" warning — Packagist convention prefers tag-derived versions; harmless for this release).
 
 ## 4. Docker + helm artefact tagging
-- [ ] 4.1 `docker tag nexus-nexus:latest nexus-nexus:2.1.0` and confirm `/health` reports `2.1.0` from the tagged image
-- [ ] 4.2 Update `deploy/helm/nexus/Chart.yaml` `appVersion` to `2.1.0`; chart `version` is independent and stays per helm convention
-- [ ] 4.3 Run any existing helm-chart smoke test (`helm lint deploy/helm/nexus/`, `helm template`) to confirm the chart still renders
+- [x] 4.1 `docker tag nexus-nexus:latest nexus-nexus:2.1.0` — `/health` on the tagged container reports `version: 2.1.0`
+- [x] 4.2 `deploy/helm/nexus/Chart.yaml` `appVersion: "2.1.0"` (already in place; chart `version: 0.2.0` independent)
+- [x] 4.3 `helm lint deploy/helm/nexus/` via `alpine/helm:3.14.4` — `1 chart(s) linted, 0 chart(s) failed`
 
 ## 5. End-to-end validation against the tagged image
-- [ ] 5.1 Bring up `nexus-nexus:2.1.0` with auth disabled
-- [ ] 5.2 Run `bash scripts/sdks/run-live-suites.sh` and assert PASS for all six SDKs
-- [ ] 5.3 Refresh the per-SDK timings table in `sdks/PHASE10_LIVE_RESULTS.md` with the 2.1.0-image numbers
-- [ ] 5.4 Run `python scripts/compatibility/test-external-ids-docker.py` and assert 25/25 PASS against the tagged image
-- [ ] 5.5 Run `python scripts/compatibility/test-wal-replay-docker.py` and assert 9/9 PASS
-- [ ] 5.6 Run `python scripts/compatibility/demo-external-ids-relationships.py` and assert 29/29 PASS
+- [x] 5.1 `nexus-nexus:2.1.0` started with auth disabled, `/health` returns version 2.1.0
+- [x] 5.2 `NEXUS_IMAGE=nexus-nexus:2.1.0 bash scripts/sdks/run-live-suites.sh` -> 6 / 6 SDKs PASS (rust + python + typescript + go + csharp + php)
+- [x] 5.3 Refreshed `sdks/PHASE10_LIVE_RESULTS.md` with the 2.1.0-image confirmation
+- [x] 5.4 `python scripts/compatibility/test-external-ids-docker.py` against fresh container -> 25 / 25 PASS
+- [x] 5.5 `python scripts/compatibility/test-wal-replay-docker.py` against fresh container -> 9 / 9 PASS
+- [x] 5.6 `python scripts/compatibility/demo-external-ids-relationships.py` against fresh container -> 29 / 29 PASS
 
 ## 6. Release docs + checklist
-- [ ] 6.1 Create `docs/development/RELEASE_2.1.0.md` codifying the publish order: server image -> Rust -> Python -> TypeScript -> Go -> C# -> PHP, with the exact dry-run command per SDK
-- [ ] 6.2 Add the smoke-test invocations (sections 5.1-5.6) to the release checklist so the human operator runs them before pushing
-- [ ] 6.3 Extend `docs/development/RELEASE_PROCESS.md` with a "Cross-SDK release" section that points at `RELEASE_2.1.0.md` as the worked example
-- [ ] 6.4 Append a top-level CHANGELOG bullet to the `[2.1.0]` section noting the PHP + C# `createNode` route fix landed in this phase
+- [x] 6.1 `docs/development/RELEASE_2.1.0.md` ships the publish order (`nexus-protocol` -> Rust SDK -> Python -> TypeScript -> Go tag -> C# -> PHP tag -> Docker -> helm -> GitHub release) with per-registry commands
+- [x] 6.2 `RELEASE_2.1.0.md` "Smoke-test commands" section captures the 150-test pre-publish gate (`run-live-suites.sh` + the three compat suites) the operator runs before AND after every registry push
+- [x] 6.3 `docs/development/RELEASE_PROCESS.md` "Cross-SDK release" section points at `RELEASE_2.1.0.md` as the worked example
+- [x] 6.4 Top-level `CHANGELOG.md` `[2.1.0]` gains a Fixed bullet covering the PHP + C# route fix and the SDK manifest realignment
 
 ## 7. Tail (mandatory - enforced by rulebook v5.3.0)
-- [ ] 7.1 Update or create documentation covering the implementation
-- [ ] 7.2 Write tests covering the new behavior
-- [ ] 7.3 Run tests and confirm they pass
+- [x] 7.1 `RELEASE_2.1.0.md` plus the `RELEASE_PROCESS.md` cross-link cover the implementation
+- [x] 7.2 Tests landed in §2.6-2.7 (PHP + C# regression coverage via existing live + unit suites) and §5.2-5.6 (the cross-image smoke gates)
+- [x] 7.3 All tests run and pass: 60 C# unit + 14 C# live + 14 PHP live + 17 Python live + 16 TS live + 15 Go live + 14 Rust live + 25 REST + 29 demo + 9 WAL replay = **213 PASS / 0 FAIL**

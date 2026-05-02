@@ -26,6 +26,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Compat verification**: Docker-based external-ID and WAL-replay smoke scripts under [`scripts/compatibility/test-external-ids-docker.{sh,py}`](scripts/compatibility/) and [`scripts/compatibility/test-wal-replay-docker.{sh,py}`](scripts/compatibility/). Neo4j 4.8 diff suite re-verified at 300/300.
 - **Docs**: [`docs/reference/external-node-ids.md`](docs/reference/external-node-ids.md) (reference) and the user-guide section on external IDs cover the wire format, conflict-policy semantics, and per-SDK usage examples.
 
+### Fixed — `phase11_publish-2.1.0`
+
+- **PHP and C# SDK `createNode` / `getNode` / `updateNode` / `deleteNode`** were targeting the legacy `/nodes` route which the server retired before phase 9. The PHP and C# clients now POST to `/data/nodes`, GET via `?id=<id>`, and PUT / DELETE with `{node_id, ...}` in the body. New PHP `CreateNodeResponse` and `GetNodeResponse` model classes; new C# `GetNodeResponse` class. Behaviour for callers who only used `_id` helpers (the phase 9 surface) is unchanged.
+- **SDK manifest version drift** introduced during phase 10 reset: Python and TypeScript bumped to `2.1.1`, C# and PHP bumped to `2.2.0` while every CHANGELOG already had the `[2.1.0]` heading. Phase 11 realigned every SDK manifest on `2.1.0`.
+
 ## [2.0.0] — 2026-04-30
 
 > **Major version bump**: 1.x → 2.0.0. Marks the first phase-8
