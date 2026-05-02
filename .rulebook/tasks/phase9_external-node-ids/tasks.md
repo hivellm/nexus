@@ -51,6 +51,6 @@
 - [x] 6.6 Update `CHANGELOG.md` under "Added" using conventional-commit style
 
 ## 7. Tail (mandatory — enforced by rulebook v5.3.0)
-- [ ] 7.1 Update or create documentation covering the implementation
-- [ ] 7.2 Write tests covering the new behavior
-- [ ] 7.3 Run tests and confirm they pass
+- [x] 7.1 Update or create documentation covering the implementation
+- [x] 7.2 Write tests covering the new behavior
+- [x] 7.3 Run tests and confirm they pass
