@@ -104,8 +104,40 @@ impl Executor {
     ///
     /// Takes `&self` so clones can execute concurrently; all mutable state
     /// lives behind `Arc`/`RwLock` inside [`ExecutorShared`].
-    #[tracing::instrument(skip_all, level = "debug", fields(cypher = %query.cypher))]
+    ///
+    /// Wraps [`Self::execute_inner`] to manage the per-thread planner
+    /// notification sink: clear before planning so a panic-aborted
+    /// prior call cannot leak its diagnostics into this query, then
+    /// drain after the result is built and attach the notifications
+    /// to the returned `ResultSet`. The thread-local sink is shared
+    /// with [`crate::executor::planner::queries::stash_planner_notifications`]
+    /// which the planner's per-call accumulator flushes into right
+    /// before the planner is dropped.
     pub fn execute(&self, query: &Query) -> Result<ResultSet> {
+        // Drain (and discard) any stale notifications from a prior
+        // panic-aborted call before planning the new query. Equivalent
+        // to a clear, but reuses the existing drain helper.
+        let _stale = planner::queries::drain_pending_planner_notifications();
+
+        let mut result = self.execute_inner(query)?;
+
+        // Attach planner-level diagnostics produced for this call.
+        // Vec is empty in the hot path (no unindexed access), so this
+        // is a near-zero-cost append.
+        let notes = planner::queries::drain_pending_planner_notifications();
+        if !notes.is_empty() {
+            result.notifications.extend(notes);
+        }
+        Ok(result)
+    }
+
+    /// Inner execute body — see [`Self::execute`] for the wrapper that
+    /// manages the planner notification sink. Marked `pub(super)` so
+    /// downstream sub-query operators (`call_subquery`) that want to
+    /// avoid double-attaching notifications can dispatch through here
+    /// directly; main callers should always go through [`Self::execute`].
+    #[tracing::instrument(skip_all, level = "debug", fields(cypher = %query.cypher))]
+    pub(super) fn execute_inner(&self, query: &Query) -> Result<ResultSet> {
         // Increment query counter for lazy cache warming
         let current_count = self
             .query_count
@@ -343,10 +375,7 @@ impl Executor {
                     vec![]
                 };
 
-                return Ok(ResultSet {
-                    columns: final_columns,
-                    rows: final_rows,
-                });
+                return Ok(ResultSet::new(final_columns, final_rows));
             }
         }
 
@@ -830,9 +859,9 @@ impl Executor {
                         *or_replace,
                     )?;
                     // Return empty result set for CREATE INDEX
-                    context.result_set = ResultSet {
-                        columns: vec!["index".to_string()],
-                        rows: vec![Row {
+                    context.result_set = ResultSet::new(
+                        vec!["index".to_string()],
+                        vec![Row {
                             values: vec![Value::String(format!(
                                 "{}.{}.{}",
                                 label,
@@ -840,7 +869,7 @@ impl Executor {
                                 index_type.as_deref().unwrap_or("property")
                             ))],
                         }],
-                    };
+                    );
                 }
                 Operator::ShowDatabases => {
                     context.result_set = self.execute_show_databases()?;
@@ -945,10 +974,7 @@ impl Executor {
             vec![]
         };
 
-        let result_set = ResultSet {
-            columns: final_columns,
-            rows: final_rows,
-        };
+        let result_set = ResultSet::new(final_columns, final_rows);
 
         // Cache the result for read operations
         if !is_write_query {
@@ -1088,12 +1114,12 @@ impl Executor {
                 None => return Ok(None),
             };
         }
-        Ok(Some(ResultSet {
-            columns: vec![count_alias],
-            rows: vec![Row {
+        Ok(Some(ResultSet::new(
+            vec![count_alias],
+            vec![Row {
                 values: vec![Value::Number(serde_json::Number::from(product))],
             }],
-        }))
+        )))
     }
 
     /// Check if query is a simple MATCH query that can be executed directly
@@ -1154,10 +1180,7 @@ impl Executor {
             values: vec![serde_json::Value::Number(count.into())],
         };
 
-        Ok(ResultSet {
-            columns: vec!["count".to_string()],
-            rows: vec![row],
-        })
+        Ok(ResultSet::new(vec!["count".to_string()], vec![row]))
     }
     /// Invalidate cache entries based on affected data
     pub fn invalidate_query_cache(&self, affected_labels: &[&str], affected_properties: &[&str]) {
@@ -1223,6 +1246,11 @@ impl Executor {
 
         // Optimize the operator order
         operators = planner.optimize_operator_order(operators)?;
+
+        // Bridge planner-level diagnostics across the planner-drop
+        // boundary so `Executor::execute` can attach them to the
+        // resulting `ResultSet`. Empty vec is a no-op fast path.
+        planner::queries::stash_planner_notifications(planner.take_notifications());
 
         Ok(operators)
     }

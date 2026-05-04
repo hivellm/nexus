@@ -175,7 +175,7 @@ impl Executor {
                 })
                 .collect();
 
-            Ok(ResultSet { columns, rows })
+            Ok(ResultSet::new(columns, rows))
         } else {
             // No database manager - return single default database
             let columns = vec![
@@ -212,7 +212,7 @@ impl Executor {
                 ],
             }];
 
-            Ok(ResultSet { columns, rows })
+            Ok(ResultSet::new(columns, rows))
         }
     }
 
@@ -228,15 +228,15 @@ impl Executor {
             if db_manager.exists(name) {
                 if if_not_exists {
                     // Return success without creating
-                    return Ok(ResultSet {
-                        columns: vec!["result".to_string()],
-                        rows: vec![Row {
+                    return Ok(ResultSet::new(
+                        vec!["result".to_string()],
+                        vec![Row {
                             values: vec![Value::String(format!(
                                 "Database '{}' already exists",
                                 name
                             ))],
                         }],
-                    });
+                    ));
                 } else {
                     return Err(Error::CypherExecution(format!(
                         "Database '{}' already exists",
@@ -248,15 +248,15 @@ impl Executor {
             // Create the database
             db_manager.create_database(name)?;
 
-            Ok(ResultSet {
-                columns: vec!["result".to_string()],
-                rows: vec![Row {
+            Ok(ResultSet::new(
+                vec!["result".to_string()],
+                vec![Row {
                     values: vec![Value::String(format!(
                         "Database '{}' created successfully",
                         name
                     ))],
                 }],
-            })
+            ))
         } else {
             Err(Error::CypherExecution(
                 "Multi-database support is not enabled. DatabaseManager not configured."
@@ -284,15 +284,15 @@ impl Executor {
             if !db_manager.exists(name) {
                 if if_exists {
                     // Return success without error
-                    return Ok(ResultSet {
-                        columns: vec!["result".to_string()],
-                        rows: vec![Row {
+                    return Ok(ResultSet::new(
+                        vec!["result".to_string()],
+                        vec![Row {
                             values: vec![Value::String(format!(
                                 "Database '{}' does not exist",
                                 name
                             ))],
                         }],
-                    });
+                    ));
                 } else {
                     return Err(Error::CypherExecution(format!(
                         "Database '{}' does not exist",
@@ -304,15 +304,15 @@ impl Executor {
             // Drop the database
             db_manager.drop_database(name, if_exists)?;
 
-            Ok(ResultSet {
-                columns: vec!["result".to_string()],
-                rows: vec![Row {
+            Ok(ResultSet::new(
+                vec!["result".to_string()],
+                vec![Row {
                     values: vec![Value::String(format!(
                         "Database '{}' dropped successfully",
                         name
                     ))],
                 }],
-            })
+            ))
         } else {
             Err(Error::CypherExecution(
                 "Multi-database support is not enabled. DatabaseManager not configured."
@@ -349,12 +349,12 @@ impl Executor {
                 format!("Database '{}' altered successfully", name)
             };
 
-            Ok(ResultSet {
-                columns: vec!["result".to_string()],
-                rows: vec![Row {
+            Ok(ResultSet::new(
+                vec!["result".to_string()],
+                vec![Row {
                     values: vec![Value::String(alteration_msg)],
                 }],
-            })
+            ))
         } else {
             Err(Error::CypherExecution(
                 "Multi-database support is not enabled. DatabaseManager not configured."
@@ -376,12 +376,12 @@ impl Executor {
 
             // Note: In a real implementation, this would switch the session's current database
             // For now, we just return success
-            Ok(ResultSet {
-                columns: vec!["result".to_string()],
-                rows: vec![Row {
+            Ok(ResultSet::new(
+                vec!["result".to_string()],
+                vec![Row {
                     values: vec![Value::String(format!("Switched to database '{}'", name))],
                 }],
-            })
+            ))
         } else {
             Err(Error::CypherExecution(
                 "Multi-database support is not enabled. DatabaseManager not configured."

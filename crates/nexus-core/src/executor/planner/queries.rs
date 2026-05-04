@@ -4,6 +4,87 @@
 //! façade (mod.rs) stays focused on types and the cache dispatcher.
 
 use super::*;
+use crate::executor::types::{Notification, NotificationCategory, NotificationSeverity};
+use std::cell::RefCell;
+use std::fmt;
+use std::sync::{Mutex, OnceLock};
+
+thread_local! {
+    /// Per-thread sink for notifications that the planner produced
+    /// while building a plan. The planner is constructed deep inside
+    /// `Executor::plan_ast` / `Executor::parse_and_plan`, so the
+    /// per-call `QueryPlanner::notifications` accumulator is dropped
+    /// before the wrapper has a chance to attach them to the
+    /// `ResultSet`. This thread-local bridges the gap: the planner
+    /// flushes its accumulator into here right before being dropped,
+    /// and `Executor::execute` drains here after the operators run.
+    ///
+    /// Cleared at the start of every `Executor::execute` so a panic
+    /// that aborts a prior query cannot leak its notifications onto
+    /// an unrelated follow-up query.
+    static PENDING_PLANNER_NOTIFICATIONS: RefCell<Vec<Notification>> =
+        const { RefCell::new(Vec::new()) };
+}
+
+/// Drain the per-thread pending notifications. Call from
+/// `Executor::execute` after the operators run; the returned vector
+/// is appended to the resulting `ResultSet`. Safe to call when the
+/// list is empty.
+pub fn drain_pending_planner_notifications() -> Vec<Notification> {
+    PENDING_PLANNER_NOTIFICATIONS.with(|c| std::mem::take(&mut *c.borrow_mut()))
+}
+
+/// Push a planner's notifications into the per-thread sink. Used by
+/// `Executor::plan_ast` immediately before dropping the planner.
+pub fn stash_planner_notifications(notifications: Vec<Notification>) {
+    if notifications.is_empty() {
+        return;
+    }
+    PENDING_PLANNER_NOTIFICATIONS.with(|c| c.borrow_mut().extend(notifications));
+}
+
+/// Origin clause for an unindexed-property-access notification — used
+/// in the human-readable description so operators can locate the
+/// offending pattern in their query. `Display` produces `MERGE` /
+/// `MATCH` exactly so it inlines cleanly into the notification body.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum UnindexedAccessClause {
+    Match,
+    Merge,
+}
+
+impl fmt::Display for UnindexedAccessClause {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(match self {
+            UnindexedAccessClause::Match => "MATCH",
+            UnindexedAccessClause::Merge => "MERGE",
+        })
+    }
+}
+
+/// Process-global rate limiter for the WARN log mirror of every
+/// `Nexus.Performance.UnindexedPropertyAccess` notification. Keyed by
+/// `(label_id, key_id)`; value is the `Instant` of the last emission.
+///
+/// A `QueryPlanner` is constructed fresh per query (`Engine::execute_*`),
+/// so per-planner state would never deduplicate. The rate limiter
+/// therefore lives in process-global storage. Stored as
+/// `OnceLock<Mutex<HashMap<...>>>` rather than `Lazy` to avoid pulling
+/// `once_cell` into `nexus-core`'s already-large dependency closure.
+fn warn_log_state() -> &'static Mutex<HashMap<(u32, u32), Instant>> {
+    static STATE: OnceLock<Mutex<HashMap<(u32, u32), Instant>>> = OnceLock::new();
+    STATE.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+/// Window size for the rate-limited unindexed-property WARN log,
+/// configurable via `NEXUS_PLANNER_WARN_INTERVAL_SECS`. Default: 60s.
+fn planner_warn_interval() -> Duration {
+    let secs = std::env::var("NEXUS_PLANNER_WARN_INTERVAL_SECS")
+        .ok()
+        .and_then(|s| s.parse::<u64>().ok())
+        .unwrap_or(60);
+    Duration::from_secs(secs)
+}
 
 impl<'a> QueryPlanner<'a> {
     /// Create a new query planner without an R-tree registry handle.
@@ -21,6 +102,93 @@ impl<'a> QueryPlanner<'a> {
             property_index: None,
             plan_cache: QueryPlanCache::new(1000, Duration::from_secs(300)), // 1000 plans, 5min TTL
             aggregation_cache: AggregationCache::new(500, Duration::from_secs(180)), // 500 results, 3min TTL
+            notifications: Vec::new(),
+        }
+    }
+
+    /// Drain the notifications accumulated during the most recent
+    /// `plan_query` call. Call site (`Engine::execute_*`) attaches the
+    /// drained vector to the resulting `ResultSet` so the HTTP layer
+    /// can copy it into the `/cypher` response envelope. The internal
+    /// vector is replaced with an empty one — re-using the same
+    /// planner for a follow-up query is safe.
+    pub fn take_notifications(&mut self) -> Vec<Notification> {
+        std::mem::take(&mut self.notifications)
+    }
+
+    /// Push a `Nexus.Performance.UnindexedPropertyAccess` notification
+    /// for the given `(label, property)` pair, deduplicating within a
+    /// single plan and rate-limiting the mirrored WARN log per the
+    /// `NEXUS_PLANNER_WARN_INTERVAL_SECS` window.
+    ///
+    /// Pure record-and-log — does not change the plan.
+    pub(super) fn record_unindexed_property_access(
+        &mut self,
+        label_id: u32,
+        key_id: u32,
+        label_name: &str,
+        property_name: &str,
+        clause: UnindexedAccessClause,
+    ) {
+        let code = "Nexus.Performance.UnindexedPropertyAccess";
+
+        // Within a single plan, do not push the same (label, prop)
+        // notification twice — `MERGE (n:L { p: $v })` and a later
+        // `MATCH (n:L { p: $v })` in the same query produce one entry.
+        let already_present = self.notifications.iter().any(|n| {
+            n.code == code && n.title.contains(label_name) && n.description.contains(property_name)
+        });
+        if already_present {
+            return;
+        }
+
+        let suggested_ddl = format!("CREATE INDEX FOR (n:{label_name}) ON (n.{property_name})",);
+        let title = format!("Unindexed property access on :{label_name}({property_name})");
+        let description = format!(
+            "{clause} selects nodes by `:{label_name}` with a property predicate on \
+             `{property_name}`, but no property index covers this pair. The planner \
+             falls back to a full label scan plus property comparison, which is \
+             O(N) over every `:{label_name}` node. Create the recommended index to \
+             switch to an O(log N) index seek: `{suggested_ddl}`.",
+            clause = clause,
+        );
+
+        self.notifications.push(Notification {
+            code: code.to_string(),
+            title,
+            description: description.clone(),
+            severity: NotificationSeverity::Information,
+            category: NotificationCategory::Performance,
+        });
+
+        // Rate-limited WARN log — one entry per (label, prop) per
+        // window. Failure to acquire the lock (poisoned) is silent;
+        // the notification still flows through the response envelope.
+        let now = Instant::now();
+        let interval = planner_warn_interval();
+        let mut should_log = true;
+        if let Ok(mut state) = warn_log_state().lock() {
+            if let Some(last) = state.get(&(label_id, key_id)) {
+                if now.duration_since(*last) < interval {
+                    should_log = false;
+                }
+            }
+            if should_log {
+                state.insert((label_id, key_id), now);
+            }
+        }
+        if should_log {
+            tracing::warn!(
+                code = code,
+                label = label_name,
+                property = property_name,
+                clause = %clause,
+                suggested = %suggested_ddl,
+                "unindexed property access on :{}({}) — {}",
+                label_name,
+                property_name,
+                suggested_ddl,
+            );
         }
     }
 
@@ -68,6 +236,20 @@ impl<'a> QueryPlanner<'a> {
 
     /// Plan a Cypher query into optimized operators with caching
     pub fn plan_query(&mut self, query: &CypherQuery) -> Result<Vec<Operator>> {
+        // Reset planner-level notifications: every plan starts with a
+        // clean slate so the engine drains only the notes produced by
+        // *this* query. Notifications from a prior call belong to the
+        // prior `ResultSet`.
+        self.notifications.clear();
+
+        // Diagnostic pre-pass: scan MATCH/MERGE selectors for property
+        // predicates against unindexed `(label, property)` pairs. Runs
+        // before plan-cache lookup so a cache hit still surfaces the
+        // hint — operators only see the index pathology after the
+        // first plan, but the warning matters every time the query
+        // runs against the wedged catalog.
+        self.scan_unindexed_property_access(query);
+
         // Validate that query has at least one clause
         // Exceptions: CALL procedures and USE DATABASE can be standalone
         if query.clauses.is_empty() {
@@ -204,9 +386,15 @@ impl<'a> QueryPlanner<'a> {
                         100,
                         std::time::Duration::from_secs(3600),
                     ),
+                    notifications: Vec::new(),
                 };
                 let left_operators = temp_planner.plan_query(&left_query)?;
                 let right_operators = temp_planner.plan_query(&right_query)?;
+                // Lift sub-planner notifications back into self so the
+                // UNION as a whole reports the union of its branches'
+                // diagnostics — otherwise hints from inside a UNION
+                // would silently drop on the floor.
+                self.notifications.extend(temp_planner.take_notifications());
 
                 // Create UNION operator with complete operator pipelines for each side
                 let mut operators = vec![Operator::Union {
@@ -3925,6 +4113,195 @@ impl<'a> QueryPlanner<'a> {
             out.push(op.clone());
         }
         if swapped { Some(out) } else { None }
+    }
+
+    /// Diagnostic pre-pass: walk every MATCH/MERGE clause looking for
+    /// node selectors of the form `(var:Label { prop: <expr> })` or
+    /// WHERE equality predicates of the form `var.prop = <expr>` where
+    /// `var` is bound to a node with a known label, and emit one
+    /// `Nexus.Performance.UnindexedPropertyAccess` notification per
+    /// distinct `(label, property)` pair that lacks a covering
+    /// property index.
+    ///
+    /// No-op when:
+    ///   - `self.property_index` is `None` (caller has no catalog
+    ///     handle — typical for the standalone `Executor::parse_and_plan`
+    ///     path and for planner unit tests).
+    ///   - The label is not registered in the catalog (the planner
+    ///     would either auto-create it later or fail; either way no
+    ///     scan-vs-seek decision exists yet).
+    ///   - The property name is not registered (same reasoning).
+    fn scan_unindexed_property_access(&mut self, query: &CypherQuery) {
+        let Some(prop_idx) = self.property_index else {
+            return;
+        };
+
+        // First pass: collect the (variable -> first_label) map across
+        // all MATCH/MERGE patterns in the query so the WHERE walker
+        // can resolve `n.prop` references back to a label.
+        let mut var_label: HashMap<String, String> = HashMap::new();
+        for clause in &query.clauses {
+            match clause {
+                Clause::Match(mc) => collect_node_var_labels(&mc.pattern, &mut var_label),
+                Clause::Merge(mc) => collect_node_var_labels(&mc.pattern, &mut var_label),
+                _ => {}
+            }
+        }
+
+        // Second pass: emit notifications.
+        for clause in &query.clauses {
+            match clause {
+                Clause::Match(mc) => {
+                    self.emit_unindexed_for_pattern(
+                        prop_idx,
+                        &mc.pattern,
+                        UnindexedAccessClause::Match,
+                    );
+                    // Some MATCH parses inline a WHERE on the
+                    // `MatchClause` itself (legacy path); newer ones
+                    // emit `Clause::Where` as a sibling clause —
+                    // covered by the standalone `Clause::Where` arm
+                    // below.
+                    if let Some(where_clause) = &mc.where_clause {
+                        self.emit_unindexed_for_where(
+                            prop_idx,
+                            &where_clause.expression,
+                            &var_label,
+                            UnindexedAccessClause::Match,
+                        );
+                    }
+                }
+                Clause::Merge(mc) => {
+                    self.emit_unindexed_for_pattern(
+                        prop_idx,
+                        &mc.pattern,
+                        UnindexedAccessClause::Merge,
+                    );
+                }
+                Clause::Where(wc) => {
+                    // Standalone WHERE clause produced by the modern
+                    // parser path. Variable bindings come from the
+                    // pattern collection above (first pass walks all
+                    // MATCH/MERGE clauses), so `n.prop` references in
+                    // a sibling WHERE resolve to the right label.
+                    self.emit_unindexed_for_where(
+                        prop_idx,
+                        &wc.expression,
+                        &var_label,
+                        UnindexedAccessClause::Match,
+                    );
+                }
+                _ => {}
+            }
+        }
+    }
+
+    /// Walk a pattern, emit one notification per node element with a
+    /// `(first_label, inline_property)` selector that lacks a
+    /// property index. Multi-label patterns use the **first** label —
+    /// it matches the planner's actual scan choice (see the
+    /// `NodeByLabel { label_id: …, … }` push at the start of the
+    /// node-element handler).
+    fn emit_unindexed_for_pattern(
+        &mut self,
+        prop_idx: &crate::index::PropertyIndex,
+        pattern: &Pattern,
+        clause: UnindexedAccessClause,
+    ) {
+        for el in &pattern.elements {
+            if let PatternElement::Node(node) = el {
+                let Some(label_name) = node.labels.first() else {
+                    continue;
+                };
+                let Some(properties) = &node.properties else {
+                    continue;
+                };
+                let Ok(label_id) = self.catalog.get_label_id(label_name) else {
+                    continue;
+                };
+                for (prop_name, _value) in &properties.properties {
+                    let Ok(key_id) = self.catalog.get_key_id(prop_name) else {
+                        continue;
+                    };
+                    if !prop_idx.has_index(label_id, key_id) {
+                        self.record_unindexed_property_access(
+                            label_id, key_id, label_name, prop_name, clause,
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    /// Walk a WHERE expression looking for equality predicates of the
+    /// form `<var>.<prop> = <anything>` (or the symmetric
+    /// `<anything> = <var>.<prop>`) and emit a notification when
+    /// `<var>` resolves to a labelled node and the
+    /// `(label, prop)` pair has no index.
+    ///
+    /// Recurses into AND/OR boolean trees so multi-clause WHEREs are
+    /// covered. Other operators are walked transparently — we only
+    /// flag equality, since range / `CONTAINS` / `STARTS WITH` are
+    /// either sargable through different index types or already a
+    /// known full-scan (a separate notification is queued for them
+    /// in a follow-up task).
+    fn emit_unindexed_for_where(
+        &mut self,
+        prop_idx: &crate::index::PropertyIndex,
+        expr: &Expression,
+        var_label: &HashMap<String, String>,
+        clause: UnindexedAccessClause,
+    ) {
+        match expr {
+            Expression::BinaryOp { left, op, right } => {
+                if matches!(op, BinaryOperator::Equal) {
+                    let candidate = match (left.as_ref(), right.as_ref()) {
+                        (Expression::PropertyAccess { variable, property }, _) => {
+                            Some((variable, property))
+                        }
+                        (_, Expression::PropertyAccess { variable, property }) => {
+                            Some((variable, property))
+                        }
+                        _ => None,
+                    };
+                    if let Some((variable, property)) = candidate
+                        && let Some(label_name) = var_label.get(variable)
+                        && let Ok(label_id) = self.catalog.get_label_id(label_name)
+                        && let Ok(key_id) = self.catalog.get_key_id(property)
+                        && !prop_idx.has_index(label_id, key_id)
+                    {
+                        self.record_unindexed_property_access(
+                            label_id, key_id, label_name, property, clause,
+                        );
+                    }
+                }
+                // Recurse for AND/OR/etc. so `WHERE a.x = 1 AND b.y = 2`
+                // produces both notifications.
+                self.emit_unindexed_for_where(prop_idx, left, var_label, clause);
+                self.emit_unindexed_for_where(prop_idx, right, var_label, clause);
+            }
+            Expression::UnaryOp { operand, .. } => {
+                self.emit_unindexed_for_where(prop_idx, operand, var_label, clause);
+            }
+            _ => {}
+        }
+    }
+}
+
+/// Helper: walk a pattern and record `node.variable -> first_label`
+/// for every node element that has both. Used by the WHERE walker to
+/// resolve `n.prop` references back to a label without re-running the
+/// full planner. Free function (not a method) so the `&mut self`
+/// borrow held by `scan_unindexed_property_access` does not collide
+/// with the immutable pattern walk.
+fn collect_node_var_labels(pattern: &Pattern, out: &mut HashMap<String, String>) {
+    for el in &pattern.elements {
+        if let PatternElement::Node(node) = el
+            && let Some(var) = &node.variable
+            && let Some(label) = node.labels.first()
+        {
+            out.entry(var.clone()).or_insert_with(|| label.clone());
+        }
     }
 }
 

@@ -401,10 +401,7 @@ impl Executor {
             }
         }
 
-        context.result_set = ResultSet {
-            columns: joined_columns,
-            rows: joined_rows,
-        };
+        context.result_set = ResultSet::new(joined_columns, joined_rows);
         Ok(())
     }
 
@@ -553,10 +550,7 @@ impl Executor {
                 None => outer_columns_owned.clone(),
             });
         let rows = std::mem::take(&mut *combined_rows.lock());
-        context.result_set = ResultSet {
-            columns: cols,
-            rows,
-        };
+        context.result_set = ResultSet::new(cols, rows);
         Ok(())
     }
 
@@ -592,10 +586,7 @@ impl Executor {
             )?;
         }
 
-        context.result_set = ResultSet {
-            columns: joined_columns,
-            rows: joined_rows,
-        };
+        context.result_set = ResultSet::new(joined_columns, joined_rows);
         Ok(())
     }
 

@@ -389,9 +389,9 @@ impl Executor {
                     *or_replace,
                 )?;
                 // Return empty result set for CREATE INDEX
-                context.result_set = ResultSet {
-                    columns: vec!["index".to_string()],
-                    rows: vec![Row {
+                context.result_set = ResultSet::new(
+                    vec!["index".to_string()],
+                    vec![Row {
                         values: vec![Value::String(format!(
                             "{}.{}.{}",
                             label,
@@ -399,7 +399,7 @@ impl Executor {
                             index_type.as_deref().unwrap_or("property")
                         ))],
                     }],
-                };
+                );
             }
             Operator::ShowDatabases => {
                 context.result_set = self.execute_show_databases()?;

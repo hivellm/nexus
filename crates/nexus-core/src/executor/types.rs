@@ -3,6 +3,7 @@
 //! configuration struct. No execution logic lives here.
 
 use super::parser;
+use serde::Serialize;
 use serde_json::Value;
 use std::collections::HashMap;
 
@@ -86,6 +87,59 @@ pub struct Row {
     pub values: Vec<serde_json::Value>,
 }
 
+/// Severity of a planner / executor notification.
+///
+/// Mirrors the Neo4j status notification severities so first-party
+/// SDKs that already model the Neo4j envelope can surface notifications
+/// without translation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "UPPERCASE")]
+pub enum NotificationSeverity {
+    /// Advisory — non-default behaviour or performance hint.
+    Information,
+    /// Likely problem the user should investigate (slow query, missing
+    /// index, deprecated syntax).
+    Warning,
+}
+
+/// Category of a planner / executor notification, mirroring the Neo4j
+/// taxonomy. `Performance` is the home for unindexed-property hints.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "UPPERCASE")]
+pub enum NotificationCategory {
+    /// Plan choice the planner thinks is suboptimal (e.g. label scan
+    /// instead of index seek).
+    Performance,
+    /// Suggestion to rewrite the query for the same result.
+    Hint,
+    /// Use of a deprecated clause / function / parameter.
+    Deprecation,
+    /// Anything that does not fit the buckets above.
+    Generic,
+}
+
+/// Structured notification produced by the planner or executor and
+/// surfaced to the client through the `/cypher` response envelope.
+///
+/// Wire shape mirrors Neo4j status notifications: `code`, `title`,
+/// `description`, `severity`, `category`. `code` is the stable
+/// identifier for client-side filtering (e.g.
+/// `Nexus.Performance.UnindexedPropertyAccess`); `title` and
+/// `description` are human-readable.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct Notification {
+    /// Stable, dot-namespaced identifier.
+    pub code: String,
+    /// Short human title.
+    pub title: String,
+    /// Long human description, including the recommended fix.
+    pub description: String,
+    /// Severity tier — see [`NotificationSeverity`].
+    pub severity: NotificationSeverity,
+    /// Category — see [`NotificationCategory`].
+    pub category: NotificationCategory,
+}
+
 /// Query result set
 #[derive(Debug, Clone, Default)]
 pub struct ResultSet {
@@ -93,6 +147,38 @@ pub struct ResultSet {
     pub columns: Vec<String>,
     /// Result rows
     pub rows: Vec<Row>,
+    /// Planner / executor notifications produced while building or
+    /// running the plan. Empty for the hot path; populated only when
+    /// the planner detects a suboptimal pattern (e.g. unindexed
+    /// `(label, property)` selector). The HTTP layer copies these into
+    /// the `/cypher` response envelope.
+    pub notifications: Vec<Notification>,
+}
+
+impl ResultSet {
+    /// Build a `ResultSet` from a column header and the row vector,
+    /// leaving `notifications` empty. Use this in the hot path; the
+    /// planner / executor can append notifications afterwards via
+    /// [`ResultSet::with_notifications`] or by mutating the field
+    /// directly.
+    #[inline]
+    pub fn new(columns: Vec<String>, rows: Vec<Row>) -> Self {
+        Self {
+            columns,
+            rows,
+            notifications: Vec::new(),
+        }
+    }
+
+    /// Attach notifications to an existing `ResultSet` and return it
+    /// by value — convenient for `Ok(rs.with_notifications(notes))`
+    /// at the end of an execution path.
+    #[inline]
+    #[must_use]
+    pub fn with_notifications(mut self, notifications: Vec<Notification>) -> Self {
+        self.notifications = notifications;
+        self
+    }
 }
 
 /// Execution plan containing a sequence of operators

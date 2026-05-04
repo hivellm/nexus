@@ -2483,12 +2483,12 @@ impl Engine {
 
                 if is_count_only {
                     // Return count of deleted nodes
-                    return Ok(executor::ResultSet {
-                        columns: vec![count_alias],
-                        rows: vec![executor::Row {
+                    return Ok(executor::ResultSet::new(
+                        vec![count_alias],
+                        vec![executor::Row {
                             values: vec![serde_json::Value::Number(deleted_count.into())],
                         }],
-                    });
+                    ));
                 } else {
                     // phase6 §8.2 — build an AST for the RETURN tail and
                     // install it as the executor's preparsed-AST override.
@@ -2527,12 +2527,12 @@ impl Engine {
                 }
             } else {
                 // No RETURN clause - return count of deleted nodes
-                return Ok(executor::ResultSet {
-                    columns: vec!["count".to_string()],
-                    rows: vec![executor::Row {
+                return Ok(executor::ResultSet::new(
+                    vec!["count".to_string()],
+                    vec![executor::Row {
                         values: vec![serde_json::Value::Number(deleted_count.into())],
                     }],
-                });
+                ));
             }
         }
 
@@ -2588,12 +2588,12 @@ impl Engine {
             });
             if has_dynamic_labels {
                 self.execute_create_via_engine(&ast)?;
-                return Ok(executor::ResultSet {
-                    columns: vec!["status".to_string()],
-                    rows: vec![executor::Row {
+                return Ok(executor::ResultSet::new(
+                    vec!["status".to_string()],
+                    vec![executor::Row {
                         values: vec![serde_json::Value::String("ok".to_string())],
                     }],
-                });
+                ));
             }
             let query_obj = executor::Query {
                 cypher: query.to_string(),
@@ -2699,10 +2699,7 @@ impl Engine {
         self.storage.flush_async()?;
         self.refresh_executor()?;
 
-        Ok(result.unwrap_or_else(|| executor::ResultSet {
-            columns: vec![],
-            rows: vec![],
-        }))
+        Ok(result.unwrap_or_else(|| executor::ResultSet::new(vec![], vec![])))
     }
 
     fn process_merge_clause(
@@ -2970,10 +2967,7 @@ impl Engine {
         return_clause: &executor::parser::ReturnClause,
     ) -> Result<executor::ResultSet> {
         if return_clause.items.is_empty() {
-            return Ok(executor::ResultSet {
-                columns: vec![],
-                rows: vec![],
-            });
+            return Ok(executor::ResultSet::new(vec![], vec![]));
         }
 
         // Check if any return item references a relationship variable
@@ -3003,10 +2997,10 @@ impl Engine {
             row_values.push(value);
         }
 
-        Ok(executor::ResultSet {
+        Ok(executor::ResultSet::new(
             columns,
-            rows: vec![executor::Row { values: row_values }],
-        })
+            vec![executor::Row { values: row_values }],
+        ))
     }
 
     /// Check if an expression references a relationship variable
@@ -3627,12 +3621,12 @@ impl Engine {
             }
         }
 
-        Ok(executor::ResultSet {
-            columns: vec!["status".to_string()],
-            rows: vec![executor::Row {
+        Ok(executor::ResultSet::new(
+            vec!["status".to_string()],
+            vec![executor::Row {
                 values: vec![serde_json::Value::String("ok".to_string())],
             }],
-        })
+        ))
     }
 
     /// Execute index management commands (CREATE INDEX, DROP INDEX)
@@ -3832,16 +3826,10 @@ impl Engine {
 
         // If no rows were added (all commands were skipped), return empty result
         if result_rows.is_empty() {
-            return Ok(executor::ResultSet {
-                columns: vec![],
-                rows: vec![],
-            });
+            return Ok(executor::ResultSet::new(vec![], vec![]));
         }
 
-        Ok(executor::ResultSet {
-            columns,
-            rows: result_rows,
-        })
+        Ok(executor::ResultSet::new(columns, result_rows))
     }
 
     /// Populate an index with existing nodes that have the specified label and property
@@ -4198,16 +4186,10 @@ impl Engine {
 
         // If no rows were added (all commands were skipped), return empty result
         if result_rows.is_empty() {
-            return Ok(executor::ResultSet {
-                columns: vec![],
-                rows: vec![],
-            });
+            return Ok(executor::ResultSet::new(vec![], vec![]));
         }
 
-        Ok(executor::ResultSet {
-            columns,
-            rows: result_rows,
-        })
+        Ok(executor::ResultSet::new(columns, result_rows))
     }
 
     /// Execute function management commands (SHOW FUNCTIONS, CREATE FUNCTION, DROP FUNCTION)
@@ -4257,10 +4239,10 @@ impl Engine {
 
                     // If no functions, return empty result
                     if result_rows.is_empty() {
-                        return Ok(executor::ResultSet {
-                            columns: vec!["function".to_string()],
-                            rows: vec![],
-                        });
+                        return Ok(executor::ResultSet::new(
+                            vec!["function".to_string()],
+                            vec![],
+                        ));
                     }
                 }
                 executor::parser::Clause::ShowConstraints => {
@@ -4320,15 +4302,15 @@ impl Engine {
                     }
 
                     // Return result with appropriate columns
-                    return Ok(executor::ResultSet {
-                        columns: vec![
+                    return Ok(executor::ResultSet::new(
+                        vec![
                             "label".to_string(),
                             "property".to_string(),
                             "type".to_string(),
                             "description".to_string(),
                         ],
-                        rows: result_rows,
-                    });
+                        result_rows,
+                    ));
                 }
                 executor::parser::Clause::CreateFunction(create_function) => {
                     // Check if function already exists
@@ -4443,16 +4425,10 @@ impl Engine {
 
         // If no rows were added (all commands were skipped), return empty result
         if result_rows.is_empty() {
-            return Ok(executor::ResultSet {
-                columns: vec![],
-                rows: vec![],
-            });
+            return Ok(executor::ResultSet::new(vec![], vec![]));
         }
 
-        Ok(executor::ResultSet {
-            columns,
-            rows: result_rows,
-        })
+        Ok(executor::ResultSet::new(columns, result_rows))
     }
 
     /// Execute LOAD CSV commands
@@ -4548,10 +4524,7 @@ impl Engine {
             }
         }
 
-        Ok(executor::ResultSet {
-            columns,
-            rows: all_rows,
-        })
+        Ok(executor::ResultSet::new(columns, all_rows))
     }
 
     /// Execute CALL subquery commands
@@ -4655,10 +4628,7 @@ impl Engine {
             }
         }
 
-        Ok(executor::ResultSet {
-            columns,
-            rows: all_results,
-        })
+        Ok(executor::ResultSet::new(columns, all_results))
     }
 
     /// Check constraints before creating or updating a node
@@ -4801,12 +4771,12 @@ impl Engine {
             "estimated_rows": "N/A"  // Would need row estimation
         });
 
-        Ok(executor::ResultSet {
-            columns: vec!["plan".to_string()],
-            rows: vec![executor::Row {
+        Ok(executor::ResultSet::new(
+            vec!["plan".to_string()],
+            vec![executor::Row {
                 values: vec![plan_json],
             }],
-        })
+        ))
     }
 
     /// Execute PROFILE command - executes query and returns execution statistics
@@ -4855,12 +4825,12 @@ impl Engine {
             "columns_returned": result.columns.len()
         });
 
-        Ok(executor::ResultSet {
-            columns: vec!["profile".to_string()],
-            rows: vec![executor::Row {
+        Ok(executor::ResultSet::new(
+            vec!["profile".to_string()],
+            vec![executor::Row {
                 values: vec![profile_json],
             }],
-        })
+        ))
     }
 
     /// Convert CypherQuery AST to string representation
@@ -5101,12 +5071,12 @@ impl Engine {
 
                 if is_count_only {
                     // Return count of deleted nodes
-                    return Ok(executor::ResultSet {
-                        columns: vec![count_alias],
-                        rows: vec![executor::Row {
+                    return Ok(executor::ResultSet::new(
+                        vec![count_alias],
+                        vec![executor::Row {
                             values: vec![serde_json::Value::Number(deleted_count.into())],
                         }],
-                    });
+                    ));
                 } else {
                     // If there's a RETURN clause with other expressions, let the executor handle it
                     // The executor will process the RETURN, but since nodes are deleted,
@@ -5119,12 +5089,12 @@ impl Engine {
                 }
             } else {
                 // No RETURN clause - return count of deleted nodes
-                return Ok(executor::ResultSet {
-                    columns: vec!["count".to_string()],
-                    rows: vec![executor::Row {
+                return Ok(executor::ResultSet::new(
+                    vec!["count".to_string()],
+                    vec![executor::Row {
                         values: vec![serde_json::Value::Number(deleted_count.into())],
                     }],
-                });
+                ));
             }
         }
 
@@ -5170,10 +5140,7 @@ impl Engine {
         return_clause: &executor::parser::ReturnClause,
     ) -> Result<executor::ResultSet> {
         if return_clause.items.is_empty() {
-            return Ok(executor::ResultSet {
-                columns: vec![],
-                rows: vec![],
-            });
+            return Ok(executor::ResultSet::new(vec![], vec![]));
         }
 
         // Check if we have any complex expressions (function calls, aggregations)
@@ -5227,10 +5194,7 @@ impl Engine {
         let var_name = match var_for_iteration {
             Some(v) => v,
             None => {
-                return Ok(executor::ResultSet {
-                    columns,
-                    rows: vec![],
-                });
+                return Ok(executor::ResultSet::new(columns, vec![]));
             }
         };
 
@@ -5280,7 +5244,7 @@ impl Engine {
             }
         }
 
-        Ok(executor::ResultSet { columns, rows })
+        Ok(executor::ResultSet::new(columns, rows))
     }
 
     fn build_return_result_with_executor(
@@ -5305,10 +5269,7 @@ impl Engine {
                 .iter()
                 .map(|item| item.alias.clone().unwrap_or_else(|| "?column?".to_string()))
                 .collect();
-            return Ok(executor::ResultSet {
-                columns,
-                rows: vec![],
-            });
+            return Ok(executor::ResultSet::new(columns, vec![]));
         }
 
         // Build a query like: MATCH (var) WHERE id(var) IN [ids] RETURN ...

@@ -80,10 +80,7 @@ impl ExecutionContext {
         Self {
             params,
             variables: HashMap::new(),
-            result_set: ResultSet {
-                columns: Vec::new(),
-                rows: Vec::new(),
-            },
+            result_set: ResultSet::new(Vec::new(), Vec::new()),
             cache,
             plan_hints: Vec::new(),
             undo_buffer: None,

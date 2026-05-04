@@ -130,7 +130,7 @@ impl Executor {
         if let Some(first) = rows.first().and_then(|r| r.values.first()).cloned() {
             context.set_variable(variable, first);
         }
-        context.result_set = ResultSet { columns, rows };
+        context.result_set = ResultSet::new(columns, rows);
         Ok(())
     }
 }

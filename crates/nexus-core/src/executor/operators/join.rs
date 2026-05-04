@@ -385,10 +385,7 @@ impl Executor {
             right_result.columns.clone()
         });
 
-        Ok(ResultSet {
-            columns: result_columns,
-            rows: result_rows,
-        })
+        Ok(ResultSet::new(result_columns, result_rows))
     }
 
     /// Execute Merge Join algorithm
@@ -465,10 +462,7 @@ impl Executor {
         let mut result_columns = left_result.columns.clone();
         result_columns.extend(right_result.columns.clone());
 
-        Ok(ResultSet {
-            columns: result_columns,
-            rows: result_rows,
-        })
+        Ok(ResultSet::new(result_columns, result_rows))
     }
 
     /// Convert row value to hash key

@@ -164,6 +164,7 @@ fn cypher_response_to_nexus(resp: CypherResponse) -> NexusValue {
         rows,
         execution_time_ms,
         error,
+        notifications,
     } = resp;
 
     let columns_val = NexusValue::Array(columns.into_iter().map(NexusValue::Str).collect());
@@ -196,6 +197,35 @@ fn cypher_response_to_nexus(resp: CypherResponse) -> NexusValue {
     ];
     if let Some(e) = error {
         entries.push((NexusValue::Str("error".into()), NexusValue::Str(e)));
+    }
+    // Mirror the REST envelope's `notifications` field on the RPC
+    // wire so SDKs see an identical shape on both transports. Empty
+    // vec is omitted to keep the hot-path payload compact.
+    if !notifications.is_empty() {
+        let notes_val = NexusValue::Array(
+            notifications
+                .into_iter()
+                .map(|n| {
+                    NexusValue::Map(vec![
+                        (NexusValue::Str("code".into()), NexusValue::Str(n.code)),
+                        (NexusValue::Str("title".into()), NexusValue::Str(n.title)),
+                        (
+                            NexusValue::Str("description".into()),
+                            NexusValue::Str(n.description),
+                        ),
+                        (
+                            NexusValue::Str("severity".into()),
+                            NexusValue::Str(format!("{:?}", n.severity).to_uppercase()),
+                        ),
+                        (
+                            NexusValue::Str("category".into()),
+                            NexusValue::Str(format!("{:?}", n.category).to_uppercase()),
+                        ),
+                    ])
+                })
+                .collect(),
+        );
+        entries.push((NexusValue::Str("notifications".into()), notes_val));
     }
     NexusValue::Map(entries)
 }

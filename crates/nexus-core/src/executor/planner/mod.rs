@@ -19,6 +19,7 @@ use super::parser::{
     PropertyMap, QuantifiedGroup, QueryHint, RelationshipDirection, RelationshipPattern,
     RelationshipQuantifier, ReturnItem, SortDirection, UnaryOperator,
 };
+use super::types::Notification;
 use super::{Aggregation, Direction, JoinType, Operator, ProjectionItem};
 use crate::cache::relationship_index::RelationshipTraversalStats;
 use crate::catalog::Catalog;
@@ -246,6 +247,14 @@ pub struct QueryPlanner<'a> {
     plan_cache: QueryPlanCache,
     /// Aggregation result cache for intermediate results
     aggregation_cache: AggregationCache,
+    /// Notifications accumulated during the most recent `plan_query`
+    /// call. Cleared at the start of every plan, drained by
+    /// [`QueryPlanner::take_notifications`] after the plan is built.
+    /// Surfaces planner-level diagnostics (currently only the
+    /// `Nexus.Performance.UnindexedPropertyAccess` hint emitted from
+    /// the node-selector path) to the engine, which copies them onto
+    /// the resulting `ResultSet` for delivery to the HTTP layer.
+    pub(super) notifications: Vec<Notification>,
 }
 
 impl QueryPlanCache {

@@ -377,6 +377,14 @@ pub struct CypherResponse {
     /// Error message if any
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
+    /// Planner / executor notifications (Neo4j-shape: code, title,
+    /// description, severity, category). Currently sourced from the
+    /// `Nexus.Performance.UnindexedPropertyAccess` planner hint.
+    /// Field is omitted from the wire format when empty so the hot
+    /// path (no notifications) keeps the same byte count it had
+    /// before phase6.
+    #[serde(skip_serializing_if = "Vec::is_empty", default)]
+    pub notifications: Vec<nexus_core::executor::types::Notification>,
 }
 
 /// Record Prometheus metrics for query execution against the server's

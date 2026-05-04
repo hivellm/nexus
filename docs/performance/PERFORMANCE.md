@@ -511,3 +511,90 @@ max_queue_depth = 10000
 - Full JIT framework implementation
 - Enhanced adjacency list compression
 - Hierarchical cache system optimization
+
+---
+
+## Recommended Indexes for Ingest Workloads
+
+The Cypher planner emits a structured `Notification` with code
+`Nexus.Performance.UnindexedPropertyAccess` whenever a `MERGE` /
+`MATCH` selector — either inline `(n:Label { prop: $v })` or a WHERE
+equality `WHERE n.prop = $v` — references a `(label, property)` pair
+without a covering property index. The notification surfaces in the
+`/cypher` JSON response under a `notifications` field (Neo4j-shape:
+`code`, `title`, `description`, `severity`, `category`) and is
+mirrored to the server log at WARN level, rate-limited per
+`(label, property)` pair (default 60s, configurable via
+`NEXUS_PLANNER_WARN_INTERVAL_SECS`).
+
+This section catalogs the indexes that high-volume ingest pipelines
+should create up-front to avoid the pathology behind the
+`cortex-nexus` 100 % CPU incident on 2026-05-04: every
+`MERGE (n:Artifact { natural_key: ... })` against an unindexed
+`Artifact.natural_key` degraded to a full label scan + property
+comparison, saturating a single writer thread and timing out
+`/stats` and `count(*)`.
+
+### Common patterns and their indexes
+
+```cypher
+-- Cortex / similar ingest pipelines (keyed by content hash)
+CREATE INDEX FOR (n:Artifact) ON (n.natural_key);
+CREATE INDEX FOR (n:Artifact) ON (n.path);
+
+-- Memory / agent-graph bookkeeping
+CREATE INDEX FOR (n:Turn)     ON (n.id);
+CREATE INDEX FOR (n:ToolCall) ON (n.id);
+CREATE INDEX FOR (n:Session)  ON (n.id);
+```
+
+Verify with:
+
+```cypher
+CALL db.indexes();
+```
+
+The `state` column should read `ONLINE` and `populationPercent` should
+read `100.0` before relying on the index.
+
+### Wire format of the `notifications` field
+
+```json
+{
+  "columns": [...],
+  "rows": [...],
+  "execution_time_ms": 17,
+  "notifications": [
+    {
+      "code": "Nexus.Performance.UnindexedPropertyAccess",
+      "title": "Unindexed property access on :Artifact(natural_key)",
+      "description": "MERGE selects nodes by `:Artifact` with a property predicate on `natural_key`, but no property index covers this pair. The planner falls back to a full label scan plus property comparison, which is O(N) over every `:Artifact` node. Create the recommended index to switch to an O(log N) index seek: `CREATE INDEX FOR (n:Artifact) ON (n.natural_key)`.",
+      "severity": "INFORMATION",
+      "category": "PERFORMANCE"
+    }
+  ]
+}
+```
+
+The field is **omitted** from the response when no notifications were
+produced — the hot path keeps the same byte count it had before this
+feature shipped. Both the REST envelope and the native RPC envelope
+expose the field with identical shape so first-party SDKs decode it
+uniformly across transports.
+
+### Suppressing the WARN log
+
+The mirrored WARN log is on by default at the 60-second window. To
+silence it (e.g. during a known migration where the missing-index
+state is intentional):
+
+```bash
+# Widen the window to 24 h — effectively one log per day per pair.
+NEXUS_PLANNER_WARN_INTERVAL_SECS=86400 nexus-server
+```
+
+Setting the value to `0` collapses the rate limit to a per-call check
+and emits on every plan; useful only for debugging the emitter
+itself. The notification still flows through the `/cypher` envelope
+regardless of the log setting — clients that want to surface or
+silence the hint can filter on `notifications[].code`.
