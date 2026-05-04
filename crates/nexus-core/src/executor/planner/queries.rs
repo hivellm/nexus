@@ -110,7 +110,7 @@ impl<'a> QueryPlanner<'a> {
     /// `plan_query` call. Call site (`Engine::execute_*`) attaches the
     /// drained vector to the resulting `ResultSet` so the HTTP layer
     /// can copy it into the `/cypher` response envelope. The internal
-    /// vector is replaced with an empty one — re-using the same
+    /// vector is replaced with an empty one — reusing the same
     /// planner for a follow-up query is safe.
     pub fn take_notifications(&mut self) -> Vec<Notification> {
         std::mem::take(&mut self.notifications)
