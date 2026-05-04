@@ -53,6 +53,75 @@ pub struct ConnectionTracker {
     query_counter: Arc<RwLock<u64>>,
 }
 
+/// RAII guard that marks a registered query completed on drop.
+///
+/// Without this guard, `mark_query_completed` is called manually at
+/// the bottom of every Cypher HTTP handler. Any panic, early return,
+/// or path that bypasses the manual call leaks the query in the
+/// `is_running=true` state — which then keeps the slow-query log
+/// barking forever and inflates `SHOW QUERIES` output until the
+/// 10-minute `cleanup_old_queries` sweep evicts it.
+///
+/// `RegisteredQueryGuard` plugs that hole: callers register via
+/// [`ConnectionTracker::register_query_guarded`] and the returned
+/// guard's `Drop` impl calls `complete_query`. Drop runs unwinding
+/// past `?` returns and during panic, so the contract holds even
+/// when the query path errors out abnormally.
+pub struct RegisteredQueryGuard {
+    tracker: Arc<RwLock<HashMap<String, QueryInfo>>>,
+    query_id: String,
+    /// Set to `true` by [`Self::take_id`] when a caller wants to opt
+    /// out of automatic completion (e.g. they intend to mark the
+    /// query cancelled manually). Skips the `complete_query` call in
+    /// `Drop`.
+    disarmed: bool,
+}
+
+impl RegisteredQueryGuard {
+    /// The query id that was registered. Useful for the caller to
+    /// report back to the client (Neo4j-compatible response shape
+    /// includes `query_id` so `TERMINATE QUERY` can target it).
+    pub fn query_id(&self) -> &str {
+        &self.query_id
+    }
+
+    /// Disarm the guard and consume it, returning the query id.
+    /// The caller takes responsibility for calling
+    /// `complete_query` / `cancel_query` themselves. Used by code
+    /// paths that need to mark the query as `cancelled` rather than
+    /// `completed` on the way out.
+    pub fn take_id(mut self) -> String {
+        self.disarmed = true;
+        std::mem::take(&mut self.query_id)
+    }
+}
+
+impl Drop for RegisteredQueryGuard {
+    fn drop(&mut self) {
+        if self.disarmed || self.query_id.is_empty() {
+            return;
+        }
+        // Best-effort: if the lock is poisoned (a panic happened
+        // while another thread held the write lock), the tracker
+        // map is already in an inconsistent state. Log and move on
+        // — the cleanup tick will eventually evict the orphan.
+        match self.tracker.write() {
+            Ok(mut queries) => {
+                if let Some(q) = queries.get_mut(&self.query_id) {
+                    q.is_running = false;
+                }
+            }
+            Err(_) => {
+                tracing::warn!(
+                    query_id = %self.query_id,
+                    "RegisteredQueryGuard: poisoned tracker lock; orphan entry will be \
+                     reaped by cleanup_old_queries",
+                );
+            }
+        }
+    }
+}
+
 impl ConnectionTracker {
     /// Create a new connection tracker
     pub fn new() -> Self {
@@ -136,6 +205,29 @@ impl ConnectionTracker {
             .unwrap()
             .insert(query_id.clone(), query_info);
         query_id
+    }
+
+    /// Register a query and return an RAII guard whose `Drop` impl
+    /// calls `complete_query`. Use this from every code path that
+    /// can early-return or panic — the guard ensures the
+    /// `is_running` flag flips back to `false` even when the
+    /// surrounding handler bails out abnormally.
+    ///
+    /// The guard exposes the query id via [`RegisteredQueryGuard::query_id`]
+    /// so callers that need to surface it to the client (e.g. the
+    /// Cypher response envelope) can read it without a separate
+    /// `register_query` call.
+    pub fn register_query_guarded(
+        &self,
+        connection_id: String,
+        query: String,
+    ) -> RegisteredQueryGuard {
+        let query_id = self.register_query(connection_id, query);
+        RegisteredQueryGuard {
+            tracker: Arc::clone(&self.queries),
+            query_id,
+            disarmed: false,
+        }
     }
 
     /// Mark query as completed
@@ -292,6 +384,68 @@ mod tests {
         assert_eq!(connections.len(), 0);
         let queries = tracker.get_running_queries();
         assert_eq!(queries.len(), 0); // Queries should be removed too
+    }
+
+    #[test]
+    fn registered_query_guard_marks_completed_on_drop() {
+        let tracker = ConnectionTracker::new();
+        let conn_id = tracker.register_connection(None, "127.0.0.1:1".to_string());
+        {
+            let _guard =
+                tracker.register_query_guarded(conn_id.clone(), "MATCH (n) RETURN n".to_string());
+            assert_eq!(
+                tracker.get_running_queries().len(),
+                1,
+                "running while in scope"
+            );
+        } // guard drops here
+        assert_eq!(
+            tracker.get_running_queries().len(),
+            0,
+            "guard drop must mark the query completed"
+        );
+    }
+
+    #[test]
+    fn registered_query_guard_runs_on_panic_unwind() {
+        // The guard's `Drop` runs during stack unwinding, so a
+        // panic inside the registered scope still flips
+        // `is_running` to `false`. This is the load-bearing
+        // contract — without it, a panic in the executor would
+        // leave the query "running" forever in `SHOW QUERIES`.
+        let tracker = Arc::new(ConnectionTracker::new());
+        let conn_id = tracker.register_connection(None, "127.0.0.1:1".to_string());
+
+        let tracker_clone = Arc::clone(&tracker);
+        let conn_clone = conn_id.clone();
+        let panicked = std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || {
+            let _guard =
+                tracker_clone.register_query_guarded(conn_clone, "MATCH (n) RETURN n".to_string());
+            panic!("simulated executor panic");
+        }));
+        assert!(panicked.is_err(), "panic should propagate");
+        assert_eq!(
+            tracker.get_running_queries().len(),
+            0,
+            "guard must mark completed even on panic unwind"
+        );
+    }
+
+    #[test]
+    fn registered_query_guard_take_id_disarms_drop() {
+        let tracker = ConnectionTracker::new();
+        let conn_id = tracker.register_connection(None, "127.0.0.1:1".to_string());
+        let guard = tracker.register_query_guarded(conn_id, "MATCH (n) RETURN n".to_string());
+        let qid = guard.take_id();
+
+        // Disarmed: the query is still running until manually
+        // completed/cancelled.
+        assert_eq!(tracker.get_running_queries().len(), 1);
+        assert!(!qid.is_empty());
+
+        // Caller takes responsibility for completion.
+        tracker.complete_query(&qid);
+        assert_eq!(tracker.get_running_queries().len(), 0);
     }
 
     #[test]

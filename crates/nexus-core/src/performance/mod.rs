@@ -19,6 +19,7 @@ pub mod memory;
 pub mod memory_tracking;
 pub mod metrics;
 pub mod monitoring;
+pub mod parameter_redaction;
 pub mod plan_cache;
 pub mod profiler;
 pub mod query_stats;

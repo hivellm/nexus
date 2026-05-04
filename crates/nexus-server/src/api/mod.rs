@@ -1,5 +1,6 @@
 //! API handlers
 
+pub mod admin_queries;
 pub mod auth;
 pub mod auto_generate;
 pub mod cluster;

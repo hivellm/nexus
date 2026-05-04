@@ -18,13 +18,22 @@ pub async fn execute_cypher(
     // Register connection and query for tracking
     // Note: ConnectInfo requires special router setup, using fallback for now
     let client_address = "unknown".to_string(); // Will be improved when ConnectInfo is enabled
-    let connection_id = register_connection_and_query_fallback(
+    let (_connection_id, _query_guard) = register_connection_and_query_fallback(
         &server,
         &query_for_tracking,
         &client_address,
         &auth_context,
     );
-    let query_id = connection_id.clone(); // Use connection_id as query_id for simplicity
+    // Hold the guard for the entire handler lifetime — its `Drop`
+    // impl calls `complete_query` so panics and early returns can't
+    // leak a "running" entry. The previous design recycled
+    // `connection_id` as `query_id` and called
+    // `mark_query_completed` manually on the success/error tails;
+    // that path silently no-op'd on `connection_id != query_id`
+    // and leaked on every other return point. Keep `query_id` as a
+    // string for the existing tracing/metrics call sites that read
+    // it; resolve to the guard's id so logs match the tracker.
+    let _query_id = _query_guard.query_id().to_string();
 
     tracing::info!("Executing Cypher query: {}", request.query);
 
@@ -1441,8 +1450,8 @@ pub async fn execute_cypher(
             let cache_hit = cache_hits > 0;
             record_prometheus_metrics(&server, execution_time_ms, true, cache_hit);
 
-            // Mark query as completed
-            mark_query_completed(&server, &query_id);
+            // `_query_guard` (held in scope above) auto-completes
+            // on Drop — no manual `mark_query_completed` needed.
 
             Json(CypherResponse {
                 columns: result_set.columns,
@@ -1482,8 +1491,8 @@ pub async fn execute_cypher(
             let cache_hit = cache_hits > 0;
             record_prometheus_metrics(&server, execution_time_ms, false, cache_hit);
 
-            // Mark query as completed
-            mark_query_completed(&server, &query_id);
+            // `_query_guard` (held in scope above) auto-completes
+            // on Drop — no manual `mark_query_completed` needed.
 
             Json(CypherResponse {
                 columns: vec![],

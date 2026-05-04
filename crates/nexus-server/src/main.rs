@@ -426,6 +426,13 @@ async fn async_main(_worker_threads: usize) -> anyhow::Result<()> {
             "/admin/encryption/status",
             get(api::encryption::status),
         )
+        // `GET /admin/queries` — JSON view of the active-query
+        // tracker for triage when `/cypher` is wedged
+        // (phase6_slow-query-log-and-active-queries §3).
+        .route(
+            "/admin/queries",
+            get(api::admin_queries::list_queries),
+        )
         .route("/test-handler", get(|| async {
             tracing::debug!("Handler called!");
             "Handler called successfully"

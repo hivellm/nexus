@@ -433,22 +433,29 @@ fn record_query_execution_with_metrics(
 }
 
 /// Register a connection and query against the server's DBMS
-/// procedures tracker. Returns the generated `connection_id`, which
-/// the handler reuses as the `query_id` for the subsequent
-/// `mark_query_completed` call.
+/// procedures tracker. Returns `(connection_id, guard)` where the
+/// guard's `Drop` impl marks the query completed automatically — so
+/// any panic, early return, or `?` propagation in the handler still
+/// flips `is_running` back to `false`. Without the guard, an abnormal
+/// exit leaks a "running" entry that pollutes both `SHOW QUERIES`
+/// and the slow-query log tick until `cleanup_old_queries` reaps it
+/// 10 minutes later.
 fn register_connection_and_query_fallback(
     server: &NexusServer,
     query: &str,
     client_address: &str,
     auth_context: &Option<AuthContext>,
-) -> String {
+) -> (
+    String,
+    nexus_core::performance::connection_tracking::RegisteredQueryGuard,
+) {
     let tracker = server.dbms_procedures.get_connection_tracker();
     let username = auth_context
         .as_ref()
         .and_then(|ctx| ctx.api_key.user_id.clone());
     let connection_id = tracker.register_connection(username, client_address.to_string());
-    let _query_id = tracker.register_query(connection_id.clone(), query.to_string());
-    connection_id
+    let guard = tracker.register_query_guarded(connection_id.clone(), query.to_string());
+    (connection_id, guard)
 }
 
 /// Check plan-cache status for a query. Hashes the query text with
@@ -475,6 +482,12 @@ fn check_query_cache_status(server: &NexusServer, query: &str) -> (u64, u64) {
 }
 
 /// Mark a query as completed in the DBMS connection tracker.
+///
+/// Kept for callers that need to mark a specific id as completed
+/// outside the RAII guard's scope (TERMINATE QUERY surfaces, plus
+/// any future code path that registers a query via the manual
+/// `register_query` API rather than `register_query_guarded`).
+#[allow(dead_code)]
 fn mark_query_completed(server: &NexusServer, query_id: &str) {
     server
         .dbms_procedures

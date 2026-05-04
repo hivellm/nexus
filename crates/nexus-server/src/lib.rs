@@ -214,6 +214,99 @@ impl NexusServer {
             }
         });
 
+        // Slow-query log tick (phase6_slow-query-log-and-active-queries §2).
+        //
+        // The completion log line `Query executed successfully in Nms`
+        // only fires post-completion. When a query is wedged (the
+        // 2026-05-04 cortex-nexus 100% CPU incident — a `MERGE` against
+        // an unindexed property doing a full label scan), `docker logs`
+        // stays silent because nothing completes. This tick scans the
+        // active-query map every `NEXUS_SLOW_QUERY_TICK_MS` ms (default
+        // 1000), and for any entry whose `elapsed >=
+        // NEXUS_SLOW_QUERY_THRESHOLD_MS` (default 1000) emits a WARN
+        // log so operators can identify the offender via `docker logs`
+        // without needing the HTTP / Cypher introspection paths
+        // (which themselves time out when the writer thread is
+        // saturated).
+        //
+        // Per-query throttle: a query is logged once on the first
+        // threshold crossing, then once per `NEXUS_SLOW_QUERY_REPEAT_SECS`
+        // (default 30) for as long as it is still running. Without the
+        // throttle, the tick would spam one line per second per
+        // wedged query — useless. Setting `NEXUS_SLOW_QUERY_THRESHOLD_MS=0`
+        // disables the tick entirely.
+        let tick_ms = std::env::var("NEXUS_SLOW_QUERY_TICK_MS")
+            .ok()
+            .and_then(|s| s.parse::<u64>().ok())
+            .unwrap_or(1000);
+        let threshold_ms = std::env::var("NEXUS_SLOW_QUERY_THRESHOLD_MS")
+            .ok()
+            .and_then(|s| s.parse::<u64>().ok())
+            .unwrap_or(1000);
+        let repeat_secs = std::env::var("NEXUS_SLOW_QUERY_REPEAT_SECS")
+            .ok()
+            .and_then(|s| s.parse::<u64>().ok())
+            .unwrap_or(30);
+
+        if threshold_ms > 0 && tick_ms > 0 {
+            let tracker_for_slow = dbms_procedures.get_connection_tracker();
+            tokio::spawn(async move {
+                use std::collections::HashMap as StdHashMap;
+                use std::time::{SystemTime, UNIX_EPOCH};
+
+                // Per-query "last warned at" wall-clock seconds. Pruned
+                // implicitly: queries that exit the running set are not
+                // re-touched, so stale entries are evicted by the next
+                // sweep that runs after the cleanup task drops the
+                // entry below `QUERY_MAX_AGE_SECS`.
+                let mut last_warned: StdHashMap<String, u64> = StdHashMap::new();
+                let mut ticker = tokio::time::interval(std::time::Duration::from_millis(tick_ms));
+                ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+                ticker.tick().await; // skip immediate first tick
+                let threshold_secs = threshold_ms.div_ceil(1000);
+
+                loop {
+                    ticker.tick().await;
+                    let now = SystemTime::now()
+                        .duration_since(UNIX_EPOCH)
+                        .map(|d| d.as_secs())
+                        .unwrap_or(0);
+
+                    let running = tracker_for_slow.get_running_queries();
+                    // Keep `last_warned` bounded by the running set.
+                    last_warned.retain(|qid, _| running.iter().any(|q| q.query_id == *qid));
+
+                    for q in running {
+                        let elapsed_secs = now.saturating_sub(q.started_at);
+                        if elapsed_secs < threshold_secs {
+                            continue;
+                        }
+                        let last = last_warned.get(&q.query_id).copied().unwrap_or(0);
+                        if last == 0 || now.saturating_sub(last) >= repeat_secs {
+                            // Truncate the query text so a 2 MB
+                            // payload doesn't blow up `docker logs`.
+                            let truncated: String = if q.query.len() > 512 {
+                                let mut t: String = q.query.chars().take(512).collect();
+                                t.push_str("…<<truncated>>");
+                                t
+                            } else {
+                                q.query.clone()
+                            };
+                            tracing::warn!(
+                                target: "nexus_server::slow_query",
+                                query_id = %q.query_id,
+                                connection_id = %q.connection_id,
+                                elapsed_ms = elapsed_secs * 1000,
+                                "slow query still running: {}",
+                                truncated,
+                            );
+                            last_warned.insert(q.query_id, now);
+                        }
+                    }
+                }
+            });
+        }
+
         Self {
             executor,
             engine,
