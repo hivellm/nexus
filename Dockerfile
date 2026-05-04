@@ -2,11 +2,11 @@
 # Multi-stage Dockerfile for Nexus Graph Database
 #
 # HOW TO BUILD:
-#   docker build -t hivehub/nexus:2.1.0 -t hivehub/nexus:latest .
+#   docker build -t hivehub/nexus:2.2.0 -t hivehub/nexus:latest .
 #
 # HOW TO PUBLISH (Docker Hub — hivehub/nexus):
 #   docker login
-#   docker push hivehub/nexus:2.1.0
+#   docker push hivehub/nexus:2.2.0
 #   docker push hivehub/nexus:latest
 #
 # The `# syntax=docker/dockerfile:1.6` header opts into the
@@ -29,7 +29,7 @@
 #     -e NEXUS_ROOT_USERNAME=admin \
 #     -e NEXUS_ROOT_PASSWORD=secure_password \
 #     -e NEXUS_AUTH_ENABLED=true \
-#     hivehub/nexus:2.1.0
+#     hivehub/nexus:2.2.0
 #
 #   # Using docker run with Docker secrets (recommended for production):
 #   echo "secure_password" > secrets/root_password.txt
@@ -44,7 +44,7 @@
 #     -e NEXUS_ROOT_PASSWORD_FILE=/run/secrets/nexus_root_password \
 #     -e NEXUS_AUTH_ENABLED=true \
 #     -e NEXUS_DISABLE_ROOT_AFTER_SETUP=true \
-#     hivehub/nexus:2.1.0
+#     hivehub/nexus:2.2.0
 #
 #   # Using docker-compose (recommended):
 #   docker-compose up -d
@@ -129,12 +129,12 @@ FROM dhi.io/debian-base:trixie
 
 # OCI image metadata. `org.opencontainers.image.version` is the
 # canonical place container registries (Docker Hub, ghcr) read the
-# version from; `docker inspect hivehub/nexus:2.1.0 --format
+# version from; `docker inspect hivehub/nexus:2.2.0 --format
 # '{{ index .Config.Labels "org.opencontainers.image.version" }}'`
 # must match the tag.
 LABEL org.opencontainers.image.title="Nexus" \
       org.opencontainers.image.description="High-performance property graph database with native vector search (KNN/HNSW)" \
-      org.opencontainers.image.version="2.1.0" \
+      org.opencontainers.image.version="2.2.0" \
       org.opencontainers.image.vendor="HiveLLM" \
       org.opencontainers.image.source="https://github.com/hivellm/nexus" \
       org.opencontainers.image.documentation="https://github.com/hivellm/nexus/blob/main/README.md" \

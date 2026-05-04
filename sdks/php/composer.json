@@ -1,6 +1,6 @@
 {
     "name": "hivellm/nexus-php",
-    "version": "2.1.0",
+    "version": "2.2.0",
     "description": "Official PHP client library for Nexus, a high-performance Neo4j-compatible graph database",
     "type": "library",
     "license": "Apache-2.0",

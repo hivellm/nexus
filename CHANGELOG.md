@@ -5,6 +5,101 @@ All notable changes to Nexus will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.2.0] — 2026-05-04
+
+> Ships two operator-hardening features driven by the
+> 2026-05-04 `cortex-nexus` 100 % CPU incident: a Cypher-planner
+> `Nexus.Performance.UnindexedPropertyAccess` notification that
+> surfaces missing-index pathologies *before* they wedge a
+> writer thread, and a slow-query observability stack
+> (background tick log, `GET /admin/queries` JSON endpoint,
+> RAII guard on the active-query tracker). All additive — pre-2.2
+> clients keep working unchanged; the new fields are opt-in via
+> response-envelope inspection.
+
+### Added — `phase6_merge-unindexed-property-warning`
+
+- **Planner notification**: `Nexus.Performance.UnindexedPropertyAccess`
+  (Neo4j-shape: `code`, `title`, `description`, `severity`,
+  `category`) emitted whenever the planner sees a node selector
+  of the form `(n:Label { prop: $v })`, `MERGE (n:Label { prop:
+  $v })`, or `WHERE n.prop = $v` against a `(label, property)`
+  pair without a covering property index. Description includes
+  the suggested `CREATE INDEX FOR (n:Label) ON (n.prop)` DDL
+  verbatim so the hint is copy-paste-actionable.
+- **Response envelope**: new `notifications: Vec<Notification>`
+  field on the `/cypher` JSON response and the native RPC
+  envelope. Field is omitted (not `null`, not `[]`) when empty so
+  the hot path keeps its byte count.
+- **Engine write-path coverage**: a free function
+  `compute_unindexed_property_access_notifications(catalog,
+  prop_idx, query)` is shared between the planner pre-pass (used
+  by `Executor::execute` on read paths) and the engine's
+  `execute_write_query` path (MERGE/SET/REMOVE/FOREACH bypass
+  the planner entirely; without this, the originating pathology
+  would have shipped silent).
+- **Rate-limited WARN log**: every notification mirrors to
+  `tracing::warn!(target = "nexus_core::executor::planner")`
+  with a process-global `OnceLock<Mutex<HashMap<(label_id,
+  key_id), Instant>>>` rate limiter. Window is configurable via
+  `NEXUS_PLANNER_WARN_INTERVAL_SECS` (default 60). The
+  notification still flows through the response envelope
+  regardless of the log setting.
+- **Docs**: `docs/performance/PERFORMANCE.md` gains a
+  "Recommended indexes for ingest workloads" section covering
+  `Artifact.natural_key`, `Artifact.path`, `Turn.id`,
+  `ToolCall.id`, `Session.id`, the wire format of the
+  `notifications` field, and the `NEXUS_PLANNER_WARN_INTERVAL_SECS`
+  knob.
+
+### Added — `phase6_slow-query-log-and-active-queries`
+
+- **Slow-query log tick**: background task in
+  `crates/nexus-server/src/lib.rs` polls the active-query map
+  every `NEXUS_SLOW_QUERY_TICK_MS` (default 1000) and emits a
+  WARN log under `target = "nexus_server::slow_query"` for any
+  query whose elapsed time crosses
+  `NEXUS_SLOW_QUERY_THRESHOLD_MS` (default 1000). Per-query
+  throttle: first warn on threshold crossing, then once per
+  `NEXUS_SLOW_QUERY_REPEAT_SECS` (default 30). Setting
+  `THRESHOLD_MS=0` disables the tick. Solves the reference
+  incident's missing diagnostic — `docker logs` was silent for
+  30+ minutes because the `Query executed successfully in Nms`
+  line only fires post-completion.
+- **`GET /admin/queries`** endpoint at
+  `crates/nexus-server/src/api/admin_queries.rs`. Read-only JSON
+  view of the active-query tracker, only touches the
+  active-query lock so it stays responsive even when the writer
+  thread is saturated and `/cypher` is timing out. Response
+  shape: `{total, running, entries: [{query_id, connection_id,
+  query, started_at_secs, elapsed_ms, status}], schema_version}`.
+  Entries sorted by `elapsed_ms` desc; query text truncated at
+  8 KiB at the wire boundary.
+- **`RegisteredQueryGuard` RAII** in
+  `crates/nexus-core/src/performance/connection_tracking.rs`.
+  Plugs a panic-safety hole in the previous Cypher handler
+  (which recycled `connection_id` as `query_id` and called
+  `mark_query_completed` manually on the success/error tails —
+  silently no-op'd on `connection_id != query_id` and leaked on
+  panic). The guard's `Drop` impl calls `complete_query`, so any
+  panic, early return, or `?` propagation flips the flag back.
+- **Parameter redaction utility**: `redact_parameters(&HashMap<String,
+  Value>) -> HashMap<String, Value>` at
+  `crates/nexus-core/src/performance/parameter_redaction.rs`.
+  Truncates strings > 256 chars with a `<<truncated N bytes>>`
+  suffix (byte count, not char count, so multibyte payloads
+  report their actual on-wire size); recurses through arrays /
+  objects with shape preserved; passes primitives through. The
+  current `QueryInfo` struct does not capture parameters, so
+  the diagnostic surfaces have nothing to redact today; the
+  utility is in place for the moment parameter capture lands on
+  the tracker.
+- **Docs**: `docs/operations/RUNBOOK.md` (newly created) under
+  "Diagnosing a wedged server" documents all three surfaces, the
+  env-var tuning knobs, and references the sister
+  `phase6_merge-unindexed-property-warning` notification as the
+  upstream signal.
+
 ## [2.1.0] — 2026-05-02
 
 > Ships **`phase9_external-node-ids`**: caller-supplied stable
