@@ -2699,7 +2699,25 @@ impl Engine {
         self.storage.flush_async()?;
         self.refresh_executor()?;
 
-        Ok(result.unwrap_or_else(|| executor::ResultSet::new(vec![], vec![])))
+        // Diagnostic pre-pass for the write path: MERGE/SET/REMOVE
+        // bypass the planner entirely, so the planner-side
+        // `Nexus.Performance.UnindexedPropertyAccess` notification
+        // never fires here. Run the same scan against the engine's
+        // catalog + property-index registry and attach any
+        // notifications to the returned `ResultSet`. This is what
+        // surfaces the `cortex-nexus` MERGE-ingest pathology in the
+        // `/cypher` envelope.
+        let mut rs = result.unwrap_or_else(|| executor::ResultSet::new(vec![], vec![]));
+        let notes =
+            crate::executor::planner::queries::compute_unindexed_property_access_notifications(
+                &self.catalog,
+                &self.indexes.property_index,
+                ast,
+            );
+        if !notes.is_empty() {
+            rs.notifications.extend(notes);
+        }
+        Ok(rs)
     }
 
     fn process_merge_clause(

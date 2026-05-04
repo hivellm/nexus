@@ -116,82 +116,6 @@ impl<'a> QueryPlanner<'a> {
         std::mem::take(&mut self.notifications)
     }
 
-    /// Push a `Nexus.Performance.UnindexedPropertyAccess` notification
-    /// for the given `(label, property)` pair, deduplicating within a
-    /// single plan and rate-limiting the mirrored WARN log per the
-    /// `NEXUS_PLANNER_WARN_INTERVAL_SECS` window.
-    ///
-    /// Pure record-and-log — does not change the plan.
-    pub(super) fn record_unindexed_property_access(
-        &mut self,
-        label_id: u32,
-        key_id: u32,
-        label_name: &str,
-        property_name: &str,
-        clause: UnindexedAccessClause,
-    ) {
-        let code = "Nexus.Performance.UnindexedPropertyAccess";
-
-        // Within a single plan, do not push the same (label, prop)
-        // notification twice — `MERGE (n:L { p: $v })` and a later
-        // `MATCH (n:L { p: $v })` in the same query produce one entry.
-        let already_present = self.notifications.iter().any(|n| {
-            n.code == code && n.title.contains(label_name) && n.description.contains(property_name)
-        });
-        if already_present {
-            return;
-        }
-
-        let suggested_ddl = format!("CREATE INDEX FOR (n:{label_name}) ON (n.{property_name})",);
-        let title = format!("Unindexed property access on :{label_name}({property_name})");
-        let description = format!(
-            "{clause} selects nodes by `:{label_name}` with a property predicate on \
-             `{property_name}`, but no property index covers this pair. The planner \
-             falls back to a full label scan plus property comparison, which is \
-             O(N) over every `:{label_name}` node. Create the recommended index to \
-             switch to an O(log N) index seek: `{suggested_ddl}`.",
-            clause = clause,
-        );
-
-        self.notifications.push(Notification {
-            code: code.to_string(),
-            title,
-            description: description.clone(),
-            severity: NotificationSeverity::Information,
-            category: NotificationCategory::Performance,
-        });
-
-        // Rate-limited WARN log — one entry per (label, prop) per
-        // window. Failure to acquire the lock (poisoned) is silent;
-        // the notification still flows through the response envelope.
-        let now = Instant::now();
-        let interval = planner_warn_interval();
-        let mut should_log = true;
-        if let Ok(mut state) = warn_log_state().lock() {
-            if let Some(last) = state.get(&(label_id, key_id)) {
-                if now.duration_since(*last) < interval {
-                    should_log = false;
-                }
-            }
-            if should_log {
-                state.insert((label_id, key_id), now);
-            }
-        }
-        if should_log {
-            tracing::warn!(
-                code = code,
-                label = label_name,
-                property = property_name,
-                clause = %clause,
-                suggested = %suggested_ddl,
-                "unindexed property access on :{}({}) — {}",
-                label_name,
-                property_name,
-                suggested_ddl,
-            );
-        }
-    }
-
     /// Builder shim: install an R-tree registry handle so the
     /// spatial-seek rewriter (phase6_spatial-planner-seek §2) can
     /// look up which `(label, property)` pairs have a registered
@@ -4135,156 +4059,236 @@ impl<'a> QueryPlanner<'a> {
         let Some(prop_idx) = self.property_index else {
             return;
         };
+        // Delegate to the free function so MATCH/READ paths share one
+        // implementation with the engine's MERGE/write path.
+        let notes = compute_unindexed_property_access_notifications(self.catalog, prop_idx, query);
+        self.notifications.extend(notes);
+    }
+}
 
-        // First pass: collect the (variable -> first_label) map across
-        // all MATCH/MERGE patterns in the query so the WHERE walker
-        // can resolve `n.prop` references back to a label.
-        let mut var_label: HashMap<String, String> = HashMap::new();
-        for clause in &query.clauses {
-            match clause {
-                Clause::Match(mc) => collect_node_var_labels(&mc.pattern, &mut var_label),
-                Clause::Merge(mc) => collect_node_var_labels(&mc.pattern, &mut var_label),
-                _ => {}
-            }
+/// Public entry point: compute `Nexus.Performance.UnindexedPropertyAccess`
+/// notifications for a parsed `CypherQuery` against a given
+/// `(Catalog, PropertyIndex)` pair. Returns the notifications in
+/// emission order (deduplicated within the call) and drives the same
+/// rate-limited WARN log mirror that the planner uses.
+///
+/// Two callers:
+///   - The planner pre-pass during `QueryPlanner::plan_query` —
+///     covers MATCH/READ paths that go through `Executor::execute`.
+///   - `Engine::execute_write_query` — covers MERGE/SET/REMOVE/FOREACH
+///     paths that bypass the planner entirely. Without this hook the
+///     ingest pathology that drove this feature (every Cortex
+///     `MERGE (n:Artifact { natural_key: ... })`) would ship without
+///     a notification because the write path never builds a plan.
+pub fn compute_unindexed_property_access_notifications(
+    catalog: &Catalog,
+    prop_idx: &crate::index::PropertyIndex,
+    query: &CypherQuery,
+) -> Vec<Notification> {
+    let mut out: Vec<Notification> = Vec::new();
+
+    // First pass: collect (variable -> first_label) bindings across
+    // every MATCH/MERGE pattern in the query so the WHERE walker can
+    // resolve `n.prop` references back to a label.
+    let mut var_label: HashMap<String, String> = HashMap::new();
+    for clause in &query.clauses {
+        match clause {
+            Clause::Match(mc) => collect_node_var_labels(&mc.pattern, &mut var_label),
+            Clause::Merge(mc) => collect_node_var_labels(&mc.pattern, &mut var_label),
+            _ => {}
         }
+    }
 
-        // Second pass: emit notifications.
-        for clause in &query.clauses {
-            match clause {
-                Clause::Match(mc) => {
-                    self.emit_unindexed_for_pattern(
+    // Second pass: emit one notification per offending (label, prop)
+    // pair, deduplicated within `out`.
+    for clause in &query.clauses {
+        match clause {
+            Clause::Match(mc) => {
+                emit_unindexed_for_pattern_into(
+                    catalog,
+                    prop_idx,
+                    &mc.pattern,
+                    UnindexedAccessClause::Match,
+                    &mut out,
+                );
+                if let Some(where_clause) = &mc.where_clause {
+                    emit_unindexed_for_where_into(
+                        catalog,
                         prop_idx,
-                        &mc.pattern,
-                        UnindexedAccessClause::Match,
-                    );
-                    // Some MATCH parses inline a WHERE on the
-                    // `MatchClause` itself (legacy path); newer ones
-                    // emit `Clause::Where` as a sibling clause —
-                    // covered by the standalone `Clause::Where` arm
-                    // below.
-                    if let Some(where_clause) = &mc.where_clause {
-                        self.emit_unindexed_for_where(
-                            prop_idx,
-                            &where_clause.expression,
-                            &var_label,
-                            UnindexedAccessClause::Match,
-                        );
-                    }
-                }
-                Clause::Merge(mc) => {
-                    self.emit_unindexed_for_pattern(
-                        prop_idx,
-                        &mc.pattern,
-                        UnindexedAccessClause::Merge,
-                    );
-                }
-                Clause::Where(wc) => {
-                    // Standalone WHERE clause produced by the modern
-                    // parser path. Variable bindings come from the
-                    // pattern collection above (first pass walks all
-                    // MATCH/MERGE clauses), so `n.prop` references in
-                    // a sibling WHERE resolve to the right label.
-                    self.emit_unindexed_for_where(
-                        prop_idx,
-                        &wc.expression,
+                        &where_clause.expression,
                         &var_label,
                         UnindexedAccessClause::Match,
+                        &mut out,
                     );
                 }
-                _ => {}
             }
-        }
-    }
-
-    /// Walk a pattern, emit one notification per node element with a
-    /// `(first_label, inline_property)` selector that lacks a
-    /// property index. Multi-label patterns use the **first** label —
-    /// it matches the planner's actual scan choice (see the
-    /// `NodeByLabel { label_id: …, … }` push at the start of the
-    /// node-element handler).
-    fn emit_unindexed_for_pattern(
-        &mut self,
-        prop_idx: &crate::index::PropertyIndex,
-        pattern: &Pattern,
-        clause: UnindexedAccessClause,
-    ) {
-        for el in &pattern.elements {
-            if let PatternElement::Node(node) = el {
-                let Some(label_name) = node.labels.first() else {
-                    continue;
-                };
-                let Some(properties) = &node.properties else {
-                    continue;
-                };
-                let Ok(label_id) = self.catalog.get_label_id(label_name) else {
-                    continue;
-                };
-                for (prop_name, _value) in &properties.properties {
-                    let Ok(key_id) = self.catalog.get_key_id(prop_name) else {
-                        continue;
-                    };
-                    if !prop_idx.has_index(label_id, key_id) {
-                        self.record_unindexed_property_access(
-                            label_id, key_id, label_name, prop_name, clause,
-                        );
-                    }
-                }
+            Clause::Merge(mc) => {
+                emit_unindexed_for_pattern_into(
+                    catalog,
+                    prop_idx,
+                    &mc.pattern,
+                    UnindexedAccessClause::Merge,
+                    &mut out,
+                );
             }
-        }
-    }
-
-    /// Walk a WHERE expression looking for equality predicates of the
-    /// form `<var>.<prop> = <anything>` (or the symmetric
-    /// `<anything> = <var>.<prop>`) and emit a notification when
-    /// `<var>` resolves to a labelled node and the
-    /// `(label, prop)` pair has no index.
-    ///
-    /// Recurses into AND/OR boolean trees so multi-clause WHEREs are
-    /// covered. Other operators are walked transparently — we only
-    /// flag equality, since range / `CONTAINS` / `STARTS WITH` are
-    /// either sargable through different index types or already a
-    /// known full-scan (a separate notification is queued for them
-    /// in a follow-up task).
-    fn emit_unindexed_for_where(
-        &mut self,
-        prop_idx: &crate::index::PropertyIndex,
-        expr: &Expression,
-        var_label: &HashMap<String, String>,
-        clause: UnindexedAccessClause,
-    ) {
-        match expr {
-            Expression::BinaryOp { left, op, right } => {
-                if matches!(op, BinaryOperator::Equal) {
-                    let candidate = match (left.as_ref(), right.as_ref()) {
-                        (Expression::PropertyAccess { variable, property }, _) => {
-                            Some((variable, property))
-                        }
-                        (_, Expression::PropertyAccess { variable, property }) => {
-                            Some((variable, property))
-                        }
-                        _ => None,
-                    };
-                    if let Some((variable, property)) = candidate
-                        && let Some(label_name) = var_label.get(variable)
-                        && let Ok(label_id) = self.catalog.get_label_id(label_name)
-                        && let Ok(key_id) = self.catalog.get_key_id(property)
-                        && !prop_idx.has_index(label_id, key_id)
-                    {
-                        self.record_unindexed_property_access(
-                            label_id, key_id, label_name, property, clause,
-                        );
-                    }
-                }
-                // Recurse for AND/OR/etc. so `WHERE a.x = 1 AND b.y = 2`
-                // produces both notifications.
-                self.emit_unindexed_for_where(prop_idx, left, var_label, clause);
-                self.emit_unindexed_for_where(prop_idx, right, var_label, clause);
-            }
-            Expression::UnaryOp { operand, .. } => {
-                self.emit_unindexed_for_where(prop_idx, operand, var_label, clause);
+            Clause::Where(wc) => {
+                emit_unindexed_for_where_into(
+                    catalog,
+                    prop_idx,
+                    &wc.expression,
+                    &var_label,
+                    UnindexedAccessClause::Match,
+                    &mut out,
+                );
             }
             _ => {}
         }
+    }
+
+    out
+}
+
+/// Free-function form of `QueryPlanner::emit_unindexed_for_pattern`
+/// — pushes into a caller-provided `&mut Vec<Notification>` instead
+/// of the planner's per-call accumulator. Used by both the planner
+/// (via the pre-pass) and the engine write path.
+fn emit_unindexed_for_pattern_into(
+    catalog: &Catalog,
+    prop_idx: &crate::index::PropertyIndex,
+    pattern: &Pattern,
+    clause: UnindexedAccessClause,
+    out: &mut Vec<Notification>,
+) {
+    for el in &pattern.elements {
+        if let PatternElement::Node(node) = el {
+            let Some(label_name) = node.labels.first() else {
+                continue;
+            };
+            let Some(properties) = &node.properties else {
+                continue;
+            };
+            let Ok(label_id) = catalog.get_label_id(label_name) else {
+                continue;
+            };
+            for (prop_name, _value) in &properties.properties {
+                let Ok(key_id) = catalog.get_key_id(prop_name) else {
+                    continue;
+                };
+                if !prop_idx.has_index(label_id, key_id) {
+                    record_unindexed_into(label_id, key_id, label_name, prop_name, clause, out);
+                }
+            }
+        }
+    }
+}
+
+/// Free-function form of `QueryPlanner::emit_unindexed_for_where`.
+fn emit_unindexed_for_where_into(
+    catalog: &Catalog,
+    prop_idx: &crate::index::PropertyIndex,
+    expr: &Expression,
+    var_label: &HashMap<String, String>,
+    clause: UnindexedAccessClause,
+    out: &mut Vec<Notification>,
+) {
+    match expr {
+        Expression::BinaryOp { left, op, right } => {
+            if matches!(op, BinaryOperator::Equal) {
+                let candidate = match (left.as_ref(), right.as_ref()) {
+                    (Expression::PropertyAccess { variable, property }, _) => {
+                        Some((variable, property))
+                    }
+                    (_, Expression::PropertyAccess { variable, property }) => {
+                        Some((variable, property))
+                    }
+                    _ => None,
+                };
+                if let Some((variable, property)) = candidate
+                    && let Some(label_name) = var_label.get(variable)
+                    && let Ok(label_id) = catalog.get_label_id(label_name)
+                    && let Ok(key_id) = catalog.get_key_id(property)
+                    && !prop_idx.has_index(label_id, key_id)
+                {
+                    record_unindexed_into(label_id, key_id, label_name, property, clause, out);
+                }
+            }
+            emit_unindexed_for_where_into(catalog, prop_idx, left, var_label, clause, out);
+            emit_unindexed_for_where_into(catalog, prop_idx, right, var_label, clause, out);
+        }
+        Expression::UnaryOp { operand, .. } => {
+            emit_unindexed_for_where_into(catalog, prop_idx, operand, var_label, clause, out);
+        }
+        _ => {}
+    }
+}
+
+/// Free-function form of `QueryPlanner::record_unindexed_property_access`
+/// — pushes into a caller-provided `&mut Vec<Notification>`,
+/// deduplicates within that vec, and drives the same rate-limited
+/// WARN log mirror.
+fn record_unindexed_into(
+    label_id: u32,
+    key_id: u32,
+    label_name: &str,
+    property_name: &str,
+    clause: UnindexedAccessClause,
+    out: &mut Vec<Notification>,
+) {
+    let code = "Nexus.Performance.UnindexedPropertyAccess";
+
+    // Per-call dedup so MATCH + MERGE on the same (label, prop) pair
+    // produce a single notification.
+    if out.iter().any(|n| {
+        n.code == code && n.title.contains(label_name) && n.description.contains(property_name)
+    }) {
+        return;
+    }
+
+    let suggested_ddl = format!("CREATE INDEX FOR (n:{label_name}) ON (n.{property_name})");
+    let title = format!("Unindexed property access on :{label_name}({property_name})");
+    let description = format!(
+        "{clause} selects nodes by `:{label_name}` with a property predicate on \
+         `{property_name}`, but no property index covers this pair. The planner \
+         falls back to a full label scan plus property comparison, which is \
+         O(N) over every `:{label_name}` node. Create the recommended index to \
+         switch to an O(log N) index seek: `{suggested_ddl}`.",
+    );
+
+    out.push(Notification {
+        code: code.to_string(),
+        title,
+        description,
+        severity: NotificationSeverity::Information,
+        category: NotificationCategory::Performance,
+    });
+
+    // Rate-limited WARN log — shared across planner and engine paths
+    // via the process-global `warn_log_state()`.
+    let now = Instant::now();
+    let interval = planner_warn_interval();
+    let mut should_log = true;
+    if let Ok(mut state) = warn_log_state().lock() {
+        if let Some(last) = state.get(&(label_id, key_id)) {
+            if now.duration_since(*last) < interval {
+                should_log = false;
+            }
+        }
+        if should_log {
+            state.insert((label_id, key_id), now);
+        }
+    }
+    if should_log {
+        tracing::warn!(
+            code = code,
+            label = label_name,
+            property = property_name,
+            clause = %clause,
+            suggested = %suggested_ddl,
+            "unindexed property access on :{}({}) — {}",
+            label_name,
+            property_name,
+            suggested_ddl,
+        );
     }
 }
 
