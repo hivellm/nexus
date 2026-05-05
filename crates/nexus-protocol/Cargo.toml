@@ -18,7 +18,7 @@ unexpected_cfgs = { level = "warn", check-cfg = ['cfg(FALSE)'] }
 [dependencies]
 # HTTP client
 hyper.workspace = true
-reqwest = { version = "0.12", features = ["json"] }
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
 tokio.workspace = true
 
 # Serialization
