@@ -5,7 +5,7 @@
 ![Rust](https://img.shields.io/badge/rust-nightly%201.85%2B-orange.svg)
 ![Edition](https://img.shields.io/badge/edition-2024-blue.svg)
 ![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)
-![Status](https://img.shields.io/badge/status-v2.1.0-success.svg)
+![Status](https://img.shields.io/badge/status-v2.2.0-success.svg)
 ![Tests](https://img.shields.io/badge/tests-2310%2B%20passing-success.svg)
 ![Compatibility](https://img.shields.io/badge/Neo4j%20compat-300%2F300-success.svg)
 
@@ -19,7 +19,7 @@ Nexus is a **property graph database** built for **read-heavy workloads** with *
 
 **Think Neo4j meets vector search**, shipped as a single Rust binary with a CLI, six first-party SDKs, and three transports (native binary RPC, HTTP/JSON, RESP3).
 
-### Highlights (v2.1.0)
+### Highlights (v2.2.0)
 
 - **Neo4j-compatible Cypher** — MATCH / CREATE / MERGE / SET / DELETE / REMOVE / WHERE / RETURN / ORDER BY / LIMIT / SKIP / UNION / WITH / UNWIND / FOREACH / CASE / EXISTS subqueries / list & map comprehensions / pattern comprehensions and 250+ functions & procedures. **300/300** Neo4j diff-suite tests pass ([Neo4j 2025.09.0, 2026-04-19](docs/compatibility/NEO4J_COMPATIBILITY_REPORT.md)). See the [openCypher status table](#-opencypher-support-matrix) at the bottom.
 - **APOC compatibility** — ~100 procedures across `apoc.coll.*` / `apoc.map.*` / `apoc.text.*` / `apoc.date.*` / `apoc.schema.*` / `apoc.util.*` / `apoc.convert.*` / `apoc.number.*` / `apoc.agg.*`. Drop-in replacement for most of the Neo4j APOC surface. Matrix: [`docs/procedures/APOC_COMPATIBILITY.md`](docs/procedures/APOC_COMPATIBILITY.md).
@@ -235,11 +235,11 @@ Every SDK ships equivalent methods (`list_databases` / `listDatabases` / etc.). 
 
 ## 📦 Official SDKs
 
-Six first-party SDKs, all tracking the same 2.1.0 line. Every SDK shares the URL grammar, command-map table, and error semantics defined in [`docs/specs/sdk-transport.md`](docs/specs/sdk-transport.md).
+Six first-party SDKs, all tracking the same 2.2.0 line. Every SDK shares the URL grammar, command-map table, and error semantics defined in [`docs/specs/sdk-transport.md`](docs/specs/sdk-transport.md).
 
 | SDK            | Install                                    | Docs                                          | RPC status   |
 |----------------|--------------------------------------------|-----------------------------------------------|--------------|
-| 🦀 Rust        | `nexus-sdk = "2.1.0"`                     | [sdks/rust/](sdks/rust/README.md)             | ✅ shipped   |
+| 🦀 Rust        | `nexus-sdk = "2.2.0"`                     | [sdks/rust/](sdks/rust/README.md)             | ✅ shipped   |
 | 🐍 Python      | `pip install hivehub-nexus-sdk`            | [sdks/python/](sdks/python/README.md)         | ✅ shipped   |
 | 📘 TypeScript  | `npm install @hivehub/nexus-sdk`           | [sdks/typescript/](sdks/typescript/README.md) | ✅ shipped   |
 | 🐹 Go          | `go get github.com/hivellm/nexus-go`       | [sdks/go/](sdks/go/README.md)                 | ✅ shipped   |
@@ -502,7 +502,7 @@ ORDER BY confidence DESC
 
 ## 🗺️ Roadmap
 
-### 2.0.0 — current (2026-04-30)
+### 2.2.0 — current (2026-05-04)
 - ✅ Property graph engine + broad openCypher surface + 19 GDS procedures + ~100 APOC procedures.
 - ✅ **300/300** Neo4j diff suite (2025.09.0).
 - ✅ Native HNSW KNN per label.
@@ -575,7 +575,7 @@ Full detail: [`docs/ROADMAP.md`](docs/ROADMAP.md).
 
 ## 🧮 openCypher Support Matrix
 
-Canonical list of openCypher / Cypher 25 surfaces in Nexus v2.1.0. ✅ shipped · 🟡 partial (grammar-only or limited scope) · 🧭 queued. Validated against the [300/300 Neo4j diff suite](docs/compatibility/NEO4J_COMPATIBILITY_REPORT.md); per-clause detail lives in [`docs/specs/cypher-subset.md`](docs/specs/cypher-subset.md).
+Canonical list of openCypher / Cypher 25 surfaces in Nexus v2.2.0. ✅ shipped · 🟡 partial (grammar-only or limited scope) · 🧭 queued. Validated against the [300/300 Neo4j diff suite](docs/compatibility/NEO4J_COMPATIBILITY_REPORT.md); per-clause detail lives in [`docs/specs/cypher-subset.md`](docs/specs/cypher-subset.md).
 
 ### Reading clauses
 
