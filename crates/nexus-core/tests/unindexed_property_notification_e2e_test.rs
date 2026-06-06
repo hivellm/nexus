@@ -20,7 +20,7 @@ const UNINDEXED_CODE: &str = "Nexus.Performance.UnindexedPropertyAccess";
 fn engine_surfaces_unindexed_notification_for_merge_through_executor_drain() {
     // Fresh data dir so no stale index/catalog state leaks across runs.
     let ctx = TestContext::new();
-    let mut engine = Engine::with_data_dir(ctx.path()).expect("engine init");
+    let mut engine = Engine::with_isolated_catalog(ctx.path()).expect("engine init");
 
     // Seed the catalog so the diagnostic pre-pass can resolve the
     // `(label_id, key_id)` pair. The MERGE itself does this implicitly
@@ -65,7 +65,7 @@ fn engine_surfaces_unindexed_notification_for_merge_through_executor_drain() {
 #[test]
 fn engine_omits_notification_after_index_is_created() {
     let ctx = TestContext::new();
-    let mut engine = Engine::with_data_dir(ctx.path()).expect("engine init");
+    let mut engine = Engine::with_isolated_catalog(ctx.path()).expect("engine init");
 
     // Bootstrap label + key, then create the property index so the
     // planner's `has_index` check returns true on the next plan.
@@ -101,7 +101,7 @@ fn engine_does_not_leak_notifications_across_consecutive_queries() {
     // not pollute a follow-up query that should produce none (because
     // the second query targets an already-indexed pair).
     let ctx = TestContext::new();
-    let mut engine = Engine::with_data_dir(ctx.path()).expect("engine init");
+    let mut engine = Engine::with_isolated_catalog(ctx.path()).expect("engine init");
 
     engine
         .execute_cypher("CREATE (s:Artifact { natural_key: 'seed' })")

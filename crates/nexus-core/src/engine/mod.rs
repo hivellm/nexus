@@ -2632,6 +2632,18 @@ impl Engine {
         &mut self,
         ast: &executor::parser::CypherQuery,
     ) -> Result<executor::ResultSet> {
+        // Drain any stale planner notifications that a prior query may have
+        // deposited into the thread-local sink on this OS thread.  The read
+        // path clears the sink inside `Executor::execute` before planning, but
+        // `execute_write_query` bypasses the executor entirely — without this
+        // drain a notification produced by a preceding query leaks into the
+        // `ResultSet` we return here (the flaky
+        // `engine_does_not_leak_notifications_across_consecutive_queries` test).
+        // The discard is intentional: notifications for *this* query are
+        // computed later by `compute_unindexed_property_access_notifications`
+        // and appended fresh.
+        let _ = crate::executor::planner::queries::drain_pending_planner_notifications();
+
         let mut context: HashMap<String, Vec<u64>> = HashMap::new();
         // Track relationship bindings: variable -> (rel_id, rel_type)
         let mut rel_context: HashMap<String, (u64, String)> = HashMap::new();

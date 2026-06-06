@@ -4171,11 +4171,29 @@ fn emit_unindexed_for_pattern_into(
                 continue;
             };
             for (prop_name, _value) in &properties.properties {
-                let Ok(key_id) = catalog.get_key_id(prop_name) else {
-                    continue;
-                };
-                if !prop_idx.has_index(label_id, key_id) {
-                    record_unindexed_into(label_id, key_id, label_name, prop_name, clause, out);
+                match catalog.get_key_id(prop_name) {
+                    Ok(key_id) => {
+                        if !prop_idx.has_index(label_id, key_id) {
+                            record_unindexed_into(
+                                label_id, key_id, label_name, prop_name, clause, out,
+                            );
+                        }
+                    }
+                    // An un-interned property key cannot have an index (the
+                    // catalog does not intern keys on the CREATE/MERGE
+                    // write path), so this is by definition unindexed
+                    // access — emit. `u32::MAX` is a sentinel for the WARN
+                    // rate-limiter only; `out` dedups by label/prop name.
+                    Err(_) => {
+                        record_unindexed_into(
+                            label_id,
+                            u32::MAX,
+                            label_name,
+                            prop_name,
+                            clause,
+                            out,
+                        );
+                    }
                 }
             }
         }

@@ -260,6 +260,75 @@ impl Engine {
             }
         }
 
+        // Fast path: when the pattern has exactly one label and at least one
+        // property whose (label_id, key_id) pair has a registered B-tree entry,
+        // intersect the per-property bitmaps from `find_exact` and verify only
+        // those candidates against the full property map.  This reduces the
+        // candidate set from O(N_label) to O(matches) for indexed properties.
+        //
+        // We fall through to the label-bitmap scan when:
+        //   - there is no label (full scan), or more than one label,
+        //   - there are no properties to filter on,
+        //   - no property in the map has a registered index, or
+        //   - an expression cannot be resolved to a concrete PropertyValue
+        //     (e.g. it references a variable that isn't bound here).
+        if label_ids.len() == 1 {
+            if let Some(prop_map) = &node_pattern.properties {
+                if !prop_map.properties.is_empty() {
+                    let label_id = label_ids[0];
+                    // Collect (key_id, PropertyValue) for every property whose
+                    // key is registered AND whose expression resolves to a literal.
+                    let mut indexed_filters: Vec<(u32, crate::index::PropertyValue)> = Vec::new();
+                    for (key_name, expr) in &prop_map.properties {
+                        if let Ok(key_id) = self.catalog.get_key_id(key_name) {
+                            if self.indexes.property_index.has_index(label_id, key_id) {
+                                if let Ok(json_val) = self.expression_to_json_value(expr) {
+                                    let pv = super::json_to_property_value(&json_val);
+                                    indexed_filters.push((key_id, pv));
+                                }
+                            }
+                        }
+                    }
+
+                    if !indexed_filters.is_empty() {
+                        // Intersect all per-property bitmaps to get the candidate set.
+                        let mut candidate_bitmap = self.indexes.property_index.find_exact(
+                            label_id,
+                            indexed_filters[0].0,
+                            indexed_filters[0].1.clone(),
+                        )?;
+                        for (key_id, pv) in indexed_filters.into_iter().skip(1) {
+                            let bm = self
+                                .indexes
+                                .property_index
+                                .find_exact(label_id, key_id, pv)?;
+                            candidate_bitmap &= bm;
+                            if candidate_bitmap.is_empty() {
+                                return Ok(Vec::new());
+                            }
+                        }
+
+                        // Verify each candidate against the complete property map
+                        // (covers non-indexed properties and handles deleted nodes).
+                        let mut matches = Vec::new();
+                        for node_id in candidate_bitmap.iter() {
+                            let node_id = node_id as u64;
+                            let record = self.storage.read_node(node_id)?;
+                            if record.is_deleted() {
+                                continue;
+                            }
+                            if !self.node_matches_properties(node_id, prop_map)? {
+                                continue;
+                            }
+                            matches.push(node_id);
+                        }
+                        return Ok(matches);
+                    }
+                }
+            }
+        }
+
+        // Fallback: label-bitmap (or full) scan with per-node property check.
         let mut candidates = Vec::new();
         if label_ids.is_empty() {
             let total_nodes = self.storage.node_count();
@@ -540,6 +609,13 @@ impl Engine {
             self.indexes.label_index.add_node(node_id, &label_ids)?;
             self.index_node_properties(node_id, &properties)?;
         }
+
+        // Keep the typed property index (the one `find_exact`/`has_index`
+        // read, used by the index-backed MERGE existence check) in sync for
+        // any (label, key) that already has a registered index. Without this,
+        // a node created after `CREATE INDEX` is absent from the B-tree, so a
+        // later `MERGE` index seek misses it and creates a duplicate.
+        self.maintain_indexed_properties(node_id, &label_ids, &properties)?;
 
         // phase6_opencypher-constraint-enforcement §5 — populate every
         // registered composite B-tree matching this node's label set
@@ -1206,6 +1282,43 @@ impl Engine {
             }
         }
 
+        Ok(())
+    }
+
+    /// Maintain the typed property B-tree (`self.indexes.property_index`,
+    /// read by `find_exact`/`has_index`) for a freshly written node — but
+    /// ONLY for `(label, key)` pairs that already have a registered index.
+    /// `add_property` would otherwise auto-create a tree (turning every
+    /// property into a phantom index), so the `has_index` guard is required.
+    pub(super) fn maintain_indexed_properties(
+        &self,
+        node_id: u64,
+        label_ids: &[u32],
+        properties: &serde_json::Value,
+    ) -> Result<()> {
+        let serde_json::Value::Object(props) = properties else {
+            return Ok(());
+        };
+        for (prop_name, prop_value) in props {
+            let Ok(key_id) = self.catalog.get_key_id(prop_name) else {
+                continue;
+            };
+            for &label_id in label_ids {
+                if self.indexes.property_index.has_index(label_id, key_id) {
+                    let pv = super::json_to_property_value(prop_value);
+                    if let Err(e) = self
+                        .indexes
+                        .property_index
+                        .add_property(node_id, label_id, key_id, pv)
+                    {
+                        tracing::warn!(
+                            "typed property-index add failed for node {node_id} \
+                             (label {label_id}, key {key_id}): {e}"
+                        );
+                    }
+                }
+            }
+        }
         Ok(())
     }
 
