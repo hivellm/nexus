@@ -1,6 +1,6 @@
 # Implementation Tasks - V1 Desktop GUI
 
-**Status**: 🟡 IN PROGRESS (~49% — core shell, editor, graph view, metrics done)
+**Status**: 📦 ARCHIVED (~49% — core shell, editor, graph view, metrics done). Remaining unchecked items carried forward to `phase7_complete-v1-gui`.
 **Priority**: Medium (after MVP and Authentication)
 **Estimated**: Q1 2026
 

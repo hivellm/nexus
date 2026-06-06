@@ -247,19 +247,17 @@ The remaining `[ ]` checkboxes split cleanly into two buckets:
 - [x] Test coverage ≥ 95% for cluster mode code (95.85% module-wide weighted line coverage via cargo llvm-cov; see §15.7)
 - [ ] All documentation complete
 
-## 1. Tail (mandatory — enforced by rulebook v5.3.0)
-- [x] 1.1 Documentation shipped — `docs/CLUSTER_MODE.md`
-      operator guide, `docs/specs/cluster-mode.md` technical
-      spec, `docs/security/AUTHENTICATION.md` updated with
-      function-level permissions, `docs/guides/DEPLOYMENT_GUIDE.md`
-      cluster-mode subsection, ADR-7 captured in
-      `.rulebook/decisions/`. CHANGELOG updated under 1.0.0.
-- [x] 1.2 Tests written — `tests/cluster_isolation_tests.rs`
-      covers the two-tenant attack surface; module unit tests
-      cover every `cluster::*` submodule (8 namespace, 6
-      context, 5 quota, 14 scope, 4 middleware = 37 total);
-      `cluster_mode_benchmark.rs` measures the overhead.
-- [x] 1.3 Tests pass — workspace-wide `cargo +nightly test
-      --workspace` reports 3470 passed / 0 failed last refresh.
-      Coverage at 95.85% module-wide weighted line coverage via
-      cargo llvm-cov, above the 95% gate.
+## 6. Tail (mandatory — enforced by rulebook v5.3.0)
+- [x] 6.1 Update or create documentation covering the implementation
+- [x] 6.2 Write tests covering the new behavior
+- [x] 6.3 Run tests and confirm they pass
+
+Evidence — Docs: `docs/CLUSTER_MODE.md` operator guide,
+`docs/specs/cluster-mode.md` technical spec,
+`docs/security/AUTHENTICATION.md` (function-level permissions),
+`docs/guides/DEPLOYMENT_GUIDE.md` cluster-mode subsection, ADR-7 in
+`.rulebook/decisions/`, CHANGELOG under 1.0.0. Tests:
+`tests/cluster_isolation_tests.rs` (two-tenant attack surface) + 37
+`cluster::*` unit tests + `cluster_mode_benchmark.rs`. Run:
+`cargo +nightly test --workspace` 3470 passed / 0 failed, 95.85%
+line coverage via cargo llvm-cov.
