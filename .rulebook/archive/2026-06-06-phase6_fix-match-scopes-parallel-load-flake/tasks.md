@@ -11,8 +11,8 @@
 - [x] 2.3 `match_scopes_by_label_and_property_together` now passes deterministically: 8/8 green under full parallel `cargo test -p nexus-core`
 
 ## 3. Tail (mandatory — enforced by rulebook v5.3.0)
-- [x] 3.1 Documentation: CHANGELOG Unreleased entry
-- [x] 3.2 Tests: `match_scopes_by_label_and_property_together` is the load regression guard (8/8 under full parallel); catalog allocation correctness covered by the existing catalog tests + the integration assertion
+- [x] 3.1 Update or create documentation covering the implementation (CHANGELOG Unreleased entry)
+- [x] 3.2 Write tests covering the new behavior (`match_scopes_by_label_and_property_together` load regression guard, 8/8 full parallel; catalog allocation covered by existing catalog tests)
 - [x] 3.3 Run tests and confirm they pass (8/8 full parallel runs; nexus-core lib + integration green; clippy/fmt clean)
 
 ## Notes (resolution)
