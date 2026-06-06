@@ -286,11 +286,12 @@ impl Executor {
                 parser::Literal::Point(p) => Ok(p.to_json_value()),
             },
             parser::Expression::Parameter(name) => {
-                if let Some(value) = context.params.get(name) {
-                    Ok(value.clone())
-                } else {
-                    Ok(Value::Null)
-                }
+                context.params.get(name).cloned().ok_or_else(|| {
+                    Error::CypherExecution(format!(
+                        "ERR_MISSING_PARAMETER: parameter ${} not provided",
+                        name
+                    ))
+                })
             }
             parser::Expression::BinaryOp { left, op, right } => {
                 let left_val = self.evaluate_expression(node, left, context)?;

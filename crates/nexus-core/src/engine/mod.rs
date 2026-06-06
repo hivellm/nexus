@@ -2623,7 +2623,7 @@ impl Engine {
         // function) survives the executor's re-parse.
         let query_obj = executor::Query {
             cypher: query.to_string(),
-            params: std::collections::HashMap::new(),
+            params: self.current_params.clone(),
         };
         self.executor.execute(&query_obj)
     }

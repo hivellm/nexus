@@ -1314,7 +1314,7 @@ pub async fn execute_cypher(
         {
             // Use the engine's execute_cypher method which uses its internal executor
             let mut engine_guard = server.engine.write().await;
-            match engine_guard.execute_cypher(&request.query) {
+            match engine_guard.execute_cypher_with_params(&request.query, request.params.clone()) {
                 Ok(result_set) => {
                     let execution_time = start_time.elapsed().as_millis() as u64;
                     tracing::info!(

@@ -5,6 +5,23 @@ All notable changes to Nexus will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed — `phase6_fix-cypher-param-binding` (GH #3)
+
+- **Cypher `$param` binding now works on the read path.** `POST /cypher`
+  with a `parameters` map previously returned 0 rows for every
+  parametrized query: the MATCH handler called `execute_cypher`
+  (discarding `request.params`) and the engine read-fallthrough built
+  `executor::Query` with a hard-coded empty params map. Both the inline
+  property-map form `MATCH (s {id: $id})` and the `WHERE s.id = $id` form
+  now resolve parameters and return the same rows as the inlined literal.
+- **Missing parameters now surface a structured error** instead of silently
+  coalescing to `NULL`. A query referencing an unbound `$param` returns
+  `ERR_MISSING_PARAMETER: parameter $<name> not provided`, so callers can
+  detect binding failures programmatically. A parameter explicitly bound to
+  JSON `null` is still treated as provided (distinct from an absent key).
+
 ## [2.2.0] — 2026-05-04
 
 > Ships two operator-hardening features driven by the

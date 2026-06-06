@@ -314,7 +314,12 @@ impl Executor {
                 parser::Literal::Point(p) => Ok(p.to_json_value()),
             },
             parser::Expression::Parameter(name) => {
-                Ok(context.params.get(name).cloned().unwrap_or(Value::Null))
+                context.params.get(name).cloned().ok_or_else(|| {
+                    Error::CypherExecution(format!(
+                        "ERR_MISSING_PARAMETER: parameter ${} not provided",
+                        name
+                    ))
+                })
             }
             parser::Expression::FunctionCall { name, args } => {
                 let lowered = name.to_lowercase();

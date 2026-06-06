@@ -251,3 +251,169 @@ fn query_without_graph_scope_runs_normally() {
     let r = run(&mut engine, "MATCH (n:Test) RETURN count(n) AS c");
     assert_eq!(r.rows[0].values[0], serde_json::json!(1));
 }
+
+// ──────────────────── §7 $param propagation (GH issue #3) ─────────────────
+//
+// Regression coverage: POST /cypher with a parameters map returned 0 rows
+// because the MATCH branch called execute_cypher (discarding params) and the
+// read-fallthrough path hard-coded HashMap::new() instead of current_params.
+
+/// Inline prop-map param: `MATCH (s {id: $id})` binds via the node
+/// predicate evaluator. Expects exactly 1 row when the param matches.
+#[test]
+fn param_inline_prop_map_match_returns_row() {
+    let (mut engine, _ctx) = setup_isolated_test_engine().unwrap();
+    engine
+        .execute_cypher("CREATE (:Person {id: 'alice'})")
+        .unwrap();
+
+    let mut params = HashMap::new();
+    params.insert("id".to_string(), serde_json::json!("alice"));
+    let r = engine
+        .execute_cypher_with_params("MATCH (s {id: $id}) RETURN id(s)", params)
+        .expect("MATCH with inline prop-map param must succeed");
+
+    assert_eq!(
+        r.rows.len(),
+        1,
+        "expected exactly 1 row, got {}",
+        r.rows.len()
+    );
+}
+
+/// WHERE param: `MATCH (s) WHERE s.id = $id` binds via the WHERE
+/// predicate evaluator. Expects exactly 1 row when the param matches.
+#[test]
+fn param_where_clause_match_returns_row() {
+    let (mut engine, _ctx) = setup_isolated_test_engine().unwrap();
+    engine
+        .execute_cypher("CREATE (:Person {id: 'bob'})")
+        .unwrap();
+
+    let mut params = HashMap::new();
+    params.insert("id".to_string(), serde_json::json!("bob"));
+    let r = engine
+        .execute_cypher_with_params("MATCH (s) WHERE s.id = $id RETURN id(s)", params)
+        .expect("MATCH with WHERE param must succeed");
+
+    assert_eq!(
+        r.rows.len(),
+        1,
+        "expected exactly 1 row, got {}",
+        r.rows.len()
+    );
+}
+
+/// Negative control: a param value that matches nothing must return 0 rows,
+/// proving the predicate is actually evaluated rather than silently ignored.
+#[test]
+fn param_no_match_returns_zero_rows() {
+    let (mut engine, _ctx) = setup_isolated_test_engine().unwrap();
+    engine
+        .execute_cypher("CREATE (:Person {id: 'carol'})")
+        .unwrap();
+
+    let mut params = HashMap::new();
+    params.insert("id".to_string(), serde_json::json!("nobody"));
+    let r = engine
+        .execute_cypher_with_params("MATCH (s {id: $id}) RETURN id(s)", params)
+        .expect("query must succeed even with zero matches");
+
+    assert_eq!(
+        r.rows.len(),
+        0,
+        "expected 0 rows for non-matching param, got {}",
+        r.rows.len()
+    );
+}
+
+/// Numeric param: integer property matched via `WHERE n.age = $age`.
+/// Guards against string-only coercion in the evaluator.
+#[test]
+fn param_numeric_where_clause_match_returns_row() {
+    let (mut engine, _ctx) = setup_isolated_test_engine().unwrap();
+    engine.execute_cypher("CREATE (:Person {age: 42})").unwrap();
+
+    let mut params = HashMap::new();
+    params.insert("age".to_string(), serde_json::json!(42));
+    let r = engine
+        .execute_cypher_with_params("MATCH (n) WHERE n.age = $age RETURN id(n)", params)
+        .expect("MATCH with numeric WHERE param must succeed");
+
+    assert_eq!(
+        r.rows.len(),
+        1,
+        "expected exactly 1 row for numeric param match, got {}",
+        r.rows.len()
+    );
+}
+
+// ──────────── §7.5 Missing $param returns structured error (GH issue #3) ────
+//
+// A parameter referenced in a query but absent from the parameters map MUST
+// produce a structured Err rather than silently coalescing to NULL. Callers
+// must be able to distinguish "param missing" from "no rows matched".
+
+/// Inline prop-map form: `MATCH (s {id: $id})` with an empty params map must
+/// return `Err`, not `Ok` with 0 rows.
+#[test]
+fn param_missing_returns_error() {
+    let (mut engine, _ctx) = setup_isolated_test_engine().unwrap();
+    engine
+        .execute_cypher("CREATE (:Person {id: 'alice'})")
+        .unwrap();
+
+    let result =
+        engine.execute_cypher_with_params("MATCH (s {id: $id}) RETURN id(s)", HashMap::new());
+
+    let err = result.expect_err("expected Err for missing $id param, got Ok");
+    let msg = err.to_string();
+    assert!(
+        msg.contains("id"),
+        "error message must name the missing parameter; got: {msg}"
+    );
+}
+
+/// WHERE form: `MATCH (s) WHERE s.id = $id` with an empty params map must
+/// return `Err`. A node must exist so the filter predicate is actually
+/// evaluated — the missing-parameter error is raised lazily per row at
+/// predicate-evaluation time (issue #3's reproducer ran against a populated
+/// graph).
+#[test]
+fn param_missing_where_clause_returns_error() {
+    let (mut engine, _ctx) = setup_isolated_test_engine().unwrap();
+    engine
+        .execute_cypher("CREATE (:Person {id: 'alice'})")
+        .unwrap();
+
+    let result = engine
+        .execute_cypher_with_params("MATCH (s) WHERE s.id = $id RETURN id(s)", HashMap::new());
+
+    assert!(
+        result.is_err(),
+        "expected Err for missing $id param in WHERE clause, got Ok"
+    );
+}
+
+/// A param that IS explicitly bound to JSON `null` must NOT error — the value
+/// is present in the map (bound-null is distinct from absent-key). The query
+/// may return 0 rows because no node property equals null, but the execution
+/// itself must succeed.
+#[test]
+fn param_bound_to_null_resolves_without_error() {
+    let (mut engine, _ctx) = setup_isolated_test_engine().unwrap();
+    engine
+        .execute_cypher("CREATE (:Person {id: 'alice'})")
+        .unwrap();
+
+    let mut params = HashMap::new();
+    params.insert("id".to_string(), serde_json::Value::Null);
+
+    // The query must not Err just because the bound value is null.
+    let result =
+        engine.execute_cypher_with_params("MATCH (s) WHERE s.id = $id RETURN id(s)", params);
+
+    let rs = result.expect("bound-null param must not cause an error");
+    // No node has id = null, so 0 rows is the correct result.
+    assert_eq!(rs.rows.len(), 0);
+}
