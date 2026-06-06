@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed — `phase6_fix-cypher-nonascii-body` (GH #6)
+
+- **Non-ASCII text in Cypher no longer panics / drops the connection.** The
+  lexer's `consume_char` advanced `pos` by 1 byte per char; a multi-byte
+  UTF-8 char (any non-ASCII text in a string literal, property value, or
+  parameter) left `pos` mid-sequence and the next `self.input[pos..]` slice
+  panicked on a non-char boundary — surfacing over HTTP as a dropped
+  connection and forcing callers into lossy ASCII stripping (`versão` →
+  `verso`). `consume_char` and the keyword/whitespace scan loops now advance
+  by `ch.len_utf8()`, so UTF-8 in string literals, `WHERE` comparisons, and
+  `$param` values round-trips losslessly (accented Latin, CJK, Cyrillic,
+  emoji).
+
 ### Fixed — `phase6_fix-groupby-expr-and-return-node` (GH #5)
 
 - **GROUP BY by a function/expression key now aggregates correctly.** The

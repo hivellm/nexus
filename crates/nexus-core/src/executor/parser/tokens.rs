@@ -149,7 +149,11 @@ impl CypherParser {
     pub(super) fn consume_char(&mut self) -> Option<char> {
         if self.pos < self.input.len() {
             let ch = self.input[self.pos..].chars().next()?;
-            self.pos += 1;
+            // Advance by the char's UTF-8 width, not 1 byte — otherwise a
+            // multi-byte char (any non-ASCII text in a string literal,
+            // property value, etc.) leaves `pos` mid-sequence and the next
+            // `self.input[self.pos..]` slice panics on a non-char boundary.
+            self.pos += ch.len_utf8();
 
             if ch == '\n' {
                 self.line += 1;
@@ -194,7 +198,7 @@ impl CypherParser {
             while pos < self.input.len() {
                 let ch = self.input[pos..].chars().next().unwrap();
                 if ch.is_whitespace() {
-                    pos += 1;
+                    pos += ch.len_utf8();
                 } else {
                     break;
                 }
@@ -203,7 +207,7 @@ impl CypherParser {
             while pos < self.input.len() {
                 let ch = self.input[pos..].chars().next().unwrap();
                 if ch.is_alphanumeric() || ch == '_' {
-                    pos += 1;
+                    pos += ch.len_utf8();
                 } else {
                     break;
                 }
@@ -214,7 +218,7 @@ impl CypherParser {
         while pos < self.input.len() {
             let ch = self.input[pos..].chars().next().unwrap();
             if ch.is_whitespace() {
-                pos += 1;
+                pos += ch.len_utf8();
             } else {
                 break;
             }
@@ -235,7 +239,7 @@ impl CypherParser {
         while pos < self.input.len() {
             let ch = self.input[pos..].chars().next().unwrap();
             if ch.is_whitespace() {
-                pos += 1;
+                pos += ch.len_utf8();
             } else {
                 break;
             }

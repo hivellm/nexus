@@ -405,3 +405,91 @@ async fn create_return_node_var_returns_node_object() {
         .expect("MATCH RETURN t must be a node object, not null");
     assert_eq!(node2.get("title").and_then(|v| v.as_str()), Some("hello"));
 }
+
+// GH issue #6 — non-ASCII text in the /cypher body must not error or drop the
+// connection; it must round-trip losslessly (no lossy ASCII stripping).
+#[tokio::test]
+async fn non_ascii_body_round_trips_via_handler() {
+    use crate::NexusServer;
+    use nexus_core::auth::RoleBasedAccessControl;
+    use nexus_core::database::DatabaseManager;
+    use nexus_core::testing::TestContext;
+    use parking_lot::RwLock as PlRwLock;
+    use std::sync::Arc;
+    use tokio::sync::RwLock;
+
+    let ctx = TestContext::new();
+    let engine = nexus_core::Engine::with_data_dir(ctx.path()).unwrap();
+    let engine_arc = Arc::new(RwLock::new(engine));
+    let executor = nexus_core::executor::Executor::default();
+    let executor_arc = Arc::new(executor);
+    let database_manager = DatabaseManager::new(ctx.path().join("databases")).unwrap();
+    let database_manager_arc = Arc::new(PlRwLock::new(database_manager));
+    let rbac = RoleBasedAccessControl::new();
+    let rbac_arc = Arc::new(RwLock::new(rbac));
+    let auth_config = nexus_core::auth::AuthConfig::default();
+    let auth_manager = Arc::new(nexus_core::auth::AuthManager::new(auth_config));
+    let jwt_config = nexus_core::auth::JwtConfig::default();
+    let jwt_manager = Arc::new(nexus_core::auth::JwtManager::new(jwt_config));
+    let audit_logger = Arc::new(
+        nexus_core::auth::AuditLogger::new(nexus_core::auth::AuditConfig {
+            enabled: false,
+            log_dir: std::path::PathBuf::from("./logs"),
+            retention_days: 30,
+            compress_logs: false,
+        })
+        .unwrap(),
+    );
+    let server = Arc::new(NexusServer::new(
+        executor_arc,
+        engine_arc,
+        database_manager_arc,
+        rbac_arc,
+        auth_manager,
+        jwt_manager,
+        audit_logger,
+        crate::config::RootUserConfig::default(),
+    ));
+
+    // CREATE with non-ASCII property value must NOT error.
+    let create = CypherRequest {
+        query: "CREATE (:Doc {title: 'versão 日本語 😀'})".to_string(),
+        params: HashMap::new(),
+        database: None,
+    };
+    let resp = execute_cypher(
+        axum::extract::State(server.clone()),
+        None,
+        axum::Json(create),
+    )
+    .await
+    .0;
+    assert!(
+        resp.error.is_none(),
+        "non-ASCII CREATE must not error (was: {:?})",
+        resp.error
+    );
+
+    // Read it back unchanged — no lossy stripping (versão stays versão).
+    let read = CypherRequest {
+        query: "MATCH (d:Doc) RETURN d.title AS title".to_string(),
+        params: HashMap::new(),
+        database: None,
+    };
+    let resp2 = execute_cypher(axum::extract::State(server), None, axum::Json(read))
+        .await
+        .0;
+    assert!(
+        resp2.error.is_none(),
+        "non-ASCII MATCH errored: {:?}",
+        resp2.error
+    );
+    assert_eq!(resp2.rows.len(), 1);
+    let title = resp2.rows[0].as_array().expect("row is array")[0]
+        .as_str()
+        .expect("title is a string");
+    assert_eq!(
+        title, "versão 日本語 😀",
+        "non-ASCII must round-trip losslessly"
+    );
+}
