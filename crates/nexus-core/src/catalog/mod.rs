@@ -234,21 +234,31 @@ impl Catalog {
             static TEST_CATALOG_DIR: OnceLock<std::path::PathBuf> = OnceLock::new();
 
             let shared_dir = TEST_CATALOG_DIR.get_or_init(|| {
-                // Single shared directory across all tests in a
-                // `cargo test` invocation. `get_or_init` runs exactly
-                // once per process, so wiping the dir here resets
-                // every label / type / key id to zero at the start
-                // of each `cargo test` run — without the wipe, LMDB
-                // state persists across runs and tests that assert
-                // on `db.labels()` content see accumulated cruft
-                // that eventually causes `get_or_create_label` to
-                // allocate ids past the 64-bit `label_bits` cap
-                // (and silently drop newly-registered labels).
-                // Every test binary initialises its own OnceLock, so
-                // concurrent `cargo test -p nexus-core` and
-                // `cargo test -p nexus-server` don't race on the
-                // wipe — only one init body runs per process.
-                let dir = std::env::temp_dir().join("nexus_test_catalogs_shared");
+                // One shared LMDB directory PER PROCESS (keyed by pid).
+                // `get_or_init` runs once per process, so wiping the dir
+                // here resets every label / type / key id to zero at the
+                // start of each `cargo test` run — without the wipe, LMDB
+                // state persists across runs and tests that assert on
+                // `db.labels()` content see accumulated cruft that
+                // eventually causes `get_or_create_label` to allocate ids
+                // past the 64-bit `label_bits` cap (and silently drop
+                // newly-registered labels).
+                //
+                // CRITICAL: the directory MUST be process-scoped. A single
+                // `cargo test -p nexus-core` invocation launches MANY test
+                // binaries (the lib binary plus one per integration file)
+                // as separate processes. If they all share ONE fixed dir,
+                // each process's wipe (`remove_dir_all`) + concurrent LMDB
+                // writes corrupt the others' catalog mid-run — label ids
+                // get reset/reassigned, so a query's label resolution no
+                // longer matches the `label_bits` written at CREATE time,
+                // and label-scoped filters collapse. That was the root
+                // cause of the load-dependent `match_scopes_*` flake. The
+                // pid suffix keeps exactly one LMDB environment per process
+                // (still avoids the Windows TlsFull error) while giving each
+                // concurrent test binary its own isolated catalog.
+                let dir = std::env::temp_dir()
+                    .join(format!("nexus_test_catalogs_shared_{}", std::process::id()));
                 let _ = std::fs::remove_dir_all(&dir);
                 std::fs::create_dir_all(&dir).ok();
                 dir

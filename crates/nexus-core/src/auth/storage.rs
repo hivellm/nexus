@@ -52,12 +52,18 @@ impl ApiKeyStorage {
             static AUTH_STORAGE_DIR: OnceLock<std::path::PathBuf> = OnceLock::new();
 
             let shared_dir = AUTH_STORAGE_DIR.get_or_init(|| {
-                // Use a fixed shared directory for all tests. The
-                // suffix is bumped whenever `ApiKey`'s on-disk schema
-                // changes (e.g. new field, encoding switch) so stale
-                // data left over from a previous run is orphaned
+                // One shared dir PER PROCESS (pid suffix). A single
+                // `cargo test` invocation runs many test binaries as
+                // separate processes; a single fixed dir would let them
+                // concurrently read/write the same LMDB auth environment
+                // and corrupt each other. Per-process scoping keeps one
+                // LMDB environment per process (still avoids the Windows
+                // TlsFull error) while isolating concurrent test binaries.
+                // The `v2` tag is bumped whenever `ApiKey`'s on-disk schema
+                // changes so stale data from a previous run is orphaned
                 // rather than silently failing to deserialise.
-                let base = std::env::temp_dir().join("nexus_test_auth_shared_v2");
+                let base = std::env::temp_dir()
+                    .join(format!("nexus_test_auth_shared_v2_{}", std::process::id()));
                 std::fs::create_dir_all(&base).ok();
                 base
             });
