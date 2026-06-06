@@ -43,6 +43,11 @@ pub struct RelationshipIndex {
     type_index: RwLock<TypeRelationshipIndex>,
     /// Node-based index for fast node relationship lookup
     node_index: RwLock<HashMap<u64, NodeRelationshipIndex>>,
+    /// Exact-edge existence index: `(src_id, type_id, dst_id) → rel_ids`.
+    /// Backs O(1) `MERGE (a)-[:T]->(b)` existence checks instead of walking
+    /// the source node's relationship chain (O(out-degree)). A `Vec` handles
+    /// the multigraph case (several edges of the same type between two nodes).
+    edge_index: RwLock<HashMap<(u64, u32, u64), Vec<u64>>>,
     /// Statistics for monitoring
     stats: RwLock<RelationshipIndexStats>,
 }
@@ -85,8 +90,22 @@ impl RelationshipIndex {
                 type_to_rels: HashMap::new(),
             }),
             node_index: RwLock::new(HashMap::new()),
+            edge_index: RwLock::new(HashMap::new()),
             stats: RwLock::new(RelationshipIndexStats::default()),
         }
+    }
+
+    /// Look up a relationship id for the exact `(src, type, dst)` edge.
+    ///
+    /// Returns the first indexed rel id for the triple, or `None`. This is a
+    /// HINT: the caller MUST verify the returned id against storage (the
+    /// record may be deleted, or the index may not yet be rebuilt after a
+    /// restart). On a miss the caller should fall back to a chain walk.
+    pub fn find_edge(&self, src_id: u64, type_id: u32, dst_id: u64) -> Option<u64> {
+        let edge_index = self.edge_index.read().unwrap();
+        edge_index
+            .get(&(src_id, type_id, dst_id))
+            .and_then(|ids| ids.first().copied())
     }
 
     /// Index a new relationship
@@ -129,6 +148,15 @@ impl RelationshipIndex {
                     incoming: HashMap::new(),
                 });
             dst_entry.incoming.entry(type_id).or_default().push(rel_id);
+        }
+
+        // Update exact-edge existence index.
+        {
+            let mut edge_index = self.edge_index.write().unwrap();
+            edge_index
+                .entry((src_id, type_id, dst_id))
+                .or_default()
+                .push(rel_id);
         }
 
         // Update stats
@@ -194,6 +222,17 @@ impl RelationshipIndex {
                 }
                 if dst_entry.outgoing.is_empty() && dst_entry.incoming.is_empty() {
                     node_index.remove(&dst_id);
+                }
+            }
+        }
+
+        // Update exact-edge existence index.
+        {
+            let mut edge_index = self.edge_index.write().unwrap();
+            if let Some(ids) = edge_index.get_mut(&(src_id, type_id, dst_id)) {
+                ids.retain(|&id| id != rel_id);
+                if ids.is_empty() {
+                    edge_index.remove(&(src_id, type_id, dst_id));
                 }
             }
         }
@@ -282,6 +321,10 @@ impl RelationshipIndex {
         {
             let mut node_index = self.node_index.write().unwrap();
             node_index.clear();
+        }
+        {
+            let mut edge_index = self.edge_index.write().unwrap();
+            edge_index.clear();
         }
         {
             let mut stats = self.stats.write().unwrap();

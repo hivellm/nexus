@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added — `phase6_add-src-type-dst-edge-index`
+
+- **O(1) edge-MERGE existence check.** `find_relationship_between` walked the
+  source node's relationship chain (O(out-degree)); for a hub accumulating
+  high same-type degree via repeated `MERGE (hub)-[:T]->(x)` that was
+  O(degree) per merge. A new exact-edge index `(src_id, type_id, dst_id) ->
+  rel_ids` in the relationship index gives an O(1) existence hint (verified
+  against storage, with the chain walk as a correctness fallback). The
+  relationship index is now rebuilt from storage at startup so the fast path
+  survives a restart (the re-bootstrap write-burst scenario). Added
+  `Engine::flush()` for durable on-demand persistence.
+
 ## [2.3.0] — 2026-06-06
 
 > Bug-fix release driven by field reports against 2.2.0 (GH #3–#6) plus two

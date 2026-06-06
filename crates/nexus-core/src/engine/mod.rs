@@ -561,6 +561,30 @@ impl Engine {
             }
         }
 
+        // Rebuild the in-memory relationship index (type / node / exact-edge)
+        // from storage. Without this the index is empty after a restart, so
+        // the O(1) `(src, type, dst)` MERGE existence fast path never engages
+        // on a re-bootstrap — precisely the write-burst scenario this index
+        // exists to keep linear. Correctness does not depend on it (the
+        // existence check falls back to the chain walk), but the perf win does.
+        let rel_index = self.cache.relationship_index();
+        rel_index.clear().ok();
+        let total_rels = self.storage.relationship_count();
+        for rel_id in 0..total_rels {
+            let rel = match self.storage.read_rel(rel_id) {
+                Ok(r) => r,
+                Err(_) => continue,
+            };
+            if rel.is_deleted() {
+                continue;
+            }
+            // packed struct: copy fields to locals before use.
+            let (src, dst, type_id) = (rel.src_id, rel.dst_id, rel.type_id);
+            if let Err(e) = rel_index.add_relationship(rel_id, src, dst, type_id) {
+                tracing::warn!("relationship-index rebuild: rel {rel_id} skipped: {e}");
+            }
+        }
+
         Ok(())
     }
 
@@ -1430,6 +1454,15 @@ impl Engine {
             writer.flush()?;
         }
         Ok(())
+    }
+
+    /// Synchronously flush the record stores to disk.
+    ///
+    /// The write paths use `flush_async` on the hot path for throughput;
+    /// callers that need durable on-disk state (e.g. before a controlled
+    /// shutdown or reopen) issue this explicit sync flush.
+    pub fn flush(&mut self) -> Result<()> {
+        self.storage.flush()
     }
 
     /// Get async WAL statistics (if available)
@@ -2960,6 +2993,27 @@ impl Engine {
             Some(id) => id,
             None => return Ok(None),
         };
+
+        // Fast path: the exact-edge existence index gives an O(1) hint for
+        // `(src, type, dst)`. It is only a hint — verify against storage (the
+        // record may be deleted, or the index may not have been rebuilt yet
+        // after a restart). On any mismatch fall through to the authoritative
+        // chain walk so correctness never depends on the index being complete.
+        if let Some(rid) = self
+            .cache
+            .relationship_index()
+            .find_edge(src_id, type_id, dst_id)
+        {
+            if let Ok(rel) = self.storage.read_rel(rid) {
+                if !rel.is_deleted()
+                    && rel.src_id == src_id
+                    && rel.dst_id == dst_id
+                    && rel.type_id == type_id
+                {
+                    return Ok(Some(rid));
+                }
+            }
+        }
 
         // Read source node to get its relationship chain
         let src_node = self.storage.read_node(src_id)?;
