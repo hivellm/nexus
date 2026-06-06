@@ -102,6 +102,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `executor::Query` with a hard-coded empty params map. Both the inline
   property-map form `MATCH (s {id: $id})` and the `WHERE s.id = $id` form
   now resolve parameters and return the same rows as the inlined literal.
+- **The `/cypher` body now accepts the standard `parameters` key.** The
+  request struct field was `params` with no alias, so the Neo4j/SDK-standard
+  `parameters` key was silently dropped by serde and parametrized queries
+  still saw an empty map. The field now has `#[serde(alias = "parameters")]`
+  (both `parameters` and `params` work). Verified end-to-end over HTTP.
 - **Missing parameters now surface a structured error** instead of silently
   coalescing to `NULL`. A query referencing an unbound `$param` returns
   `ERR_MISSING_PARAMETER: parameter $<name> not provided`, so callers can

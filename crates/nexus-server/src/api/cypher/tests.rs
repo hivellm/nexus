@@ -306,6 +306,22 @@ async fn test_remove_label() {
 }
 */
 
+// GH issue #3 — the request body uses the Neo4j/SDK-standard `parameters`
+// key; serde must accept it (and the legacy `params`) so params reach the
+// executor. Without the alias every parametrized query saw an empty map.
+#[test]
+fn cypher_request_accepts_parameters_alias() {
+    let a: CypherRequest =
+        serde_json::from_str(r#"{"query":"X","parameters":{"id":"S-1"}}"#).unwrap();
+    assert_eq!(a.params.get("id").and_then(|v| v.as_str()), Some("S-1"));
+
+    let b: CypherRequest = serde_json::from_str(r#"{"query":"X","params":{"id":"S-1"}}"#).unwrap();
+    assert_eq!(b.params.get("id").and_then(|v| v.as_str()), Some("S-1"));
+
+    let c: CypherRequest = serde_json::from_str(r#"{"query":"X"}"#).unwrap();
+    assert!(c.params.is_empty());
+}
+
 // GH issue #5 Bug 2 — `RETURN <nodeVar>` must serialize the node object
 // (not null), and a bare `RETURN t` must name the column `t`, not `result`.
 #[tokio::test]

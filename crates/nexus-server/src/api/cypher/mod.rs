@@ -357,8 +357,11 @@ fn create_relationship_from_pattern(
 pub struct CypherRequest {
     /// Cypher query string
     pub query: String,
-    /// Query parameters
-    #[serde(default)]
+    /// Query parameters. Accepts both `params` and the Neo4j/SDK-standard
+    /// `parameters` key (issue #3 — clients send `parameters`; without the
+    /// alias serde silently dropped it and every parametrized query saw an
+    /// empty map).
+    #[serde(default, alias = "parameters")]
     pub params: HashMap<String, serde_json::Value>,
     /// Database name (optional, defaults to "neo4j")
     #[serde(default)]
