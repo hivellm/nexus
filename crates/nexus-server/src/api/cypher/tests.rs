@@ -19,7 +19,7 @@ async fn test_execute_simple_query() {
     let executor = nexus_core::executor::Executor::default();
     let executor_arc = Arc::new(executor);
     let database_manager = DatabaseManager::new(ctx.path().join("databases")).unwrap();
-    let database_manager_arc = Arc::new(RwLock::new(database_manager));
+    let database_manager_arc = Arc::new(PlRwLock::new(database_manager));
     let rbac = RoleBasedAccessControl::new();
     let rbac_arc = Arc::new(RwLock::new(rbac));
     let auth_config = nexus_core::auth::AuthConfig::default();
@@ -305,3 +305,103 @@ async fn test_remove_label() {
     // Test passes if no panic occurs
 }
 */
+
+// GH issue #5 Bug 2 — `RETURN <nodeVar>` must serialize the node object
+// (not null), and a bare `RETURN t` must name the column `t`, not `result`.
+#[tokio::test]
+async fn create_return_node_var_returns_node_object() {
+    use crate::NexusServer;
+    use nexus_core::auth::RoleBasedAccessControl;
+    use nexus_core::database::DatabaseManager;
+    use nexus_core::testing::TestContext;
+    use std::sync::Arc;
+    use tokio::sync::RwLock;
+    // database_manager uses parking_lot::RwLock; engine/rbac use tokio::RwLock.
+    use parking_lot::RwLock as PlRwLock;
+
+    let ctx = TestContext::new();
+    let engine = nexus_core::Engine::with_data_dir(ctx.path()).unwrap();
+    let engine_arc = Arc::new(RwLock::new(engine));
+    let executor = nexus_core::executor::Executor::default();
+    let executor_arc = Arc::new(executor);
+    let database_manager = DatabaseManager::new(ctx.path().join("databases")).unwrap();
+    let database_manager_arc = Arc::new(PlRwLock::new(database_manager));
+    let rbac = RoleBasedAccessControl::new();
+    let rbac_arc = Arc::new(RwLock::new(rbac));
+    let auth_config = nexus_core::auth::AuthConfig::default();
+    let auth_manager = Arc::new(nexus_core::auth::AuthManager::new(auth_config));
+    let jwt_config = nexus_core::auth::JwtConfig::default();
+    let jwt_manager = Arc::new(nexus_core::auth::JwtManager::new(jwt_config));
+    let audit_logger = Arc::new(
+        nexus_core::auth::AuditLogger::new(nexus_core::auth::AuditConfig {
+            enabled: false,
+            log_dir: std::path::PathBuf::from("./logs"),
+            retention_days: 30,
+            compress_logs: false,
+        })
+        .unwrap(),
+    );
+    let server = Arc::new(NexusServer::new(
+        executor_arc,
+        engine_arc,
+        database_manager_arc,
+        rbac_arc,
+        auth_manager,
+        jwt_manager,
+        audit_logger,
+        crate::config::RootUserConfig::default(),
+    ));
+
+    // CREATE ... RETURN t — must return the node object, column named "t".
+    let req = CypherRequest {
+        query: "CREATE (t:ProbeNode {id: \"probe-1\", title: \"hello\", n: 42}) RETURN t"
+            .to_string(),
+        params: HashMap::new(),
+        database: None,
+    };
+    let resp = execute_cypher(axum::extract::State(server.clone()), None, axum::Json(req))
+        .await
+        .0;
+    assert!(
+        resp.error.is_none(),
+        "CREATE...RETURN t errored: {:?}",
+        resp.error
+    );
+    assert_eq!(
+        resp.columns,
+        vec!["t".to_string()],
+        "bare RETURN t must name the column 't', not 'result'"
+    );
+    assert_eq!(resp.rows.len(), 1);
+    let row = resp.rows[0].as_array().expect("row must be an array");
+    let node = row[0]
+        .as_object()
+        .expect("RETURN t must be a node object, not null");
+    assert_eq!(node.get("id").and_then(|v| v.as_str()), Some("probe-1"));
+    assert_eq!(node.get("title").and_then(|v| v.as_str()), Some("hello"));
+    assert_eq!(node.get("n").and_then(|v| v.as_i64()), Some(42));
+    assert!(
+        node.contains_key("_nexus_id"),
+        "node object must carry _nexus_id"
+    );
+
+    // MATCH ... RETURN t — shape parity with the CREATE path.
+    let req2 = CypherRequest {
+        query: "MATCH (t:ProbeNode) RETURN t".to_string(),
+        params: HashMap::new(),
+        database: None,
+    };
+    let resp2 = execute_cypher(axum::extract::State(server), None, axum::Json(req2))
+        .await
+        .0;
+    assert!(
+        resp2.error.is_none(),
+        "MATCH...RETURN t errored: {:?}",
+        resp2.error
+    );
+    assert_eq!(resp2.rows.len(), 1);
+    let node2 = resp2.rows[0].as_array().expect("row must be an array")[0]
+        .as_object()
+        .expect("MATCH RETURN t must be a node object, not null");
+    assert_eq!(node2.get("title").and_then(|v| v.as_str()), Some("hello"));
+}

@@ -1,0 +1,26 @@
+fix(cypher): GROUP BY by expression key + RETURN node-var (#5)
+
+Bug 1 — implicit GROUP BY by a function/expression key dropped the
+aggregation. The parser dropped a postfix index after a function call, so
+`labels(n)[0]` parsed as `labels(n)`; the term was then not an implicit
+grouping key and `RETURN labels(n)[0] AS label, count(*) AS c` returned one
+raw row per node (column `labels(n)`, no count). The parser now folds
+postfix `[index]` and `[start..end]` after a function call into ArrayIndex /
+ArraySlice (labels(n)[0], head(collect(x))[0]). Fixes both RETURN and WITH.
+
+Bug 2 — `RETURN <nodeVar>` returned null. The server CREATE/MERGE-RETURN
+path hand-rolled projection and only handled PropertyAccess/Literal,
+returning null for a bare `RETURN t` (column named "result"). It now
+serializes a bound node variable to the same shape the executor uses
+({...properties, _nexus_id}) and names the column after the variable,
+matching MATCH...RETURN n.
+
+Tests: crates/nexus-core/tests/cypher_groupby_expression_key_test.rs (3) +
+a nexus-server cypher RETURN-node test. nexus-core lib serial 2354 green;
+clippy/fmt clean.
+
+Also files follow-up tasks for newly reported bugs:
+phase6_fix-cypher-nonascii-body (#6, UTF-8 body rejected + connection drop)
+and phase6_fix-windows-write-socket-exhaustion (per-request write socket churn).
+
+Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>

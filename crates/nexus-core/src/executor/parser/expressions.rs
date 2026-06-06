@@ -790,10 +790,64 @@ impl CypherParser {
                 return Ok(args.into_iter().next().unwrap());
             }
 
-            Ok(Expression::FunctionCall {
+            let mut expr = Expression::FunctionCall {
                 name: identifier,
                 args,
-            })
+            };
+
+            // Handle postfix `[index]` after a function call, e.g. `labels(n)[0]`,
+            // `head(collect(x))[0]`. One or more index/slice suffixes are folded
+            // left-associatively into nested `ArrayIndex` / `ArraySlice` nodes so
+            // the evaluator can handle them at runtime.
+            while self.peek_char() == Some('[') {
+                self.consume_char(); // consume '['
+                self.skip_whitespace();
+
+                // Detect slice syntax: func()[start..end]
+                // Peek ahead to see if we have a '..' inside.
+                let start_expr = if self.peek_char() != Some('.') && self.peek_char() != Some(']') {
+                    Some(Box::new(self.parse_expression()?))
+                } else {
+                    None
+                };
+
+                self.skip_whitespace();
+
+                if self.peek_char() == Some('.') && self.peek_char_at(1) == Some('.') {
+                    self.consume_char(); // consume first '.'
+                    self.consume_char(); // consume second '.'
+                    self.skip_whitespace();
+
+                    let end_expr = if self.peek_char() != Some(']') {
+                        Some(Box::new(self.parse_expression()?))
+                    } else {
+                        None
+                    };
+
+                    self.skip_whitespace();
+                    self.expect_char(']')?;
+
+                    expr = Expression::ArraySlice {
+                        base: Box::new(expr),
+                        start: start_expr,
+                        end: end_expr,
+                    };
+                } else {
+                    self.skip_whitespace();
+                    self.expect_char(']')?;
+
+                    if let Some(index) = start_expr {
+                        expr = Expression::ArrayIndex {
+                            base: Box::new(expr),
+                            index,
+                        };
+                    } else {
+                        return Err(self.error("Array index expected after '['"));
+                    }
+                }
+            }
+
+            Ok(expr)
         }
         // Check for map projection: n {.name, .age}
         else if self.peek_char() == Some('{') {

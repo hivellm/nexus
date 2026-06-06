@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed — `phase6_fix-groupby-expr-and-return-node` (GH #5)
+
+- **GROUP BY by a function/expression key now aggregates correctly.** The
+  parser dropped a postfix index after a function call, so `labels(n)[0]`
+  parsed as `labels(n)` — the term was then not treated as an implicit
+  grouping key, and `MATCH (n) RETURN labels(n)[0] AS label, count(*) AS c`
+  returned one raw row per node (column `labels(n)`, no count). The Cypher
+  parser now folds postfix `[index]` and `[start..end]` slices after a
+  function call into `ArrayIndex` / `ArraySlice` (e.g. `labels(n)[0]`,
+  `head(collect(x))[0]`), so every non-aggregating projection term —
+  including expressions — is an implicit grouping key. Fixes both the
+  `RETURN` and `WITH` forms.
+- **`RETURN <nodeVar>` returns the node object instead of null.** The HTTP
+  server's CREATE/MERGE…RETURN path hand-rolled projection and only handled
+  `PropertyAccess`/`Literal`, returning `null` for a bare `RETURN t` (and
+  naming the column `result`). It now serializes a bound node variable to
+  the same shape the executor uses (`{…properties, _nexus_id}`) and names
+  the column after the variable, matching `MATCH …RETURN n`.
+
 ### Fixed — `phase6_fix-prop-ptr-corruption-startup` (GH #4)
 
 - **Property data no longer lost on reopen.** `PropertyStore::rebuild_index`

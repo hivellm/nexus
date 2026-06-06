@@ -1220,10 +1220,48 @@ pub async fn execute_cypher(
                 let mut row_values = Vec::new();
 
                 for item in &return_clause.items {
-                    columns.push(item.alias.clone().unwrap_or_else(|| "result".to_string()));
+                    // Column name: prefer explicit alias, then the variable name
+                    // for a bare `RETURN t`, then fall back to "result".
+                    let col_name = item.alias.clone().unwrap_or_else(|| {
+                        if let nexus_core::executor::parser::Expression::Variable(v) =
+                            &item.expression
+                        {
+                            v.clone()
+                        } else {
+                            "result".to_string()
+                        }
+                    });
+                    columns.push(col_name);
 
                     // Evaluate the expression using the variable context
                     let value = match &item.expression {
+                        nexus_core::executor::parser::Expression::Variable(var_name) => {
+                            // Bare `RETURN t` — serialize the whole node object using
+                            // the same shape that the executor's `node_to_result_value`
+                            // produces: {…props, _nexus_id: id, _nexus_labels: […]}.
+                            if let Some(node_ids) = variable_context.get(var_name) {
+                                if let Some(node_id) = node_ids.first() {
+                                    let node_id = *node_id;
+                                    // Match the executor's `read_node_as_value`
+                                    // shape exactly: {…properties, _nexus_id: id}
+                                    // so CREATE…RETURN n equals MATCH…RETURN n.
+                                    let mut map = match engine.storage.load_node_properties(node_id)
+                                    {
+                                        Ok(Some(serde_json::Value::Object(m))) => m,
+                                        _ => serde_json::Map::new(),
+                                    };
+                                    map.insert(
+                                        "_nexus_id".to_string(),
+                                        serde_json::Value::Number(node_id.into()),
+                                    );
+                                    serde_json::Value::Object(map)
+                                } else {
+                                    serde_json::Value::Null
+                                }
+                            } else {
+                                serde_json::Value::Null
+                            }
+                        }
                         nexus_core::executor::parser::Expression::PropertyAccess {
                             variable,
                             property,
