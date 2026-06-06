@@ -13,6 +13,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > reconfirmed reliability bugs. All fixes ship with regression tests and were
 > verified end-to-end over HTTP.
 
+### Fixed — `phase6_fix-planner-merge-unindexed-on2`
+
+- **Index-backed node MERGE (O(N) → O(log N)).** `MERGE (n:Label {key: v})`
+  resolved existence with a full label-bitmap scan plus a per-candidate
+  property compare, so a batch of M merges over N label nodes was O(M·N) —
+  the cause of the production write-burst meltdown. The lookup now seeks via
+  the property B-tree (`find_exact`, intersecting per-property bitmaps) when a
+  covering index exists, falling back to the scan (and the unindexed warning)
+  otherwise. Edge-MERGE benefits too: its endpoints resolve through the same
+  now-index-backed lookup. `create_node` keeps the typed property index in
+  sync so MERGE stays idempotent for nodes created after `CREATE INDEX`.
+
 ### Fixed — `phase6_fix-match-scopes-parallel-load-flake`
 
 - **Catalog label/type/key id allocation is now collision-free across shared
