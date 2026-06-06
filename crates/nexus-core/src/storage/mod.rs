@@ -273,7 +273,7 @@ impl RecordStore {
         // Phase 3: Initialize adjacency list store (optional, for optimization)
         let adjacency_store = adjacency_list::AdjacencyListStore::new(&path).ok();
 
-        Ok(Self {
+        let mut store = Self {
             path,
             nodes_file: Arc::new(nodes_file),
             rels_file: Arc::new(rels_file),
@@ -285,7 +285,20 @@ impl RecordStore {
             next_rel_id: Arc::new(AtomicU64::new(next_rel_id)),
             nodes_file_size,
             rels_file_size,
-        })
+        };
+
+        // Issue #4: run the durable startup repair so corrupt prop_ptrs are
+        // fixed on disk before any query sees them.  On error we log and
+        // continue — refusing to open is worse than opening with stale ptrs
+        // (load_node_properties still falls back to the reverse_index).
+        if let Err(e) = store.repair_corrupt_node_prop_ptrs() {
+            tracing::error!(
+                "RecordStore::new: startup prop_ptr repair failed (continuing): {}",
+                e
+            );
+        }
+
+        Ok(store)
     }
 
     /// Allocate a new node ID
@@ -372,6 +385,88 @@ impl RecordStore {
         std::sync::atomic::fence(std::sync::atomic::Ordering::Release);
 
         Ok(())
+    }
+
+    /// Scan every node slot and durably fix any `prop_ptr` that is corrupt.
+    ///
+    /// A `prop_ptr` is corrupt when it is non-zero and the property store does
+    /// not contain a **Node** entry for the owning node at that offset (e.g.
+    /// because it points at a Relationship entry, or at stale/garbage bytes).
+    ///
+    /// The correct offset is recovered from the property store's `reverse_index`
+    /// via [`property_store::PropertyStore::offset_for`].  If no entry exists the
+    /// pointer is reset to `0` (meaning "no properties"), which is safe because
+    /// `load_node_properties` will then return `None` rather than corrupt data.
+    ///
+    /// After the scan, if any record was corrected the nodes mmap is flushed to
+    /// disk so the repair survives the next restart.  This closes the recurring
+    /// corruption loop described in issue #4.
+    ///
+    /// Returns the number of slots that were repaired.
+    pub fn repair_corrupt_node_prop_ptrs(&mut self) -> Result<usize> {
+        let slot_count = self.nodes_file_size / NODE_RECORD_SIZE;
+        let mut repaired = 0usize;
+
+        for slot in 0..slot_count {
+            let byte_start = slot * NODE_RECORD_SIZE;
+            let byte_end = byte_start + NODE_RECORD_SIZE;
+
+            // Read raw on-disk bytes — do NOT go through read_node because that
+            // resets prop_ptr in memory without persisting; we need the real value.
+            let bytes = &self.nodes_mmap[byte_start..byte_end];
+
+            // Skip all-zero slots: they are unallocated/never-written.
+            if bytes.iter().all(|&b| b == 0) {
+                continue;
+            }
+
+            let mut record: NodeRecord = *bytemuck::from_bytes(bytes);
+
+            // Nothing to validate when prop_ptr is already 0.
+            if record.prop_ptr == 0 {
+                continue;
+            }
+
+            let node_id = slot as u64;
+
+            // Determine whether the on-disk prop_ptr is valid for this node.
+            let is_valid = self
+                .property_store
+                .read()
+                .unwrap()
+                .get_entity_info_at_offset(record.prop_ptr)
+                .map(|(eid, etype)| eid == node_id && etype == property_store::EntityType::Node)
+                .unwrap_or(false);
+
+            if is_valid {
+                continue;
+            }
+
+            // prop_ptr is corrupt — recover the correct offset (or 0).
+            let correct_ptr = self
+                .property_store
+                .read()
+                .unwrap()
+                .offset_for(node_id, property_store::EntityType::Node)
+                .unwrap_or(0);
+
+            record.prop_ptr = correct_ptr;
+
+            // write_node validates that the new prop_ptr points to a Node entry
+            // (or is 0), so it will accept this corrected record.
+            self.write_node(node_id, &record)?;
+            repaired += 1;
+        }
+
+        if repaired > 0 {
+            // Make the corrections durable before the constructor returns.
+            self.nodes_mmap
+                .flush()
+                .map_err(|e| Error::Storage(format!("Failed to flush after repair: {}", e)))?;
+            tracing::info!("repaired {} corrupt node prop_ptr(s)", repaired);
+        }
+
+        Ok(repaired)
     }
 
     /// Flush all pending writes to disk
@@ -2203,5 +2298,227 @@ mod tests {
             rev, None,
             "plain create_node must not insert a reverse entry"
         );
+    }
+
+    // ── repair_corrupt_node_prop_ptrs tests (issue #4) ────────────────────────
+
+    /// Inject on-disk prop_ptr corruption (node's pointer points at a
+    /// Relationship property entry), drop and reopen the store, then verify
+    /// that:
+    ///   (a) reopening does not panic,
+    ///   (b) the on-disk prop_ptr is no longer pointing at a Relationship entry,
+    ///   (c) load_node_properties returns the node's real properties.
+    #[test]
+    fn repair_resets_prop_ptr_pointing_to_relationship_durably() {
+        let ctx = TestContext::new();
+        let path = ctx.path().to_path_buf();
+
+        // ------------------------------------------------------------------
+        // Phase 1: build a store with one node (with props) and one rel (with
+        // props), then manually corrupt the node's on-disk prop_ptr to point
+        // at the relationship's property offset.
+        // ------------------------------------------------------------------
+        let rel_prop_offset;
+        let node_id;
+        {
+            let mut store = RecordStore::new(&path).unwrap();
+            let mut tx_mgr = crate::transaction::TransactionManager::new().unwrap();
+            let mut tx = tx_mgr.begin_write().unwrap();
+
+            // Create a node with real properties.
+            node_id = store
+                .create_node(
+                    &mut tx,
+                    vec!["Person".to_string()],
+                    serde_json::json!({"name": "Alice", "age": 30}),
+                )
+                .unwrap();
+
+            // Create a relationship with properties so there is a Relationship
+            // entry in the property store.
+            let _rel_id = store
+                .create_relationship(
+                    &mut tx,
+                    node_id,
+                    node_id,
+                    0,
+                    serde_json::json!({"since": 2020}),
+                )
+                .unwrap();
+
+            // Persist the node record + property store to disk BEFORE injecting
+            // corruption, so that on reopen the rebuilt reverse_index still
+            // contains the node's real property entry (the source the repair
+            // recovers from). Flushing only nodes_mmap later is not enough —
+            // properties.store must be durable too.
+            store
+                .flush()
+                .expect("flush store before corruption injection");
+
+            // Discover the offset of the relationship's property entry via the
+            // reverse_index (the only reliable source).
+            rel_prop_offset = store
+                .property_store
+                .read()
+                .unwrap()
+                .offset_for(0, property_store::EntityType::Relationship)
+                .expect("relationship must have a property entry");
+
+            // ----------------------------------------------------------------
+            // Inject corruption: overwrite the node's on-disk record so that
+            // prop_ptr points at the relationship's property offset.
+            //
+            // We bypass write_node deliberately here — write_node's guard
+            // would reject this (it detects the Relationship type and returns
+            // Err).  Writing the mmap directly is the only way to simulate the
+            // pre-existing on-disk corruption that issue #4 describes.
+            // ----------------------------------------------------------------
+            let byte_start = node_id as usize * NODE_RECORD_SIZE;
+            let byte_end = byte_start + NODE_RECORD_SIZE;
+            // Read current record bytes via mmap.
+            let mut record_bytes = store.nodes_mmap[byte_start..byte_end].to_vec();
+            // Overwrite prop_ptr (bytes 16..24 in NodeRecord: label_bits[0..8],
+            // first_rel_ptr[8..16], prop_ptr[16..24]).
+            record_bytes[16..24].copy_from_slice(&rel_prop_offset.to_le_bytes());
+            store.nodes_mmap[byte_start..byte_end].copy_from_slice(&record_bytes);
+            // Flush so the corrupt bytes land on disk.
+            store
+                .nodes_mmap
+                .flush()
+                .expect("flush of injected corruption must succeed");
+        } // store dropped here — all handles closed.
+
+        // ------------------------------------------------------------------
+        // Phase 2: reopen.  RecordStore::new calls repair_corrupt_node_prop_ptrs.
+        // ------------------------------------------------------------------
+        let store2 = RecordStore::new(&path).unwrap();
+
+        // (a) We reached here without panic.
+
+        // (b) The on-disk prop_ptr must no longer point at a Relationship.
+        let byte_start = node_id as usize * NODE_RECORD_SIZE;
+        let byte_end = byte_start + NODE_RECORD_SIZE;
+        let raw_bytes = &store2.nodes_mmap[byte_start..byte_end];
+        let on_disk_record: NodeRecord = *bytemuck::from_bytes(raw_bytes);
+        if on_disk_record.prop_ptr != 0 {
+            let info = store2
+                .property_store
+                .read()
+                .unwrap()
+                .get_entity_info_at_offset(on_disk_record.prop_ptr);
+            assert!(
+                matches!(
+                    info,
+                    Some((id, property_store::EntityType::Node)) if id == node_id
+                ),
+                "on-disk prop_ptr={} must point to a Node entry for node_id={}, got {:?}",
+                on_disk_record.prop_ptr,
+                node_id,
+                info
+            );
+        }
+
+        // (c) load_node_properties returns the node's real properties.
+        let props = store2
+            .load_node_properties(node_id)
+            .unwrap()
+            .expect("node must still have properties after repair");
+        assert_eq!(
+            props.get("name").and_then(|v| v.as_str()),
+            Some("Alice"),
+            "real node properties must be recoverable after repair"
+        );
+    }
+
+    /// After the first repair (above), drop and reopen once more.  The second
+    /// open must find zero corrupt slots — the repair is one-shot and durable.
+    #[test]
+    fn repair_is_one_shot_clean_second_boot() {
+        let ctx = TestContext::new();
+        let path = ctx.path().to_path_buf();
+
+        // ------------------------------------------------------------------
+        // Build the same corrupt scenario as the first test.
+        // ------------------------------------------------------------------
+        {
+            let mut store = RecordStore::new(&path).unwrap();
+            let mut tx_mgr = crate::transaction::TransactionManager::new().unwrap();
+            let mut tx = tx_mgr.begin_write().unwrap();
+
+            let node_id = store
+                .create_node(
+                    &mut tx,
+                    vec!["X".to_string()],
+                    serde_json::json!({"k": "v"}),
+                )
+                .unwrap();
+
+            let _rel_id = store
+                .create_relationship(&mut tx, node_id, node_id, 0, serde_json::json!({"r": 1}))
+                .unwrap();
+
+            let rel_prop_offset = store
+                .property_store
+                .read()
+                .unwrap()
+                .offset_for(0, property_store::EntityType::Relationship)
+                .unwrap();
+
+            // Inject corruption.
+            let byte_start = node_id as usize * NODE_RECORD_SIZE;
+            let byte_end = byte_start + NODE_RECORD_SIZE;
+            let mut record_bytes = store.nodes_mmap[byte_start..byte_end].to_vec();
+            record_bytes[16..24].copy_from_slice(&rel_prop_offset.to_le_bytes());
+            store.nodes_mmap[byte_start..byte_end].copy_from_slice(&record_bytes);
+            store.nodes_mmap.flush().unwrap();
+        }
+
+        // First reopen — repair runs.
+        drop(RecordStore::new(&path).unwrap());
+
+        // Second reopen — repair must find nothing to fix.
+        let mut store3 = RecordStore::new(&path).unwrap();
+        let count = store3
+            .repair_corrupt_node_prop_ptrs()
+            .expect("repair on already-clean store must succeed");
+        assert_eq!(
+            count, 0,
+            "second boot must find zero corrupt slots (repair is durable)"
+        );
+    }
+
+    /// A completely healthy store (no corruption) must yield a repair count of
+    /// 0, and all properties must remain intact after the repair pass.
+    #[test]
+    fn repair_noop_on_healthy_store() {
+        let (mut store, _ctx) = create_test_store();
+        let mut tx_mgr = crate::transaction::TransactionManager::new().unwrap();
+        let mut tx = tx_mgr.begin_write().unwrap();
+
+        // Create a few nodes with real properties.
+        let n0 = store
+            .create_node(&mut tx, vec!["A".to_string()], serde_json::json!({"x": 1}))
+            .unwrap();
+        let n1 = store
+            .create_node(&mut tx, vec!["B".to_string()], serde_json::json!({"y": 2}))
+            .unwrap();
+
+        let count = store
+            .repair_corrupt_node_prop_ptrs()
+            .expect("repair on healthy store must not error");
+        assert_eq!(count, 0, "healthy store must report 0 repairs");
+
+        // Properties must remain intact.
+        let p0 = store
+            .load_node_properties(n0)
+            .unwrap()
+            .expect("node 0 must still have properties");
+        assert_eq!(p0.get("x").and_then(|v| v.as_i64()), Some(1));
+
+        let p1 = store
+            .load_node_properties(n1)
+            .unwrap()
+            .expect("node 1 must still have properties");
+        assert_eq!(p1.get("y").and_then(|v| v.as_i64()), Some(2));
     }
 }

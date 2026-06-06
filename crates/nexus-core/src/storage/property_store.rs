@@ -51,6 +51,13 @@ impl PropertyStore {
     pub fn new(path: PathBuf) -> Result<Self> {
         let property_file = path.join("properties.store");
 
+        // Whether the backing file already exists with (potential) data. For an
+        // existing file we must let rebuild_index() perform a full scan from
+        // disk, so next_offset is seeded to 0 below (the >0 "preserve" branch in
+        // rebuild_index would otherwise skip the on-disk scan and lose the index
+        // on every reopen — the root cause of issue #4 property loss on reboot).
+        let file_existed = property_file.exists();
+
         // Create or open the property file
         let file = if property_file.exists() {
             OpenOptions::new()
@@ -75,9 +82,11 @@ impl PropertyStore {
         let mut store = Self {
             path,
             mmap,
-            // CRITICAL: Start at offset 1, not 0, because prop_ptr=0 means "no properties"
-            // This ensures the first stored property gets offset 1, which is a valid non-zero prop_ptr
-            next_offset: 1,
+            // For a brand-new file, start at offset 1 (offset 0 is reserved
+            // because prop_ptr=0 means "no properties"). For an existing file,
+            // seed 0 so rebuild_index() takes the full on-disk scan branch and
+            // reconstructs the index correctly (issue #4).
+            next_offset: if file_existed { 0 } else { 1 },
             index: HashMap::new(),
             reverse_index: HashMap::new(),
         };
@@ -462,8 +471,10 @@ impl PropertyStore {
             self.index.clear();
             self.reverse_index.clear();
 
-            // Scan file to rebuild indexes, but don't update next_offset
-            let mut offset = 0;
+            // Scan file to rebuild indexes, but don't update next_offset.
+            // Entries start at offset 1 (offset 0 is the reserved sentinel);
+            // scanning from 0 would misalign every read.
+            let mut offset = 1;
             while offset < self.mmap.len() as u64 && offset < preserved_next_offset {
                 if offset + 13 > self.mmap.len() as u64 {
                     break;
@@ -521,8 +532,11 @@ impl PropertyStore {
         );
 
         // CRITICAL FIX: Track the maximum offset found in the file
-        // This helps detect if we're reading old data that shouldn't be used
-        let mut offset = 0;
+        // This helps detect if we're reading old data that shouldn't be used.
+        // Entries start at offset 1 (offset 0 is the reserved sentinel because
+        // prop_ptr=0 means "no properties"); scanning from 0 misaligns every
+        // read and fabricates a phantom (0, Node) entry (issue #4).
+        let mut offset = 1;
         let mut max_valid_offset = 0;
         let mut found_valid_entries = false;
 
@@ -676,6 +690,78 @@ impl PropertyStore {
     /// Read a u8 value from the given offset
     fn read_u8(&self, offset: u64) -> u8 {
         self.mmap[offset as usize]
+    }
+
+    /// Return the byte-offset stored in the reverse index for `(entity_id, entity_type)`.
+    ///
+    /// This is the canonical way to recover a valid `prop_ptr` for a node (or
+    /// relationship) when the on-disk record's pointer is known to be corrupt.
+    /// The index must be populated (via [`PropertyStore::ensure_index_populated`])
+    /// before calling this.
+    pub fn offset_for(&self, entity_id: u64, entity_type: EntityType) -> Option<u64> {
+        self.reverse_index.get(&(entity_id, entity_type)).copied()
+    }
+
+    /// Ensure the in-memory index is populated by scanning the property file.
+    ///
+    /// Called by [`RecordStore::repair_corrupt_node_prop_ptrs`] at startup,
+    /// before it needs to look up `offset_for` entries.  The normal
+    /// `rebuild_index` path skips the full scan when `next_offset` is already
+    /// set (i.e. on every fresh open of an existing store), which means the
+    /// reverse_index is initially empty.  This method forces a full scan so
+    /// the repair has a complete map from `(entity_id, entity_type)` → offset.
+    ///
+    /// If the indexes are already populated, this is a no-op.
+    pub fn ensure_index_populated(&mut self) -> Result<()> {
+        if !self.index.is_empty() {
+            // Already populated — nothing to do.
+            return Ok(());
+        }
+
+        // Full scan: start at offset 1 (offset 0 is always zero because
+        // prop_ptr=0 means "no properties").
+        let mut offset: u64 = 1;
+        let mmap_len = self.mmap.len() as u64;
+        let mut found_next_offset: u64 = 1;
+
+        while offset < mmap_len {
+            if offset + 13 > mmap_len {
+                break;
+            }
+
+            let entity_id = self.read_u64(offset);
+            let entity_type_byte = self.read_u8(offset + 8);
+            let data_size = self.read_u32(offset + 9);
+
+            // Stop at the first all-zero header — no more entries.
+            if entity_id == 0 && entity_type_byte == 0 && data_size == 0 {
+                break;
+            }
+
+            let entity_type = match EntityType::from_u8(entity_type_byte) {
+                Ok(et) => et,
+                Err(_) => break,
+            };
+
+            let entry_size = 8u64 + 1 + 4 + data_size as u64;
+            if offset + entry_size > mmap_len {
+                break;
+            }
+
+            self.index.insert(offset, (entity_id, entity_type));
+            self.reverse_index.insert((entity_id, entity_type), offset);
+
+            found_next_offset = offset + entry_size;
+            offset += entry_size;
+        }
+
+        // Advance next_offset to the end of the last valid entry so that new
+        // properties are appended correctly.
+        if found_next_offset > self.next_offset {
+            self.next_offset = found_next_offset;
+        }
+
+        Ok(())
     }
 
     /// Get the number of stored properties

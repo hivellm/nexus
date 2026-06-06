@@ -1021,8 +1021,11 @@ impl Engine {
         self.check_constraints(&label_ids, &properties, Some(id))?;
         self.enforce_extended_node_constraints(&label_ids, &properties, Some(id))?;
 
-        // Create updated node record
-        let mut node_record = storage::NodeRecord::new();
+        // Start from the EXISTING record so we preserve first_rel_ptr (the head
+        // of the relationship chain), flags, etc. Building a blank
+        // `NodeRecord::new()` here would zero first_rel_ptr and orphan the
+        // node's relationships (data-integrity bug related to issue #4).
+        let mut node_record = self.storage.read_node(id)?;
         node_record.label_bits = label_bits;
 
         // Store properties and get property pointer

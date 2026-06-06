@@ -7,6 +7,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed — `phase6_fix-prop-ptr-corruption-startup` (GH #4)
+
+- **Property data no longer lost on reopen.** `PropertyStore::rebuild_index`
+  always seeded `next_offset = 1` before rebuilding, so on every reopen it took
+  the "preserve next_offset" branch and scanned only `[0, 1)` — reconstructing
+  an empty/garbage index from disk. Both scan loops also started at byte offset
+  0, but real entries begin at offset 1 (offset 0 is the reserved `prop_ptr=0`
+  sentinel), so the misaligned read fabricated a phantom `(0, Node)→0` entry.
+  Existing files now seed `next_offset = 0` to force a correct full on-disk
+  rebuild, and both scan loops start at offset 1. This is the root cause of the
+  "node returns only `_nexus_id`" and intermittent
+  `JSON error: expected value at line 1 column 1` symptoms after a restart.
+- **Durable, one-shot prop_ptr repair at startup.** `read_node` detected a
+  `prop_ptr` pointing at a Relationship entry and reset it in memory only
+  (`&self`), so the on-disk corruption recurred on every boot. `RecordStore::new`
+  now runs `repair_corrupt_node_prop_ptrs`, which scans node records, recovers
+  the correct property offset from the rebuilt reverse-index (or 0), persists the
+  correction via `write_node`, and flushes — so subsequent boots are clean and
+  `RETURN n` returns the full property map. Added `PropertyStore::offset_for`.
+- **`update_node` preserves the relationship chain.** It built a blank
+  `NodeRecord::new()`, zeroing `first_rel_ptr` and orphaning the node's
+  relationships; it now reads the existing record first.
+
 ### Fixed — `phase6_fix-cypher-param-binding` (GH #3)
 
 - **Cypher `$param` binding now works on the read path.** `POST /cypher`

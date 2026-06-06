@@ -14,9 +14,9 @@
 
 | Status | Task | Progress | Description |
 |--------|------|----------|-------------|
-| ✅ | phase6_fix-cypher-param-binding | 10/10 | fix cypher param binding |
 | ⬚ | phase6_fix-groupby-expr-and-return-node | 0/11 | fix groupby expr and return node |
-| ⬚ | phase6_fix-prop-ptr-corruption-startup | 0/11 | fix prop ptr corruption startup |
+| ⬚ | phase6_fix-match-scopes-parallel-load-flake | 0/10 | fix match scopes parallel load flake |
+| ✅ | phase6_fix-prop-ptr-corruption-startup | 11/11 | fix prop ptr corruption startup |
 
 ## phase7
 
