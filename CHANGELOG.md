@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.3.0] — 2026-06-06
+
+> Bug-fix release driven by field reports against 2.2.0 (GH #3–#6) plus two
+> reconfirmed reliability bugs. All fixes ship with regression tests and were
+> verified end-to-end over HTTP.
+
 ### Fixed — `phase6_fix-match-scopes-parallel-load-flake`
 
 - **Catalog label/type/key id allocation is now collision-free across shared
