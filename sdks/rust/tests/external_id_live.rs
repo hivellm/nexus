@@ -306,12 +306,7 @@ async fn str_too_long_is_rejected() {
     let c = client();
     let ext = format!("str:{}", "a".repeat(257));
     let r = c
-        .create_node_with_external_id(
-            vec!["LiveRustCap".to_string()],
-            HashMap::new(),
-            ext,
-            None,
-        )
+        .create_node_with_external_id(vec!["LiveRustCap".to_string()], HashMap::new(), ext, None)
         .await
         .unwrap();
     assert!(r.error.is_some(), "oversize str should error");
@@ -323,12 +318,7 @@ async fn bytes_too_long_is_rejected() {
     let c = client();
     let ext = format!("bytes:{}", "ff".repeat(65));
     let r = c
-        .create_node_with_external_id(
-            vec!["LiveRustCap".to_string()],
-            HashMap::new(),
-            ext,
-            None,
-        )
+        .create_node_with_external_id(vec!["LiveRustCap".to_string()], HashMap::new(), ext, None)
         .await
         .unwrap();
     assert!(r.error.is_some(), "oversize bytes should error");
@@ -358,6 +348,9 @@ async fn get_node_by_absent_external_id_returns_none() {
     let c = client();
     let ext = format!("str:rust-absent-{}", uniq());
     let g = c.get_node_by_external_id(ext).await.unwrap();
-    assert!(g.node.is_none(), "absent external id should resolve to None");
+    assert!(
+        g.node.is_none(),
+        "absent external id should resolve to None"
+    );
     assert!(g.error.is_none(), "absent != error");
 }

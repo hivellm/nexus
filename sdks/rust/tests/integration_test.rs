@@ -59,12 +59,7 @@ async fn test_create_node_with_external_id_round_trip() {
     );
 
     let create = client
-        .create_node_with_external_id(
-            vec!["ExtIdTest".to_string()],
-            props,
-            ext_id,
-            Some("match"),
-        )
+        .create_node_with_external_id(vec!["ExtIdTest".to_string()], props, ext_id, Some("match"))
         .await
         .unwrap();
 

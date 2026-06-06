@@ -49,6 +49,12 @@ impl HttpTransport {
         let client = Client::builder()
             .timeout(std::time::Duration::from_secs(timeout_secs))
             .user_agent(format!("nexus-sdk/{}", env!("CARGO_PKG_VERSION")))
+            // Reuse pooled keep-alive connections across requests. Without a
+            // bounded idle pool + TCP keep-alive, sustained writes on Windows
+            // can pile connections into TIME_WAIT and drain ephemeral ports.
+            .pool_max_idle_per_host(32)
+            .pool_idle_timeout(Some(std::time::Duration::from_secs(90)))
+            .tcp_keepalive(Some(std::time::Duration::from_secs(60)))
             .build()
             .map_err(|e| NexusError::Configuration(format!("reqwest build: {e}")))?;
         Ok(Self {

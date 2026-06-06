@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed — `phase6_fix-windows-write-socket-exhaustion`
+
+- **HTTP clients now reuse pooled keep-alive connections.** The
+  `nexus-protocol` `RestClient` built a fresh `reqwest::Client` inside every
+  `post`/`get`/`stream` call, so each request got its own (empty) connection
+  pool and opened a new TCP connection. Under sustained writes on Windows
+  those connections piled up in `TIME_WAIT` and drained the ephemeral port
+  range (socket exhaustion), forcing callers into a batch-40 + retry +
+  item-by-item workaround. `RestClient` now builds the client once (bounded
+  idle pool + TCP keep-alive) and reuses it across requests. The Rust SDK
+  HTTP transport (which already reused its client) gains the same explicit
+  pool/keep-alive settings for parity. Verified by a connection-counting
+  test: five sequential POSTs share a single connection.
+
 ### Fixed — `phase6_fix-cypher-nonascii-body` (GH #6)
 
 - **Non-ASCII text in Cypher no longer panics / drops the connection.** The

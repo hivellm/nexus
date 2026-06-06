@@ -11,6 +11,25 @@ pub struct RestClient {
     base_url: String,
     /// API key for authentication (optional)
     api_key: Option<Arc<RwLock<String>>>,
+    /// Shared HTTP client. Built ONCE and reused across every request so the
+    /// connection pool actually pools — constructing a fresh `reqwest::Client`
+    /// per request gave each call its own (empty) pool, forcing a new TCP
+    /// connection every time. Under sustained writes on Windows those
+    /// connections piled up in TIME_WAIT and drained the ephemeral port range
+    /// (socket exhaustion). `reqwest::Client` is cheap to clone (Arc inside).
+    client: reqwest::Client,
+}
+
+/// Build the shared HTTP client with keep-alive and a bounded idle pool so
+/// repeated requests reuse connections instead of opening a new socket each
+/// time. Falls back to the default client if the builder fails (never panics).
+fn build_http_client() -> reqwest::Client {
+    reqwest::Client::builder()
+        .pool_max_idle_per_host(32)
+        .pool_idle_timeout(Some(std::time::Duration::from_secs(90)))
+        .tcp_keepalive(Some(std::time::Duration::from_secs(60)))
+        .build()
+        .unwrap_or_else(|_| reqwest::Client::new())
 }
 
 /// Error types for REST client operations
@@ -34,6 +53,7 @@ impl RestClient {
         Self {
             base_url: base_url.into(),
             api_key: None,
+            client: build_http_client(),
         }
     }
 
@@ -42,6 +62,7 @@ impl RestClient {
         Self {
             base_url: base_url.into(),
             api_key: Some(Arc::new(RwLock::new(api_key.into()))),
+            client: build_http_client(),
         }
     }
 
@@ -100,11 +121,16 @@ impl RestClient {
         path: &str,
         body: &T,
     ) -> Result<R, RestClientError> {
-        let client = reqwest::Client::new();
         let url = self.build_url(path);
         let headers = self.build_headers().await;
 
-        let response = client.post(&url).headers(headers).json(body).send().await?;
+        let response = self
+            .client
+            .post(&url)
+            .headers(headers)
+            .json(body)
+            .send()
+            .await?;
 
         if !response.status().is_success() {
             let status = response.status();
@@ -124,11 +150,10 @@ impl RestClient {
         &self,
         path: &str,
     ) -> Result<R, RestClientError> {
-        let client = reqwest::Client::new();
         let url = self.build_url(path);
         let headers = self.build_headers().await;
 
-        let response = client.get(&url).headers(headers).send().await?;
+        let response = self.client.get(&url).headers(headers).send().await?;
 
         if !response.status().is_success() {
             let status = response.status();
@@ -145,7 +170,6 @@ impl RestClient {
 
     /// Stream data via Server-Sent Events (SSE)
     pub async fn stream(&self, path: &str) -> Result<(), RestClientError> {
-        let client = reqwest::Client::new();
         let url = self.build_url(path);
         let mut headers = self.build_headers().await;
 
@@ -158,7 +182,7 @@ impl RestClient {
             reqwest::header::HeaderValue::from_static("no-cache"),
         );
 
-        let response = client.get(&url).headers(headers).send().await?;
+        let response = self.client.get(&url).headers(headers).send().await?;
 
         if !response.status().is_success() {
             let status = response.status();
@@ -291,5 +315,75 @@ mod tests {
             Ok(_) => tracing::debug!("Stream request succeeded"),
             Err(e) => tracing::debug!("Stream request failed as expected: {}", e),
         }
+    }
+
+    /// GH #6 transport fix — the RestClient must reuse one pooled keep-alive
+    /// connection across requests. The previous code built a fresh
+    /// `reqwest::Client` per request, so each call opened a new TCP connection
+    /// (socket exhaustion on Windows under sustained writes). This drives a
+    /// minimal keep-alive server that counts accepted connections: five
+    /// sequential POSTs must share (essentially) one connection.
+    #[tokio::test]
+    async fn reuses_connection_across_sequential_requests() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        use tokio::net::TcpListener;
+
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let conns = Arc::new(AtomicUsize::new(0));
+        let conns_srv = conns.clone();
+
+        // Minimal HTTP/1.1 keep-alive responder: count each accepted
+        // connection, then loop serving a fixed JSON body on the same socket.
+        let server = tokio::spawn(async move {
+            loop {
+                let (mut sock, _) = match listener.accept().await {
+                    Ok(x) => x,
+                    Err(_) => break,
+                };
+                conns_srv.fetch_add(1, Ordering::SeqCst);
+                tokio::spawn(async move {
+                    let mut buf = [0u8; 8192];
+                    loop {
+                        match sock.read(&mut buf).await {
+                            Ok(0) | Err(_) => break,
+                            Ok(_) => {}
+                        }
+                        let body = b"{}";
+                        let head = format!(
+                            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n\
+                             Content-Length: {}\r\nConnection: keep-alive\r\n\r\n",
+                            body.len()
+                        );
+                        if sock.write_all(head.as_bytes()).await.is_err()
+                            || sock.write_all(body).await.is_err()
+                        {
+                            break;
+                        }
+                        let _ = sock.flush().await;
+                    }
+                });
+            }
+        });
+
+        let client = RestClient::new(format!("http://{addr}"));
+        for _ in 0..5 {
+            let res = tokio::time::timeout(
+                std::time::Duration::from_secs(5),
+                client.post::<_, serde_json::Value>("/x", &serde_json::json!({"k": 1})),
+            )
+            .await
+            .expect("request must not hang");
+            res.expect("POST must succeed against the keep-alive server");
+        }
+
+        server.abort();
+
+        let observed = conns.load(Ordering::SeqCst);
+        assert!(
+            observed <= 2,
+            "expected connection reuse (<=2 connections for 5 requests), got {observed}"
+        );
     }
 }
