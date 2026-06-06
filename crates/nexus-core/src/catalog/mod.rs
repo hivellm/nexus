@@ -472,6 +472,63 @@ impl Catalog {
     /// let same_id = catalog.get_or_create_label("Person").unwrap();
     /// assert_eq!(person_id, same_id);
     /// ```
+    /// Allocate the next label id from committed LMDB state inside an open
+    /// write txn. Must be called while holding the env write txn so the scan
+    /// is atomic w.r.t. other writers (LMDB serialises writers across Catalog
+    /// instances and processes). Keeps the in-memory counter monotonic.
+    fn alloc_label_id(&self, wtxn: &heed::RwTxn<'_>) -> Result<LabelId> {
+        let new_id = self
+            .label_name_to_id
+            .iter(wtxn)?
+            .map(|r| r.map(|(_, id)| id))
+            .collect::<std::result::Result<Vec<_>, _>>()?
+            .into_iter()
+            .max()
+            .map(|m| m + 1)
+            .unwrap_or(0);
+        let mut next = self.next_label_id.write();
+        if *next <= new_id {
+            *next = new_id + 1;
+        }
+        Ok(new_id)
+    }
+
+    /// See [`alloc_label_id`]. Same atomic allocation for relationship types.
+    fn alloc_type_id(&self, wtxn: &heed::RwTxn<'_>) -> Result<TypeId> {
+        let new_id = self
+            .type_name_to_id
+            .iter(wtxn)?
+            .map(|r| r.map(|(_, id)| id))
+            .collect::<std::result::Result<Vec<_>, _>>()?
+            .into_iter()
+            .max()
+            .map(|m| m + 1)
+            .unwrap_or(0);
+        let mut next = self.next_type_id.write();
+        if *next <= new_id {
+            *next = new_id + 1;
+        }
+        Ok(new_id)
+    }
+
+    /// See [`alloc_label_id`]. Same atomic allocation for property keys.
+    fn alloc_key_id(&self, wtxn: &heed::RwTxn<'_>) -> Result<KeyId> {
+        let new_id = self
+            .key_name_to_id
+            .iter(wtxn)?
+            .map(|r| r.map(|(_, id)| id))
+            .collect::<std::result::Result<Vec<_>, _>>()?
+            .into_iter()
+            .max()
+            .map(|m| m + 1)
+            .unwrap_or(0);
+        let mut next = self.next_key_id.write();
+        if *next <= new_id {
+            *next = new_id + 1;
+        }
+        Ok(new_id)
+    }
+
     pub fn get_or_create_label(&self, label: &str) -> Result<LabelId> {
         // Try cache first (lock-free)
         if let Some(id) = self.label_name_cache.get(label) {
@@ -489,13 +546,15 @@ impl Catalog {
             return Ok(id);
         }
 
-        // Allocate new ID
-        let id = {
-            let mut next_id = self.next_label_id.write();
-            let id = *next_id;
-            *next_id += 1;
-            id
-        };
+        // Allocate new ID atomically from committed LMDB state within this
+        // write txn. Multiple `Catalog` instances can share ONE LMDB env (the
+        // shared test catalog, and any future concurrent use); a per-instance
+        // in-memory counter hands out the SAME id from two instances, so two
+        // distinct labels collide on one id and `get_nodes(id)` returns nodes
+        // of both labels. Deriving the id from the LMDB max inside the write
+        // txn (LMDB serialises writers across instances/processes) guarantees
+        // uniqueness. The in-memory counter is kept monotonic for other readers.
+        let id = self.alloc_label_id(&wtxn)?;
 
         // Insert bidirectional mappings
         self.label_name_to_id.put(&mut wtxn, label, &id)?;
@@ -547,13 +606,10 @@ impl Catalog {
                 self.label_id_cache.insert(id, label.to_string());
                 result.insert(label.to_string(), id);
             } else {
-                // Allocate new ID
-                let id = {
-                    let mut next_id = self.next_label_id.write();
-                    let id = *next_id;
-                    *next_id += 1;
-                    id
-                };
+                // Allocate new ID atomically from LMDB state within the txn.
+                // Reads in this write txn see prior puts in the same loop, so
+                // successive allocations get distinct ids.
+                let id = self.alloc_label_id(&wtxn)?;
 
                 // Insert bidirectional mappings
                 self.label_name_to_id.put(&mut wtxn, *label, &id)?;
@@ -625,13 +681,10 @@ impl Catalog {
             return Ok(id);
         }
 
-        // Allocate new ID
-        let id = {
-            let mut next_id = self.next_type_id.write();
-            let id = *next_id;
-            *next_id += 1;
-            id
-        };
+        // Allocate new ID atomically from LMDB state within this write txn
+        // (see `alloc_label_id` — prevents duplicate ids across Catalog
+        // instances sharing one env).
+        let id = self.alloc_type_id(&wtxn)?;
 
         // Insert bidirectional mappings
         self.type_name_to_id.put(&mut wtxn, type_name, &id)?;
@@ -683,13 +736,8 @@ impl Catalog {
                 self.type_id_cache.insert(id, type_name.to_string());
                 result.insert(type_name.to_string(), id);
             } else {
-                // Allocate new ID
-                let id = {
-                    let mut next_id = self.next_type_id.write();
-                    let id = *next_id;
-                    *next_id += 1;
-                    id
-                };
+                // Allocate new ID atomically from LMDB state within the txn.
+                let id = self.alloc_type_id(&wtxn)?;
 
                 // Insert bidirectional mappings
                 self.type_name_to_id.put(&mut wtxn, *type_name, &id)?;
@@ -777,13 +825,9 @@ impl Catalog {
             return Ok(id);
         }
 
-        // Allocate new ID
-        let id = {
-            let mut next_id = self.next_key_id.write();
-            let id = *next_id;
-            *next_id += 1;
-            id
-        };
+        // Allocate new ID atomically from LMDB state within this write txn
+        // (see `alloc_label_id`).
+        let id = self.alloc_key_id(&wtxn)?;
 
         // Insert bidirectional mappings
         self.key_name_to_id.put(&mut wtxn, key, &id)?;

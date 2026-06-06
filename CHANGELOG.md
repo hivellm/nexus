@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed — `phase6_fix-match-scopes-parallel-load-flake`
+
+- **Catalog label/type/key id allocation is now collision-free across shared
+  LMDB environments.** `get_or_create_label`/`_type`/`_key` allocated ids from
+  a per-`Catalog`-instance in-memory counter. When multiple `Catalog`
+  instances share one LMDB env (the shared test catalog, and any concurrent
+  use), two instances opened at the same state handed out the SAME id for
+  different names, so two labels collided on one id and `get_nodes(id)`
+  returned nodes of both labels — e.g. a `MATCH (:X …)` also matched `:Y`
+  nodes, producing wrong counts under load. Ids are now allocated from the
+  committed LMDB max **inside the write transaction** (LMDB serialises writers
+  across instances and processes), guaranteeing uniqueness. Also process-scopes
+  the shared test catalog/auth LMDB directories (`..._<pid>`) so concurrent
+  `cargo test` binaries no longer share/wipe one env. This was the root cause
+  of the load-dependent `match_scopes_by_label_and_property_together` flake
+  (now 8/8 green under full parallel `cargo test -p nexus-core`).
+
 ### Fixed — `phase6_fix-windows-write-socket-exhaustion`
 
 - **HTTP clients now reuse pooled keep-alive connections.** The
