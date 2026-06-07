@@ -19,6 +19,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   survives a restart (the re-bootstrap write-burst scenario). Added
   `Engine::flush()` for durable on-demand persistence.
 
+### Fixed — `phase6_clean-graph-rebuild-null-ids`
+
+- **Null property values no longer pollute typed property indexes.** Property
+  values coercing to `NULL` are now treated as absent — they are never written
+  to the typed property index, so index seeks (`MATCH (n:L {id: $v})`) never
+  match null-keyed nodes and legacy null values no longer surface in query
+  results.
+- **`MERGE` with null property values now fails explicitly.** `MERGE (n:Label
+  {key: null})` returns `ERR_NULL_MERGE_KEY: Cannot merge node using null
+  property value for <key>` instead of creating a phantom null-keyed node
+  that cannot be queried.
+- **Documented clean graph rebuild procedure.** `docs/ops/graph-rebuild.md`
+  covers the full sequence: `DROP DATABASE`, recreate, rebuild indexes, and
+  re-ingest to eliminate legacy null-keyed nodes.
+
 ## [2.3.0] — 2026-06-06
 
 > Bug-fix release driven by field reports against 2.2.0 (GH #3–#6) plus two

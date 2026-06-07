@@ -2787,6 +2787,23 @@ impl Engine {
             .clone()
             .ok_or_else(|| Error::CypherExecution("MERGE requires a variable alias".to_string()))?;
 
+        // Null-key contract (Neo4j parity): MERGE cannot use a null property
+        // value. Reject before match-or-create so behaviour is identical
+        // whether or not an existing node would match. Mirrors Neo4j's
+        // "Cannot merge node using null property value for <key>".
+        if let Some(prop_map) = &node_pattern.properties {
+            for (key, expr) in &prop_map.properties {
+                if matches!(
+                    self.expression_to_json_value(expr)?,
+                    serde_json::Value::Null
+                ) {
+                    return Err(Error::CypherExecution(format!(
+                        "Cannot merge node using null property value for {key}"
+                    )));
+                }
+            }
+        }
+
         let mut node_ids = self.find_nodes_by_node_pattern(&node_pattern)?;
         node_ids.sort_unstable();
         node_ids.dedup();

@@ -53,6 +53,14 @@ Common problems and solutions:
 - Performance problems
 - Debugging tips
 
+### [Clean Graph Rebuild](../../ops/graph-rebuild.md)
+
+Rebuilding a polluted graph after fixing null-key bugs:
+- Null-key contract (Neo4j-aligned)
+- Clean rebuild procedure
+- Database drop and recreate
+- Index recreation and re-ingest
+
 ## Quick Reference
 
 ### Service Commands

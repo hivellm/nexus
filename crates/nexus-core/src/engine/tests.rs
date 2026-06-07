@@ -2624,3 +2624,50 @@ fn fulltext_unknown_analyzer_is_rejected() {
         "got: {err}"
     );
 }
+
+// phase6_clean-graph-rebuild-null-ids — null-key contract: MERGE with null property value is rejected.
+#[test]
+fn merge_rejects_null_property_value() {
+    let (mut engine, _ctx) = crate::testing::setup_test_engine().unwrap();
+    let err = engine
+        .execute_cypher("MERGE (n:Label {id: null}) RETURN n")
+        .expect_err("MERGE with null property value must be rejected");
+    assert!(
+        err.to_string()
+            .contains("Cannot merge node using null property value for id"),
+        "got: {err}"
+    );
+}
+
+// phase6_clean-graph-rebuild-null-ids — null-key contract: MERGE with non-null property succeeds and is idempotent.
+#[test]
+fn merge_non_null_property_still_works() {
+    let (mut engine, _ctx) = crate::testing::setup_test_engine().unwrap();
+
+    // First MERGE creates the node.
+    engine
+        .execute_cypher("MERGE (n:Person {name: 'Alice'}) RETURN n")
+        .expect("first MERGE must succeed");
+
+    // Second identical MERGE must not create a duplicate.
+    engine
+        .execute_cypher("MERGE (n:Person {name: 'Alice'}) RETURN n")
+        .expect("second MERGE must succeed");
+
+    let result = engine
+        .execute_cypher("MATCH (n:Person {name: 'Alice'}) RETURN count(n) AS c")
+        .expect("count query must succeed");
+
+    let count_val = result
+        .rows
+        .first()
+        .and_then(|row| row.values.first())
+        .cloned()
+        .unwrap_or(serde_json::Value::Null);
+
+    assert_eq!(
+        count_val,
+        serde_json::Value::Number(1.into()),
+        "expected exactly 1 Alice node, got count={count_val}"
+    );
+}
