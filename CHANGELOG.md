@@ -5,7 +5,14 @@ All notable changes to Nexus will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [2.3.1] — 2026-06-07
+
+> Bug-fix release driven by field reports against 2.3.0 (GH #7–#9) plus the
+> null-keyed graph rebuild and the O(1) edge-MERGE existence index. Restores
+> the read/MERGE index path end-to-end: API-created property indexes now
+> register and populate, read `MATCH` uses index seeks, and comma-joined
+> endpoint lookups stop being cartesian. All fixes ship with regression tests
+> and were verified end-to-end over HTTP.
 
 ### Added — `phase6_add-src-type-dst-edge-index`
 
