@@ -43,6 +43,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   as `null`. Absent, `{}`, a real map, and both the `params` and `parameters`
   keys all continue to work.
 
+### Fixed — `phase6_fix-read-match-index-seek` (#8)
+
+- **Read-side `MATCH (n:Label {prop: val})` now uses a typed property-index seek** (new `NodeIndexSeek` operator) when a covering index exists, instead of a full label scan. A single-node lookup on an indexed property is now a point lookup (O(log N)/O(matches)) rather than O(N).
+- **Comma-joined multi-pattern reads** such as `MATCH (a:Turn {id:$a}), (b:ToolCall {id:$b})` now seed each leg via an independent index seek, so endpoint resolution is no longer a cartesian product of two full label scans (previously O(N²), timing out on large graphs). This unblocks edge-upsert throughput.
+- **The typed property index is shared with the read executor at construction**, so a `CREATE INDEX` is visible to subsequent read queries immediately. Results are unchanged; only performance improves.
+
 ## [2.3.0] — 2026-06-06
 
 > Bug-fix release driven by field reports against 2.2.0 (GH #3–#6) plus two

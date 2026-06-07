@@ -53,6 +53,49 @@ impl Executor {
         Ok(results)
     }
 
+    /// Seed a scan from the typed property index. Returns only the nodes
+    /// whose `(label_id, key_id)` property equals `value`. Falls back to a
+    /// full label scan when no PropertyIndex handle is installed (test
+    /// harness executors built outside an engine).
+    pub(in crate::executor) fn execute_node_index_seek(
+        &self,
+        label_id: u32,
+        key_id: u32,
+        value: &crate::index::PropertyValue,
+    ) -> Result<Vec<Value>> {
+        let Some(prop_idx) = self.property_index() else {
+            return self.execute_node_by_label(label_id);
+        };
+        let bitmap = prop_idx.find_exact(label_id, key_id, value.clone())?;
+        use std::collections::HashSet;
+        let cap_hint = (bitmap.len() as usize).min(MAX_INTERMEDIATE_ROWS);
+        let mut seen = HashSet::new();
+        let mut results = Vec::with_capacity(cap_hint);
+        for node_id in bitmap.iter() {
+            if results.len() >= MAX_INTERMEDIATE_ROWS {
+                return Err(Error::OutOfMemory(format!(
+                    "NodeIndexSeek would return more than {} rows \
+                     (MAX_INTERMEDIATE_ROWS); add LIMIT or narrow the predicate",
+                    MAX_INTERMEDIATE_ROWS
+                )));
+            }
+            let node_id_u64 = node_id as u64;
+            if !seen.insert(node_id_u64) {
+                continue;
+            }
+            if let Ok(rec) = self.store().read_node(node_id_u64) {
+                if rec.is_deleted() {
+                    continue;
+                }
+            }
+            match self.read_node_as_value(node_id_u64)? {
+                Value::Null => continue,
+                v => results.push(v),
+            }
+        }
+        Ok(results)
+    }
+
     /// Execute AllNodesScan operator (scan all nodes regardless of label)
     pub(in crate::executor) fn execute_all_nodes_scan(&self) -> Result<Vec<Value>> {
         // Get the total number of nodes from the store

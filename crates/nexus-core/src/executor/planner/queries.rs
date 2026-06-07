@@ -1510,11 +1510,16 @@ impl<'a> QueryPlanner<'a> {
                                 variable: variable.clone(),
                             });
                         } else {
-                            // Normal planning - use label scan
-                            operators.push(Operator::NodeByLabel {
-                                label_id,
-                                variable: variable.clone(),
-                            });
+                            // Normal planning — prefer an index seek when a
+                            // covering property index exists, else label scan.
+                            if let Some(seek) = self.node_index_seek_for(node, label_id, variable) {
+                                operators.push(seek);
+                            } else {
+                                operators.push(Operator::NodeByLabel {
+                                    label_id,
+                                    variable: variable.clone(),
+                                });
+                            }
                         }
 
                         // Add filters for additional labels (multiple label intersection)
@@ -1688,10 +1693,14 @@ impl<'a> QueryPlanner<'a> {
                         if !node.labels.is_empty() {
                             let first_label = &node.labels[0];
                             let label_id = self.catalog.get_or_create_label(first_label)?;
-                            operators.push(Operator::NodeByLabel {
-                                label_id,
-                                variable: variable.clone(),
-                            });
+                            if let Some(seek) = self.node_index_seek_for(node, label_id, variable) {
+                                operators.push(seek);
+                            } else {
+                                operators.push(Operator::NodeByLabel {
+                                    label_id,
+                                    variable: variable.clone(),
+                                });
+                            }
 
                             // Add filters for additional labels
                             if node.labels.len() > 1 {
@@ -2607,6 +2616,48 @@ impl<'a> QueryPlanner<'a> {
         Ok(&patterns[0])
     }
 
+    /// Build a `NodeIndexSeek` for the first inline equality property of
+    /// `node` whose `(label_id, key_id)` has a registered property index
+    /// and whose value is an indexable literal. Returns `None` (caller
+    /// falls back to `NodeByLabel`) when no PropertyIndex handle is
+    /// installed, no property qualifies, or the value is null/point/non-literal.
+    fn node_index_seek_for(
+        &self,
+        node: &NodePattern,
+        label_id: u32,
+        variable: &str,
+    ) -> Option<Operator> {
+        let prop_idx = self.property_index?;
+        let property_map = node.properties.as_ref()?;
+        for (prop_name, expr) in &property_map.properties {
+            let pv = match expr {
+                Expression::Literal(Literal::String(s)) => {
+                    crate::index::PropertyValue::String(s.clone())
+                }
+                Expression::Literal(Literal::Integer(i)) => {
+                    crate::index::PropertyValue::Integer(*i)
+                }
+                Expression::Literal(Literal::Float(f)) => crate::index::PropertyValue::Float(*f),
+                Expression::Literal(Literal::Boolean(b)) => {
+                    crate::index::PropertyValue::Boolean(*b)
+                }
+                _ => continue, // null / point / param / non-literal: not indexable
+            };
+            let Ok(key_id) = self.catalog.get_key_id(prop_name) else {
+                continue;
+            };
+            if prop_idx.has_index(label_id, key_id) {
+                return Some(Operator::NodeIndexSeek {
+                    label_id,
+                    key_id,
+                    value: pv,
+                    variable: variable.to_string(),
+                });
+            }
+        }
+        None
+    }
+
     /// Add relationship traversal operators
     pub(super) fn add_relationship_operators(
         &self,
@@ -3196,6 +3247,11 @@ impl<'a> QueryPlanner<'a> {
                     // Estimate cost based on label selectivity
                     let selectivity = self.estimate_label_selectivity(*label_id)?;
                     total_cost += 1000.0 * selectivity;
+                }
+                Operator::NodeIndexSeek { .. } => {
+                    // Index seek is a point lookup over the property B-tree —
+                    // far cheaper than a label scan; bias the planner toward it.
+                    total_cost += 5.0;
                 }
                 Operator::AllNodesScan { .. } => {
                     // Scanning all nodes is more expensive than label scan

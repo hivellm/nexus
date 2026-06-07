@@ -243,6 +243,20 @@ impl Executor {
         self.shared.composite_btree()
     }
 
+    /// Share the engine's property index with this executor.
+    /// Called from `Engine::refresh_executor` after every engine-side
+    /// index update so the planner can consult it via `property_index()`.
+    /// Subsequent calls are no-ops (OnceLock semantics).
+    pub(crate) fn install_property_index(&self, idx: crate::index::PropertyIndex) {
+        self.shared.set_property_index(idx);
+    }
+
+    /// Borrow the property index installed by the engine.
+    /// Returns `None` for executors built outside an engine (test harness).
+    pub(super) fn property_index(&self) -> Option<&crate::index::PropertyIndex> {
+        self.shared.property_index()
+    }
+
     /// Share the engine's full-text search registry with this executor.
     pub(crate) fn install_fulltext(
         &self,

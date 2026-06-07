@@ -90,6 +90,10 @@ pub struct ExecutorShared {
     /// Named full-text search registry (phase6_opencypher-fulltext-search).
     /// Populated by `Engine::refresh_executor`.
     pub(super) fulltext: std::sync::OnceLock<crate::index::fulltext_registry::FullTextRegistry>,
+    /// Property index shared with the engine (phase6_fix-read-match-index-seek).
+    /// Populated via [`ExecutorShared::set_property_index`] in `Engine::refresh_executor`.
+    /// `None` for executor instances built outside an engine (e.g. test harness).
+    pub(super) property_index: std::sync::OnceLock<crate::index::PropertyIndex>,
 }
 
 impl ExecutorShared {
@@ -130,6 +134,7 @@ impl ExecutorShared {
             preparsed_ast_override: Arc::new(parking_lot::Mutex::new(None)),
             composite_btree: std::sync::OnceLock::new(),
             fulltext: std::sync::OnceLock::new(),
+            property_index: std::sync::OnceLock::new(),
         })
     }
 
@@ -160,6 +165,22 @@ impl ExecutorShared {
     /// Borrow the full-text registry if one has been installed.
     pub fn fulltext(&self) -> Option<&crate::index::fulltext_registry::FullTextRegistry> {
         self.fulltext.get()
+    }
+
+    /// Install the engine's property index on this shared state.
+    /// Idempotent per executor instance; subsequent calls are no-ops
+    /// (OnceLock semantics). The index's Arc-shared internals mean one
+    /// install is sufficient — live mutations are visible through the ref.
+    pub fn set_property_index(&self, idx: crate::index::PropertyIndex) {
+        let _ = self.property_index.set(idx);
+    }
+
+    /// Borrow the property index if one has been installed.
+    /// Returns `None` for executor instances built outside an engine
+    /// (e.g. the test harness). In that case `USING INDEX` hints are
+    /// accepted silently by the planner.
+    pub fn property_index(&self) -> Option<&crate::index::PropertyIndex> {
+        self.property_index.get()
     }
 
     /// Set the database manager for multi-database support
@@ -237,6 +258,7 @@ impl ExecutorShared {
             preparsed_ast_override: Arc::new(parking_lot::Mutex::new(None)),
             composite_btree: std::sync::OnceLock::new(),
             fulltext: std::sync::OnceLock::new(),
+            property_index: std::sync::OnceLock::new(),
         })
     }
 }

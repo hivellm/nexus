@@ -28,57 +28,27 @@ impl Executor {
                     label_id,
                     variable
                 );
-
-                // CRITICAL FIX: Remove relationship objects from variables before creating cartesian product
-                // Relationship objects have a "type" property - filter them out to avoid contamination
-                context.variables.retain(|var_name, var_value| {
-                    let is_relationship = if let Value::Object(obj) = var_value {
-                        obj.contains_key("type") // Relationships have "type" property
-                    } else if let Value::Array(arr) = var_value {
-                        // Check if array contains relationship objects
-                        arr.iter().any(|v| {
-                            if let Value::Object(obj) = v {
-                                obj.contains_key("type")
-                            } else {
-                                false
-                            }
-                        })
-                    } else {
-                        false
-                    };
-                    if is_relationship {}
-                    !is_relationship // Keep only non-relationship variables
-                });
-
-                // CRITICAL FIX: Always clear result_set.rows before regenerating from variables
-                // Since we are applying Cartesian product and regenerating the full state from variables,
-                // the old rows in result_set are stale (partial state) and should be removed.
-                context.result_set.rows.clear();
-
-                context.variables.remove(variable);
-
-                // CRITICAL FIX: Apply Cartesian product if there are existing variables
-                // If we have existing rows (e.g. from a previous MATCH), we must cross-product
-                // the new nodes with the existing rows.
-                // Example: MATCH (a), (b) -> a has N rows, b has M rows -> Result N*M rows
-                if !context.variables.is_empty() {
-                    self.apply_cartesian_product(context, variable, nodes)?;
-                } else {
-                    context.set_variable(variable, Value::Array(nodes));
-                }
-
-                // CRITICAL FIX: Materialize rows from variables so Project can process them
-                // This matches the behavior in the main execute loop
-                let rows = self.materialize_rows_from_variables(context);
-                tracing::debug!(
-                    "execute_operator NodeByLabel: materialized {} rows from variables",
-                    rows.len()
-                );
-                self.update_result_set_from_rows(context, &rows);
+                self.seed_scan_variable(context, variable, nodes)?;
                 tracing::debug!(
                     "execute_operator NodeByLabel: result_set now has {} rows",
                     context.result_set.rows.len()
                 );
+            }
+            Operator::NodeIndexSeek {
+                label_id,
+                key_id,
+                value,
+                variable,
+            } => {
+                let nodes = self.execute_node_index_seek(*label_id, *key_id, value)?;
+                tracing::debug!(
+                    "execute_operator NodeIndexSeek: found {} nodes for label_id {}/key_id {}, variable '{}'",
+                    nodes.len(),
+                    label_id,
+                    key_id,
+                    variable
+                );
+                self.seed_scan_variable(context, variable, nodes)?;
             }
             Operator::AllNodesScan { variable } => {
                 let nodes = self.execute_all_nodes_scan()?;
@@ -509,5 +479,54 @@ impl Executor {
         columns: &[String],
     ) -> Option<usize> {
         columns.iter().position(|col| col == column_name)
+    }
+
+    /// Shared post-scan wiring used by `NodeByLabel` and `NodeIndexSeek`:
+    /// strips relationship objects from the context, clears stale rows,
+    /// applies a Cartesian product or sets the variable directly, then
+    /// materialises the result set. Behaviour is identical for both scan
+    /// operators — only the node-sourcing step differs.
+    fn seed_scan_variable(
+        &self,
+        context: &mut ExecutionContext,
+        variable: &str,
+        nodes: Vec<Value>,
+    ) -> crate::Result<()> {
+        // CRITICAL FIX: Remove relationship objects from variables before creating cartesian product
+        // Relationship objects have a "type" property - filter them out to avoid contamination
+        context.variables.retain(|_var_name, var_value| {
+            let is_relationship = if let Value::Object(obj) = var_value {
+                obj.contains_key("type") // Relationships have "type" property
+            } else if let Value::Array(arr) = var_value {
+                // Check if array contains relationship objects
+                arr.iter().any(|v| {
+                    if let Value::Object(obj) = v {
+                        obj.contains_key("type")
+                    } else {
+                        false
+                    }
+                })
+            } else {
+                false
+            };
+            !is_relationship // Keep only non-relationship variables
+        });
+
+        // CRITICAL FIX: Always clear result_set.rows before regenerating from variables
+        context.result_set.rows.clear();
+
+        context.variables.remove(variable);
+
+        // CRITICAL FIX: Apply Cartesian product if there are existing variables
+        if !context.variables.is_empty() {
+            self.apply_cartesian_product(context, variable, nodes)?;
+        } else {
+            context.set_variable(variable, Value::Array(nodes));
+        }
+
+        // CRITICAL FIX: Materialize rows from variables so Project can process them
+        let rows = self.materialize_rows_from_variables(context);
+        self.update_result_set_from_rows(context, &rows);
+        Ok(())
     }
 }
