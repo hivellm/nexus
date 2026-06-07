@@ -306,6 +306,57 @@ async fn test_remove_label() {
 }
 */
 
+// GH issue #7 — `"parameters": null` (SDK serialization for no-param queries)
+// must deserialize to an empty map, not 422.
+#[test]
+fn cypher_request_accepts_null_parameters() {
+    let req: CypherRequest =
+        serde_json::from_str(r#"{"query":"RETURN 1","parameters":null}"#).unwrap();
+    assert!(
+        req.params.is_empty(),
+        "parameters:null must yield empty map"
+    );
+}
+
+#[test]
+fn cypher_request_accepts_null_params() {
+    let req: CypherRequest = serde_json::from_str(r#"{"query":"RETURN 1","params":null}"#).unwrap();
+    assert!(req.params.is_empty(), "params:null must yield empty map");
+}
+
+#[test]
+fn cypher_request_accepts_omitted_parameters() {
+    let req: CypherRequest = serde_json::from_str(r#"{"query":"RETURN 1"}"#).unwrap();
+    assert!(
+        req.params.is_empty(),
+        "absent parameters must yield empty map"
+    );
+}
+
+#[test]
+fn cypher_request_accepts_empty_object_parameters() {
+    let req: CypherRequest =
+        serde_json::from_str(r#"{"query":"RETURN 1","parameters":{}}"#).unwrap();
+    assert!(
+        req.params.is_empty(),
+        "parameters:{{}} must yield empty map"
+    );
+}
+
+#[test]
+fn cypher_request_accepts_map_via_parameters() {
+    let req: CypherRequest =
+        serde_json::from_str(r#"{"query":"RETURN 1","parameters":{"x":1}}"#).unwrap();
+    assert_eq!(req.params.get("x").and_then(|v| v.as_i64()), Some(1));
+}
+
+#[test]
+fn cypher_request_accepts_map_via_params() {
+    let req: CypherRequest =
+        serde_json::from_str(r#"{"query":"RETURN 1","params":{"y":"z"}}"#).unwrap();
+    assert_eq!(req.params.get("y").and_then(|v| v.as_str()), Some("z"));
+}
+
 // GH issue #3 — the request body uses the Neo4j/SDK-standard `parameters`
 // key; serde must accept it (and the legacy `params`) so params reach the
 // executor. Without the alias every parametrized query saw an empty map.

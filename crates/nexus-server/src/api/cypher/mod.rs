@@ -352,6 +352,23 @@ fn create_relationship_from_pattern(
     Ok(())
 }
 
+/// Deserialize a parameter map that may be explicitly `null`.
+///
+/// The published SDK serializes `parameters` as explicit JSON `null` for
+/// no-parameter queries. serde rejects `null` for a non-`Option` `HashMap`
+/// (HTTP 422). Treat `null` (and a missing field, via `default`) as an empty
+/// map, restoring 2.2.0 behaviour (issue #7).
+fn deserialize_null_default<'de, D>(
+    deserializer: D,
+) -> std::result::Result<HashMap<String, serde_json::Value>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    use serde::Deserialize;
+    let opt = Option::<HashMap<String, serde_json::Value>>::deserialize(deserializer)?;
+    Ok(opt.unwrap_or_default())
+}
+
 /// Cypher query request
 #[derive(Debug, Deserialize)]
 pub struct CypherRequest {
@@ -360,8 +377,12 @@ pub struct CypherRequest {
     /// Query parameters. Accepts both `params` and the Neo4j/SDK-standard
     /// `parameters` key (issue #3 — clients send `parameters`; without the
     /// alias serde silently dropped it and every parametrized query saw an
-    /// empty map).
-    #[serde(default, alias = "parameters")]
+    /// empty map). Explicit JSON `null` is treated as an empty map (issue #7).
+    #[serde(
+        default,
+        alias = "parameters",
+        deserialize_with = "deserialize_null_default"
+    )]
     pub params: HashMap<String, serde_json::Value>,
     /// Database name (optional, defaults to "neo4j")
     #[serde(default)]

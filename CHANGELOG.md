@@ -34,6 +34,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   covers the full sequence: `DROP DATABASE`, recreate, rebuild indexes, and
   re-ingest to eliminate legacy null-keyed nodes.
 
+### Fixed — `phase6_fix-rest-parameters-null` (#7)
+
+- **`POST /cypher` now accepts an explicit `"parameters": null` in the request
+  body, treating it as an empty parameter map (restores 2.2.0 behaviour).** 
+  Previously serde rejected `null` for the non-`Option` map and returned HTTP 422,
+  breaking every no-parameter query from SDK clients that serialize `parameters`
+  as `null`. Absent, `{}`, a real map, and both the `params` and `parameters`
+  keys all continue to work.
+
 ## [2.3.0] — 2026-06-06
 
 > Bug-fix release driven by field reports against 2.2.0 (GH #3–#6) plus two
