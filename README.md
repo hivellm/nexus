@@ -19,7 +19,7 @@ Nexus is a **property graph database** built for **read-heavy workloads** with *
 
 **Think Neo4j meets vector search**, shipped as a single Rust binary with a CLI, six first-party SDKs, and three transports (native binary RPC, HTTP/JSON, RESP3).
 
-### Highlights (v2.2.0)
+### Highlights (v2.3.0)
 
 - **Neo4j-compatible Cypher** — MATCH / CREATE / MERGE / SET / DELETE / REMOVE / WHERE / RETURN / ORDER BY / LIMIT / SKIP / UNION / WITH / UNWIND / FOREACH / CASE / EXISTS subqueries / list & map comprehensions / pattern comprehensions and 250+ functions & procedures. **300/300** Neo4j diff-suite tests pass ([Neo4j 2025.09.0, 2026-04-19](docs/compatibility/NEO4J_COMPATIBILITY_REPORT.md)). See the [openCypher status table](#-opencypher-support-matrix) at the bottom.
 - **APOC compatibility** — ~100 procedures across `apoc.coll.*` / `apoc.map.*` / `apoc.text.*` / `apoc.date.*` / `apoc.schema.*` / `apoc.util.*` / `apoc.convert.*` / `apoc.number.*` / `apoc.agg.*`. Drop-in replacement for most of the Neo4j APOC surface. Matrix: [`docs/procedures/APOC_COMPATIBILITY.md`](docs/procedures/APOC_COMPATIBILITY.md).
@@ -502,7 +502,22 @@ ORDER BY confidence DESC
 
 ## 🗺️ Roadmap
 
-### 2.2.0 — current (2026-05-04)
+### Unreleased (on `main`)
+- ⚡ **O(1) edge-MERGE existence** — exact `(src, type, dst)` index backs
+  `MERGE (a)-[:T]->(b)`; rebuilt from storage on startup. Not in the `v2.3.0`
+  tag yet.
+
+### 2.3.0 — current (2026-06-06)
+- ✅ Bug-fix release (field reports vs 2.2.0):
+  - `$param` binding on the read path + the Neo4j-standard `parameters` body key (GH #3).
+  - `prop_ptr` startup corruption / property-store reopen made durable (GH #4).
+  - GROUP BY by a function/expression key + `RETURN <nodeVar>` (GH #5).
+  - non-ASCII (UTF-8) `/cypher` bodies no longer panic / drop the connection (GH #6).
+- ✅ Reliability: Windows write socket exhaustion (pooled keep-alive HTTP client);
+  catalog label/type/key id-allocation race on shared LMDB environments.
+- ✅ Performance: index-backed node MERGE existence (O(N) → O(log N)).
+
+### 2.2.0 (2026-05-04)
 - ✅ Property graph engine + broad openCypher surface + 19 GDS procedures + ~100 APOC procedures.
 - ✅ **300/300** Neo4j diff suite (2025.09.0).
 - ✅ Native HNSW KNN per label.
@@ -575,7 +590,7 @@ Full detail: [`docs/ROADMAP.md`](docs/ROADMAP.md).
 
 ## 🧮 openCypher Support Matrix
 
-Canonical list of openCypher / Cypher 25 surfaces in Nexus v2.2.0. ✅ shipped · 🟡 partial (grammar-only or limited scope) · 🧭 queued. Validated against the [300/300 Neo4j diff suite](docs/compatibility/NEO4J_COMPATIBILITY_REPORT.md); per-clause detail lives in [`docs/specs/cypher-subset.md`](docs/specs/cypher-subset.md).
+Canonical list of openCypher / Cypher 25 surfaces in Nexus v2.3.0. ✅ shipped · 🟡 partial (grammar-only or limited scope) · 🧭 queued. Validated against the [300/300 Neo4j diff suite](docs/compatibility/NEO4J_COMPATIBILITY_REPORT.md); per-clause detail lives in [`docs/specs/cypher-subset.md`](docs/specs/cypher-subset.md).
 
 ### Reading clauses
 
