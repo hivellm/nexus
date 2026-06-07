@@ -342,6 +342,14 @@ impl Engine {
         // registry at construction so spatial DDL and queries work even
         // before the first `refresh_executor` fires.
         engine.executor.install_rtree(engine.indexes.rtree.clone());
+        // phase6_fix-read-match-index-seek §2 — install the typed property
+        // index (Arc-shared) at construction so a `CREATE INDEX` followed by
+        // a read `MATCH (n:L {p: v})` uses the index seek even before the
+        // first `refresh_executor` fires. The clone shares state, so later
+        // index registrations are visible without re-installing.
+        engine
+            .executor
+            .install_property_index(engine.indexes.property_index.clone());
 
         Ok(engine)
     }
@@ -521,6 +529,12 @@ impl Engine {
             .executor
             .install_fulltext(engine.indexes.fulltext.clone());
         engine.executor.install_rtree(engine.indexes.rtree.clone());
+        // phase6_fix-read-match-index-seek §2 — install the typed property
+        // index (Arc-shared) at construction so read-side index seeks work
+        // before the first `refresh_executor` fires.
+        engine
+            .executor
+            .install_property_index(engine.indexes.property_index.clone());
 
         Ok(engine)
     }
@@ -1411,6 +1425,10 @@ impl Engine {
         // R-tree registry with the executor so spatial CRUD hooks and
         // query operators read and write the same in-memory state.
         self.executor.install_rtree(self.indexes.rtree.clone());
+        // phase6_fix-read-match-index-seek §1 — share the property index
+        // so the planner can consult it for USING INDEX seeks.
+        self.executor
+            .install_property_index(self.indexes.property_index.clone());
         Ok(())
     }
 
@@ -2786,6 +2804,23 @@ impl Engine {
             .variable
             .clone()
             .ok_or_else(|| Error::CypherExecution("MERGE requires a variable alias".to_string()))?;
+
+        // Null-key contract (Neo4j parity): MERGE cannot use a null property
+        // value. Reject before match-or-create so behaviour is identical
+        // whether or not an existing node would match. Mirrors Neo4j's
+        // "Cannot merge node using null property value for <key>".
+        if let Some(prop_map) = &node_pattern.properties {
+            for (key, expr) in &prop_map.properties {
+                if matches!(
+                    self.expression_to_json_value(expr)?,
+                    serde_json::Value::Null
+                ) {
+                    return Err(Error::CypherExecution(format!(
+                        "Cannot merge node using null property value for {key}"
+                    )));
+                }
+            }
+        }
 
         let mut node_ids = self.find_nodes_by_node_pattern(&node_pattern)?;
         node_ids.sort_unstable();

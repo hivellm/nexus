@@ -198,6 +198,20 @@ pub enum Operator {
         /// Variable name
         variable: String,
     },
+    /// Seed a scan from the typed property index instead of a full label
+    /// scan: `MATCH (n:Label {key = value})` where (label, key) has a
+    /// registered index. Yields only nodes whose indexed property equals
+    /// `value`; residual `Filter` operators still run for full correctness.
+    NodeIndexSeek {
+        /// Label ID the index was created on.
+        label_id: u32,
+        /// Property key ID.
+        key_id: u32,
+        /// Exact value to look up in the index.
+        value: crate::index::PropertyValue,
+        /// Pattern variable to bind the returned nodes to.
+        variable: String,
+    },
     /// Scan all nodes (no label filter)
     AllNodesScan {
         /// Variable name

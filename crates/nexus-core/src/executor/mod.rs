@@ -105,6 +105,98 @@ impl Executor {
     /// Takes `&self` so clones can execute concurrently; all mutable state
     /// lives behind `Arc`/`RwLock` inside [`ExecutorShared`].
     ///
+    /// Seed a scan variable in the main `execute` loop from an already
+    /// materialised node list, applying the same cross-product / UNWIND
+    /// fan-out / variable-materialisation logic regardless of whether the
+    /// nodes came from a `NodeByLabel` full scan or a `NodeIndexSeek`
+    /// point lookup. Extracted so both operators share one code path.
+    fn seed_scan_main_loop(
+        &self,
+        context: &mut ExecutionContext,
+        variable: &str,
+        nodes: Vec<Value>,
+    ) -> Result<()> {
+        // CRITICAL FIX: Only clear result_set.rows if this is the first scan
+        // For subsequent scan operators (comma-separated MATCH patterns),
+        // we need to preserve existing filtered rows to create correct cartesian product
+        let is_first_node_by_label =
+            context.variables.is_empty() && context.result_set.rows.is_empty();
+        if is_first_node_by_label {
+            context.result_set.rows.clear();
+        }
+        context.variables.remove(variable);
+
+        // Track if we handle cross-product with existing rows
+        let mut handled_cross_product = false;
+
+        // CRITICAL FIX: Apply Cartesian product if there are existing variables
+        // If we have existing rows (e.g. from a previous MATCH, WITH, or UNWIND),
+        // we must cross-product the new nodes with the existing rows.
+        // Example: MATCH (a), (b) -> a has N rows, b has M rows -> Result N*M rows
+        if !context.variables.is_empty() {
+            self.apply_cartesian_product(context, variable, nodes)?;
+        } else if !context.result_set.rows.is_empty() {
+            // CRITICAL FIX for UNWIND...MATCH: Handle case where there are existing
+            // rows from UNWIND but no variables yet. We need to cross-product the
+            // existing rows with the new nodes.
+            // Example: UNWIND ['a','b'] AS x MATCH (p:Person) -> 2 x N rows
+            handled_cross_product = true;
+            let existing_rows = std::mem::take(&mut context.result_set.rows);
+            let existing_columns = context.result_set.columns.clone();
+
+            // Add the new variable column
+            context.result_set.columns.push(variable.to_string());
+
+            // Create cross product: existing_rows × nodes
+            for existing_row in &existing_rows {
+                for node in &nodes {
+                    let mut new_values = existing_row.values.clone();
+                    new_values.push(node.clone());
+                    context.result_set.rows.push(Row { values: new_values });
+                }
+            }
+
+            // Also set in variables for subsequent operations
+            // We need to expand nodes to match the cross product count
+            let mut expanded_nodes = Vec::with_capacity(existing_rows.len() * nodes.len());
+            for _ in &existing_rows {
+                expanded_nodes.extend(nodes.clone());
+            }
+            context.set_variable(variable, Value::Array(expanded_nodes));
+
+            // Expand existing column values in variables too
+            for (col_idx, col_name) in existing_columns.iter().enumerate() {
+                let mut expanded_values = Vec::with_capacity(existing_rows.len() * nodes.len());
+                for existing_row in &existing_rows {
+                    for _ in &nodes {
+                        if col_idx < existing_row.values.len() {
+                            expanded_values.push(existing_row.values[col_idx].clone());
+                        } else {
+                            expanded_values.push(Value::Null);
+                        }
+                    }
+                }
+                context.set_variable(col_name, Value::Array(expanded_values));
+            }
+
+            tracing::trace!(
+                "scan seed: cross-product with existing rows: {} x {} = {} rows",
+                existing_rows.len(),
+                nodes.len(),
+                context.result_set.rows.len()
+            );
+        } else {
+            context.set_variable(variable, Value::Array(nodes));
+        }
+
+        // Only materialize and update if we didn't already handle cross-product above
+        if !handled_cross_product {
+            let rows = self.materialize_rows_from_variables(context);
+            self.update_result_set_from_rows(context, &rows);
+        }
+        Ok(())
+    }
+
     /// Wraps [`Self::execute_inner`] to manage the per-thread planner
     /// notification sink: clear before planning so a panic-aborted
     /// prior call cannot leak its diagnostics into this query, then
@@ -420,103 +512,22 @@ impl Executor {
             match operator {
                 Operator::NodeByLabel { label_id, variable } => {
                     let nodes = self.execute_node_by_label(*label_id)?;
-                    tracing::trace!(
-                        "NodeByLabel: found {} nodes for label_id {}, variable '{}'",
-                        nodes.len(),
-                        label_id,
-                        variable
-                    );
-                    // CRITICAL FIX: Only clear result_set.rows if this is the first NodeByLabel
-                    // For subsequent NodeByLabel operators (comma-separated MATCH patterns),
-                    // we need to preserve existing filtered rows to create correct cartesian product
-                    let is_first_node_by_label =
-                        context.variables.is_empty() && context.result_set.rows.is_empty();
-                    if is_first_node_by_label {
-                        context.result_set.rows.clear();
-                    }
-                    context.variables.remove(variable);
-
-                    // Track if we handle cross-product with existing rows
-                    let mut handled_cross_product = false;
-
-                    // CRITICAL FIX: Apply Cartesian product if there are existing variables
-                    // If we have existing rows (e.g. from a previous MATCH, WITH, or UNWIND),
-                    // we must cross-product the new nodes with the existing rows.
-                    // Example: MATCH (a), (b) -> a has N rows, b has M rows -> Result N*M rows
-                    if !context.variables.is_empty() {
-                        self.apply_cartesian_product(&mut context, variable, nodes)?;
-                    } else if !context.result_set.rows.is_empty() {
-                        // CRITICAL FIX for UNWIND...MATCH: Handle case where there are existing
-                        // rows from UNWIND but no variables yet. We need to cross-product the
-                        // existing rows with the new nodes.
-                        // Example: UNWIND ['a','b'] AS x MATCH (p:Person) -> 2 x N rows
-                        handled_cross_product = true;
-                        let existing_rows = std::mem::take(&mut context.result_set.rows);
-                        let existing_columns = context.result_set.columns.clone();
-
-                        // Add the new variable column
-                        context.result_set.columns.push(variable.to_string());
-
-                        // Create cross product: existing_rows × nodes
-                        for existing_row in &existing_rows {
-                            for node in &nodes {
-                                let mut new_values = existing_row.values.clone();
-                                new_values.push(node.clone());
-                                context.result_set.rows.push(Row { values: new_values });
-                            }
-                        }
-
-                        // Also set in variables for subsequent operations
-                        // We need to expand nodes to match the cross product count
-                        let mut expanded_nodes =
-                            Vec::with_capacity(existing_rows.len() * nodes.len());
-                        for _ in &existing_rows {
-                            expanded_nodes.extend(nodes.clone());
-                        }
-                        context.set_variable(variable, Value::Array(expanded_nodes));
-
-                        // Expand existing column values in variables too
-                        for (col_idx, col_name) in existing_columns.iter().enumerate() {
-                            let mut expanded_values =
-                                Vec::with_capacity(existing_rows.len() * nodes.len());
-                            for existing_row in &existing_rows {
-                                for _ in &nodes {
-                                    if col_idx < existing_row.values.len() {
-                                        expanded_values.push(existing_row.values[col_idx].clone());
-                                    } else {
-                                        expanded_values.push(Value::Null);
-                                    }
-                                }
-                            }
-                            context.set_variable(col_name, Value::Array(expanded_values));
-                        }
-
-                        tracing::trace!(
-                            "NodeByLabel: cross-product with existing rows: {} x {} = {} rows",
-                            existing_rows.len(),
-                            nodes.len(),
-                            context.result_set.rows.len()
-                        );
-                    } else {
-                        context.set_variable(variable, Value::Array(nodes));
-                    }
-
-                    // Only materialize and update if we didn't already handle cross-product above
-                    if !handled_cross_product {
-                        let rows = self.materialize_rows_from_variables(&context);
-                        tracing::trace!(
-                            "NodeByLabel: materialized {} rows from variables for '{}' (is_first={})",
-                            rows.len(),
-                            variable,
-                            is_first_node_by_label
-                        );
-                        self.update_result_set_from_rows(&mut context, &rows);
-                    }
-                    tracing::trace!(
-                        "NodeByLabel: result_set now has {} rows, {} columns",
-                        context.result_set.rows.len(),
-                        context.result_set.columns.len()
-                    );
+                    self.seed_scan_main_loop(&mut context, variable, nodes)?;
+                }
+                Operator::NodeIndexSeek {
+                    label_id,
+                    key_id,
+                    value,
+                    variable,
+                } => {
+                    // Read-side index seek: only nodes whose indexed property
+                    // equals `value` seed the scan (O(matches)), instead of a
+                    // full label scan. Residual `Filter` operators still run
+                    // for full correctness. The downstream seeding (cartesian
+                    // product / UNWIND cross-product / materialize) is shared
+                    // with NodeByLabel via `seed_scan_main_loop`.
+                    let nodes = self.execute_node_index_seek(*label_id, *key_id, value)?;
+                    self.seed_scan_main_loop(&mut context, variable, nodes)?;
                 }
                 Operator::AllNodesScan { variable } => {
                     let nodes = self.execute_all_nodes_scan()?;
@@ -1228,19 +1239,17 @@ impl Executor {
         };
 
         // Locks are released here - planning happens with cloned data.
-        // `with_property_index` is intentionally not called here yet —
-        // the executor's `ExecutorShared` does not currently carry a
-        // `PropertyIndex` handle (the registry lives on the engine
-        // side at `Engine::indexes::property_index`), so plans built
-        // from `Executor::execute` accept `USING INDEX` hints
-        // silently. Direct planner callers that hold a `PropertyIndex`
-        // reference can opt into validation via
-        // `QueryPlanner::with_property_index`. Threading the registry
-        // through `ExecutorShared` is queued behind a wider
-        // index-handle-Arc refactor.
+        // The property index handle is now threaded through ExecutorShared
+        // (populated by `Engine::refresh_executor` via
+        // `install_property_index`). Executors built outside an engine —
+        // e.g. the test harness — still have `None` and accept
+        // `USING INDEX` hints silently; that is intentional.
         let mut planner =
             QueryPlanner::new(self.catalog(), &label_index_snapshot, &knn_index_snapshot)
                 .with_rtree(self.shared.rtree_registry.clone());
+        if let Some(pi) = self.property_index() {
+            planner = planner.with_property_index(pi);
+        }
 
         let mut operators = planner.plan_query(ast)?;
 

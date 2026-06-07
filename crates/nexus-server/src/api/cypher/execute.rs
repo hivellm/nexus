@@ -175,6 +175,75 @@ pub async fn execute_cypher(
         }
     }
 
+    // Route property-index DDL (CREATE INDEX / DROP INDEX) through the engine
+    // so that `property_index.create_index` + `populate_index` are called and
+    // subsequent reads / MERGE existence checks see the index (issue #9).
+    // Spatial and fulltext index DDL stays on the executor fallthrough below.
+    let is_property_index_ddl = ast.clauses.iter().any(|c| match c {
+        nexus_core::executor::parser::Clause::CreateIndex(ci) => {
+            !matches!(ci.index_type.as_deref(), Some("spatial") | Some("fulltext"))
+        }
+        nexus_core::executor::parser::Clause::DropIndex(_) => true,
+        _ => false,
+    });
+
+    if is_property_index_ddl {
+        let mut engine = server.engine.write().await;
+        match engine.execute_cypher(&request.query) {
+            Ok(result) => {
+                let execution_time = start_time.elapsed().as_millis() as u64;
+                // Preserve the single-column ["index"] shape that the executor
+                // path returned so existing clients are unaffected.
+                // The engine returns ["index", "message"] with :Label(prop)
+                // style names; reformat to "Label.property.property" to match.
+                let rows: Vec<serde_json::Value> = result
+                    .rows
+                    .into_iter()
+                    .map(|row| {
+                        // row.values[0] is the index name from the engine
+                        // (e.g. ":Turn(id)").  We need "Turn.id.property".
+                        let engine_name = match row.values.first() {
+                            Some(serde_json::Value::String(s)) => s.clone(),
+                            Some(v) => v.to_string(),
+                            None => String::new(),
+                        };
+                        // Strip leading ":" and convert "(prop)" → ".prop.property"
+                        let reformatted = if let Some(stripped) = engine_name.strip_prefix(':') {
+                            if let Some(paren) = stripped.find('(') {
+                                let label = &stripped[..paren];
+                                let rest = &stripped[paren + 1..];
+                                let prop = rest.trim_end_matches(')');
+                                format!("{}.{}.property", label, prop)
+                            } else {
+                                engine_name.clone()
+                            }
+                        } else {
+                            engine_name.clone()
+                        };
+                        serde_json::Value::Array(vec![serde_json::Value::String(reformatted)])
+                    })
+                    .collect();
+                return Json(CypherResponse {
+                    columns: vec!["index".to_string()],
+                    rows,
+                    execution_time_ms: execution_time,
+                    error: None,
+                    notifications: Vec::new(),
+                });
+            }
+            Err(e) => {
+                let execution_time = start_time.elapsed().as_millis() as u64;
+                return Json(CypherResponse {
+                    columns: vec![],
+                    rows: vec![],
+                    execution_time_ms: execution_time,
+                    error: Some(format!("Execution error: {}", e)),
+                    notifications: Vec::new(),
+                });
+            }
+        }
+    }
+
     // Check if this is a CREATE, MERGE, SET, DELETE, REMOVE, or MATCH query
     let query_upper = request.query.trim().to_uppercase();
     // DDL statements (`CREATE INDEX`, `CREATE SPATIAL INDEX`,

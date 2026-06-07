@@ -767,6 +767,15 @@ impl PropertyIndex {
         key_id: u32,
         value: PropertyValue,
     ) -> Result<()> {
+        // Null-key contract (Neo4j-aligned): a null property value means the
+        // property is absent, so it is never indexed. Skipping it keeps the
+        // typed property index free of null-keyed entries — `find_exact(..,
+        // Null)` therefore never matches and legacy null-valued properties
+        // cannot pollute index seeks. See docs/ops/graph-rebuild.md.
+        if value == PropertyValue::Null {
+            return Ok(());
+        }
+
         let mut trees = self.property_trees.write();
         let mut stats = self.stats.write();
 
@@ -1745,5 +1754,30 @@ mod tests {
 
         let stats = index.get_stats();
         assert_eq!(stats.total_vectors, 0);
+    }
+
+    #[test]
+    fn add_property_skips_null_value() {
+        let index = PropertyIndex::new();
+        // label_id=1, key_id=1
+        index.create_index(1, 1).unwrap();
+
+        // Adding Null must be a no-op — find_exact returns an empty bitmap.
+        index.add_property(42, 1, 1, PropertyValue::Null).unwrap();
+        let null_hits = index.find_exact(1, 1, PropertyValue::Null).unwrap();
+        assert!(
+            null_hits.is_empty(),
+            "find_exact for Null should return empty bitmap, got {null_hits:?}"
+        );
+
+        // A subsequent non-null add must still be indexed normally.
+        index
+            .add_property(42, 1, 1, PropertyValue::Integer(99))
+            .unwrap();
+        let hits = index.find_exact(1, 1, PropertyValue::Integer(99)).unwrap();
+        assert!(
+            hits.contains(42),
+            "node 42 should appear after non-null add"
+        );
     }
 }
