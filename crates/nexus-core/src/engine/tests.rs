@@ -2955,3 +2955,147 @@ fn comma_join_both_legs_plan_index_seek() {
          (one per leg), got {seeks}; plan = {plan:?}"
     );
 }
+
+/// ISSUE #9: `CREATE INDEX` through the executor/API path must register the
+/// typed property index AND backfill existing nodes — not merely intern the
+/// catalog key. Before the fix `has_index` stayed false, so reads fell back
+/// to a full label scan (Nexus.Performance.UnindexedPropertyAccess) and
+/// index-backed MERGE existence degraded to O(N).
+#[test]
+#[serial_test::serial]
+fn api_create_index_registers_and_populates() {
+    use crate::executor::types::Operator;
+    let ctx = crate::testing::TestContext::new();
+    let mut engine = Engine::with_isolated_catalog(ctx.path()).unwrap();
+
+    engine
+        .execute_cypher("CREATE (:Turn {id: 't1'}), (:Turn {id: 't2'}), (:Turn {id: 't3'})")
+        .expect("seed CREATE must succeed");
+
+    // Create the index via the executor/API path (the code path issue #9 fixed).
+    engine
+        .executor
+        .execute_create_index("Turn", "id", None, false, false)
+        .expect("executor CREATE INDEX must succeed");
+
+    // The typed index must now be registered AND backfilled with existing data.
+    let label_id = engine.catalog.get_label_id("Turn").expect("label exists");
+    let key_id = engine.catalog.get_key_id("id").expect("key exists");
+    assert!(
+        engine.indexes.property_index.has_index(label_id, key_id),
+        "API CREATE INDEX must register the typed property index"
+    );
+    let hits = engine
+        .indexes
+        .property_index
+        .find_exact(
+            label_id,
+            key_id,
+            crate::index::PropertyValue::String("t2".into()),
+        )
+        .expect("find_exact must succeed");
+    assert_eq!(
+        hits.len(),
+        1,
+        "backfill must index the existing node with id='t2'"
+    );
+
+    // The read planner must now choose a NodeIndexSeek (no fallback scan).
+    let plan = engine
+        .executor
+        .parse_and_plan("MATCH (n:Turn {id: 't2'}) RETURN n")
+        .expect("plan must succeed");
+    assert!(
+        plan.iter()
+            .any(|op| matches!(op, Operator::NodeIndexSeek { .. })),
+        "indexed read must plan NodeIndexSeek after API CREATE INDEX; plan = {plan:?}"
+    );
+
+    // Regression on the issue's exact symptom: no UnindexedPropertyAccess.
+    let result = engine
+        .execute_cypher("MATCH (n:Turn {id: 't2'}) RETURN n.id")
+        .expect("read must succeed");
+    assert!(
+        !result
+            .notifications
+            .iter()
+            .any(|n| n.code == "Nexus.Performance.UnindexedPropertyAccess"),
+        "must not emit UnindexedPropertyAccess once the index is populated; \
+         notifications = {:?}",
+        result.notifications
+    );
+}
+
+/// ISSUE #9: executor `CREATE INDEX` honours duplicate / IF NOT EXISTS on
+/// the typed property index (not the unrelated spatial R-tree registry).
+#[test]
+#[serial_test::serial]
+fn api_create_index_if_not_exists_and_duplicate() {
+    let ctx = crate::testing::TestContext::new();
+    let mut engine = Engine::with_isolated_catalog(ctx.path()).unwrap();
+    engine
+        .execute_cypher("CREATE (:Turn {id: 't1'})")
+        .expect("seed CREATE must succeed");
+
+    engine
+        .executor
+        .execute_create_index("Turn", "id", None, false, false)
+        .expect("first CREATE INDEX must succeed");
+
+    // Duplicate without IF NOT EXISTS / OR REPLACE must error.
+    let dup = engine
+        .executor
+        .execute_create_index("Turn", "id", None, false, false);
+    assert!(
+        dup.is_err(),
+        "duplicate CREATE INDEX must error without IF NOT EXISTS / OR REPLACE"
+    );
+
+    // IF NOT EXISTS must succeed silently on an existing index.
+    engine
+        .executor
+        .execute_create_index("Turn", "id", None, true, false)
+        .expect("CREATE INDEX IF NOT EXISTS must be a no-op success");
+}
+
+/// ISSUE #9: executor `CREATE INDEX ... OR REPLACE` rebuilds and re-backfills
+/// the typed property index.
+#[test]
+#[serial_test::serial]
+fn api_create_index_or_replace_repopulates() {
+    let ctx = crate::testing::TestContext::new();
+    let mut engine = Engine::with_isolated_catalog(ctx.path()).unwrap();
+    engine
+        .execute_cypher("CREATE (:Turn {id: 't1'})")
+        .expect("seed CREATE must succeed");
+
+    engine
+        .executor
+        .execute_create_index("Turn", "id", None, false, false)
+        .expect("first CREATE INDEX must succeed");
+    engine
+        .executor
+        .execute_create_index("Turn", "id", None, false, true)
+        .expect("CREATE INDEX OR REPLACE must succeed");
+
+    let label_id = engine.catalog.get_label_id("Turn").expect("label exists");
+    let key_id = engine.catalog.get_key_id("id").expect("key exists");
+    assert!(
+        engine.indexes.property_index.has_index(label_id, key_id),
+        "OR REPLACE must leave the index registered"
+    );
+    let hits = engine
+        .indexes
+        .property_index
+        .find_exact(
+            label_id,
+            key_id,
+            crate::index::PropertyValue::String("t1".into()),
+        )
+        .expect("find_exact must succeed");
+    assert_eq!(
+        hits.len(),
+        1,
+        "OR REPLACE must re-backfill existing nodes (id='t1')"
+    );
+}

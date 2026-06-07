@@ -49,6 +49,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Comma-joined multi-pattern reads** such as `MATCH (a:Turn {id:$a}), (b:ToolCall {id:$b})` now seed each leg via an independent index seek, so endpoint resolution is no longer a cartesian product of two full label scans (previously O(N²), timing out on large graphs). This unblocks edge-upsert throughput.
 - **The typed property index is shared with the read executor at construction**, so a `CREATE INDEX` is visible to subsequent read queries immediately. Results are unchanged; only performance improves.
 
+### Fixed — `phase6_fix-create-index-api-populate` (#9)
+
+- **`CREATE INDEX FOR (n:Label) ON (n.prop)` issued via the REST/RPC API now actually registers and backfills the typed property index** that read-side `NodeIndexSeek` (fix #8) and index-backed MERGE existence consult. Previously the API routed property-index DDL through the executor path, which only interned the catalog key — `has_index` stayed false, so every `MATCH (n:Label {prop:val})` fell back to a full label scan (emitting `Nexus.Performance.UnindexedPropertyAccess`) and MERGE existence stayed O(N), silently defeating both the fix in #8 and the index-backed MERGE fix.
+- **The REST handler now routes property `CREATE INDEX` / `DROP INDEX` through the engine handler** (`execute_index_commands`), which calls `property_index.create_index` + populates existing nodes; spatial and fulltext index DDL keep their executor path. The single-column `["index"]` response shape is preserved. The core executor `execute_create_index` also registers + backfills the typed index when a property-index handle is present.
+
 ## [2.3.0] — 2026-06-06
 
 > Bug-fix release driven by field reports against 2.2.0 (GH #3–#6) plus two

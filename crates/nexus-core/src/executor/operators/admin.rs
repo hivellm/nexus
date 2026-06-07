@@ -49,9 +49,37 @@ impl Executor {
                 registry.register_empty(&index_key);
             }
             None | Some("property") => {
-                // Property index — register in catalog.
-                let _label_id = self.catalog().get_or_create_label(label)?;
-                let _key_id = self.catalog().get_or_create_key(property)?;
+                // Property index — register in the catalog AND in the typed
+                // `property_index` that `has_index` / `find_exact` consult,
+                // then backfill existing nodes. Without this the index is
+                // invisible to `NodeIndexSeek` (read #8) and index-backed
+                // MERGE existence, so both silently fall back to O(N) label
+                // scans (issue #9). Mirrors `engine::populate_index`.
+                let label_id = self.catalog().get_or_create_label(label)?;
+                let key_id = self.catalog().get_or_create_key(property)?;
+
+                // The typed index is shared with the engine via an Arc; an
+                // executor built outside an engine (test harness) has no
+                // handle, in which case catalog interning above is all we can
+                // do.
+                if let Some(prop_idx) = self.property_index() {
+                    let already = prop_idx.has_index(label_id, key_id);
+                    if already {
+                        if if_not_exists {
+                            return Ok(());
+                        }
+                        if !or_replace {
+                            return Err(Error::CypherExecution(format!(
+                                "Index on :{}({}) already exists",
+                                label, property
+                            )));
+                        }
+                        // OR REPLACE — drop and rebuild from scratch.
+                        prop_idx.drop_index(label_id, key_id)?;
+                    }
+                    prop_idx.create_index(label_id, key_id)?;
+                    self.populate_property_index(label_id, key_id, property)?;
+                }
             }
             _ => {
                 return Err(Error::CypherExecution(format!(
@@ -124,6 +152,61 @@ impl Executor {
                 )));
             }
         }
+        Ok(())
+    }
+
+    /// Backfill the typed property index for `(label_id, key_id)` from every
+    /// existing node carrying `label_id` that has the `property`. Mirrors
+    /// `engine::Engine::populate_index` so an API/executor `CREATE INDEX`
+    /// registers existing data, not just new writes (issue #9).
+    ///
+    /// Only scalar values are indexable: `String`/`Integer`/`Float`/
+    /// `Boolean`. Null is never indexed (null-key contract) and arrays /
+    /// objects have no index representation — both are passed over. The
+    /// `PropertyValue` mapping matches the write-side `json_to_property_value`
+    /// normalization so a later `find_exact` cannot miss a backfilled node.
+    fn populate_property_index(&self, label_id: u32, key_id: u32, property: &str) -> Result<()> {
+        use crate::index::PropertyValue;
+
+        let Some(prop_idx) = self.property_index() else {
+            return Ok(());
+        };
+
+        let bitmap = {
+            let label_index = self.shared.label_index.read();
+            label_index
+                .get_nodes_with_labels(&[label_id])
+                .unwrap_or_default()
+        };
+
+        let store = self.shared.store.read();
+        for raw_id in bitmap.iter() {
+            let node_id = raw_id as u64;
+            let props = match store.load_node_properties(node_id) {
+                Ok(Some(Value::Object(m))) => m,
+                _ => continue,
+            };
+            let Some(value) = props.get(property) else {
+                continue;
+            };
+            let pv = match value {
+                Value::String(s) => PropertyValue::String(s.clone()),
+                Value::Number(n) => {
+                    if let Some(i) = n.as_i64() {
+                        PropertyValue::Integer(i)
+                    } else if let Some(f) = n.as_f64() {
+                        PropertyValue::Float(f)
+                    } else {
+                        continue;
+                    }
+                }
+                Value::Bool(b) => PropertyValue::Boolean(*b),
+                // Null (null-key contract), arrays and objects are not indexed.
+                _ => continue,
+            };
+            prop_idx.add_property(node_id, label_id, key_id, pv)?;
+        }
+
         Ok(())
     }
 
