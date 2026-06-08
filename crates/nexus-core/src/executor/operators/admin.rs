@@ -79,6 +79,9 @@ impl Executor {
                     }
                     prop_idx.create_index(label_id, key_id)?;
                     self.populate_property_index(label_id, key_id, property)?;
+                    // Persist the definition so the index survives a restart
+                    // (issue #11).
+                    self.catalog().persist_property_index(label_id, key_id)?;
                 }
             }
             _ => {

@@ -608,6 +608,23 @@ impl Engine {
             }
         }
 
+        // Rebuild the typed property index from the durable definitions
+        // (issue #11). `CREATE INDEX` persists each `(label_id, key_id)` pair;
+        // without this rebuild they would be lost on restart and every
+        // `MATCH (n:L {p:v})` / index-backed MERGE would silently fall back to
+        // an O(N) label scan until the client re-issued `CREATE INDEX`.
+        for (label_id, key_id) in self.catalog.list_property_indexes().unwrap_or_default() {
+            if let Err(e) = self.indexes.property_index.create_index(label_id, key_id) {
+                tracing::warn!(
+                    "property-index rebuild: create_index({label_id},{key_id}) failed: {e}"
+                );
+                continue;
+            }
+            if let Err(e) = self.populate_index(label_id, key_id) {
+                tracing::warn!("property-index rebuild: populate({label_id},{key_id}) failed: {e}");
+            }
+        }
+
         Ok(())
     }
 
@@ -4117,6 +4134,11 @@ impl Engine {
                         // Populate index with existing nodes that have this label and property
                         self.populate_index(label_id, property_key_id)?;
 
+                        // Persist the definition so the index survives a
+                        // restart (issue #11).
+                        self.catalog
+                            .persist_property_index(label_id, property_key_id)?;
+
                         // Return success message
                         let index_name =
                             format!(":{}({})", create_index.label, create_index.property);
@@ -4174,6 +4196,10 @@ impl Engine {
                     self.indexes
                         .property_index
                         .drop_index(label_id, property_key_id)?;
+                    // Remove the durable definition so it is not rebuilt on
+                    // the next restart (issue #11).
+                    self.catalog
+                        .remove_property_index(label_id, property_key_id)?;
 
                     // Return success message
                     let index_name = format!(":{}({})", drop_index.label, drop_index.property);

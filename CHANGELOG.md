@@ -12,6 +12,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **`UNWIND [...] AS row MERGE/CREATE/SET ...` writes now persist every row in a single statement.** Previously a write that ranged over an UNWIND row list silently persisted nothing (HTTP 200, `count = 0`) — the write executor rejected the UNWIND clause and the REST handler routed UNWIND-prefixed queries to the read executor, which dropped the write. This forced one request per row (~1-2 writes/sec), making bulk backfill ~100x slower.
 - **The engine write path now iterates UNWIND rows**, binding the row variable per iteration against a fresh per-row context so each row's `SET`/`REMOVE` touches only that row's node, and `RETURN count(n)` reflects all rows written. MERGE stays idempotent across rows. Relationship `CREATE` inside UNWIND returns a clear error instead of silently dropping. Both the engine dispatch and the REST `/cypher` handler now route UNWIND+write queries to the engine write path.
 
+### Fixed — `phase6_fix-index-durability-restart` (#11)
+
+- **Property indexes created via `CREATE INDEX FOR (n:Label) ON (n.prop)` now survive a server restart.** Previously the index definitions were not persisted and `rebuild_indexes_from_storage` rebuilt only the label/relationship indexes, so after any restart (deploy, crash, OOM) `has_index` was false: every `MATCH (n:Label {prop:val})` fell back to an O(N) label scan (emitting `Nexus.Performance.UnindexedPropertyAccess`) and index-backed MERGE existence degraded to O(N) — silently re-introducing the meltdown the #8/#9 fixes addressed, until a client re-issued `CREATE INDEX`. The catalog entry was lost too, so a duplicate `CREATE INDEX` wrongly succeeded after a restart.
+- **`CREATE INDEX` now persists each `(label_id, key_id)` definition in the LMDB catalog** (removed on `DROP INDEX`), and engine startup rebuilds the typed property index from those definitions by backfilling existing nodes. After a restart the seek engages with no `UnindexedPropertyAccess`, and a duplicate `CREATE INDEX` (without `IF NOT EXISTS`) correctly errors.
+
 ## [2.3.1] — 2026-06-07
 
 > Bug-fix release driven by field reports against 2.3.0 (GH #7–#9) plus the

@@ -3206,3 +3206,74 @@ fn unwind_write_create_persists_each_row() {
         "rows: {by_id:?}"
     );
 }
+
+/// ISSUE #11: property indexes must survive a restart. After reopening the
+/// engine on the same data dir, the typed index is rebuilt + backfilled from
+/// the persisted definition, the read seek engages (no UnindexedPropertyAccess),
+/// and a duplicate `CREATE INDEX` errors (catalog existence restored).
+#[test]
+#[serial_test::serial]
+fn property_index_survives_restart() {
+    let ctx = crate::testing::TestContext::new();
+    let path = ctx.path().to_path_buf();
+
+    // First engine: seed data + create index, then flush + drop (= restart).
+    {
+        let mut engine = Engine::with_data_dir(&path).expect("open engine");
+        engine
+            .execute_cypher("CREATE (:Restart {id: 'r1'}), (:Restart {id: 'r2'})")
+            .expect("seed CREATE");
+        engine
+            .execute_cypher("CREATE INDEX FOR (n:Restart) ON (n.id)")
+            .expect("CREATE INDEX");
+        engine.flush().expect("flush");
+    }
+
+    // Reopen on the same directory — simulates a server restart.
+    let mut engine = Engine::with_data_dir(&path).expect("reopen engine");
+    let label_id = engine
+        .catalog
+        .get_label_id("Restart")
+        .expect("label persisted");
+    let key_id = engine.catalog.get_key_id("id").expect("key persisted");
+
+    assert!(
+        engine.indexes.property_index.has_index(label_id, key_id),
+        "property index must be rebuilt after restart"
+    );
+    let hits = engine
+        .indexes
+        .property_index
+        .find_exact(
+            label_id,
+            key_id,
+            crate::index::PropertyValue::String("r1".into()),
+        )
+        .expect("find_exact");
+    assert_eq!(
+        hits.len(),
+        1,
+        "rebuilt index must be backfilled from storage"
+    );
+
+    // Read seek engages — no unindexed-scan notification.
+    let res = engine
+        .execute_cypher("MATCH (n:Restart {id: 'r1'}) RETURN n.id")
+        .expect("read");
+    assert_eq!(res.rows.len(), 1, "seek must find r1");
+    assert!(
+        !res.notifications
+            .iter()
+            .any(|n| n.code == "Nexus.Performance.UnindexedPropertyAccess"),
+        "restored index must serve the seek (no UnindexedPropertyAccess); notes = {:?}",
+        res.notifications
+    );
+
+    // Catalog existence restored: duplicate CREATE INDEX errors.
+    assert!(
+        engine
+            .execute_cypher("CREATE INDEX FOR (n:Restart) ON (n.id)")
+            .is_err(),
+        "duplicate CREATE INDEX must error after restart (definition persisted)"
+    );
+}

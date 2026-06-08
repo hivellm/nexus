@@ -136,6 +136,11 @@ pub struct Catalog {
     /// Procedure storage database
     procedure_db: Database<Str, SerdeBincode<crate::graph::procedures::ProcedureSignature>>,
 
+    /// Durable property-index definitions: the set of `(label_id, key_id)`
+    /// pairs registered by `CREATE INDEX`. Reloaded at startup to rebuild the
+    /// typed property index so indexes survive a restart (issue #11).
+    property_index_db: Database<SerdeBincode<(u32, u32)>, SerdeBincode<()>>,
+
     /// Next label ID counter (cached for performance)
     next_label_id: Arc<RwLock<u32>>,
     /// Next type ID counter
@@ -340,6 +345,10 @@ impl Catalog {
             SerdeBincode<crate::graph::procedures::ProcedureSignature>,
         > = env.create_database(&mut wtxn, Some("procedures"))?;
 
+        // Create the durable property-index definition store (issue #11).
+        let property_index_db: Database<SerdeBincode<(u32, u32)>, SerdeBincode<()>> =
+            env.create_database(&mut wtxn, Some("property_indexes"))?;
+
         // Create external-id index sub-databases (forward + reverse).
         let external_id_index = ExternalIdIndex::open(&env, &mut wtxn)?;
 
@@ -446,6 +455,7 @@ impl Catalog {
             constraint_manager: Arc::new(RwLock::new(constraint_manager)),
             udf_db,
             procedure_db,
+            property_index_db,
             next_label_id: Arc::new(RwLock::new(next_label_id)),
             next_type_id: Arc::new(RwLock::new(next_type_id)),
             next_key_id: Arc::new(RwLock::new(next_key_id)),
@@ -1114,6 +1124,33 @@ impl Catalog {
         self.udf_db.delete(&mut wtxn, name)?;
         wtxn.commit()?;
         Ok(())
+    }
+
+    /// Durably record that a property index exists on `(label_id, key_id)`
+    /// so it can be rebuilt after a restart (issue #11). Idempotent.
+    pub fn persist_property_index(&self, label_id: u32, key_id: u32) -> Result<()> {
+        let mut wtxn = self.env.write_txn()?;
+        self.property_index_db
+            .put(&mut wtxn, &(label_id, key_id), &())?;
+        wtxn.commit()?;
+        Ok(())
+    }
+
+    /// Remove a durable property-index definition (on `DROP INDEX`).
+    pub fn remove_property_index(&self, label_id: u32, key_id: u32) -> Result<()> {
+        let mut wtxn = self.env.write_txn()?;
+        self.property_index_db
+            .delete(&mut wtxn, &(label_id, key_id))?;
+        wtxn.commit()?;
+        Ok(())
+    }
+
+    /// List every persisted property-index definition `(label_id, key_id)`.
+    /// Used at startup to rebuild the typed property index.
+    pub fn list_property_indexes(&self) -> Result<Vec<(u32, u32)>> {
+        let rtxn = self.env.read_txn()?;
+        let iter = self.property_index_db.iter(&rtxn)?;
+        Ok(iter.filter_map(|r| r.ok()).map(|(k, _)| k).collect())
     }
 
     /// Store a procedure signature in the catalog
