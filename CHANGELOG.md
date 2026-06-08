@@ -5,12 +5,17 @@ All notable changes to Nexus will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [2.3.2] — 2026-06-08
+
+> Bug-fix release continuing the read/MERGE index reliability line (GH
+> #11–#13): UNWIND-driven writes persist, property indexes survive
+> restarts, and a sustained-write 100% CPU busy-loop is fixed. All fixes
+> ship with regression tests; the full workspace suite is green.
 
 ### Fixed — `phase6_fix-unwind-write-persists` (#13)
 
-- **`UNWIND [...] AS row MERGE/CREATE/SET ...` writes now persist every row in a single statement.** Previously a write that ranged over an UNWIND row list silently persisted nothing (HTTP 200, `count = 0`) — the write executor rejected the UNWIND clause and the REST handler routed UNWIND-prefixed queries to the read executor, which dropped the write. This forced one request per row (~1-2 writes/sec), making bulk backfill ~100x slower.
-- **The engine write path now iterates UNWIND rows**, binding the row variable per iteration against a fresh per-row context so each row's `SET`/`REMOVE` touches only that row's node, and `RETURN count(n)` reflects all rows written. MERGE stays idempotent across rows. Relationship `CREATE` inside UNWIND returns a clear error instead of silently dropping. Both the engine dispatch and the REST `/cypher` handler now route UNWIND+write queries to the engine write path.
+- **`UNWIND [...] AS row MERGE/SET ...` writes now persist every row in a single statement.** Previously a write that ranged over an UNWIND row list silently persisted nothing (HTTP 200, `count = 0`) — the engine write path rejected the UNWIND clause and the REST handler routed UNWIND-prefixed queries to the read executor, which dropped the write. This forced one request per row (~1-2 writes/sec), making bulk backfill ~100x slower.
+- **The engine write path now iterates UNWIND rows** for MERGE/SET/REMOVE/FOREACH, binding the row variable per iteration against a fresh per-row context so each row's `SET`/`REMOVE` touches only that row's node, and `RETURN count(n)` reflects all rows written. MERGE stays idempotent across rows. The REST `/cypher` handler now routes UNWIND+write queries to the engine (they previously fell through to the read executor); UNWIND+CREATE continues through the existing create path.
 
 ### Fixed — `phase6_fix-index-durability-restart` (#11)
 

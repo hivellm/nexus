@@ -5,7 +5,7 @@
 ![Rust](https://img.shields.io/badge/rust-nightly%201.85%2B-orange.svg)
 ![Edition](https://img.shields.io/badge/edition-2024-blue.svg)
 ![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)
-![Status](https://img.shields.io/badge/status-v2.3.1-success.svg)
+![Status](https://img.shields.io/badge/status-v2.3.2-success.svg)
 ![Tests](https://img.shields.io/badge/tests-2310%2B%20passing-success.svg)
 ![Compatibility](https://img.shields.io/badge/Neo4j%20compat-300%2F300-success.svg)
 
@@ -19,7 +19,7 @@ Nexus is a **property graph database** built for **read-heavy workloads** with *
 
 **Think Neo4j meets vector search**, shipped as a single Rust binary with a CLI, six first-party SDKs, and three transports (native binary RPC, HTTP/JSON, RESP3).
 
-### Highlights (v2.3.1)
+### Highlights (v2.3.2)
 
 - **Neo4j-compatible Cypher** — MATCH / CREATE / MERGE / SET / DELETE / REMOVE / WHERE / RETURN / ORDER BY / LIMIT / SKIP / UNION / WITH / UNWIND / FOREACH / CASE / EXISTS subqueries / list & map comprehensions / pattern comprehensions and 250+ functions & procedures. **300/300** Neo4j diff-suite tests pass ([Neo4j 2025.09.0, 2026-04-19](docs/compatibility/NEO4J_COMPATIBILITY_REPORT.md)). See the [openCypher status table](#-opencypher-support-matrix) at the bottom.
 - **APOC compatibility** — ~100 procedures across `apoc.coll.*` / `apoc.map.*` / `apoc.text.*` / `apoc.date.*` / `apoc.schema.*` / `apoc.util.*` / `apoc.convert.*` / `apoc.number.*` / `apoc.agg.*`. Drop-in replacement for most of the Neo4j APOC surface. Matrix: [`docs/procedures/APOC_COMPATIBILITY.md`](docs/procedures/APOC_COMPATIBILITY.md).
@@ -502,7 +502,17 @@ ORDER BY confidence DESC
 
 ## 🗺️ Roadmap
 
-### 2.3.1 — current (2026-06-07)
+### 2.3.2 — current (2026-06-08)
+- ✅ Bug-fix release (field reports vs 2.3.1):
+  - `UNWIND [...] AS row MERGE/SET ...` writes persist every row in a single
+    statement instead of silently dropping (GH #13) — unblocks batched backfill.
+  - property indexes survive a restart: definitions are persisted and the
+    typed index is rebuilt at startup, so seeks/MERGE stay O(log N) across
+    restarts (GH #11).
+  - fixed a sustained-write 100% CPU busy-loop: `CALL { ... } IN TRANSACTIONS`
+    infinite re-execution + O(N)-per-write label-index stats (GH #12).
+
+### 2.3.1 (2026-06-07)
 - ✅ Bug-fix release (field reports vs 2.3.0):
   - `POST /cypher` accepts an explicit `"parameters": null` body again (GH #7).
   - read-side `MATCH (n:Label {prop: val})` uses a typed property-index seek
@@ -598,7 +608,7 @@ Full detail: [`docs/ROADMAP.md`](docs/ROADMAP.md).
 
 ## 🧮 openCypher Support Matrix
 
-Canonical list of openCypher / Cypher 25 surfaces in Nexus v2.3.1. ✅ shipped · 🟡 partial (grammar-only or limited scope) · 🧭 queued. Validated against the [300/300 Neo4j diff suite](docs/compatibility/NEO4J_COMPATIBILITY_REPORT.md); per-clause detail lives in [`docs/specs/cypher-subset.md`](docs/specs/cypher-subset.md).
+Canonical list of openCypher / Cypher 25 surfaces in Nexus v2.3.2. ✅ shipped · 🟡 partial (grammar-only or limited scope) · 🧭 queued. Validated against the [300/300 Neo4j diff suite](docs/compatibility/NEO4J_COMPATIBILITY_REPORT.md); per-clause detail lives in [`docs/specs/cypher-subset.md`](docs/specs/cypher-subset.md).
 
 ### Reading clauses
 
