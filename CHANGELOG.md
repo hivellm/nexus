@@ -17,6 +17,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Property indexes created via `CREATE INDEX FOR (n:Label) ON (n.prop)` now survive a server restart.** Previously the index definitions were not persisted and `rebuild_indexes_from_storage` rebuilt only the label/relationship indexes, so after any restart (deploy, crash, OOM) `has_index` was false: every `MATCH (n:Label {prop:val})` fell back to an O(N) label scan (emitting `Nexus.Performance.UnindexedPropertyAccess`) and index-backed MERGE existence degraded to O(N) — silently re-introducing the meltdown the #8/#9 fixes addressed, until a client re-issued `CREATE INDEX`. The catalog entry was lost too, so a duplicate `CREATE INDEX` wrongly succeeded after a restart.
 - **`CREATE INDEX` now persists each `(label_id, key_id)` definition in the LMDB catalog** (removed on `DROP INDEX`), and engine startup rebuilds the typed property index from those definitions by backfilling existing nodes. After a restart the seek engages with no `UnindexedPropertyAccess`, and a duplicate `CREATE INDEX` (without `IF NOT EXISTS`) correctly errors.
 
+### Fixed — `phase6_fix-sustained-write-busyloop` (#12)
+
+- **Fixed an infinite loop in `CALL { ... } IN TRANSACTIONS OF n ROWS`: the batching loop re-ran the whole subquery against the same dataset every iteration and only stopped when it returned zero rows or fewer than `n`.** A subquery returning `>= n` stable rows (e.g. a backfill `CALL { ... } IN TRANSACTIONS OF 1000 ROWS`) never terminated, pinning the engine write lock at 100% CPU with no active-query log — every other request (even `RETURN 1`) then blocked and the server appeared hung until restart. `CALL ... IN TRANSACTIONS` now runs the subquery once in a transaction and commits (commit granularity, not re-execution).
+- **Removed an O(N)-per-write cost: `LabelIndex` recomputed full label statistics** (iterating every node in every label bitmap) on every `add_node`/`remove_node`. Under sustained write load on a large graph this compounded into a steady CPU drain. Stats are diagnostic-only and are now computed lazily on read.
+- **Added telemetry: `find_relationship_between` now warns** (`RUST_LOG=nexus_core=warn`) when an edge-existence check degrades to an O(degree) chain walk on a high-degree hub node, surfacing the sustained edge-MERGE pathology that otherwise presents as an opaque no-query CPU climb.
+
 ## [2.3.1] — 2026-06-07
 
 > Bug-fix release driven by field reports against 2.3.0 (GH #7–#9) plus the

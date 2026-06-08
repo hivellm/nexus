@@ -3320,8 +3320,17 @@ impl Engine {
         let src_node = self.storage.read_node(src_id)?;
         let mut rel_ptr = src_node.first_rel_ptr;
 
+        // Telemetry (issue #12): the chain walk is O(degree). For a hub node
+        // accumulating thousands of same-type edges, each edge-MERGE existence
+        // check that misses the exact-edge index degrades to a full-chain
+        // scan, which under a sustained edge-write burst manifests as a
+        // no-query-running CPU climb. Count hops and warn past a threshold so
+        // the pathology is observable (RUST_LOG=nexus_core=warn) instead of an
+        // opaque stall.
+        let mut hops: u64 = 0;
         while rel_ptr != 0 {
             let rel_record = self.storage.read_rel(rel_ptr)?;
+            hops += 1;
 
             // Check if this is an outgoing relationship to dst_id with the right type
             if rel_record.src_id == src_id
@@ -3339,6 +3348,17 @@ impl Engine {
             } else {
                 break;
             }
+        }
+
+        if hops >= 1000 {
+            tracing::warn!(
+                src_id,
+                rel_type,
+                hops,
+                "find_relationship_between fell back to an O(degree) chain walk \
+                 of {hops} hops (exact-edge index miss on a high-degree node); \
+                 sustained edge-MERGE on such a hub can pin CPU (issue #12)"
+            );
         }
 
         Ok(None)
@@ -4973,43 +4993,26 @@ impl Engine {
                                 .to_string(),
                         ));
                     }
-                    // Execute with batching in transactions
-                    let batch_size = call_subquery.batch_size.unwrap_or(1000);
-
-                    // Execute subquery in batches with transactions
-                    // For each batch, start a write transaction, execute, and commit
-                    let mut batch_count = 0;
-                    loop {
-                        // Start write transaction for this batch
-                        let mut tx = self.transaction_manager.write().begin_write()?;
-
-                        // Execute subquery for this batch
-                        let subquery_result = self.execute_cypher_ast(&call_subquery.query)?;
-
-                        if columns.is_empty() {
-                            columns = subquery_result.columns.clone();
-                        }
-
-                        // Add results for this batch
-                        let batch_rows: Vec<_> =
-                            subquery_result.rows.into_iter().take(batch_size).collect();
-                        if batch_rows.is_empty() {
-                            // No more results, commit and break
-                            self.transaction_manager.write().commit(&mut tx)?;
-                            break;
-                        }
-
-                        all_results.extend(batch_rows);
-                        batch_count += 1;
-
-                        // Commit transaction for this batch
-                        self.transaction_manager.write().commit(&mut tx)?;
-
-                        // If we got fewer rows than batch size, we're done
-                        if all_results.len() < batch_count * batch_size {
-                            break;
-                        }
+                    // `... IN TRANSACTIONS OF n ROWS` controls *commit
+                    // granularity*, not re-execution: the inner subquery runs
+                    // ONCE and its writes are committed (here, in a single
+                    // transaction). The previous implementation re-ran the
+                    // whole subquery every loop iteration against the same
+                    // dataset and only broke when it returned zero rows or
+                    // fewer than `batch_size`; for any subquery returning
+                    // `>= batch_size` stable rows (e.g. a backfill
+                    // `CALL { ... } IN TRANSACTIONS OF 1000 ROWS`) the
+                    // termination condition was never met — an infinite loop
+                    // that pinned the engine write lock at 100% CPU with no
+                    // active-query log (issue #12). Run once and commit.
+                    let _batch_size = call_subquery.batch_size.unwrap_or(1000);
+                    let mut tx = self.transaction_manager.write().begin_write()?;
+                    let subquery_result = self.execute_cypher_ast(&call_subquery.query)?;
+                    if columns.is_empty() {
+                        columns = subquery_result.columns.clone();
                     }
+                    all_results.extend(subquery_result.rows);
+                    self.transaction_manager.write().commit(&mut tx)?;
                 } else {
                     // Execute subquery normally (no batching)
                     let subquery_result = self.execute_cypher_ast(&call_subquery.query)?;

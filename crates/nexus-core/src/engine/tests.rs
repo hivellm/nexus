@@ -3277,3 +3277,28 @@ fn property_index_survives_restart() {
         "duplicate CREATE INDEX must error after restart (definition persisted)"
     );
 }
+
+/// ISSUE #12: `CALL { ... } IN TRANSACTIONS OF n ROWS` must terminate. The
+/// previous batching loop re-ran the whole subquery every iteration and only
+/// stopped when it returned zero rows or fewer than `n`; a subquery returning
+/// `>= n` stable rows looped forever, pinning the engine write lock at 100%
+/// CPU with no active-query log. This test would hang on the old code.
+#[test]
+#[serial_test::serial]
+fn call_in_transactions_terminates() {
+    let ctx = crate::testing::TestContext::new();
+    let mut engine = Engine::with_isolated_catalog(ctx.path()).unwrap();
+    engine
+        .execute_cypher("CREATE (:Seed {v: 1}), (:Seed {v: 2}), (:Seed {v: 3})")
+        .expect("seed CREATE");
+
+    // Subquery returns 3 rows >= batch size 2 — the old loop never terminated.
+    let r = engine
+        .execute_cypher("CALL { MATCH (s:Seed) RETURN s } IN TRANSACTIONS OF 2 ROWS")
+        .expect("CALL IN TRANSACTIONS must terminate");
+    assert_eq!(
+        r.rows.len(),
+        3,
+        "subquery runs once and returns all 3 seed rows (no infinite re-execution)"
+    );
+}

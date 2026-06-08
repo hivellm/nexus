@@ -160,8 +160,6 @@ impl IndexManager {
 pub struct LabelIndex {
     /// Mapping from label_id to bitmap of node_ids
     label_bitmaps: Arc<RwLock<HashMap<u32, RoaringBitmap>>>,
-    /// Statistics
-    stats: Arc<RwLock<LabelIndexStats>>,
 }
 
 /// Statistics for label index
@@ -199,17 +197,10 @@ impl LabelIndex {
         }
     }
 
-    fn update_stats(&self, bitmaps: &HashMap<u32, RoaringBitmap>) {
-        let stats_snapshot = Self::recompute_stats(bitmaps);
-        let mut stats = self.stats.write();
-        *stats = stats_snapshot;
-    }
-
     /// Create a new label index
     pub fn new() -> Self {
         Self {
             label_bitmaps: Arc::new(RwLock::new(HashMap::new())),
-            stats: Arc::new(RwLock::new(LabelIndexStats::default())),
         }
     }
 
@@ -221,7 +212,6 @@ impl LabelIndex {
             bitmaps.entry(label_id).or_default().insert(node_id as u32);
         }
 
-        self.update_stats(&bitmaps);
         Ok(())
     }
 
@@ -234,7 +224,6 @@ impl LabelIndex {
         }
 
         bitmaps.retain(|_, bitmap| !bitmap.is_empty());
-        self.update_stats(&bitmaps);
         Ok(())
     }
 
@@ -251,7 +240,6 @@ impl LabelIndex {
         }
 
         bitmaps.retain(|_, bitmap| !bitmap.is_empty());
-        self.update_stats(&bitmaps);
         Ok(())
     }
 
@@ -301,9 +289,14 @@ impl LabelIndex {
         bitmaps.get(&label_id).map(|b| b.len()).unwrap_or(0)
     }
 
-    /// Get statistics
+    /// Get statistics. Computed on demand from the label bitmaps — the
+    /// previous design recomputed (O(N) over every node in every bitmap) on
+    /// every `add_node`/`remove_node`, which pinned CPU under sustained write
+    /// load (issue #12). Stats are diagnostic-only, so the cost moves to the
+    /// (rare) read instead of the (hot) write.
     pub fn get_stats(&self) -> LabelIndexStats {
-        self.stats.read().clone()
+        let bitmaps = self.label_bitmaps.read();
+        Self::recompute_stats(&bitmaps)
     }
 
     /// Check if a label exists
@@ -323,14 +316,12 @@ impl LabelIndex {
         let mut bitmaps = self.label_bitmaps.write();
         bitmaps.clear();
 
-        self.update_stats(&bitmaps);
         Ok(())
     }
 
     /// Health check for the label index
     pub fn health_check(&self) -> Result<()> {
         let bitmaps = self.label_bitmaps.read();
-        let stats = self.stats.read();
 
         // Check if the number of labels is reasonable
         if bitmaps.len() > 1_000_000 {
@@ -339,7 +330,8 @@ impl LabelIndex {
         }
 
         // Check if the total nodes count is reasonable
-        if stats.total_nodes > 1_000_000_000 {
+        let total_nodes = Self::recompute_stats(&bitmaps).total_nodes;
+        if total_nodes > 1_000_000_000 {
             // 1 billion max
             return Err(Error::index("Too many nodes in label index"));
         }
