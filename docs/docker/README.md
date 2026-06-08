@@ -37,13 +37,14 @@ curl -X POST http://localhost:15474/cypher \
 
 | Tag | Contents |
 |---|---|
-| `latest`, `2.1.0` | Phase 9 + 10 ship train: caller-supplied external node IDs (`_id`) with `ON CONFLICT ERROR/MATCH/REPLACE`, Cypher + REST integration, six-SDK parity helpers. PHP + C# SDK `/nodes` → `/data/nodes` route fix. 300/300 Neo4j 4.8 diff suite + 87/87 SDK live cases passing. |
-| `2.0.0`, `v2.0.0` | Phase-8 ship train: encryption-at-rest core + KMS + WAL, quantified-path patterns with mode keywords, query-plan cache. |
-| `v1.14.0` | Geospatial predicates + `spatial.*` procedures slice A. |
-| `v1.13.0` | FTS async writer + crash-recovery harness. |
-| `v1.12.0` | FTS auto-maintenance on CREATE / SET / REMOVE / DELETE. |
+| `latest`, `2.3.2` | Reliability bug-fix release (GH #11–#13): UNWIND-driven writes (`UNWIND [...] AS row MERGE/SET ...`) persist every row in one statement; property indexes survive a restart (definitions persisted + rebuilt at startup); fixed a sustained-write 100% CPU busy-loop (`CALL { ... } IN TRANSACTIONS` infinite loop + O(N)-per-write label stats). |
+| `2.3.1` | Read/MERGE index line (GH #7–#9): `POST /cypher` accepts `"parameters": null`; read `MATCH (n:L {p:v})` uses a typed property-index seek (`NodeIndexSeek`) instead of a full scan; `CREATE INDEX` via the API registers + backfills the typed index. |
+| `2.3.0` | Bug-fix release (GH #3–#6): `$param` read-path binding + `parameters` body key, durable property-store reopen, GROUP BY by expression, UTF-8 `/cypher` bodies. |
+| `2.2.0` | Planner unindexed-property notification + slow-query observability. |
+| `2.1.0` | Caller-supplied external node IDs (`_id`) with `ON CONFLICT ERROR/MATCH/REPLACE`, six-SDK parity helpers. |
+| `2.0.0`, `v2.0.0` | Phase-8 ship train: encryption-at-rest core + KMS + WAL, quantified-path patterns, query-plan cache. |
 
-Pin a specific tag (e.g. `hivehub/nexus:2.1.0`) for production. `latest` floats forward on every release.
+Pin a specific tag (e.g. `hivehub/nexus:2.3.2`) for production. `latest` floats forward on every release.
 
 Every tag ships the HTTP API (`:15474`) and the binary RPC
 transport (`:15475`) the first-party SDKs use by default.
@@ -57,7 +58,7 @@ transport (`:15475`) the first-party SDKs use by default.
 - **Data directory**: `/app/data` — mount a volume here for
   persistence.
 - **Config directory**: `/app/config` — optional, for `config.yml`.
-- **Image size**: ~152 MB.
+- **Image size**: ~70 MB.
 
 ## Ports
 
@@ -150,9 +151,9 @@ curl -sf http://localhost:15474/health | jq .status
 
 ## Features
 
-- **openCypher**: ~55 % of the openCypher surface (300/300 Neo4j 4.8
-  diff suite passing at `2.1.0`; `cargo +nightly test --workspace`
-  reports 2310 passed / 67 ignored / 0 failed).
+- **openCypher**: ~55 % of the openCypher surface (300/300 Neo4j
+  2025.09.0 diff suite passing; the full `cargo +nightly test
+  --workspace` suite is green).
 - **External node IDs (`_id`)**: caller-supplied stable identifiers on
   nodes with `ON CONFLICT ERROR/MATCH/REPLACE` policies, REST surface
   (`POST /data/nodes` + `GET /data/nodes/by-external-id`), Cypher
@@ -175,8 +176,7 @@ curl -sf http://localhost:15474/health | jq .status
   via the `DatabaseManager`.
 - **Binary RPC**: first-party SDKs (Python, TypeScript, Rust, Go,
   C#, PHP) speak `nexus://` natively for p95 sub-millisecond
-  round-trips. Every SDK at `2.1.0` is live-validated against the
-  tagged `hivehub/nexus:2.1.0` image (87 / 87 cases PASS).
+  round-trips.
 
 ## Links
 
