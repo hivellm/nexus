@@ -3099,3 +3099,110 @@ fn api_create_index_or_replace_repopulates() {
         "OR REPLACE must re-backfill existing nodes (id='t1')"
     );
 }
+
+/// ISSUE #13: a write that ranges over an UNWIND row list must persist every
+/// row (MERGE + SET), and `RETURN count(n)` must reflect the rows written.
+/// Previously the write path errored/dropped UNWIND and returned count 0.
+#[test]
+#[serial_test::serial]
+fn unwind_write_merge_persists_each_row() {
+    let ctx = crate::testing::TestContext::new();
+    let mut engine = Engine::with_isolated_catalog(ctx.path()).unwrap();
+
+    let r = engine
+        .execute_cypher(
+            "UNWIND [{id:'unw1',nm:'A'},{id:'unw2',nm:'B'}] AS row \
+             MERGE (n:ZZUnw {id: row.id}) SET n.name = row.nm RETURN count(n) AS c",
+        )
+        .expect("UNWIND write must succeed");
+    assert_eq!(r.rows.len(), 1, "count query returns one row");
+    assert_eq!(
+        r.rows[0].values[0].as_i64(),
+        Some(2),
+        "count(n) must be 2, got {:?}",
+        r.rows[0].values[0]
+    );
+
+    // Data is actually persisted and readable, and each row's SET applied to
+    // ITS OWN node (not the whole accumulated batch).
+    let read = engine
+        .execute_cypher("MATCH (n:ZZUnw) RETURN n.id, n.name")
+        .expect("read must succeed");
+    assert_eq!(read.rows.len(), 2, "two :ZZUnw nodes must persist");
+    let mut by_id: std::collections::HashMap<String, String> = std::collections::HashMap::new();
+    for row in &read.rows {
+        by_id.insert(
+            row.values[0].as_str().unwrap_or_default().to_string(),
+            row.values[1].as_str().unwrap_or_default().to_string(),
+        );
+    }
+    assert_eq!(
+        by_id.get("unw1").map(String::as_str),
+        Some("A"),
+        "per-row SET: unw1.name must be 'A', got {by_id:?}"
+    );
+    assert_eq!(
+        by_id.get("unw2").map(String::as_str),
+        Some("B"),
+        "per-row SET: unw2.name must be 'B', got {by_id:?}"
+    );
+
+    // MERGE is idempotent across UNWIND rows: re-running does not duplicate.
+    engine
+        .execute_cypher(
+            "UNWIND [{id:'unw1',nm:'A2'}] AS row \
+             MERGE (n:ZZUnw {id: row.id}) SET n.name = row.nm RETURN count(n) AS c",
+        )
+        .expect("second UNWIND write must succeed");
+    let read2 = engine
+        .execute_cypher("MATCH (n:ZZUnw) RETURN n.id")
+        .expect("read must succeed");
+    assert_eq!(
+        read2.rows.len(),
+        2,
+        "MERGE over UNWIND must stay idempotent (no duplicate for unw1)"
+    );
+}
+
+/// ISSUE #13: UNWIND-driven CREATE (bulk node insert) persists every row.
+#[test]
+#[serial_test::serial]
+fn unwind_write_create_persists_each_row() {
+    let ctx = crate::testing::TestContext::new();
+    let mut engine = Engine::with_isolated_catalog(ctx.path()).unwrap();
+
+    let r = engine
+        .execute_cypher(
+            "UNWIND [{id:'c1',nm:'X'},{id:'c2',nm:'Y'},{id:'c3',nm:'Z'}] AS row \
+             CREATE (n:ZZCre {id: row.id, name: row.nm}) RETURN count(n) AS c",
+        )
+        .expect("UNWIND CREATE must succeed");
+    assert_eq!(
+        r.rows[0].values[0].as_i64(),
+        Some(3),
+        "count(n) must be 3, got {:?}",
+        r.rows[0].values[0]
+    );
+
+    let read = engine
+        .execute_cypher("MATCH (n:ZZCre) RETURN n.id, n.name")
+        .expect("read must succeed");
+    assert_eq!(read.rows.len(), 3, "three :ZZCre nodes must persist");
+    let mut by_id: std::collections::HashMap<String, String> = std::collections::HashMap::new();
+    for row in &read.rows {
+        by_id.insert(
+            row.values[0].as_str().unwrap_or_default().to_string(),
+            row.values[1].as_str().unwrap_or_default().to_string(),
+        );
+    }
+    assert_eq!(
+        by_id.get("c1").map(String::as_str),
+        Some("X"),
+        "rows: {by_id:?}"
+    );
+    assert_eq!(
+        by_id.get("c3").map(String::as_str),
+        Some("Z"),
+        "rows: {by_id:?}"
+    );
+}

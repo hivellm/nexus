@@ -194,6 +194,13 @@ pub struct Engine {
     /// parameters — in that case a query containing a `:$param` label
     /// is rejected with `ERR_INVALID_LABEL`.
     pub(crate) current_params: HashMap<String, Value>,
+    /// Per-iteration UNWIND row bindings for the write path (issue #13).
+    /// `UNWIND [...] AS row MERGE/SET ...` runs the downstream write
+    /// clauses once per row; this map binds the loop variable (e.g.
+    /// `row` -> `{"id":"a"}`) for the current iteration so the write-path
+    /// expression evaluators can resolve `row` / `row.id`. Empty outside an
+    /// UNWIND-write iteration. Mirrors `current_params`.
+    pub(crate) unwind_bindings: HashMap<String, Value>,
     /// In-memory registry of `LIST<T>` property-type constraints
     /// (phase6_opencypher-advanced-types §4.3). Keyed by
     /// `(label_id, property_key_id)`; check_constraints consults this
@@ -312,6 +319,7 @@ impl Engine {
             cache,
             quota_provider: None,
             current_params: HashMap::new(),
+            unwind_bindings: HashMap::new(),
             typed_list_constraints: HashMap::new(),
             node_key_constraints: Vec::new(),
             rel_not_null_constraints: Vec::new(),
@@ -506,6 +514,7 @@ impl Engine {
             cache,
             quota_provider: None,
             current_params: HashMap::new(),
+            unwind_bindings: HashMap::new(),
             typed_list_constraints: HashMap::new(),
             node_key_constraints: Vec::new(),
             rel_not_null_constraints: Vec::new(),
@@ -1183,6 +1192,28 @@ impl Engine {
                 executor::parser::Literal::Null => Ok(serde_json::Value::Null),
                 executor::parser::Literal::Point(p) => Ok(p.to_json_value()),
             },
+            // UNWIND-write row bindings (issue #13): `row` / `row.id` resolve
+            // against the per-iteration binding installed by the UNWIND-write
+            // loop. Outside such a loop `unwind_bindings` is empty and these
+            // fall through to the error below — preserving the legacy
+            // "literals only" contract for ordinary CREATE/MERGE properties.
+            executor::parser::Expression::Variable(name) => {
+                self.unwind_bindings.get(name).cloned().ok_or_else(|| {
+                    Error::CypherExecution(format!(
+                        "Unbound variable `{name}` in write property value"
+                    ))
+                })
+            }
+            executor::parser::Expression::PropertyAccess { variable, property } => {
+                match self.unwind_bindings.get(variable) {
+                    Some(serde_json::Value::Object(m)) => {
+                        Ok(m.get(property).cloned().unwrap_or(serde_json::Value::Null))
+                    }
+                    _ => Err(Error::CypherExecution(format!(
+                        "Cannot resolve `{variable}.{property}` in write property value"
+                    ))),
+                }
+            }
             _ => Err(Error::CypherExecution(
                 "Complex expressions not supported in CREATE properties".to_string(),
             )),
@@ -1213,10 +1244,21 @@ impl Engine {
                         .get(property)
                         .cloned()
                         .unwrap_or(serde_json::Value::Null))
+                } else if let Some(serde_json::Value::Object(m)) =
+                    self.unwind_bindings.get(variable)
+                {
+                    // UNWIND-write row binding (issue #13): `SET n.x = row.y`.
+                    Ok(m.get(property).cloned().unwrap_or(serde_json::Value::Null))
                 } else {
                     Ok(serde_json::Value::Null)
                 }
             }
+            // UNWIND-write row binding (issue #13): bare `row` on the SET RHS.
+            executor::parser::Expression::Variable(name) => Ok(self
+                .unwind_bindings
+                .get(name)
+                .cloned()
+                .unwrap_or(serde_json::Value::Null)),
             executor::parser::Expression::BinaryOp { left, op, right } => {
                 let left_val = self.evaluate_set_expression(left, target_var, node_props)?;
                 let right_val = self.evaluate_set_expression(right, target_var, node_props)?;
@@ -2595,6 +2637,16 @@ impl Engine {
 
         // If query has CREATE (with or without MATCH), handle via Engine for persistence
         if has_create {
+            // UNWIND-driven CREATE routes through the write path so each row
+            // is created (issue #13); the create-specific path below does not
+            // iterate UNWIND rows.
+            if ast
+                .clauses
+                .iter()
+                .any(|c| matches!(c, executor::parser::Clause::Unwind(_)))
+            {
+                return self.execute_write_query(&ast);
+            }
             if has_match {
                 // MATCH ... CREATE: execute MATCH first, then CREATE with results
                 let result = self.execute_match_create_query(&ast, Some(query))?;
@@ -2700,6 +2752,17 @@ impl Engine {
         let mut rel_context: HashMap<String, (u64, String)> = HashMap::new();
         let mut result: Option<executor::ResultSet> = None;
 
+        // UNWIND-driven write (issue #13): `UNWIND list AS row <writes> RETURN`
+        // runs the downstream write clauses once per row. Handled by a
+        // dedicated path; the linear loop below stays the non-UNWIND fast path.
+        if let Some(unwind_idx) = ast
+            .clauses
+            .iter()
+            .position(|c| matches!(c, executor::parser::Clause::Unwind(_)))
+        {
+            return self.execute_unwind_write_query(ast, unwind_idx);
+        }
+
         for clause in &ast.clauses {
             match clause {
                 executor::parser::Clause::Match(match_clause) => {
@@ -2749,16 +2812,26 @@ impl Engine {
             }
         }
 
+        self.finalize_write_result(result, ast)
+    }
+
+    /// Shared tail for the write-query paths: async-flush, refresh the
+    /// executor against the new storage state, and attach the write-path
+    /// `Nexus.Performance.UnindexedPropertyAccess` diagnostic. Used by both
+    /// the linear `execute_write_query` loop and the UNWIND-write path.
+    fn finalize_write_result(
+        &mut self,
+        result: Option<executor::ResultSet>,
+        ast: &executor::parser::CypherQuery,
+    ) -> Result<executor::ResultSet> {
         // Async flush — matches the CREATE / executor-side write paths,
         // which use `flush_async` as well. The SYNC `flush()` here used
         // to dominate write-query latency (5-10ms per call on spinning
         // media; 2-3ms even on NVMe) because mmap page syncs are
         // OS-level operations. With the WAL already providing
         // durability on commit, this full sync is redundant on the hot
-        // path — causing the bench's `write.set_property` and
-        // `constraint.not_null_set` to run 2× slower than Neo4j. Callers
-        // that genuinely need on-disk durability can issue an explicit
-        // `flush()` after the write.
+        // path. Callers that genuinely need on-disk durability can issue
+        // an explicit `flush()` after the write.
         self.storage.flush_async()?;
         self.refresh_executor()?;
 
@@ -2767,9 +2840,7 @@ impl Engine {
         // `Nexus.Performance.UnindexedPropertyAccess` notification
         // never fires here. Run the same scan against the engine's
         // catalog + property-index registry and attach any
-        // notifications to the returned `ResultSet`. This is what
-        // surfaces the `cortex-nexus` MERGE-ingest pathology in the
-        // `/cypher` envelope.
+        // notifications to the returned `ResultSet`.
         let mut rs = result.unwrap_or_else(|| executor::ResultSet::new(vec![], vec![]));
         let notes =
             crate::executor::planner::queries::compute_unindexed_property_access_notifications(
@@ -2781,6 +2852,184 @@ impl Engine {
             rs.notifications.extend(notes);
         }
         Ok(rs)
+    }
+
+    /// Evaluate an expression to a `serde_json::Value` for the write path,
+    /// supporting list/map literals and (via `expression_to_json_value`)
+    /// scalar literals plus UNWIND row bindings (`row` / `row.id`). Used to
+    /// materialise the UNWIND list and per-row map values (issue #13).
+    fn eval_write_value(&self, expr: &executor::parser::Expression) -> Result<serde_json::Value> {
+        match expr {
+            executor::parser::Expression::Map(entries) => {
+                let mut m = serde_json::Map::with_capacity(entries.len());
+                for (k, v) in entries.iter() {
+                    m.insert(k.clone(), self.eval_write_value(v)?);
+                }
+                Ok(serde_json::Value::Object(m))
+            }
+            executor::parser::Expression::List(items) => {
+                let mut a = Vec::with_capacity(items.len());
+                for it in items {
+                    a.push(self.eval_write_value(it)?);
+                }
+                Ok(serde_json::Value::Array(a))
+            }
+            // Scalars + UNWIND row bindings (Variable / PropertyAccess) +
+            // (when bound) `$param` are handled here.
+            _ => self.expression_to_json_value(expr),
+        }
+    }
+
+    /// Execute an `UNWIND list AS var <write clauses> [RETURN ...]` write
+    /// query by running the post-UNWIND write clauses once per list item,
+    /// binding `var` to the item for the iteration (issue #13). Only `MATCH`
+    /// may precede the `UNWIND`; the post-UNWIND clauses may be
+    /// MERGE / SET / REMOVE / FOREACH (+ a trailing RETURN).
+    fn execute_unwind_write_query(
+        &mut self,
+        ast: &executor::parser::CypherQuery,
+        unwind_idx: usize,
+    ) -> Result<executor::ResultSet> {
+        use executor::parser::Clause;
+
+        // `base_context` holds bindings from any leading MATCH (shared by
+        // every row). `accumulated` collects the node ids written across all
+        // rows for the trailing RETURN/count. Each row runs its write clauses
+        // against a *fresh per-row context* so a `SET` only touches that row's
+        // node, not every node merged so far.
+        let mut base_context: HashMap<String, Vec<u64>> = HashMap::new();
+        let mut accumulated: HashMap<String, Vec<u64>> = HashMap::new();
+        let mut rel_context: HashMap<String, (u64, String)> = HashMap::new();
+
+        // Clauses before UNWIND run once (e.g. a leading MATCH).
+        for clause in &ast.clauses[..unwind_idx] {
+            match clause {
+                Clause::Match(mc) => self.process_match_clause_multi(mc, &mut base_context)?,
+                _ => {
+                    return Err(Error::CypherExecution(
+                        "Only MATCH may precede UNWIND in a write query".to_string(),
+                    ));
+                }
+            }
+        }
+
+        let unwind = match &ast.clauses[unwind_idx] {
+            Clause::Unwind(u) => u,
+            _ => unreachable!("unwind_idx points at a non-UNWIND clause"),
+        };
+        let items = match self.eval_write_value(&unwind.expression)? {
+            serde_json::Value::Array(a) => a,
+            serde_json::Value::Null => Vec::new(),
+            // Neo4j unwinds a non-list scalar as a single row.
+            other => vec![other],
+        };
+
+        let post = &ast.clauses[unwind_idx + 1..];
+        for item in items {
+            self.unwind_bindings.insert(unwind.variable.clone(), item);
+            // Fresh per-row context seeded from the shared MATCH bindings, so
+            // SET/REMOVE only touch the node(s) this row merged/matched.
+            let mut row_context = base_context.clone();
+            for clause in post {
+                match clause {
+                    Clause::Merge(merge_clause) => {
+                        if let Some((rel_var, rel_id, rel_type)) =
+                            self.process_merge_relationship(merge_clause, &row_context)?
+                        {
+                            rel_context.insert(rel_var, (rel_id, rel_type));
+                        } else {
+                            let (variable, node_ids) = self.process_merge_clause(merge_clause)?;
+                            row_context.insert(variable.clone(), node_ids.clone());
+                            accumulated.entry(variable).or_default().extend(node_ids);
+                        }
+                    }
+                    Clause::Create(create_clause) => {
+                        for element in &create_clause.pattern.elements {
+                            match element {
+                                executor::parser::PatternElement::Node(node) => {
+                                    let mut props = serde_json::Map::new();
+                                    if let Some(pm) = &node.properties {
+                                        for (k, expr) in &pm.properties {
+                                            props.insert(k.clone(), self.eval_write_value(expr)?);
+                                        }
+                                    }
+                                    let id = self.create_node(
+                                        node.labels.clone(),
+                                        serde_json::Value::Object(props),
+                                    )?;
+                                    if let Some(var) = &node.variable {
+                                        row_context.insert(var.clone(), vec![id]);
+                                        accumulated.entry(var.clone()).or_default().push(id);
+                                    }
+                                }
+                                _ => {
+                                    self.unwind_bindings.clear();
+                                    return Err(Error::CypherExecution(
+                                        "Relationship CREATE inside UNWIND is not supported; \
+                                         use separate MERGE clauses for the endpoints and edge"
+                                            .to_string(),
+                                    ));
+                                }
+                            }
+                        }
+                    }
+                    Clause::Set(set_clause) => self.apply_set_clause(&row_context, set_clause)?,
+                    Clause::Remove(remove_clause) => {
+                        self.apply_remove_clause(&row_context, remove_clause)?
+                    }
+                    Clause::Foreach(foreach_clause) => {
+                        self.execute_foreach_clause(&row_context, foreach_clause)?
+                    }
+                    // RETURN is computed once after the loop.
+                    Clause::Return(_) => {}
+                    Clause::Match(_)
+                    | Clause::Where(_)
+                    | Clause::With(_)
+                    | Clause::Unwind(_)
+                    | Clause::Union(_)
+                    | Clause::OrderBy(_)
+                    | Clause::Limit(_)
+                    | Clause::Skip(_) => {
+                        self.unwind_bindings.clear();
+                        return Err(Error::CypherExecution(
+                            "Unsupported clause after UNWIND in write query".to_string(),
+                        ));
+                    }
+                    _ => {}
+                }
+            }
+        }
+        self.unwind_bindings.clear();
+
+        // Merge the leading-MATCH bindings with the accumulated per-row writes
+        // into the RETURN context, with stable de-duplicated id lists so a
+        // trailing `RETURN count(n)` reflects every distinct row written.
+        let mut return_context = base_context;
+        for (variable, ids) in accumulated {
+            return_context.entry(variable).or_default().extend(ids);
+        }
+        for ids in return_context.values_mut() {
+            ids.sort_unstable();
+            ids.dedup();
+        }
+
+        // Build the trailing RETURN (if any) after flush+refresh so the
+        // executor-backed projection sees the freshly written rows.
+        self.storage.flush_async()?;
+        self.refresh_executor()?;
+        let result = post
+            .iter()
+            .find_map(|c| match c {
+                Clause::Return(r) => Some(r),
+                _ => None,
+            })
+            .map(|return_clause| {
+                self.build_return_result_with_rels(&return_context, &rel_context, return_clause)
+            })
+            .transpose()?;
+
+        // Reuse the shared notification tail (flush/refresh are idempotent).
+        self.finalize_write_result(result, ast)
     }
 
     fn process_merge_clause(
@@ -5225,6 +5474,14 @@ impl Engine {
 
         // If query has CREATE (with or without MATCH), handle via Engine for persistence
         if has_create {
+            // UNWIND-driven CREATE routes through the write path (issue #13).
+            if ast
+                .clauses
+                .iter()
+                .any(|c| matches!(c, executor::parser::Clause::Unwind(_)))
+            {
+                return self.execute_write_query(ast);
+            }
             if has_match {
                 // MATCH ... CREATE: execute MATCH first, then CREATE with results
                 let result = self.execute_match_create_query(ast, None)?;

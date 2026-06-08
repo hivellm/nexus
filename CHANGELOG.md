@@ -5,6 +5,13 @@ All notable changes to Nexus will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed — `phase6_fix-unwind-write-persists` (#13)
+
+- **`UNWIND [...] AS row MERGE/CREATE/SET ...` writes now persist every row in a single statement.** Previously a write that ranged over an UNWIND row list silently persisted nothing (HTTP 200, `count = 0`) — the write executor rejected the UNWIND clause and the REST handler routed UNWIND-prefixed queries to the read executor, which dropped the write. This forced one request per row (~1-2 writes/sec), making bulk backfill ~100x slower.
+- **The engine write path now iterates UNWIND rows**, binding the row variable per iteration against a fresh per-row context so each row's `SET`/`REMOVE` touches only that row's node, and `RETURN count(n)` reflects all rows written. MERGE stays idempotent across rows. Relationship `CREATE` inside UNWIND returns a clear error instead of silently dropping. Both the engine dispatch and the REST `/cypher` handler now route UNWIND+write queries to the engine write path.
+
 ## [2.3.1] — 2026-06-07
 
 > Bug-fix release driven by field reports against 2.3.0 (GH #7–#9) plus the

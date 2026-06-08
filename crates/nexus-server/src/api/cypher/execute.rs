@@ -244,6 +244,54 @@ pub async fn execute_cypher(
         }
     }
 
+    // UNWIND-driven writes (issue #13): `UNWIND list AS row MERGE/SET/...`.
+    // The string-prefix routing below only flags writes that *start with*
+    // CREATE/MERGE, so an UNWIND-prefixed write falls through to the read
+    // executor and silently persists nothing (200 / count 0). Detect it from
+    // the parsed AST and route through the engine write path, which iterates
+    // the rows.
+    {
+        use nexus_core::executor::parser::Clause;
+        let has_unwind = ast.clauses.iter().any(|c| matches!(c, Clause::Unwind(_)));
+        let has_write = ast.clauses.iter().any(|c| {
+            matches!(
+                c,
+                Clause::Merge(_)
+                    | Clause::Set(_)
+                    | Clause::Remove(_)
+                    | Clause::Foreach(_)
+                    | Clause::Create(_)
+            )
+        });
+        if has_unwind && has_write {
+            let mut engine = server.engine.write().await;
+            let execution_time = start_time.elapsed().as_millis() as u64;
+            return match engine.execute_cypher_with_params(&request.query, request.params.clone()) {
+                Ok(result) => {
+                    let rows: Vec<serde_json::Value> = result
+                        .rows
+                        .into_iter()
+                        .map(|row| serde_json::Value::Array(row.values))
+                        .collect();
+                    Json(CypherResponse {
+                        columns: result.columns,
+                        rows,
+                        execution_time_ms: execution_time,
+                        error: None,
+                        notifications: result.notifications,
+                    })
+                }
+                Err(e) => Json(CypherResponse {
+                    columns: vec![],
+                    rows: vec![],
+                    execution_time_ms: execution_time,
+                    error: Some(format!("Execution error: {}", e)),
+                    notifications: Vec::new(),
+                }),
+            };
+        }
+    }
+
     // Check if this is a CREATE, MERGE, SET, DELETE, REMOVE, or MATCH query
     let query_upper = request.query.trim().to_uppercase();
     // DDL statements (`CREATE INDEX`, `CREATE SPATIAL INDEX`,
