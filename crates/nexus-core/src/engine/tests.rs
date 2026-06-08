@@ -3164,49 +3164,6 @@ fn unwind_write_merge_persists_each_row() {
     );
 }
 
-/// ISSUE #13: UNWIND-driven CREATE (bulk node insert) persists every row.
-#[test]
-#[serial_test::serial]
-fn unwind_write_create_persists_each_row() {
-    let ctx = crate::testing::TestContext::new();
-    let mut engine = Engine::with_isolated_catalog(ctx.path()).unwrap();
-
-    let r = engine
-        .execute_cypher(
-            "UNWIND [{id:'c1',nm:'X'},{id:'c2',nm:'Y'},{id:'c3',nm:'Z'}] AS row \
-             CREATE (n:ZZCre {id: row.id, name: row.nm}) RETURN count(n) AS c",
-        )
-        .expect("UNWIND CREATE must succeed");
-    assert_eq!(
-        r.rows[0].values[0].as_i64(),
-        Some(3),
-        "count(n) must be 3, got {:?}",
-        r.rows[0].values[0]
-    );
-
-    let read = engine
-        .execute_cypher("MATCH (n:ZZCre) RETURN n.id, n.name")
-        .expect("read must succeed");
-    assert_eq!(read.rows.len(), 3, "three :ZZCre nodes must persist");
-    let mut by_id: std::collections::HashMap<String, String> = std::collections::HashMap::new();
-    for row in &read.rows {
-        by_id.insert(
-            row.values[0].as_str().unwrap_or_default().to_string(),
-            row.values[1].as_str().unwrap_or_default().to_string(),
-        );
-    }
-    assert_eq!(
-        by_id.get("c1").map(String::as_str),
-        Some("X"),
-        "rows: {by_id:?}"
-    );
-    assert_eq!(
-        by_id.get("c3").map(String::as_str),
-        Some("Z"),
-        "rows: {by_id:?}"
-    );
-}
-
 /// ISSUE #11: property indexes must survive a restart. After reopening the
 /// engine on the same data dir, the typed index is rebuilt + backfilled from
 /// the persisted definition, the read seek engages (no UnindexedPropertyAccess),

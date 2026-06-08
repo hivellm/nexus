@@ -2654,16 +2654,6 @@ impl Engine {
 
         // If query has CREATE (with or without MATCH), handle via Engine for persistence
         if has_create {
-            // UNWIND-driven CREATE routes through the write path so each row
-            // is created (issue #13); the create-specific path below does not
-            // iterate UNWIND rows.
-            if ast
-                .clauses
-                .iter()
-                .any(|c| matches!(c, executor::parser::Clause::Unwind(_)))
-            {
-                return self.execute_write_query(&ast);
-            }
             if has_match {
                 // MATCH ... CREATE: execute MATCH first, then CREATE with results
                 let result = self.execute_match_create_query(&ast, Some(query))?;
@@ -5503,14 +5493,6 @@ impl Engine {
 
         // If query has CREATE (with or without MATCH), handle via Engine for persistence
         if has_create {
-            // UNWIND-driven CREATE routes through the write path (issue #13).
-            if ast
-                .clauses
-                .iter()
-                .any(|c| matches!(c, executor::parser::Clause::Unwind(_)))
-            {
-                return self.execute_write_query(ast);
-            }
             if has_match {
                 // MATCH ... CREATE: execute MATCH first, then CREATE with results
                 let result = self.execute_match_create_query(ast, None)?;
