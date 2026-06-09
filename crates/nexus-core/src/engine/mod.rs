@@ -3357,6 +3357,22 @@ impl Engine {
             let rel_record = self.storage.read_rel(rel_ptr)?;
             hops += 1;
 
+            // #20: warn DURING the walk, the moment it crosses the threshold,
+            // so a hub-degree pathology is surfaced in real time — not only
+            // after a (possibly enormous) scan completes, and even when the
+            // edge is eventually found below (the early return would otherwise
+            // skip a post-loop warning).
+            if hops == 1000 {
+                tracing::warn!(
+                    src_id,
+                    rel_type,
+                    "find_relationship_between is walking a long O(degree) \
+                     relationship chain (>= 1000 hops) — exact-edge index miss \
+                     on a high-degree hub; sustained edge-MERGE here can pin CPU \
+                     (issue #12)"
+                );
+            }
+
             // Check if this is an outgoing relationship to dst_id with the right type
             if rel_record.src_id == src_id
                 && rel_record.dst_id == dst_id
@@ -3373,17 +3389,6 @@ impl Engine {
             } else {
                 break;
             }
-        }
-
-        if hops >= 1000 {
-            tracing::warn!(
-                src_id,
-                rel_type,
-                hops,
-                "find_relationship_between fell back to an O(degree) chain walk \
-                 of {hops} hops (exact-edge index miss on a high-degree node); \
-                 sustained edge-MERGE on such a hub can pin CPU (issue #12)"
-            );
         }
 
         Ok(None)
