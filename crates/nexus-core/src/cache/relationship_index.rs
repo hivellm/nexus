@@ -159,16 +159,17 @@ impl RelationshipIndex {
                 .push(rel_id);
         }
 
-        // Update stats
+        // Update stats. #17: read `node_index.len()` into a local BEFORE
+        // acquiring `stats.write()`, so we never hold the stats lock while
+        // taking the node_index lock. The previous nested order
+        // (`stats.write()` then `node_index.read()`) formed a lock-order
+        // cycle with any path holding `node_index.write()` while waiting on
+        // `stats.write()` — a latent deadlock under concurrent edge inserts.
+        let node_count = self.node_index.read().unwrap().len() as u64;
         {
             let mut stats = self.stats.write().unwrap();
             stats.total_relationships += 1;
-
-            // Track unique nodes (approximate)
-            let node_index = self.node_index.read().unwrap();
-            stats.total_nodes = node_index.len() as u64;
-
-            // Rough memory estimation
+            stats.total_nodes = node_count; // approximate (nodes with ≥1 rel)
             stats.memory_usage += 16; // Approximate per relationship
         }
 
@@ -568,5 +569,44 @@ mod tests {
         let stats = index.stats();
         assert_eq!(stats.total_relationships, 2);
         assert!(stats.memory_usage > 0);
+    }
+
+    /// #17: concurrent `add_relationship` + `stats()` must make progress (no
+    /// deadlock). The old code held `stats.write()` while taking
+    /// `node_index.read()`, which could form a lock-order cycle with the
+    /// node_index write blocks under contention. This would hang on the old
+    /// code; it must complete and count every relationship.
+    #[test]
+    fn concurrent_add_relationship_does_not_deadlock() {
+        use std::sync::Arc;
+        let index = Arc::new(RelationshipIndex::new());
+        let threads = 8u64;
+        let per_thread = 500u64;
+
+        let mut handles = Vec::new();
+        for t in 0..threads {
+            let idx = Arc::clone(&index);
+            handles.push(std::thread::spawn(move || {
+                let base = t * per_thread;
+                for i in 0..per_thread {
+                    let rel_id = base + i;
+                    // Distinct src/dst per rel to also exercise node_index growth.
+                    idx.add_relationship(rel_id, rel_id, rel_id + 1, (i % 4) as u32)
+                        .unwrap();
+                    // Interleave a stats read (the previously-nested lock path).
+                    let _ = idx.stats();
+                }
+            }));
+        }
+        for h in handles {
+            h.join().expect("worker thread must not panic/deadlock");
+        }
+
+        let stats = index.stats();
+        assert_eq!(
+            stats.total_relationships,
+            threads * per_thread,
+            "every concurrent add_relationship must be counted"
+        );
     }
 }
