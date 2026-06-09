@@ -201,6 +201,13 @@ pub struct Engine {
     /// expression evaluators can resolve `row` / `row.id`. Empty outside an
     /// UNWIND-write iteration. Mirrors `current_params`.
     pub(crate) unwind_bindings: HashMap<String, Value>,
+    /// Set when an in-memory relationship-index update fails (issue #18) so
+    /// the index may have a missing `(src,type,dst)` entry. The next
+    /// `find_relationship_between` lazily rebuilds the relationship index from
+    /// storage and clears the flag, restoring the O(1) exact-edge fast path
+    /// (correctness is preserved meanwhile by the authoritative chain-walk
+    /// fallback). Avoids rebuilding mid-write.
+    pub(crate) relationship_index_dirty: std::sync::atomic::AtomicBool,
     /// In-memory registry of `LIST<T>` property-type constraints
     /// (phase6_opencypher-advanced-types §4.3). Keyed by
     /// `(label_id, property_key_id)`; check_constraints consults this
@@ -320,6 +327,7 @@ impl Engine {
             quota_provider: None,
             current_params: HashMap::new(),
             unwind_bindings: HashMap::new(),
+            relationship_index_dirty: std::sync::atomic::AtomicBool::new(false),
             typed_list_constraints: HashMap::new(),
             node_key_constraints: Vec::new(),
             rel_not_null_constraints: Vec::new(),
@@ -515,6 +523,7 @@ impl Engine {
             quota_provider: None,
             current_params: HashMap::new(),
             unwind_bindings: HashMap::new(),
+            relationship_index_dirty: std::sync::atomic::AtomicBool::new(false),
             typed_list_constraints: HashMap::new(),
             node_key_constraints: Vec::new(),
             rel_not_null_constraints: Vec::new(),
@@ -590,23 +599,7 @@ impl Engine {
         // on a re-bootstrap — precisely the write-burst scenario this index
         // exists to keep linear. Correctness does not depend on it (the
         // existence check falls back to the chain walk), but the perf win does.
-        let rel_index = self.cache.relationship_index();
-        rel_index.clear().ok();
-        let total_rels = self.storage.relationship_count();
-        for rel_id in 0..total_rels {
-            let rel = match self.storage.read_rel(rel_id) {
-                Ok(r) => r,
-                Err(_) => continue,
-            };
-            if rel.is_deleted() {
-                continue;
-            }
-            // packed struct: copy fields to locals before use.
-            let (src, dst, type_id) = (rel.src_id, rel.dst_id, rel.type_id);
-            if let Err(e) = rel_index.add_relationship(rel_id, src, dst, type_id) {
-                tracing::warn!("relationship-index rebuild: rel {rel_id} skipped: {e}");
-            }
-        }
+        self.rebuild_relationship_index_from_storage();
 
         // Rebuild the typed property index from the durable definitions
         // (issue #11). `CREATE INDEX` persists each `(label_id, key_id)` pair;
@@ -626,6 +619,44 @@ impl Engine {
         }
 
         Ok(())
+    }
+
+    /// Clear and rebuild the in-memory relationship index (type / node /
+    /// exact-edge) from storage. Reusable by the startup rebuild and the
+    /// lazy self-heal after a failed incremental update (#18).
+    fn rebuild_relationship_index_from_storage(&self) {
+        let rel_index = self.cache.relationship_index();
+        rel_index.clear().ok();
+        let total_rels = self.storage.relationship_count();
+        for rel_id in 0..total_rels {
+            let rel = match self.storage.read_rel(rel_id) {
+                Ok(r) => r,
+                Err(_) => continue,
+            };
+            if rel.is_deleted() {
+                continue;
+            }
+            // packed struct: copy fields to locals before use.
+            let (src, dst, type_id) = (rel.src_id, rel.dst_id, rel.type_id);
+            if let Err(e) = rel_index.add_relationship(rel_id, src, dst, type_id) {
+                tracing::warn!("relationship-index rebuild: rel {rel_id} skipped: {e}");
+            }
+        }
+    }
+
+    /// If a prior incremental relationship-index update failed (#18), the
+    /// exact-edge index may be missing entries. Rebuild it once from storage
+    /// (the authoritative source) and clear the dirty flag, restoring the
+    /// O(1) fast path. No-op when the index is clean.
+    fn heal_relationship_index_if_dirty(&self) {
+        use std::sync::atomic::Ordering;
+        if self.relationship_index_dirty.swap(false, Ordering::AcqRel) {
+            tracing::warn!(
+                "relationship index marked dirty after a failed incremental update; \
+                 rebuilding from storage to restore the exact-edge fast path (#18)"
+            );
+            self.rebuild_relationship_index_from_storage();
+        }
     }
 
     /// Replay `ExternalIdAssigned` WAL entries to rebuild the catalog's
@@ -3279,6 +3310,10 @@ impl Engine {
         dst_id: u64,
         rel_type: &str,
     ) -> Result<Option<u64>> {
+        // #18: if a prior incremental relationship-index update failed, rebuild
+        // the index from storage once before trusting the exact-edge fast path.
+        self.heal_relationship_index_if_dirty();
+
         // Get the type ID
         let type_id = match self.catalog.get_type_id(rel_type)? {
             Some(id) => id,

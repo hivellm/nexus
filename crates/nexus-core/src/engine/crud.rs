@@ -994,8 +994,21 @@ impl Engine {
             .relationship_index()
             .add_relationship(rel_id, from, to, type_id)
         {
-            tracing::warn!("Failed to update relationship index: {}", e);
-            // Don't fail the operation, just log the warning
+            // #18: do NOT silently swallow. The storage write is authoritative,
+            // so the operation still succeeds, but a missing exact-edge index
+            // entry would silently degrade MERGE existence to an O(degree) chain
+            // walk. Mark the index dirty so the next `find_relationship_between`
+            // rebuilds it from storage and restores the O(1) fast path.
+            tracing::error!(
+                rel_id,
+                from,
+                to,
+                type_id,
+                "relationship-index update failed ({e}); marking index dirty for \
+                 rebuild (exact-edge fast path degraded until next lookup)"
+            );
+            self.relationship_index_dirty
+                .store(true, std::sync::atomic::Ordering::Release);
         }
 
         // Phase 8: Update RelationshipStorageManager and RelationshipPropertyIndex
@@ -1367,7 +1380,9 @@ impl Engine {
                         .relationship_index()
                         .add_relationship(rel_id, source_id, target_id, type_id)
                     {
-                        tracing::warn!("Failed to update relationship index: {}", e);
+                        tracing::error!("Failed to update relationship index: {e}");
+                        self.relationship_index_dirty
+                            .store(true, std::sync::atomic::Ordering::Release);
                     }
                 }
                 IndexUpdate::RemoveRelationship {
@@ -1381,7 +1396,9 @@ impl Engine {
                         .relationship_index()
                         .remove_relationship(rel_id, source_id, target_id, type_id)
                     {
-                        tracing::warn!("Failed to remove from relationship index: {}", e);
+                        tracing::error!("Failed to remove from relationship index: {e}");
+                        self.relationship_index_dirty
+                            .store(true, std::sync::atomic::Ordering::Release);
                     }
                 }
             }

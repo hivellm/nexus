@@ -3294,3 +3294,56 @@ fn explicit_commit_keeps_property_index_seek() {
         res.notifications
     );
 }
+
+/// ISSUE #18: when the in-memory relationship index is marked dirty (after a
+/// failed incremental update), the next `find_relationship_between` rebuilds it
+/// from storage (self-heal) so the edge is still found and the fast path is
+/// restored. Driven via engine internals (Cypher edge-MERGE upsert is gated on
+/// the separate #14 edge-upsert path).
+#[test]
+#[serial_test::serial]
+fn relationship_index_self_heals_when_dirty() {
+    use std::sync::atomic::Ordering;
+    let ctx = crate::testing::TestContext::new();
+    let mut engine = Engine::with_isolated_catalog(ctx.path()).unwrap();
+
+    let a = engine
+        .create_node(vec!["RH".to_string()], serde_json::json!({"id": "a"}))
+        .unwrap();
+    let b = engine
+        .create_node(vec!["RH".to_string()], serde_json::json!({"id": "b"}))
+        .unwrap();
+    engine
+        .create_relationship(a, b, "RR".to_string(), serde_json::json!({}))
+        .unwrap();
+
+    // Edge is found via the (populated) exact-edge fast path.
+    assert!(
+        engine
+            .find_relationship_between(a, b, "RR")
+            .unwrap()
+            .is_some(),
+        "edge must be found right after creation"
+    );
+
+    // Simulate a failed incremental update: wipe the in-memory relationship
+    // index and mark it dirty (what crud.rs does on add_relationship error).
+    engine.cache.relationship_index().clear().ok();
+    engine
+        .relationship_index_dirty
+        .store(true, Ordering::Release);
+
+    // The next lookup must self-heal (rebuild from storage) and still find the
+    // edge, and clear the dirty flag.
+    assert!(
+        engine
+            .find_relationship_between(a, b, "RR")
+            .unwrap()
+            .is_some(),
+        "edge must still be found after a dirty/cleared index (self-heal from storage)"
+    );
+    assert!(
+        !engine.relationship_index_dirty.load(Ordering::Acquire),
+        "dirty flag must be cleared by the self-heal (#18)"
+    );
+}
