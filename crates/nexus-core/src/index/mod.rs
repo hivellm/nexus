@@ -936,6 +936,14 @@ impl PropertyIndex {
         trees.contains_key(&(label_id, key_id))
     }
 
+    /// True if at least one property index is registered. Cheap fast-path
+    /// guard (#21): write paths that maintain the typed index can skip the
+    /// per-property × per-label `has_index` loop entirely when no index exists
+    /// — the common case for un-indexed graphs.
+    pub fn has_any_index(&self) -> bool {
+        !self.property_trees.read().is_empty()
+    }
+
     /// Create an index for a (label_id, key_id) combination
     /// This initializes an empty index structure. The index will be populated
     /// as properties are added via add_property().
@@ -1771,5 +1779,19 @@ mod tests {
             hits.contains(42),
             "node 42 should appear after non-null add"
         );
+    }
+
+    #[test]
+    fn has_any_index_reflects_registration() {
+        // #21: the write-path fast-path guard. Empty index => no work.
+        let index = PropertyIndex::new();
+        assert!(!index.has_any_index(), "fresh index has no registrations");
+        index.create_index(1, 1).unwrap();
+        assert!(
+            index.has_any_index(),
+            "after create_index, at least one exists"
+        );
+        index.drop_index(1, 1).unwrap();
+        assert!(!index.has_any_index(), "after drop_index, none remain");
     }
 }

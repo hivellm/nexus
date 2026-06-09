@@ -1312,6 +1312,12 @@ impl Engine {
         let serde_json::Value::Object(props) = properties else {
             return Ok(());
         };
+        // #21: fast-path — when no property index is registered at all (the
+        // common case for un-indexed graphs), skip the per-property ×
+        // per-label `get_key_id` / `has_index` loop entirely on every write.
+        if !self.indexes.property_index.has_any_index() {
+            return Ok(());
+        }
         for (prop_name, prop_value) in props {
             let Ok(key_id) = self.catalog.get_key_id(prop_name) else {
                 continue;
