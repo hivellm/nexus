@@ -8,10 +8,10 @@
 - [x] 2.1 Split executor/planner/queries.rs (4430) into planner/queries/ submodules <!-- 10 files, max 1330 lines; check+clippy clean -->
 - [x] 2.2 Split executor/eval/projection.rs (4168) into eval/projection/ submodules <!-- fn_geo/fn_math/fn_string/fn_temporal/fn_list/core + mod.rs; check+clippy clean -->
 - [x] 2.3 Split executor/parser/clauses.rs (3120) into parser/clauses/ submodules <!-- admin/pattern/read/subquery/write + mod.rs; check+clippy clean -->
-- [ ] 2.4 Split executor/parser/expressions.rs (1652) into parser/expressions/ submodules
-- [ ] 2.5 Split executor/parser/tests.rs (2345) by feature area
-- [ ] 2.6 Split executor/operators/aggregate.rs (2090) into operators/aggregate/ submodules
-- [ ] 2.7 Split executor/operators/procedures.rs (2088) into operators/procedures/ submodules
+- [x] 2.4 Split executor/parser/expressions.rs (1652) into parser/expressions/ submodules <!-- identifier/literals/precedence/primary/structured + mod.rs -->
+- [x] 2.5 Split executor/parser/tests.rs (2345) by feature area <!-- tests/{clauses,ddl,expressions,external_ids,patterns,tokens,mod} -->
+- [x] 2.6 Split executor/operators/aggregate.rs (2090) into operators/aggregate/ submodules <!-- core/columnar/parallel/alias/tests + mod.rs; 5/5 tests preserved -->
+- [x] 2.7 Split executor/operators/procedures.rs (2088) into operators/procedures/ submodules <!-- call/db_schema/db_indexes/dbms/fts/spatial_procs + mod.rs -->
 
 ## 3. Split nexus-core engine/storage/wal/catalog/graph
 - [ ] 3.1 Split engine/mod.rs (5391) into engine/ submodules with facade mod.rs
