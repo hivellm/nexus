@@ -5042,9 +5042,27 @@ impl Engine {
                     // termination condition was never met — an infinite loop
                     // that pinned the engine write lock at 100% CPU with no
                     // active-query log (issue #12). Run once and commit.
+                    // #22: `OF n ROWS` per-batch commit granularity is not yet
+                    // implemented — the subquery runs once and its full result
+                    // is materialized in a single transaction. Cap the
+                    // materialized result so an enormous subquery returns a
+                    // clear, bounded error instead of OOMing the server while
+                    // building `all_results` + the response.
+                    const CALL_IN_TX_MAX_ROWS: usize = 1_000_000;
                     let _batch_size = call_subquery.batch_size.unwrap_or(1000);
                     let mut tx = self.transaction_manager.write().begin_write()?;
                     let subquery_result = self.execute_cypher_ast(&call_subquery.query)?;
+                    if subquery_result.rows.len() > CALL_IN_TX_MAX_ROWS {
+                        self.transaction_manager.write().abort(&mut tx).ok();
+                        return Err(Error::CypherExecution(format!(
+                            "ERR_CALL_IN_TX_RESULT_TOO_LARGE: CALL {{ ... }} IN TRANSACTIONS \
+                             produced {} rows (cap {CALL_IN_TX_MAX_ROWS}). Per-`OF n ROWS` \
+                             commit batching is not yet implemented, so the whole result is \
+                             materialized in one transaction; reduce the subquery result size \
+                             (e.g. add a LIMIT or filter).",
+                            subquery_result.rows.len()
+                        )));
+                    }
                     if columns.is_empty() {
                         columns = subquery_result.columns.clone();
                     }
