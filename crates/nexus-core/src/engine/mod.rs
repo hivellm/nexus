@@ -3018,10 +3018,18 @@ impl Engine {
                     Clause::Foreach(foreach_clause) => {
                         self.execute_foreach_clause(&row_context, foreach_clause)?
                     }
+                    // #14: per-row MATCH — resolves endpoints like
+                    // `MATCH (a {id: row.fk}), (b {id: row.tk})` into the row
+                    // context so a following relationship MERGE upserts the
+                    // edge for every row (the edge analogue of the #13 node fix).
+                    // `find_nodes_by_node_pattern` resolves `row.*` via the
+                    // active unwind binding.
+                    Clause::Match(match_clause) => {
+                        self.process_match_clause_multi(match_clause, &mut row_context)?;
+                    }
                     // RETURN is computed once after the loop.
                     Clause::Return(_) => {}
-                    Clause::Match(_)
-                    | Clause::Where(_)
+                    Clause::Where(_)
                     | Clause::With(_)
                     | Clause::Unwind(_)
                     | Clause::Union(_)
@@ -3279,28 +3287,67 @@ impl Engine {
         let existing_rel = self.find_relationship_between(src_id, dst_id, &rel_type)?;
 
         let rel_id = if let Some(rid) = existing_rel {
-            // Relationship exists - run ON MATCH if present
+            // Relationship exists — apply ON MATCH SET to its properties (#14).
             if let Some(on_match) = &merge_clause.on_match {
-                // ON MATCH would apply to relationship properties
-                // For now, we don't support SET on relationships in this context
-                let _ = on_match;
+                self.apply_merge_rel_set(&rel_var, rid, on_match)?;
             }
             rid
         } else {
-            // Create the relationship
+            // Create the relationship, then apply ON CREATE SET (#14).
             let props = Value::Object(Map::new());
             let new_rel_id = self.create_relationship(src_id, dst_id, rel_type.clone(), props)?;
-
-            // Run ON CREATE if present
             if let Some(on_create) = &merge_clause.on_create {
-                // ON CREATE would apply to relationship properties
-                // For now, we don't support SET on relationships in this context
-                let _ = on_create;
+                self.apply_merge_rel_set(&rel_var, new_rel_id, on_create)?;
             }
             new_rel_id
         };
 
         Ok(Some((rel_var, rel_id, rel_type)))
+    }
+
+    /// Apply a MERGE `ON CREATE` / `ON MATCH SET` clause to a relationship's
+    /// properties (#14). Only `SetItem::Property` assignments whose target is
+    /// the relationship variable are applied; the RHS is evaluated with
+    /// `evaluate_set_expression`, which resolves UNWIND row bindings (e.g.
+    /// `SET r.w = row.w`) and `r.<prop>` self-references against the rel's
+    /// current properties. Other SET item kinds are ignored for relationships.
+    fn apply_merge_rel_set(
+        &mut self,
+        rel_var: &str,
+        rel_id: u64,
+        set_clause: &executor::parser::SetClause,
+    ) -> Result<()> {
+        let mut props: Map<String, Value> = self
+            .storage
+            .load_relationship_properties(rel_id)?
+            .and_then(|v| match v {
+                Value::Object(m) => Some(m),
+                _ => None,
+            })
+            .unwrap_or_default();
+
+        let mut changed = false;
+        for item in &set_clause.items {
+            if let executor::parser::SetItem::Property {
+                target,
+                property,
+                value,
+            } = item
+            {
+                if target != rel_var {
+                    continue;
+                }
+                let v = self.evaluate_set_expression(value, rel_var, &props)?;
+                props.insert(property.clone(), v);
+                changed = true;
+            }
+        }
+
+        if changed {
+            self.storage
+                .update_relationship_properties(rel_id, Value::Object(props))?;
+        }
+        Ok(())
     }
 
     /// Find a relationship of a specific type between two nodes

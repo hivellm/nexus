@@ -3347,3 +3347,71 @@ fn relationship_index_self_heals_when_dirty() {
         "dirty flag must be cleared by the self-heal (#18)"
     );
 }
+
+/// ISSUE #14: `UNWIND rows AS row MATCH (a {row.fk}),(b {row.tk}) MERGE
+/// (a)-[r:T]->(b) ON CREATE/ON MATCH SET r.w = row.w` upserts the edge for
+/// every row (per-row MATCH after UNWIND + ON CREATE/ON MATCH SET on the edge),
+/// instead of being rejected with "Unsupported clause after UNWIND".
+#[test]
+#[serial_test::serial]
+fn unwind_match_merge_edge_upsert() {
+    let ctx = crate::testing::TestContext::new();
+    let mut engine = Engine::with_isolated_catalog(ctx.path()).unwrap();
+
+    let za = engine
+        .create_node(vec!["ZT".to_string()], serde_json::json!({"id": "za"}))
+        .unwrap();
+    let zb = engine
+        .create_node(vec!["ZT".to_string()], serde_json::json!({"id": "zb"}))
+        .unwrap();
+
+    // First upsert: creates the edge and ON CREATE SET r.w = 5.
+    engine
+        .execute_cypher(
+            "UNWIND [{fk:'za',tk:'zb',w:5}] AS row \
+             MATCH (a:ZT {id: row.fk}), (b:ZT {id: row.tk}) \
+             MERGE (a)-[r:ZREL]->(b) ON CREATE SET r.w = row.w ON MATCH SET r.w = row.w \
+             RETURN count(r) AS c",
+        )
+        .expect("UNWIND+MATCH+MERGE edge upsert must succeed (not be rejected)");
+
+    let rid = engine
+        .find_relationship_between(za, zb, "ZREL")
+        .unwrap()
+        .expect("edge must be created by the per-row MATCH+MERGE");
+    let props = engine
+        .storage
+        .load_relationship_properties(rid)
+        .unwrap()
+        .expect("edge must have properties");
+    assert_eq!(
+        props["w"],
+        serde_json::json!(5),
+        "ON CREATE SET r.w = row.w"
+    );
+
+    // Second upsert with w=7: MERGE is idempotent (still one edge) and
+    // ON MATCH SET updates the weight.
+    engine
+        .execute_cypher(
+            "UNWIND [{fk:'za',tk:'zb',w:7}] AS row \
+             MATCH (a:ZT {id: row.fk}), (b:ZT {id: row.tk}) \
+             MERGE (a)-[r:ZREL]->(b) ON CREATE SET r.w = row.w ON MATCH SET r.w = row.w \
+             RETURN count(r) AS c",
+        )
+        .expect("second upsert must succeed");
+    let rid2 = engine
+        .find_relationship_between(za, zb, "ZREL")
+        .unwrap()
+        .expect("still exactly one edge (idempotent MERGE)");
+    let props2 = engine
+        .storage
+        .load_relationship_properties(rid2)
+        .unwrap()
+        .expect("edge props");
+    assert_eq!(
+        props2["w"],
+        serde_json::json!(7),
+        "ON MATCH SET r.w = row.w"
+    );
+}
