@@ -1,0 +1,18 @@
+# Tasks: phase5_split-oversized-files-wave2
+
+## 1. Implementation (same recipe as wave 1: directory module + facade mod.rs, zero logic changes, check --tests clean per file)
+- [ ] 1.1 Split crates/nexus-core/src/index/mod.rs (1797)
+- [ ] 1.2 Split crates/nexus-core/src/graph/algorithms/traversal.rs (1715)
+- [ ] 1.3 Split crates/nexus-core/src/graph/clustering.rs (1669)
+- [ ] 1.4 Split crates/nexus-core/src/graph/core.rs (1641)
+- [ ] 1.5 Split crates/nexus-core/src/graph/correlation/data_flow/mod.rs (1632)
+- [ ] 1.6 Split crates/nexus-core/src/graph/procedures.rs (1594)
+- [ ] 1.7 Split crates/nexus-core/tests/neo4j_result_comparison_test.rs (1591)
+- [ ] 1.8 Split crates/nexus-core/src/executor/mod.rs (1588)
+- [ ] 1.9 Split crates/nexus-core/src/graph/correlation/component.rs (1542)
+- [ ] 1.10 Split crates/nexus-core/src/storage/adjacency_list.rs (1520)
+
+## 2. Tail (mandatory — enforced by rulebook v5.3.0)
+- [ ] 2.1 Update or create documentation covering the implementation (CHANGELOG entry)
+- [ ] 2.2 Write tests covering the new behavior (pure move: existing tests cover; verify no test-count regression)
+- [ ] 2.3 Run tests and confirm they pass (fmt + clippy -D warnings + cargo +nightly test --workspace)
