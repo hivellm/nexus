@@ -3826,8 +3826,15 @@ impl Engine {
                     // Flush storage to ensure durability
                     self.storage.flush()?;
 
-                    // Rebuild indexes from storage after commit
-                    // This ensures indexes reflect committed changes and are not affected by rollback
+                    // Rebuild indexes from storage after commit.
+                    // NOTE (#15): this is an O(N) full scan and, since #11, also
+                    // re-backfills every property index — expensive per commit.
+                    // It is currently load-bearing: the explicit-transaction
+                    // CREATE path does NOT synchronously maintain the typed
+                    // property index (`find_exact`/`NodeIndexSeek`), so removing
+                    // it makes index seeks miss explicit-tx-committed nodes.
+                    // A safe optimization requires reworking explicit-tx writes
+                    // to maintain the typed index incrementally (tracked in #15).
                     self.rebuild_indexes_from_storage()?;
 
                     // Refresh executor to see the updated indexes

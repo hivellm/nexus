@@ -3259,3 +3259,38 @@ fn call_in_transactions_terminates() {
         "subquery runs once and returns all 3 seed rows (no infinite re-execution)"
     );
 }
+
+/// ISSUE #15 (contract guard): the typed property index must stay correct
+/// across an explicit BEGIN/COMMIT — after COMMIT a `MATCH (n:L {p:v})` finds
+/// the committed node and uses the seek (no UnindexedPropertyAccess). Any
+/// optimization of the per-commit index maintenance must keep this passing.
+#[test]
+#[serial_test::serial]
+fn explicit_commit_keeps_property_index_seek() {
+    let ctx = crate::testing::TestContext::new();
+    let mut engine = Engine::with_isolated_catalog(ctx.path()).unwrap();
+
+    engine
+        .execute_cypher("CREATE INDEX FOR (n:TxIdx) ON (n.id)")
+        .expect("CREATE INDEX");
+
+    engine.execute_cypher("BEGIN TRANSACTION").expect("BEGIN");
+    engine
+        .execute_cypher("CREATE (:TxIdx {id: 'tx1'}), (:TxIdx {id: 'tx2'})")
+        .expect("CREATE in tx");
+    engine.execute_cypher("COMMIT TRANSACTION").expect("COMMIT");
+
+    // Node committed in the explicit tx is found, and the seek engages
+    // (typed index maintained in-tx, not via a post-commit full rebuild).
+    let res = engine
+        .execute_cypher("MATCH (n:TxIdx {id: 'tx1'}) RETURN n.id")
+        .expect("read");
+    assert_eq!(res.rows.len(), 1, "committed node must be found");
+    assert!(
+        !res.notifications
+            .iter()
+            .any(|n| n.code == "Nexus.Performance.UnindexedPropertyAccess"),
+        "typed index must still serve the seek after an explicit COMMIT; notes = {:?}",
+        res.notifications
+    );
+}
