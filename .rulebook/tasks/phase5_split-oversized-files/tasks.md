@@ -20,13 +20,13 @@
 - [x] 3.4 Split catalog/mod.rs (1641) into catalog/ submodules with facade mod.rs <!-- mod.rs 744; +types/store/mappings/stats/extensions; 36/36 tests -->
 - [x] 3.5 Split graph/correlation/mod.rs (2030) into correlation/ submodules with facade mod.rs <!-- mod.rs 2313->172; +graph_types/graph_builder/collection_query; 59/59 tests -->
 - [x] 3.6 Split graph/correlation/pattern_recognition.rs (1734) into pattern_recognition/ submodules <!-- types/detectors/overlay/quality/recommendation + mod.rs; 30/30 tests -->
-- [ ] 3.7 Split engine/crud.rs (1561 — crossed the 1500 threshold after #14 work) into crud/ submodules
+- [x] 3.7 Split engine/crud.rs (1561 — crossed the 1500 threshold after #14 work) into crud/ submodules <!-- nodes/relationships/lookup/index_maintenance + mod.rs; 3/3 tests -->
 - [ ] 3.8 Split storage/mod.rs (2232) into storage/ submodules with facade mod.rs <!-- moved to END of phase: file carries uncommitted concurrent fix (#16, mmap Arc<RwLock>); splitting last gives that work a chance to land first and keeps refactor commits pure -->
 
 ## 4. Split nexus-server & workspace tests
-- [ ] 4.1 Split nexus-server/src/api/cypher/execute.rs (1563) into execute/ submodules
-- [ ] 4.2 Split nexus-server/src/api/streaming.rs (1535) into streaming/ submodules
-- [ ] 4.3 Split tests/integration_test.rs (1892) by feature area
+- [x] 4.1 Split nexus-server/src/api/cypher/execute.rs (1563) into execute/ submodules <!-- handler/write_ops + mod.rs; response format untouched -->
+- [x] 4.2 Split nexus-server/src/api/streaming.rs (1535) into streaming/ submodules <!-- service/tools/dispatcher/handlers/tests + mod.rs; 19/19 tests -->
+- [x] 4.3 Split tests/integration_test.rs (1892) by feature area <!-- NOT SPLIT: file is dead code — root is a virtual workspace, no Cargo.toml references it, it is never compiled. Follow-up task created: phase5_wire-or-remove-dead-integration-test -->
 
 ## 5. Tail (mandatory — enforced by rulebook v5.3.0)
 - [ ] 5.1 Update or create documentation covering the implementation (CHANGELOG refactor entry)
