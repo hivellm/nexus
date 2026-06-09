@@ -15,11 +15,11 @@
 
 ## 3. Split nexus-core engine/storage/wal/catalog/graph
 - [x] 3.1 Split engine/mod.rs (now 5853) into engine/ submodules with facade mod.rs <!-- mod.rs 861; +query_pipeline/ddl/write_exec/match_exec/constraints/transactions -->
-- [ ] 3.2 Split engine/tests.rs (now 3417) by feature area
+- [x] 3.2 Split engine/tests.rs (now 3417) by feature area <!-- tests/{mod,basics,crud,errors,query,write,constraints,fulltext,indexes,transactions}; 104/104 tests -->
 - [x] 3.3 Split wal/mod.rs (1824) into wal/ submodules with facade mod.rs <!-- mod.rs 925; +record/writer -->
 - [x] 3.4 Split catalog/mod.rs (1641) into catalog/ submodules with facade mod.rs <!-- mod.rs 744; +types/store/mappings/stats/extensions; 36/36 tests -->
-- [ ] 3.5 Split graph/correlation/mod.rs (2030) into correlation/ submodules with facade mod.rs
-- [ ] 3.6 Split graph/correlation/pattern_recognition.rs (1734) into pattern_recognition/ submodules
+- [x] 3.5 Split graph/correlation/mod.rs (2030) into correlation/ submodules with facade mod.rs <!-- mod.rs 2313->172; +graph_types/graph_builder/collection_query; 59/59 tests -->
+- [x] 3.6 Split graph/correlation/pattern_recognition.rs (1734) into pattern_recognition/ submodules <!-- types/detectors/overlay/quality/recommendation + mod.rs; 30/30 tests -->
 - [ ] 3.7 Split engine/crud.rs (1561 — crossed the 1500 threshold after #14 work) into crud/ submodules
 - [ ] 3.8 Split storage/mod.rs (2232) into storage/ submodules with facade mod.rs <!-- moved to END of phase: file carries uncommitted concurrent fix (#16, mmap Arc<RwLock>); splitting last gives that work a chance to land first and keeps refactor commits pure -->
 
