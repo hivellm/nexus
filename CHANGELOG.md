@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Removed — `phase5_wire-or-remove-dead-integration-test`
+
+- **Removed the dead root-level `tests/integration_test.rs` (2091 lines, 30 tests) with explicit user authorization.** The file was unwired dead code — no crate's `Cargo.toml` declared a `[[test]]` target for it, it never compiled (syntax error at line 687, stale `Executor::new`/`NexusServer` constructor signatures), and the coverage diff from item 1.1 showed zero unique compilable tests: all 15 storage/catalog/WAL/tx tests are identically covered by `crates/nexus-core/tests/integration.rs` (live versions stricter). Removal has no build or coverage impact.
+
 ### Changed — `phase5_wire-or-remove-dead-integration-test`
 
 - **Completed test inventory and coverage analysis of `tests/integration_test.rs`.** Item 1.1 identifies that the root-level integration test file (2091 lines, 30 tests) is unwired dead code — no crate's `Cargo.toml` declares a `[[test]]` target pointing to it (never compiled, never runs in CI). Inventory groups tests into four categories: (A) storage/catalog/WAL/tx/cache integration (15 tests — all duplicated by `crates/nexus-core/tests/integration.rs`); (B) executor E2E (4 tests — uncompilable due to stale `Executor::new` API signature + 1 syntax error at line 687); (C) API error-handling (6 tests — uncompilable due to stale `NexusServer` constructor); (D) API performance (5 tests — similar issues). Coverage diff against existing per-crate tests shows zero unique compilable tests. All 15 Group-A storage tests are identically covered by live per-crate tests (live versions are stricter). API tests (Groups C–D) have stale constructor signatures incompatible with current `AppState`-based injection pattern. Recommendation: removal of dead file (after user authorization per Tier-1 rules) rather than wiring, since it provides zero compilable unique coverage and requires non-trivial repair for uncompilable sections.
