@@ -406,6 +406,90 @@ fn merge_does_not_duplicate_edge_after_failed_index_add() {
     );
 }
 
+/// ISSUE #20: the O(degree) chain-walk warning must fire DURING the walk,
+/// the moment it crosses the 1000-hop threshold — including when the edge is
+/// eventually FOUND (the early return skipped the old post-loop warning
+/// entirely). Captured with a counting tracing layer.
+#[test]
+#[serial_test::serial]
+fn chain_walk_warns_at_threshold_even_when_edge_is_found() {
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use tracing_subscriber::layer::SubscriberExt;
+
+    struct WarnCounter(Arc<AtomicUsize>);
+    impl<S: tracing::Subscriber> tracing_subscriber::Layer<S> for WarnCounter {
+        fn on_event(
+            &self,
+            event: &tracing::Event<'_>,
+            _ctx: tracing_subscriber::layer::Context<'_, S>,
+        ) {
+            if *event.metadata().level() == tracing::Level::WARN
+                && event.metadata().target().contains("write_exec")
+            {
+                self.0.fetch_add(1, Ordering::Relaxed);
+            }
+        }
+    }
+
+    let ctx = crate::testing::TestContext::new();
+    let mut engine = Engine::with_isolated_catalog(ctx.path()).unwrap();
+
+    // Absorb rel id 0 with a sacrificial edge: 0 doubles as the
+    // end-of-chain sentinel in the record store, so the globally first
+    // relationship is unreachable via a chain walk (pre-existing storage
+    // quirk, unrelated to #20).
+    let s1 = engine
+        .create_node(vec!["Sac".to_string()], serde_json::json!({}))
+        .unwrap();
+    let s2 = engine
+        .create_node(vec!["Sac".to_string()], serde_json::json!({}))
+        .unwrap();
+    engine
+        .create_relationship(s1, s2, "SAC".to_string(), serde_json::json!({}))
+        .unwrap();
+
+    let hub = engine
+        .create_node(vec!["Hub".to_string()], serde_json::json!({}))
+        .unwrap();
+    let mut dsts = Vec::new();
+    for _ in 0..1100u32 {
+        let d = engine
+            .create_node(vec!["Spoke".to_string()], serde_json::json!({}))
+            .unwrap();
+        engine
+            .create_relationship(hub, d, "HW".to_string(), serde_json::json!({}))
+            .unwrap();
+        dsts.push(d);
+    }
+
+    // Force the chain-walk fallback: empty the exact-edge index WITHOUT the
+    // dirty flag (no self-heal), so find_edge misses and the walk runs.
+    engine.cache.relationship_index().clear().ok();
+
+    let warns = Arc::new(AtomicUsize::new(0));
+    let subscriber = tracing_subscriber::registry().with(WarnCounter(warns.clone()));
+    tracing::subscriber::with_default(subscriber, || {
+        // One of these lives ≥1000 hops deep regardless of chain order; both
+        // are FOUND (early return), which the old post-loop warn never saw.
+        let first = engine
+            .find_relationship_between(hub, dsts[0], "HW")
+            .expect("walk");
+        let last = engine
+            .find_relationship_between(hub, *dsts.last().unwrap(), "HW")
+            .expect("walk");
+        assert!(
+            first.is_some() && last.is_some(),
+            "both edges must be found via the chain walk (first={first:?}, last={last:?})"
+        );
+    });
+
+    assert!(
+        warns.load(Ordering::Relaxed) >= 1,
+        "the hop-threshold warning must fire during the walk for a found edge"
+    );
+}
+
 /// ISSUE #14: `UNWIND rows AS row MATCH (a {row.fk}),(b {row.tk}) MERGE
 /// (a)-[r:T]->(b) ON CREATE/ON MATCH SET r.w = row.w` upserts the edge for
 /// every row (per-row MATCH after UNWIND + ON CREATE/ON MATCH SET on the edge),

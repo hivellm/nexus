@@ -643,6 +643,14 @@ impl Engine {
         let src_node = self.storage.read_node(src_id)?;
         let mut rel_ptr = src_node.first_rel_ptr;
 
+        // #20: make the fast-path miss itself observable (debug level — entry
+        // is common on small graphs; the warn below covers the pathology).
+        tracing::debug!(
+            src_id,
+            rel_type,
+            "exact-edge index miss — falling back to O(degree) chain walk"
+        );
+
         // Telemetry (issue #12): the chain walk is O(degree). For a hub node
         // accumulating thousands of same-type edges, each edge-MERGE existence
         // check that misses the exact-edge index degrades to a full-chain
@@ -652,7 +660,15 @@ impl Engine {
         // opaque stall.
         let mut hops: u64 = 0;
         while rel_ptr != 0 {
-            let rel_record = self.storage.read_rel(rel_ptr)?;
+            // Chain pointers are stored as `rel_id + 1` (0 is the
+            // end-of-chain sentinel — see record_store_ops
+            // `create_relationship` and the matching decode in
+            // executor/operators/path.rs). Reading `rel_ptr` directly was
+            // an off-by-one that silently broke this authoritative
+            // fallback: it walked the wrong records and returned None (or
+            // a wrong id) whenever the exact-edge index missed.
+            let rel_id = rel_ptr - 1;
+            let rel_record = self.storage.read_rel(rel_id)?;
             hops += 1;
 
             // #20: warn DURING the walk, the moment it crosses the threshold,
@@ -671,12 +687,16 @@ impl Engine {
                 );
             }
 
-            // Check if this is an outgoing relationship to dst_id with the right type
-            if rel_record.src_id == src_id
+            // Check if this is an outgoing relationship to dst_id with the
+            // right type. Skip deleted records — the fast path above
+            // verifies deletion too, and MERGE must not treat a deleted
+            // edge as existing.
+            if !rel_record.is_deleted()
+                && rel_record.src_id == src_id
                 && rel_record.dst_id == dst_id
                 && rel_record.type_id == type_id
             {
-                return Ok(Some(rel_ptr));
+                return Ok(Some(rel_id));
             }
 
             // Move to next relationship in chain
