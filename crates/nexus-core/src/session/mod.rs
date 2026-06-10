@@ -40,6 +40,14 @@ pub struct Session {
     /// explicit transaction; cleared on commit / rollback along with
     /// `created_nodes` and `created_relationships`.
     pub savepoints: crate::transaction::SavepointStack,
+    /// Storage node-count watermark captured at BEGIN (#15). Nodes with
+    /// ids in `tx_begin_node_watermark..node_count()` at COMMIT were
+    /// created by this transaction (single-writer model), regardless of
+    /// which write path (engine or executor) created them. Used for
+    /// scoped per-commit index maintenance.
+    pub tx_begin_node_watermark: u64,
+    /// Storage relationship-count watermark captured at BEGIN (#15).
+    pub tx_begin_rel_watermark: u64,
 }
 
 impl Session {
@@ -65,6 +73,8 @@ impl Session {
             timeout: Duration::from_secs(30 * 60), // 30 minutes
             current_database: database,
             savepoints: crate::transaction::SavepointStack::new(),
+            tx_begin_node_watermark: 0,
+            tx_begin_rel_watermark: 0,
         }
     }
 
@@ -284,6 +294,8 @@ impl SessionManager {
                 timeout: session.timeout,
                 current_database: session.current_database.clone(),
                 savepoints: session.savepoints.clone(),
+                tx_begin_node_watermark: session.tx_begin_node_watermark,
+                tx_begin_rel_watermark: session.tx_begin_rel_watermark,
             };
             sessions.insert(session_id.clone(), session.clone());
             Some(session)

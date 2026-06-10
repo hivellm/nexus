@@ -1,4 +1,4 @@
-//! Catalog module - Label/Type/Key mappings
+//! Catalog module — label/type/key mappings.
 //!
 //! The catalog maintains bidirectional mappings between:
 //! - Labels (node labels) ↔ LabelId
@@ -22,1238 +22,39 @@
 //! phase2 "deduplicate catalog backends" task deleted it. If a future
 //! memory-mapped backend is required, implement it behind a fresh
 //! trait rather than resurrecting the dead module.
+//!
+//! # Sub-module layout
+//!
+//! | Module | Contents |
+//! |---|---|
+//! | [`types`] | Primitive type aliases and value types (`LabelId`, `CatalogStats`, …) |
+//! | [`store`] | `Catalog` struct, LMDB constructors, `Default` impl |
+//! | [`mappings`] | Label/type/key name ↔ ID allocation and lookup |
+//! | [`stats`] | Metadata and statistics read/write |
+//! | [`extensions`] | UDF, procedure, property-index, external-id index |
+//! | [`constraints`] | Uniqueness / existence constraint management |
+//! | [`external_id`] | `ExternalId` value type |
+//! | [`external_id_index`] | Forward+reverse LMDB external-id index |
 
+// ── Existing sibling modules (untouched) ────────────────────────────────────
 pub mod constraints;
 pub mod external_id;
 pub mod external_id_index;
 
-/// Default LMDB `map_size` for a catalog environment — 100 MiB.
-///
-/// Sized for the catalog's workload: label / type / key name strings
-/// plus their u32 ID mappings, metadata, statistics, constraints,
-/// UDFs, and procedures. Even a production deployment with tens of
-/// thousands of labels comfortably fits under this ceiling. LMDB
-/// reserves virtual address space up to `map_size` eagerly on
-/// `Env::open`, so picking this too large wastes address space on
-/// Windows where TLS-slot pressure grows with the number of opened
-/// environments; picking it too small surfaces as `MDB_MAP_FULL`
-/// under catalog churn. 100 MiB is the working compromise measured
-/// during the phase4 magic-constant audit.
-///
-/// Callers that need a larger map explicitly pass their own value to
-/// [`Catalog::with_map_size`] / [`Catalog::with_isolated_path`].
-pub const CATALOG_MMAP_INITIAL_SIZE: usize = 100 * 1024 * 1024;
-
-use crate::catalog::external_id_index::ExternalIdIndex;
-use crate::{Error, Result};
-use dashmap::DashMap;
-use heed::types::*;
-use heed::{Database, Env, EnvOpenOptions, byteorder};
-use parking_lot::RwLock;
-use std::path::Path;
-use std::sync::Arc;
-
-/// Label ID type
-pub type LabelId = u32;
-
-/// Relationship type ID
-pub type TypeId = u32;
-
-/// Property key ID
-pub type KeyId = u32;
-
-/// Statistics for catalog
-#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
-pub struct CatalogStats {
-    /// Total number of nodes per label
-    pub node_counts: std::collections::HashMap<LabelId, u64>,
-    /// Total number of relationships per type
-    pub rel_counts: std::collections::HashMap<TypeId, u64>,
-    /// Total number of unique labels
-    pub label_count: u32,
-    /// Total number of unique types
-    pub type_count: u32,
-    /// Total number of unique keys
-    pub key_count: u32,
-}
-
-/// Metadata stored in catalog
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-pub struct CatalogMetadata {
-    /// Storage format version
-    pub version: u32,
-    /// Current epoch (for MVCC)
-    pub epoch: u64,
-    /// Page size in bytes
-    pub page_size: u32,
-}
-
-impl Default for CatalogMetadata {
-    fn default() -> Self {
-        Self {
-            version: 1,
-            epoch: 0,
-            page_size: 8192, // 8KB pages
-        }
-    }
-}
-
-/// Catalog for managing label/type/key mappings
-///
-/// Thread-safe via RwLock for concurrent reads.
-#[derive(Clone)]
-pub struct Catalog {
-    /// LMDB environment
-    env: Arc<Env>,
-
-    /// Label name → ID mapping
-    label_name_to_id: Database<Str, U32<byteorder::NativeEndian>>,
-    /// Label ID → name mapping
-    label_id_to_name: Database<U32<byteorder::NativeEndian>, Str>,
-
-    /// Type name → ID mapping
-    type_name_to_id: Database<Str, U32<byteorder::NativeEndian>>,
-    /// Type ID → name mapping
-    type_id_to_name: Database<U32<byteorder::NativeEndian>, Str>,
-
-    /// Key name → ID mapping
-    key_name_to_id: Database<Str, U32<byteorder::NativeEndian>>,
-    /// Key ID → name mapping
-    key_id_to_name: Database<U32<byteorder::NativeEndian>, Str>,
-
-    /// Metadata database (version, epoch, config)
-    metadata_db: Database<Str, SerdeBincode<CatalogMetadata>>,
-
-    /// Statistics database
-    stats_db: Database<Str, SerdeBincode<CatalogStats>>,
-
-    /// Constraint manager
-    constraint_manager: Arc<RwLock<crate::catalog::constraints::ConstraintManager>>,
-
-    /// UDF storage database
-    udf_db: Database<Str, SerdeBincode<crate::udf::UdfSignature>>,
-
-    /// Procedure storage database
-    procedure_db: Database<Str, SerdeBincode<crate::graph::procedures::ProcedureSignature>>,
-
-    /// Durable property-index definitions: the set of `(label_id, key_id)`
-    /// pairs registered by `CREATE INDEX`. Reloaded at startup to rebuild the
-    /// typed property index so indexes survive a restart (issue #11).
-    property_index_db: Database<SerdeBincode<(u32, u32)>, SerdeBincode<()>>,
-
-    /// Next label ID counter (cached for performance)
-    next_label_id: Arc<RwLock<u32>>,
-    /// Next type ID counter
-    next_type_id: Arc<RwLock<u32>>,
-    /// Next key ID counter
-    next_key_id: Arc<RwLock<u32>>,
-
-    /// In-memory cache for label name -> ID lookups (lock-free)
-    label_name_cache: Arc<DashMap<String, u32>>,
-    /// In-memory cache for label ID -> name lookups (lock-free)
-    label_id_cache: Arc<DashMap<u32, String>>,
-    /// In-memory cache for type name -> ID lookups (lock-free)
-    type_name_cache: Arc<DashMap<String, u32>>,
-    /// In-memory cache for type ID -> name lookups (lock-free)
-    type_id_cache: Arc<DashMap<u32, String>>,
-    /// In-memory cache for key name -> ID lookups (lock-free)
-    key_name_cache: Arc<DashMap<String, u32>>,
-    /// In-memory cache for key ID -> name lookups (lock-free)
-    key_id_cache: Arc<DashMap<u32, String>>,
-
-    /// External node id index (forward + reverse LMDB sub-databases).
-    external_id_index: Arc<ExternalIdIndex>,
-}
-
-impl Catalog {
-    /// Create a new catalog instance.
-    ///
-    /// Opens or creates the LMDB environment at `path`. Under `cargo
-    /// test`, `Catalog::with_map_size` transparently redirects to a
-    /// shared `nexus_test_catalogs_shared` directory under
-    /// `std::env::temp_dir()` so the whole test suite lives in a
-    /// single LMDB environment — `TestContext` callers that want a
-    /// fresh environment should use [`Catalog::with_isolated_path`]
-    /// instead.
-    ///
-    /// # Arguments
-    ///
-    /// * `path` - Directory path for LMDB files
-    ///
-    /// # Examples
-    ///
-    /// ```no_run
-    /// use nexus_core::catalog::Catalog;
-    ///
-    /// let catalog = Catalog::new("./data/catalog").unwrap();
-    /// ```
-    pub fn new<P: AsRef<Path>>(path: P) -> Result<Self> {
-        // Test runs pick a smaller map size so the shared LMDB
-        // environment does not reserve gigabytes of address space.
-        let is_test = std::env::var("CARGO_PKG_NAME").is_ok()
-            || std::env::var("CARGO").is_ok()
-            || std::env::args().any(|arg| arg.contains("test") || arg.contains("cargo"));
-        let map_size = if is_test { 512 * 1024 } else { 1024 * 1024 };
-
-        Self::with_map_size(path, map_size)
-    }
-
-    /// Create a new catalog with a specific map_size
-    ///
-    /// This is useful for testing or when you need to control the LMDB map size.
-    ///
-    /// # Arguments
-    ///
-    /// * `path` - Directory path for LMDB files
-    /// * `map_size` - Maximum size of the LMDB memory map in bytes
-    ///
-    /// # Examples
-    ///
-    /// ```no_run
-    /// use nexus_core::catalog::Catalog;
-    ///
-    /// // Create catalog with 100MB map size for testing
-    /// let catalog = Catalog::with_map_size("./data/catalog", nexus_core::catalog::CATALOG_MMAP_INITIAL_SIZE).unwrap();
-    /// ```
-    pub fn with_map_size<P: AsRef<Path>>(path: P, map_size: usize) -> Result<Self> {
-        use std::sync::OnceLock;
-
-        // In test mode, use a shared directory pool to reduce number of LMDB environments
-        // This prevents TlsFull errors when many tests run in parallel
-        let is_test = std::env::var("CARGO_PKG_NAME").is_ok()
-            || std::env::var("CARGO").is_ok()
-            || std::env::args().any(|arg| arg.contains("test") || arg.contains("cargo"));
-
-        // In test mode, use a fixed map_size to avoid BadOpenOptions errors
-        // when multiple tests try to open the same environment with different options
-        let actual_map_size = if is_test {
-            // Use a fixed map_size for all tests to allow sharing environments.
-            CATALOG_MMAP_INITIAL_SIZE
-        } else {
-            map_size
-        };
-
-        let actual_path = if is_test {
-            // Use a SINGLE shared test directory for ALL catalogs in tests
-            // This prevents TlsFull errors on Windows by limiting to just 1 LMDB environment
-            static TEST_CATALOG_DIR: OnceLock<std::path::PathBuf> = OnceLock::new();
-
-            let shared_dir = TEST_CATALOG_DIR.get_or_init(|| {
-                // One shared LMDB directory PER PROCESS (keyed by pid).
-                // `get_or_init` runs once per process, so wiping the dir
-                // here resets every label / type / key id to zero at the
-                // start of each `cargo test` run — without the wipe, LMDB
-                // state persists across runs and tests that assert on
-                // `db.labels()` content see accumulated cruft that
-                // eventually causes `get_or_create_label` to allocate ids
-                // past the 64-bit `label_bits` cap (and silently drop
-                // newly-registered labels).
-                //
-                // CRITICAL: the directory MUST be process-scoped. A single
-                // `cargo test -p nexus-core` invocation launches MANY test
-                // binaries (the lib binary plus one per integration file)
-                // as separate processes. If they all share ONE fixed dir,
-                // each process's wipe (`remove_dir_all`) + concurrent LMDB
-                // writes corrupt the others' catalog mid-run — label ids
-                // get reset/reassigned, so a query's label resolution no
-                // longer matches the `label_bits` written at CREATE time,
-                // and label-scoped filters collapse. That was the root
-                // cause of the load-dependent `match_scopes_*` flake. The
-                // pid suffix keeps exactly one LMDB environment per process
-                // (still avoids the Windows TlsFull error) while giving each
-                // concurrent test binary its own isolated catalog.
-                let dir = std::env::temp_dir()
-                    .join(format!("nexus_test_catalogs_shared_{}", std::process::id()));
-                let _ = std::fs::remove_dir_all(&dir);
-                std::fs::create_dir_all(&dir).ok();
-                dir
-            });
-
-            shared_dir.clone()
-        } else {
-            path.as_ref().to_path_buf()
-        };
-
-        Self::open_at_path(&actual_path, actual_map_size)
-    }
-
-    /// Create a catalog with an isolated path (bypasses test sharing)
-    ///
-    /// WARNING: Use sparingly! Each call creates a new LMDB environment.
-    /// Only use for tests that absolutely require data isolation.
-    /// This is available for both unit tests and integration tests.
-    pub fn with_isolated_path<P: AsRef<Path>>(path: P, map_size: usize) -> Result<Self> {
-        Self::open_at_path(path.as_ref(), map_size)
-    }
-
-    /// Internal function to open catalog at a specific path
-    fn open_at_path(actual_path: &Path, actual_map_size: usize) -> Result<Self> {
-        // Create directory if it doesn't exist
-        std::fs::create_dir_all(&actual_path)?;
-
-        // Open LMDB environment with specified map size, 15 databases.
-        // `max_readers` is bumped from LMDB's 126 default because the
-        // test binary holds a single shared catalog env across ~2000
-        // parallel tests, each opening at least one read txn per
-        // query. Without the bump, the env exhausts TLS reader slots
-        // and subsequent `env.read_txn()` / `env.write_txn()` calls
-        // return `Database(Mdb(TlsFull))` — surfaced as flaky failures
-        // in `graph::core::tests::test_edge_is_empty` and any other
-        // test that happens to try to open a (read) txn while the
-        // slot table is full. 2048 slots covers the maximum parallel
-        // depth `cargo test` uses at the default (logical-core) thread
-        // count on a typical 16-core bench box.
-        let env = unsafe {
-            EnvOpenOptions::new()
-                .map_size(actual_map_size)
-                .max_dbs(17) // Increased for constraints, UDFs, procedures, and external-id databases
-                .max_readers(2048)
-                .open(&actual_path)?
-        };
-        let env = Arc::new(env);
-
-        // Open/create databases
-        let mut wtxn = env.write_txn()?;
-
-        let label_name_to_id = env.create_database(&mut wtxn, Some("label_name_to_id"))?;
-        let label_id_to_name = env.create_database(&mut wtxn, Some("label_id_to_name"))?;
-
-        let type_name_to_id = env.create_database(&mut wtxn, Some("type_name_to_id"))?;
-        let type_id_to_name = env.create_database(&mut wtxn, Some("type_id_to_name"))?;
-
-        let key_name_to_id = env.create_database(&mut wtxn, Some("key_name_to_id"))?;
-        let key_id_to_name = env.create_database(&mut wtxn, Some("key_id_to_name"))?;
-
-        let metadata_db = env.create_database(&mut wtxn, Some("metadata"))?;
-        let stats_db = env.create_database(&mut wtxn, Some("statistics"))?;
-
-        // Create constraint databases
-        let constraints_db: Database<
-            SerdeBincode<(u32, u32)>,
-            SerdeBincode<crate::catalog::constraints::Constraint>,
-        > = env.create_database(&mut wtxn, Some("constraints"))?;
-        let constraint_id_to_key: Database<U32<byteorder::NativeEndian>, SerdeBincode<(u32, u32)>> =
-            env.create_database(&mut wtxn, Some("constraint_id_to_key"))?;
-
-        // Create UDF storage database (name -> signature)
-        let udf_db: Database<Str, SerdeBincode<crate::udf::UdfSignature>> =
-            env.create_database(&mut wtxn, Some("udfs"))?;
-
-        // Create procedure storage database (name -> signature)
-        let procedure_db: Database<
-            Str,
-            SerdeBincode<crate::graph::procedures::ProcedureSignature>,
-        > = env.create_database(&mut wtxn, Some("procedures"))?;
-
-        // Create the durable property-index definition store (issue #11).
-        let property_index_db: Database<SerdeBincode<(u32, u32)>, SerdeBincode<()>> =
-            env.create_database(&mut wtxn, Some("property_indexes"))?;
-
-        // Create external-id index sub-databases (forward + reverse).
-        let external_id_index = ExternalIdIndex::open(&env, &mut wtxn)?;
-
-        // Initialize metadata if not exists
-        if metadata_db.get(&wtxn, "main")?.is_none() {
-            let metadata = CatalogMetadata::default();
-            metadata_db.put(&mut wtxn, "main", &metadata)?;
-        }
-
-        // Initialize statistics if not exists
-        if stats_db.get(&wtxn, "main")?.is_none() {
-            let stats = CatalogStats::default();
-            stats_db.put(&mut wtxn, "main", &stats)?;
-        }
-
-        wtxn.commit()?;
-
-        // Initialize counters by scanning existing data
-        let rtxn = env.read_txn()?;
-
-        let next_label_id = label_name_to_id
-            .iter(&rtxn)?
-            .map(|r| r.map(|(_, id)| id))
-            .collect::<std::result::Result<Vec<_>, _>>()?
-            .into_iter()
-            .max()
-            .map(|max_id| max_id + 1)
-            .unwrap_or(0);
-
-        let next_type_id = type_name_to_id
-            .iter(&rtxn)?
-            .map(|r| r.map(|(_, id)| id))
-            .collect::<std::result::Result<Vec<_>, _>>()?
-            .into_iter()
-            .max()
-            .map(|max_id| max_id + 1)
-            .unwrap_or(0);
-
-        let next_key_id = key_name_to_id
-            .iter(&rtxn)?
-            .map(|r| r.map(|(_, id)| id))
-            .collect::<std::result::Result<Vec<_>, _>>()?
-            .into_iter()
-            .max()
-            .map(|max_id| max_id + 1)
-            .unwrap_or(0);
-
-        // Drop transaction before moving env
-        drop(rtxn);
-
-        // Initialize in-memory caches from LMDB
-        let label_name_cache = Arc::new(DashMap::new());
-        let label_id_cache = Arc::new(DashMap::new());
-        let type_name_cache = Arc::new(DashMap::new());
-        let type_id_cache = Arc::new(DashMap::new());
-        let key_name_cache = Arc::new(DashMap::new());
-        let key_id_cache = Arc::new(DashMap::new());
-
-        // Warm up caches from existing data
-        // Populate caches immediately to ensure consistency
-        {
-            let rtxn = env.read_txn()?;
-            for result in label_name_to_id.iter(&rtxn)? {
-                if let Ok((name, id)) = result {
-                    let name_str: &str = name;
-                    label_name_cache.insert(name_str.to_string(), id);
-                    label_id_cache.insert(id, name_str.to_string());
-                }
-            }
-            for result in type_name_to_id.iter(&rtxn)? {
-                if let Ok((name, id)) = result {
-                    let name_str: &str = name;
-                    type_name_cache.insert(name_str.to_string(), id);
-                    type_id_cache.insert(id, name_str.to_string());
-                }
-            }
-            for result in key_name_to_id.iter(&rtxn)? {
-                if let Ok((name, id)) = result {
-                    let name_str: &str = name;
-                    key_name_cache.insert(name_str.to_string(), id);
-                    key_id_cache.insert(id, name_str.to_string());
-                }
-            }
-        }
-
-        // Initialize constraint manager with existing databases
-        let constraint_manager =
-            crate::catalog::constraints::ConstraintManager::new_with_databases(
-                env.as_ref(),
-                constraints_db,
-                constraint_id_to_key,
-            )?;
-
-        Ok(Self {
-            env,
-            label_name_to_id,
-            label_id_to_name,
-            type_name_to_id,
-            type_id_to_name,
-            key_name_to_id,
-            key_id_to_name,
-            metadata_db,
-            stats_db,
-            constraint_manager: Arc::new(RwLock::new(constraint_manager)),
-            udf_db,
-            procedure_db,
-            property_index_db,
-            next_label_id: Arc::new(RwLock::new(next_label_id)),
-            next_type_id: Arc::new(RwLock::new(next_type_id)),
-            next_key_id: Arc::new(RwLock::new(next_key_id)),
-            label_name_cache,
-            label_id_cache,
-            type_name_cache,
-            type_id_cache,
-            key_name_cache,
-            key_id_cache,
-            external_id_index: Arc::new(external_id_index),
-        })
-    }
-
-    /// Get or create a label ID
-    ///
-    /// Returns existing ID if label already exists, otherwise creates new ID.
-    ///
-    /// # Examples
-    ///
-    /// ```no_run
-    /// # use nexus_core::catalog::Catalog;
-    /// # let mut catalog = Catalog::new("./data/catalog").unwrap();
-    /// let person_id = catalog.get_or_create_label("Person").unwrap();
-    /// let same_id = catalog.get_or_create_label("Person").unwrap();
-    /// assert_eq!(person_id, same_id);
-    /// ```
-    /// Allocate the next label id from committed LMDB state inside an open
-    /// write txn. Must be called while holding the env write txn so the scan
-    /// is atomic w.r.t. other writers (LMDB serialises writers across Catalog
-    /// instances and processes). Keeps the in-memory counter monotonic.
-    fn alloc_label_id(&self, wtxn: &heed::RwTxn<'_>) -> Result<LabelId> {
-        let new_id = self
-            .label_name_to_id
-            .iter(wtxn)?
-            .map(|r| r.map(|(_, id)| id))
-            .collect::<std::result::Result<Vec<_>, _>>()?
-            .into_iter()
-            .max()
-            .map(|m| m + 1)
-            .unwrap_or(0);
-        let mut next = self.next_label_id.write();
-        if *next <= new_id {
-            *next = new_id + 1;
-        }
-        Ok(new_id)
-    }
-
-    /// See [`alloc_label_id`]. Same atomic allocation for relationship types.
-    fn alloc_type_id(&self, wtxn: &heed::RwTxn<'_>) -> Result<TypeId> {
-        let new_id = self
-            .type_name_to_id
-            .iter(wtxn)?
-            .map(|r| r.map(|(_, id)| id))
-            .collect::<std::result::Result<Vec<_>, _>>()?
-            .into_iter()
-            .max()
-            .map(|m| m + 1)
-            .unwrap_or(0);
-        let mut next = self.next_type_id.write();
-        if *next <= new_id {
-            *next = new_id + 1;
-        }
-        Ok(new_id)
-    }
-
-    /// See [`alloc_label_id`]. Same atomic allocation for property keys.
-    fn alloc_key_id(&self, wtxn: &heed::RwTxn<'_>) -> Result<KeyId> {
-        let new_id = self
-            .key_name_to_id
-            .iter(wtxn)?
-            .map(|r| r.map(|(_, id)| id))
-            .collect::<std::result::Result<Vec<_>, _>>()?
-            .into_iter()
-            .max()
-            .map(|m| m + 1)
-            .unwrap_or(0);
-        let mut next = self.next_key_id.write();
-        if *next <= new_id {
-            *next = new_id + 1;
-        }
-        Ok(new_id)
-    }
-
-    pub fn get_or_create_label(&self, label: &str) -> Result<LabelId> {
-        // Try cache first (lock-free)
-        if let Some(id) = self.label_name_cache.get(label) {
-            return Ok(*id);
-        }
-
-        // Need to create new ID - acquire write lock
-        let mut wtxn = self.env.write_txn()?;
-
-        // Double-check in case another thread created it
-        if let Some(id) = self.label_name_to_id.get(&wtxn, label)? {
-            // Update cache
-            self.label_name_cache.insert(label.to_string(), id);
-            self.label_id_cache.insert(id, label.to_string());
-            return Ok(id);
-        }
-
-        // Allocate new ID atomically from committed LMDB state within this
-        // write txn. Multiple `Catalog` instances can share ONE LMDB env (the
-        // shared test catalog, and any future concurrent use); a per-instance
-        // in-memory counter hands out the SAME id from two instances, so two
-        // distinct labels collide on one id and `get_nodes(id)` returns nodes
-        // of both labels. Deriving the id from the LMDB max inside the write
-        // txn (LMDB serialises writers across instances/processes) guarantees
-        // uniqueness. The in-memory counter is kept monotonic for other readers.
-        let id = self.alloc_label_id(&wtxn)?;
-
-        // Insert bidirectional mappings
-        self.label_name_to_id.put(&mut wtxn, label, &id)?;
-        self.label_id_to_name.put(&mut wtxn, &id, label)?;
-
-        wtxn.commit()?;
-
-        // Update cache
-        self.label_name_cache.insert(label.to_string(), id);
-        self.label_id_cache.insert(id, label.to_string());
-
-        Ok(id)
-    }
-
-    /// Phase 1.5.2: Batch get or create multiple labels in a single transaction
-    /// This reduces I/O overhead when creating multiple labels at once
-    pub fn batch_get_or_create_labels(
-        &self,
-        labels: &[&str],
-    ) -> Result<std::collections::HashMap<String, LabelId>> {
-        let mut result = std::collections::HashMap::new();
-
-        if labels.is_empty() {
-            return Ok(result);
-        }
-
-        // First pass: check cache for existing labels
-        let mut labels_to_create = Vec::new();
-        for label in labels {
-            if let Some(id) = self.label_name_cache.get(*label) {
-                result.insert(label.to_string(), *id);
-            } else {
-                labels_to_create.push(*label);
-            }
-        }
-
-        if labels_to_create.is_empty() {
-            return Ok(result);
-        }
-
-        // Second pass: create missing labels in a single transaction
-        let mut wtxn = self.env.write_txn()?;
-
-        for label in &labels_to_create {
-            // Double-check in case another thread created it
-            if let Some(id) = self.label_name_to_id.get(&wtxn, *label)? {
-                // Update cache
-                self.label_name_cache.insert(label.to_string(), id);
-                self.label_id_cache.insert(id, label.to_string());
-                result.insert(label.to_string(), id);
-            } else {
-                // Allocate new ID atomically from LMDB state within the txn.
-                // Reads in this write txn see prior puts in the same loop, so
-                // successive allocations get distinct ids.
-                let id = self.alloc_label_id(&wtxn)?;
-
-                // Insert bidirectional mappings
-                self.label_name_to_id.put(&mut wtxn, *label, &id)?;
-                self.label_id_to_name.put(&mut wtxn, &id, *label)?;
-
-                // Update cache
-                self.label_name_cache.insert(label.to_string(), id);
-                self.label_id_cache.insert(id, label.to_string());
-                result.insert(label.to_string(), id);
-            }
-        }
-
-        wtxn.commit()?;
-
-        Ok(result)
-    }
-
-    /// List all `(label_id, label_name)` pairs known to the catalog.
-    ///
-    /// Mirrors [`list_all_keys`] — reads from LMDB, skips rows that fail to
-    /// decode rather than propagating errors so the caller gets the best-
-    /// effort snapshot even if a single row is corrupted.
-    pub fn list_all_labels(&self) -> Vec<(LabelId, String)> {
-        let Ok(rtxn) = self.env.read_txn() else {
-            return Vec::new();
-        };
-        let Ok(iter) = self.label_id_to_name.iter(&rtxn) else {
-            return Vec::new();
-        };
-        iter.filter_map(|r| r.ok())
-            .map(|(id, name)| (id, name.to_string()))
-            .collect()
-    }
-
-    /// Get label name by ID
-    pub fn get_label_name(&self, id: LabelId) -> Result<Option<String>> {
-        // Try cache first (lock-free)
-        if let Some(name) = self.label_id_cache.get(&id) {
-            return Ok(Some(name.clone()));
-        }
-
-        let rtxn = self.env.read_txn()?;
-        if let Some(name) = self.label_id_to_name.get(&rtxn, &id)? {
-            let name_str = name.to_string();
-            // Update cache
-            self.label_id_cache.insert(id, name_str.clone());
-            return Ok(Some(name_str));
-        }
-        Ok(None)
-    }
-
-    /// Get or create a type ID
-    ///
-    /// Returns existing ID if type already exists, otherwise creates new ID.
-    pub fn get_or_create_type(&self, type_name: &str) -> Result<TypeId> {
-        // Try cache first (lock-free)
-        if let Some(id) = self.type_name_cache.get(type_name) {
-            return Ok(*id);
-        }
-
-        // Need to create new ID - acquire write lock
-        let mut wtxn = self.env.write_txn()?;
-
-        // Double-check in case another thread created it
-        if let Some(id) = self.type_name_to_id.get(&wtxn, type_name)? {
-            // Update cache
-            self.type_name_cache.insert(type_name.to_string(), id);
-            self.type_id_cache.insert(id, type_name.to_string());
-            return Ok(id);
-        }
-
-        // Allocate new ID atomically from LMDB state within this write txn
-        // (see `alloc_label_id` — prevents duplicate ids across Catalog
-        // instances sharing one env).
-        let id = self.alloc_type_id(&wtxn)?;
-
-        // Insert bidirectional mappings
-        self.type_name_to_id.put(&mut wtxn, type_name, &id)?;
-        self.type_id_to_name.put(&mut wtxn, &id, type_name)?;
-
-        wtxn.commit()?;
-
-        // Update cache
-        self.type_name_cache.insert(type_name.to_string(), id);
-        self.type_id_cache.insert(id, type_name.to_string());
-
-        Ok(id)
-    }
-
-    /// Phase 1.5.2: Batch get or create multiple types in a single transaction
-    /// This reduces I/O overhead when creating multiple types at once
-    pub fn batch_get_or_create_types(
-        &self,
-        types: &[&str],
-    ) -> Result<std::collections::HashMap<String, TypeId>> {
-        let mut result = std::collections::HashMap::new();
-
-        if types.is_empty() {
-            return Ok(result);
-        }
-
-        // First pass: check cache for existing types
-        let mut types_to_create = Vec::new();
-        for type_name in types {
-            if let Some(id) = self.type_name_cache.get(*type_name) {
-                result.insert(type_name.to_string(), *id);
-            } else {
-                types_to_create.push(*type_name);
-            }
-        }
-
-        if types_to_create.is_empty() {
-            return Ok(result);
-        }
-
-        // Second pass: create missing types in a single transaction
-        let mut wtxn = self.env.write_txn()?;
-
-        for type_name in &types_to_create {
-            // Double-check in case another thread created it
-            if let Some(id) = self.type_name_to_id.get(&wtxn, *type_name)? {
-                // Update cache
-                self.type_name_cache.insert(type_name.to_string(), id);
-                self.type_id_cache.insert(id, type_name.to_string());
-                result.insert(type_name.to_string(), id);
-            } else {
-                // Allocate new ID atomically from LMDB state within the txn.
-                let id = self.alloc_type_id(&wtxn)?;
-
-                // Insert bidirectional mappings
-                self.type_name_to_id.put(&mut wtxn, *type_name, &id)?;
-                self.type_id_to_name.put(&mut wtxn, &id, *type_name)?;
-
-                // Update cache
-                self.type_name_cache.insert(type_name.to_string(), id);
-                self.type_id_cache.insert(id, type_name.to_string());
-                result.insert(type_name.to_string(), id);
-            }
-        }
-
-        wtxn.commit()?;
-
-        Ok(result)
-    }
-
-    /// List all `(type_id, type_name)` pairs known to the catalog.
-    ///
-    /// Mirrors [`list_all_keys`] / [`list_all_labels`] — LMDB iteration with
-    /// per-row error tolerance.
-    pub fn list_all_types(&self) -> Vec<(TypeId, String)> {
-        let Ok(rtxn) = self.env.read_txn() else {
-            return Vec::new();
-        };
-        let Ok(iter) = self.type_id_to_name.iter(&rtxn) else {
-            return Vec::new();
-        };
-        iter.filter_map(|r| r.ok())
-            .map(|(id, name)| (id, name.to_string()))
-            .collect()
-    }
-
-    /// Get type name by ID
-    pub fn get_type_name(&self, id: TypeId) -> Result<Option<String>> {
-        // Try cache first (lock-free)
-        if let Some(name) = self.type_id_cache.get(&id) {
-            return Ok(Some(name.clone()));
-        }
-
-        let rtxn = self.env.read_txn()?;
-        if let Some(name) = self.type_id_to_name.get(&rtxn, &id)? {
-            let name_str = name.to_string();
-            // Update cache
-            self.type_id_cache.insert(id, name_str.clone());
-            return Ok(Some(name_str));
-        }
-        Ok(None)
-    }
-
-    /// Get type ID by name (returns None if type doesn't exist)
-    pub fn get_type_id(&self, type_name: &str) -> Result<Option<TypeId>> {
-        // Try cache first (lock-free)
-        if let Some(id) = self.type_name_cache.get(type_name) {
-            return Ok(Some(*id));
-        }
-
-        let rtxn = self.env.read_txn()?;
-        if let Some(id) = self.type_name_to_id.get(&rtxn, type_name)? {
-            // Update cache
-            self.type_name_cache.insert(type_name.to_string(), id);
-            self.type_id_cache.insert(id, type_name.to_string());
-            return Ok(Some(id));
-        }
-        Ok(None)
-    }
-
-    /// Get or create a key ID
-    ///
-    /// Returns existing ID if key already exists, otherwise creates new ID.
-    pub fn get_or_create_key(&self, key: &str) -> Result<KeyId> {
-        // Try cache first (lock-free)
-        if let Some(id) = self.key_name_cache.get(key) {
-            return Ok(*id);
-        }
-
-        // Need to create new ID - acquire write lock
-        let mut wtxn = self.env.write_txn()?;
-
-        // Double-check in case another thread created it
-        if let Some(id) = self.key_name_to_id.get(&wtxn, key)? {
-            // Update cache
-            self.key_name_cache.insert(key.to_string(), id);
-            self.key_id_cache.insert(id, key.to_string());
-            return Ok(id);
-        }
-
-        // Allocate new ID atomically from LMDB state within this write txn
-        // (see `alloc_label_id`).
-        let id = self.alloc_key_id(&wtxn)?;
-
-        // Insert bidirectional mappings
-        self.key_name_to_id.put(&mut wtxn, key, &id)?;
-        self.key_id_to_name.put(&mut wtxn, &id, key)?;
-
-        wtxn.commit()?;
-
-        // Update cache
-        self.key_name_cache.insert(key.to_string(), id);
-        self.key_id_cache.insert(id, key.to_string());
-
-        Ok(id)
-    }
-
-    /// Get key ID by name
-    pub fn get_key_id(&self, key: &str) -> Result<KeyId> {
-        // Try cache first (lock-free)
-        if let Some(id) = self.key_name_cache.get(key) {
-            return Ok(*id);
-        }
-
-        let rtxn = self.env.read_txn()?;
-        match self.key_name_to_id.get(&rtxn, key)? {
-            Some(id) => {
-                // Update cache
-                self.key_name_cache.insert(key.to_string(), id);
-                self.key_id_cache.insert(id, key.to_string());
-                Ok(id)
-            }
-            None => Err(Error::NotFound(format!("Key '{}' not found", key))),
-        }
-    }
-
-    /// Get key name by ID
-    pub fn get_key_name(&self, id: KeyId) -> Result<Option<String>> {
-        // Try cache first (lock-free)
-        if let Some(name) = self.key_id_cache.get(&id) {
-            return Ok(Some(name.clone()));
-        }
-
-        let rtxn = self.env.read_txn()?;
-        if let Some(name) = self.key_id_to_name.get(&rtxn, &id)? {
-            let name_str = name.to_string();
-            // Update cache
-            self.key_id_cache.insert(id, name_str.clone());
-            return Ok(Some(name_str));
-        }
-        Ok(None)
-    }
-
-    /// List all property keys
-    pub fn list_all_keys(&self) -> Vec<(KeyId, String)> {
-        let Ok(rtxn) = self.env.read_txn() else {
-            return Vec::new();
-        };
-
-        let Ok(iter) = self.key_id_to_name.iter(&rtxn) else {
-            return Vec::new();
-        };
-
-        iter.filter_map(|r| r.ok())
-            .map(|(id, name)| (id, name.to_string()))
-            .collect()
-    }
-
-    /// Get current metadata
-    pub fn get_metadata(&self) -> Result<CatalogMetadata> {
-        let rtxn = self.env.read_txn()?;
-        self.metadata_db
-            .get(&rtxn, "main")?
-            .ok_or_else(|| Error::Catalog("Metadata not found".into()))
-    }
-
-    /// Update metadata
-    pub fn update_metadata(&self, metadata: &CatalogMetadata) -> Result<()> {
-        let mut wtxn = self.env.write_txn()?;
-        self.metadata_db.put(&mut wtxn, "main", metadata)?;
-        wtxn.commit()?;
-        Ok(())
-    }
-
-    /// Get current statistics
-    pub fn get_statistics(&self) -> Result<CatalogStats> {
-        let rtxn = self.env.read_txn()?;
-        self.stats_db
-            .get(&rtxn, "main")?
-            .ok_or_else(|| Error::Catalog("Statistics not found".into()))
-    }
-
-    /// Update statistics
-    pub fn update_statistics(&self, stats: &CatalogStats) -> Result<()> {
-        let mut wtxn = self.env.write_txn()?;
-        self.stats_db.put(&mut wtxn, "main", stats)?;
-        wtxn.commit()?;
-        Ok(())
-    }
-
-    /// Increment node count for a label
-    pub fn increment_node_count(&self, label_id: LabelId) -> Result<()> {
-        let mut stats = self.get_statistics()?;
-        *stats.node_counts.entry(label_id).or_insert(0) += 1;
-        self.update_statistics(&stats)
-    }
-
-    /// Phase 1 Optimization: Batch increment node counts (reduces I/O)
-    /// Updates multiple label counts in a single transaction
-    pub fn batch_increment_node_counts(&self, updates: &[(LabelId, u32)]) -> Result<()> {
-        if updates.is_empty() {
-            return Ok(());
-        }
-
-        let mut stats = self.get_statistics()?;
-        for (label_id, count) in updates {
-            *stats.node_counts.entry(*label_id).or_insert(0) += *count as u64;
-        }
-        self.update_statistics(&stats)
-    }
-
-    /// Decrement node count for a label
-    pub fn decrement_node_count(&self, label_id: LabelId) -> Result<()> {
-        let mut stats = self.get_statistics()?;
-        if let Some(count) = stats.node_counts.get_mut(&label_id) {
-            *count = count.saturating_sub(1);
-        }
-        self.update_statistics(&stats)
-    }
-
-    /// Increment relationship count for a type
-    pub fn increment_rel_count(&self, type_id: TypeId) -> Result<()> {
-        let mut stats = self.get_statistics()?;
-        *stats.rel_counts.entry(type_id).or_insert(0) += 1;
-        self.update_statistics(&stats)
-    }
-
-    /// Decrement relationship count for a type
-    pub fn decrement_rel_count(&self, type_id: TypeId) -> Result<()> {
-        let mut stats = self.get_statistics()?;
-        if let Some(count) = stats.rel_counts.get_mut(&type_id) {
-            *count = count.saturating_sub(1);
-        }
-        self.update_statistics(&stats)
-    }
-
-    /// Get total node count across all labels
-    /// This is used for optimizing COUNT(*) queries
-    pub fn get_total_node_count(&self) -> Result<u64> {
-        let stats = self.get_statistics()?;
-        Ok(stats.node_counts.values().sum())
-    }
-
-    /// Get total relationship count across all types
-    /// This is used for optimizing COUNT(*) queries on relationships
-    pub fn get_total_rel_count(&self) -> Result<u64> {
-        let stats = self.get_statistics()?;
-        Ok(stats.rel_counts.values().sum())
-    }
-
-    /// Get node count for a specific label
-    pub fn get_node_count(&self, label_id: LabelId) -> Result<u64> {
-        let stats = self.get_statistics()?;
-        Ok(*stats.node_counts.get(&label_id).unwrap_or(&0))
-    }
-
-    /// Get relationship count for a specific type
-    pub fn get_rel_count(&self, type_id: TypeId) -> Result<u64> {
-        let stats = self.get_statistics()?;
-        Ok(*stats.rel_counts.get(&type_id).unwrap_or(&0))
-    }
-
-    /// Sync environment to disk (fsync)
-    pub fn sync(&self) -> Result<()> {
-        self.env.force_sync()?;
-        Ok(())
-    }
-
-    /// Health check for the catalog
-    pub fn health_check(&self) -> Result<()> {
-        // Try to read from the catalog to verify it's accessible
-        let rtxn = self.env.read_txn()?;
-
-        // Check if we can read from all databases
-        let _ = self.label_name_to_id.len(&rtxn)?;
-        let _ = self.label_id_to_name.len(&rtxn)?;
-        let _ = self.type_name_to_id.len(&rtxn)?;
-        let _ = self.type_id_to_name.len(&rtxn)?;
-        let _ = self.key_name_to_id.len(&rtxn)?;
-        let _ = self.key_id_to_name.len(&rtxn)?;
-        let _ = self.metadata_db.len(&rtxn)?;
-        let _ = self.stats_db.len(&rtxn)?;
-
-        drop(rtxn);
-        Ok(())
-    }
-
-    /// Get the number of labels
-    pub fn label_count(&self) -> u64 {
-        let next_id = self.next_label_id.read();
-        *next_id as u64
-    }
-
-    /// Get the number of relationship types
-    pub fn rel_type_count(&self) -> u64 {
-        let next_id = self.next_type_id.read();
-        *next_id as u64
-    }
-
-    /// Convert a label bitmap to a vector of label names
-    pub fn get_labels_from_bitmap(&self, bitmap: u64) -> Result<Vec<String>> {
-        let mut labels = Vec::new();
-
-        // Check each bit in the bitmap (up to 64 labels)
-        for bit in 0..64 {
-            if (bitmap & (1u64 << bit)) != 0 {
-                let label_id = bit as LabelId;
-                if let Some(label_name) = self.get_label_name(label_id)? {
-                    labels.push(label_name);
-                }
-            }
-        }
-
-        Ok(labels)
-    }
-
-    /// Get label ID by ID (for internal use)
-    pub fn get_label_id_by_id(&self, id: LabelId) -> Result<LabelId> {
-        // This is a simple identity function for now
-        // In a full implementation, this might do validation
-        Ok(id)
-    }
-
-    /// Get label ID by name
-    pub fn get_label_id(&self, label: &str) -> Result<LabelId> {
-        // Try cache first (lock-free)
-        if let Some(id) = self.label_name_cache.get(label) {
-            return Ok(*id);
-        }
-
-        let rtxn = self.env.read_txn()?;
-        match self.label_name_to_id.get(&rtxn, label)? {
-            Some(id) => {
-                // Update cache
-                self.label_name_cache.insert(label.to_string(), id);
-                self.label_id_cache.insert(id, label.to_string());
-                Ok(id)
-            }
-            None => Err(Error::NotFound(format!("Label '{}' not found", label))),
-        }
-    }
-
-    /// Get constraint manager
-    pub fn constraint_manager(
-        &self,
-    ) -> &Arc<RwLock<crate::catalog::constraints::ConstraintManager>> {
-        &self.constraint_manager
-    }
-
-    /// Store a UDF signature in the catalog
-    pub fn store_udf(&self, signature: &crate::udf::UdfSignature) -> Result<()> {
-        let mut wtxn = self.env.write_txn()?;
-        self.udf_db.put(&mut wtxn, &signature.name, signature)?;
-        wtxn.commit()?;
-        Ok(())
-    }
-
-    /// Get a UDF signature from the catalog
-    pub fn get_udf(&self, name: &str) -> Result<Option<crate::udf::UdfSignature>> {
-        let rtxn = self.env.read_txn()?;
-        Ok(self.udf_db.get(&rtxn, name)?)
-    }
-
-    /// List all UDF names stored in the catalog
-    pub fn list_udfs(&self) -> Result<Vec<String>> {
-        let rtxn = self.env.read_txn()?;
-        let iter = self.udf_db.iter(&rtxn)?;
-        Ok(iter
-            .filter_map(|r| r.ok())
-            .map(|(name, _)| name.to_string())
-            .collect())
-    }
-
-    /// Remove a UDF from the catalog
-    pub fn remove_udf(&self, name: &str) -> Result<()> {
-        let mut wtxn = self.env.write_txn()?;
-        self.udf_db.delete(&mut wtxn, name)?;
-        wtxn.commit()?;
-        Ok(())
-    }
-
-    /// Durably record that a property index exists on `(label_id, key_id)`
-    /// so it can be rebuilt after a restart (issue #11). Idempotent.
-    pub fn persist_property_index(&self, label_id: u32, key_id: u32) -> Result<()> {
-        let mut wtxn = self.env.write_txn()?;
-        self.property_index_db
-            .put(&mut wtxn, &(label_id, key_id), &())?;
-        wtxn.commit()?;
-        Ok(())
-    }
-
-    /// Remove a durable property-index definition (on `DROP INDEX`).
-    pub fn remove_property_index(&self, label_id: u32, key_id: u32) -> Result<()> {
-        let mut wtxn = self.env.write_txn()?;
-        self.property_index_db
-            .delete(&mut wtxn, &(label_id, key_id))?;
-        wtxn.commit()?;
-        Ok(())
-    }
-
-    /// List every persisted property-index definition `(label_id, key_id)`.
-    /// Used at startup to rebuild the typed property index.
-    pub fn list_property_indexes(&self) -> Result<Vec<(u32, u32)>> {
-        let rtxn = self.env.read_txn()?;
-        let iter = self.property_index_db.iter(&rtxn)?;
-        Ok(iter.filter_map(|r| r.ok()).map(|(k, _)| k).collect())
-    }
-
-    /// Store a procedure signature in the catalog
-    pub fn store_procedure(
-        &self,
-        signature: &crate::graph::procedures::ProcedureSignature,
-    ) -> Result<()> {
-        let mut wtxn = self.env.write_txn()?;
-        self.procedure_db
-            .put(&mut wtxn, &signature.name, signature)?;
-        wtxn.commit()?;
-        Ok(())
-    }
-
-    /// Get a procedure signature from the catalog
-    pub fn get_procedure(
-        &self,
-        name: &str,
-    ) -> Result<Option<crate::graph::procedures::ProcedureSignature>> {
-        let rtxn = self.env.read_txn()?;
-        Ok(self.procedure_db.get(&rtxn, name)?)
-    }
-
-    /// List all procedure names stored in the catalog
-    pub fn list_procedures(&self) -> Result<Vec<String>> {
-        let rtxn = self.env.read_txn()?;
-        let iter = self.procedure_db.iter(&rtxn)?;
-        Ok(iter
-            .filter_map(|r| r.ok())
-            .map(|(name, _)| name.to_string())
-            .collect())
-    }
-
-    /// Remove a procedure from the catalog
-    pub fn remove_procedure(&self, name: &str) -> Result<()> {
-        let mut wtxn = self.env.write_txn()?;
-        self.procedure_db.delete(&mut wtxn, name)?;
-        wtxn.commit()?;
-        Ok(())
-    }
-
-    /// Return a reference to the external-id index.
-    ///
-    /// Use this to call `put_if_absent`, `get_internal`, `get_external`,
-    /// `delete`, and `iter`.  The index operates on caller-supplied
-    /// transactions so it participates in the same atomicity domain as
-    /// other catalog writes.
-    pub fn external_id_index(&self) -> &ExternalIdIndex {
-        &self.external_id_index
-    }
-
-    /// Verify that the external-id forward and reverse maps agree.
-    ///
-    /// In debug builds this is called automatically; in release builds
-    /// callers can invoke it explicitly (e.g. from a `--verify` CLI path
-    /// or during tests) to assert catalog integrity.
-    pub fn verify_external_ids(&self) -> Result<()> {
-        self.external_id_index.verify_consistency()
-    }
-
-    /// Open a write transaction on the catalog LMDB environment.
-    ///
-    /// Callers that need to write external-id index entries in the same
-    /// LMDB transaction as other catalog mutations should use this to
-    /// obtain an `RwTxn` and then commit it when done.
-    pub fn write_txn(&self) -> Result<heed::RwTxn<'_>> {
-        Ok(self.env.write_txn()?)
-    }
-
-    /// Open a read transaction on the catalog LMDB environment.
-    pub fn read_txn(&self) -> Result<heed::RoTxn<'_>> {
-        Ok(self.env.read_txn()?)
-    }
-}
-
-impl Default for Catalog {
-    /// Build a fresh `Catalog` backed by a throwaway directory.
-    ///
-    /// Previously this returned a clone of a process-wide
-    /// `SHARED_CATALOG` rooted at `./data/catalog` (a path relative
-    /// to the current working directory). Under `cargo test` with the
-    /// default parallelism that meant every test was hammering the
-    /// same catalog in the project root, and the first test to create
-    /// a label permanently polluted every subsequent test's label-id
-    /// enumeration. It also left stray `./data/catalog/*.mdb` files
-    /// behind every test run.
-    ///
-    /// Post `phase3_remove-test-shared-state` the default impl uses
-    /// `tempfile::tempdir().keep()` for the root path and calls
-    /// `Catalog::new` — which under `cargo test` still gets folded
-    /// into the per-process `nexus_test_catalogs_shared` directory
-    /// via `Catalog::with_map_size`, so file-descriptor usage stays
-    /// bounded, but the relative-path pollution of the project tree
-    /// is gone. Tests that need strict catalog isolation (fresh
-    /// label/type IDs) should call
-    /// [`Catalog::with_isolated_path`] directly instead of going
-    /// through `default`.
-    fn default() -> Self {
-        let temp_dir = tempfile::tempdir().expect("Failed to create default-catalog temp dir");
-        let path = temp_dir.keep();
-        Self::new(&path).expect("Failed to create default catalog")
-    }
-}
+// ── New split sub-modules ────────────────────────────────────────────────────
+pub(crate) mod extensions;
+pub(crate) mod mappings;
+pub(crate) mod stats;
+pub(crate) mod store;
+pub(crate) mod types;
+
+// ── Public re-exports — every path that was previously reachable via
+//    `crate::catalog::*` is preserved here unchanged.
+// ── types ────────────────────────────────────────────────────────────────────
+pub use types::{CatalogMetadata, CatalogStats, KeyId, LabelId, TypeId};
+
+// ── store ────────────────────────────────────────────────────────────────────
+pub use store::{CATALOG_MMAP_INITIAL_SIZE, Catalog};
 
 #[cfg(test)]
 mod tests {
@@ -1262,13 +63,13 @@ mod tests {
 
     fn create_test_catalog() -> (Catalog, TestContext) {
         let ctx = TestContext::new();
-        // Use shared catalog for most tests to avoid TlsFull
+        // Use shared catalog for most tests to avoid TlsFull.
         let catalog = Catalog::with_map_size(ctx.path(), CATALOG_MMAP_INITIAL_SIZE).unwrap();
         (catalog, ctx)
     }
 
-    /// Create an isolated catalog for tests that need data isolation
-    /// WARNING: Use sparingly - each call creates a new LMDB environment
+    /// Create an isolated catalog for tests that need data isolation.
+    /// WARNING: Use sparingly — each call creates a new LMDB environment.
     fn create_isolated_test_catalog() -> (Catalog, TestContext) {
         let ctx = TestContext::new();
         let catalog = Catalog::with_isolated_path(ctx.path(), CATALOG_MMAP_INITIAL_SIZE).unwrap();
@@ -1292,7 +93,7 @@ mod tests {
 
         assert_ne!(person_id, company_id);
 
-        // Get same label again should return same ID
+        // Get same label again should return same ID.
         let person_id_2 = catalog.get_or_create_label("Person").unwrap();
         assert_eq!(person_id, person_id_2);
     }
@@ -1335,7 +136,7 @@ mod tests {
 
     #[test]
     fn test_statistics_update() {
-        // Use isolated catalog for statistics tests
+        // Use isolated catalog for statistics tests.
         let (catalog, _dir) = create_isolated_test_catalog();
 
         let person_id = catalog.get_or_create_label("TestStatPerson").unwrap();
@@ -1356,7 +157,7 @@ mod tests {
         let ctx = TestContext::new();
         let path = ctx.path().to_path_buf();
 
-        // Create catalog and add data using isolated path
+        // Create catalog and add data using isolated path.
         {
             let catalog = Catalog::with_isolated_path(&path, CATALOG_MMAP_INITIAL_SIZE).unwrap();
             catalog.get_or_create_label("Person").unwrap();
@@ -1364,7 +165,7 @@ mod tests {
             catalog.sync().unwrap();
         }
 
-        // Reopen and verify data persisted
+        // Reopen and verify data persisted.
         {
             let catalog = Catalog::with_isolated_path(&path, CATALOG_MMAP_INITIAL_SIZE).unwrap();
             let person_id = catalog.get_or_create_label("Person").unwrap();
@@ -1435,7 +236,7 @@ mod tests {
 
     #[test]
     fn test_rel_count_tracking() {
-        // Use isolated catalog for statistics tests
+        // Use isolated catalog for statistics tests.
         let (catalog, _dir) = create_isolated_test_catalog();
 
         let type_id = catalog.get_or_create_type("TestRelKnows").unwrap();
@@ -1456,7 +257,7 @@ mod tests {
     fn test_decrement_nonexistent_count() {
         let (catalog, _dir) = create_isolated_test_catalog();
 
-        // Decrementing non-existent count should not panic
+        // Decrementing non-existent count should not panic.
         catalog.decrement_node_count(999).unwrap();
         catalog.decrement_rel_count(999).unwrap();
 
@@ -1483,22 +284,22 @@ mod tests {
 
     #[test]
     fn test_multiple_labels_and_types() {
-        // Use isolated catalog to ensure clean state
+        // Use isolated catalog to ensure clean state.
         let (catalog, _dir) = create_isolated_test_catalog();
 
-        // Create multiple labels
+        // Create multiple labels.
         let labels = vec!["Person", "Company", "Product", "Location"];
         for label in &labels {
             catalog.get_or_create_label(label).unwrap();
         }
 
-        // Create multiple types
+        // Create multiple types.
         let types = vec!["KNOWS", "WORKS_AT", "BOUGHT", "LOCATED_IN"];
         for type_name in &types {
             catalog.get_or_create_type(type_name).unwrap();
         }
 
-        // Verify all can be looked up
+        // Verify all can be looked up.
         for label in &labels {
             let id = catalog.get_or_create_label(label).unwrap();
             let name = catalog.get_label_name(id).unwrap();
@@ -1519,13 +320,13 @@ mod tests {
         catalog.get_or_create_label("Person").unwrap();
         catalog.sync().unwrap();
 
-        // Should not fail
+        // Should not fail.
         catalog.sync().unwrap();
     }
 
     #[test]
     fn test_statistics_initialization() {
-        // Use isolated catalog for statistics tests
+        // Use isolated catalog for statistics tests.
         let (catalog, _dir) = create_isolated_test_catalog();
 
         let stats = catalog.get_statistics().unwrap();
@@ -1551,7 +352,7 @@ mod tests {
         let ctx = TestContext::new();
         let path = ctx.path().to_path_buf();
 
-        // Create catalog with data using isolated path
+        // Create catalog with data using isolated path.
         {
             let catalog = Catalog::with_isolated_path(&path, CATALOG_MMAP_INITIAL_SIZE).unwrap();
             catalog.get_or_create_label("Person").unwrap();
@@ -1565,11 +366,11 @@ mod tests {
             catalog.sync().unwrap();
         }
 
-        // Reopen and verify counters are correct
+        // Reopen and verify counters are correct.
         {
             let catalog = Catalog::with_isolated_path(&path, CATALOG_MMAP_INITIAL_SIZE).unwrap();
 
-            // Should allocate next IDs correctly
+            // Should allocate next IDs correctly.
             let location_id = catalog.get_or_create_label("Location").unwrap();
             assert_eq!(location_id, 2); // After Person(0) and Company(1)
 
@@ -1585,7 +386,7 @@ mod tests {
     fn test_mixed_operations() {
         let (catalog, _dir) = create_isolated_test_catalog();
 
-        // Mix labels, types, and keys
+        // Mix labels, types, and keys.
         let p1 = catalog.get_or_create_label("Person").unwrap();
         let k1 = catalog.get_or_create_type("KNOWS").unwrap();
         let n1 = catalog.get_or_create_key("name").unwrap();
@@ -1593,12 +394,12 @@ mod tests {
         let k2 = catalog.get_or_create_type("WORKS_AT").unwrap();
         let n2 = catalog.get_or_create_key("age").unwrap();
 
-        // Verify all unique
+        // Verify all unique.
         assert_ne!(p1, p2);
         assert_ne!(k1, k2);
         assert_ne!(n1, n2);
 
-        // Verify lookups work
+        // Verify lookups work.
         assert_eq!(
             catalog.get_label_name(p1).unwrap(),
             Some("Person".to_string())
@@ -1612,15 +413,15 @@ mod tests {
 
     #[test]
     fn test_saturating_decrement() {
-        // Use isolated catalog for statistics tests
+        // Use isolated catalog for statistics tests.
         let (catalog, _dir) = create_isolated_test_catalog();
 
         let label_id = catalog.get_or_create_label("TestSatPerson").unwrap();
 
-        // Increment once
+        // Increment once.
         catalog.increment_node_count(label_id).unwrap();
 
-        // Decrement twice (should saturate at 0, not underflow)
+        // Decrement twice (should saturate at 0, not underflow).
         catalog.decrement_node_count(label_id).unwrap();
         catalog.decrement_node_count(label_id).unwrap();
 
@@ -1635,7 +436,7 @@ mod tests {
         let label_id = catalog.get_or_create_label("Person").unwrap();
         let type_id = catalog.get_or_create_type("KNOWS").unwrap();
 
-        // Multiple increments
+        // Multiple increments.
         for _ in 0..100 {
             catalog.increment_node_count(label_id).unwrap();
             catalog.increment_rel_count(type_id).unwrap();
@@ -1650,14 +451,14 @@ mod tests {
     fn test_get_labels_from_bitmap() {
         let (catalog, _dir) = create_isolated_test_catalog();
 
-        // Create some labels
+        // Create some labels.
         let person_id = catalog.get_or_create_label("Person").unwrap();
         let company_id = catalog.get_or_create_label("Company").unwrap();
 
-        // Create a bitmap with both labels
+        // Create a bitmap with both labels.
         let bitmap = (1u64 << person_id) | (1u64 << company_id);
 
-        // Test conversion
+        // Test conversion.
         let labels = catalog.get_labels_from_bitmap(bitmap).unwrap();
         assert_eq!(labels.len(), 2);
         assert!(labels.contains(&"Person".to_string()));
@@ -1668,7 +469,7 @@ mod tests {
     fn test_get_labels_from_empty_bitmap() {
         let (catalog, _dir) = create_isolated_test_catalog();
 
-        // Test with empty bitmap
+        // Test with empty bitmap.
         let labels = catalog.get_labels_from_bitmap(0).unwrap();
         assert_eq!(labels.len(), 0);
     }
@@ -1677,10 +478,10 @@ mod tests {
     fn test_get_label_id() {
         let (catalog, _dir) = create_isolated_test_catalog();
 
-        // Create a label
+        // Create a label.
         let person_id = catalog.get_or_create_label("Person").unwrap();
 
-        // Test getting the ID
+        // Test getting the ID.
         let retrieved_id = catalog.get_label_id("Person").unwrap();
         assert_eq!(retrieved_id, person_id);
     }
@@ -1689,7 +490,7 @@ mod tests {
     fn test_get_label_id_nonexistent() {
         let (catalog, _dir) = create_isolated_test_catalog();
 
-        // Test getting ID for non-existent label
+        // Test getting ID for non-existent label.
         let result = catalog.get_label_id("Nonexistent");
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("not found"));
@@ -1699,7 +500,7 @@ mod tests {
     fn test_get_label_id_by_id() {
         let (catalog, _dir) = create_isolated_test_catalog();
 
-        // Test the identity function
+        // Test the identity function.
         let test_id = 5;
         let result = catalog.get_label_id_by_id(test_id).unwrap();
         assert_eq!(result, test_id);
@@ -1716,10 +517,10 @@ mod tests {
             description: Some("Test UDF".to_string()),
         };
 
-        // Store UDF
+        // Store UDF.
         catalog.store_udf(&signature).unwrap();
 
-        // Retrieve UDF
+        // Retrieve UDF.
         let retrieved = catalog.get_udf("test_udf").unwrap();
         assert!(retrieved.is_some());
         let retrieved_sig = retrieved.unwrap();
@@ -1729,12 +530,12 @@ mod tests {
             crate::udf::UdfReturnType::Integer
         );
 
-        // List UDFs
+        // List UDFs.
         let udfs = catalog.list_udfs().unwrap();
         assert_eq!(udfs.len(), 1);
         assert_eq!(udfs[0], "test_udf");
 
-        // Remove UDF
+        // Remove UDF.
         catalog.remove_udf("test_udf").unwrap();
         let retrieved_after = catalog.get_udf("test_udf").unwrap();
         assert!(retrieved_after.is_none());
@@ -1756,10 +557,10 @@ mod tests {
             description: Some("Test procedure".to_string()),
         };
 
-        // Store procedure
+        // Store procedure.
         catalog.store_procedure(&signature).unwrap();
 
-        // Retrieve procedure
+        // Retrieve procedure.
         let retrieved = catalog.get_procedure("custom.test").unwrap();
         assert!(retrieved.is_some());
         let retrieved_sig = retrieved.unwrap();
@@ -1767,18 +568,18 @@ mod tests {
         assert_eq!(retrieved_sig.parameters.len(), 1);
         assert_eq!(retrieved_sig.output_columns.len(), 1);
 
-        // List procedures
+        // List procedures.
         let procedures = catalog.list_procedures().unwrap();
         assert_eq!(procedures.len(), 1);
         assert_eq!(procedures[0], "custom.test");
 
-        // Remove procedure
+        // Remove procedure.
         catalog.remove_procedure("custom.test").unwrap();
         let retrieved_after = catalog.get_procedure("custom.test").unwrap();
         assert!(retrieved_after.is_none());
     }
 
-    // ── External-id index integration tests ───────────────────────────────────
+    // ── External-id index integration tests ──────────────────────────────────
 
     #[test]
     fn test_external_id_insert_and_lookup() {

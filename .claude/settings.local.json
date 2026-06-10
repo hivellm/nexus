@@ -137,12 +137,15 @@
       "Bash(Select-String -Pattern \"assertion|error|FAILED|value|length\")",
       "Bash(cmd.exe /c \"start /B target\\release\\nexus-server.exe\")",
       "Bash(grep:*)",
-      "Bash(git reset:*)"
+      "Bash(git reset:*)",
+      "Bash(rustfmt --edition 2024 crates/nexus-core/src/graph/correlation/component/types.rs crates/nexus-core/src/graph/correlation/component/analyzer.rs crates/nexus-core/src/graph/correlation/component/layout.rs crates/nexus-core/src/graph/correlation/component/visualization.rs crates/nexus-core/src/graph/correlation/component/metrics.rs crates/nexus-core/src/graph/correlation/component/mod.rs)",
+      "Workflow(rulebook-driver)"
     ],
     "deny": [],
     "ask": [],
     "additionalDirectories": [
-      "e:\\HiveLLM\\Nexus\\.claude"
+      "e:\\HiveLLM\\Nexus\\.claude",
+      "C:\\Users\\Bolado\\.claude\\projects\\e--HiveLLM-Nexus\\8b471fe1-268f-4ef2-8798-92f151e73593\\workflows\\scripts"
     ]
   }
 }

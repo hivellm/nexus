@@ -11,7 +11,7 @@
 
 use crate::error::{Error, Result};
 use crate::wal::{Wal, WalEntry};
-use crossbeam_channel::{Receiver, Sender, bounded};
+use crossbeam_channel::{Receiver, Sender, TrySendError, bounded};
 use std::io::Write;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -66,6 +66,8 @@ pub struct AsyncWalStats {
     pub max_queue_depth: std::sync::atomic::AtomicU64,
     /// Total WAL I/O errors encountered
     pub wal_errors: std::sync::atomic::AtomicU64,
+    /// Number of `append` calls that had to block on a full channel (#19).
+    pub backpressure_blocks: std::sync::atomic::AtomicU64,
 }
 
 impl AsyncWalStats {
@@ -86,6 +88,7 @@ impl AsyncWalStats {
             current_queue_depth: self.current_queue_depth.load(Relaxed),
             max_queue_depth: self.max_queue_depth.load(Relaxed),
             wal_errors: self.wal_errors.load(Relaxed),
+            backpressure_blocks: self.backpressure_blocks.load(Relaxed),
         }
     }
 }
@@ -106,6 +109,7 @@ pub struct AsyncWalStatsSnapshot {
     pub current_queue_depth: u64,
     pub max_queue_depth: u64,
     pub wal_errors: u64,
+    pub backpressure_blocks: u64,
 }
 
 /// Configuration for the async WAL writer
@@ -167,7 +171,12 @@ impl AsyncWalWriter {
     /// let writer = AsyncWalWriter::new(wal, config).unwrap();
     /// ```
     pub fn new(wal: Wal, config: AsyncWalConfig) -> Result<Self> {
-        let (sender, receiver) = bounded(config.channel_buffer_size);
+        // #19: size the command channel from the configured max queue depth so
+        // the `max_queue_depth` knob is real (previously the channel was bound
+        // only by `channel_buffer_size`, so `max_queue_depth` merely fed a
+        // counter and the writer blocked far earlier than configured).
+        let capacity = config.channel_buffer_size.max(config.max_queue_depth);
+        let (sender, receiver) = bounded(capacity);
         let stats = Arc::new(AsyncWalStats::default());
         let shutdown = Arc::new(AtomicBool::new(false));
 
@@ -210,12 +219,30 @@ impl AsyncWalWriter {
             }
         }
 
-        // Send command (this may block if queue is full)
-        self.sender
-            .send(WalCommand::Append(entry))
-            .map_err(|_| Error::wal("Failed to send WAL command - channel closed"))?;
-
-        Ok(())
+        // #19: fast non-blocking submit. Only when the channel is genuinely
+        // full (writer thread behind fsync) do we block — and we surface the
+        // backpressure first so a sustained write burst that stalls the
+        // engine write lock is observable instead of an opaque hang. The
+        // blocking `send` preserves ordering + durability (crossbeam blocks
+        // rather than drops); it is bounded by the (now larger) channel.
+        match self.sender.try_send(WalCommand::Append(entry)) {
+            Ok(()) => Ok(()),
+            Err(TrySendError::Full(cmd)) => {
+                self.stats.backpressure_blocks.fetch_add(1, Relaxed);
+                tracing::warn!(
+                    queue_depth = new_depth,
+                    "WAL async channel full — applying backpressure (background \
+                     writer is behind fsync); the submitting thread will block \
+                     until the queue drains (issue #19)"
+                );
+                self.sender
+                    .send(cmd)
+                    .map_err(|_| Error::wal("Failed to send WAL command - channel closed"))
+            }
+            Err(TrySendError::Disconnected(_)) => {
+                Err(Error::wal("Failed to send WAL command - channel closed"))
+            }
+        }
     }
 
     /// Force flush all pending entries
@@ -329,6 +356,24 @@ impl AsyncWalWriter {
                         last_flush = Instant::now();
                     }
                 }
+            }
+        }
+
+        // Final drain on exit (#19 durability): the shutdown flag pops the
+        // loop at the top, which can leave ACCEPTED Append commands sitting
+        // in the channel — dropping them would break the "accepted ⇒
+        // durable" contract (`append()` already returned Ok to the caller).
+        // Consume everything still queued before the final flush.
+        while let Ok(cmd) = receiver.try_recv() {
+            match cmd {
+                WalCommand::Append(entry) => {
+                    batch.push(entry);
+                    if batch.len() >= config.max_batch_size {
+                        Self::flush_batch(&mut wal, &batch, &stats, config);
+                        batch.clear();
+                    }
+                }
+                WalCommand::Flush | WalCommand::Shutdown => {}
             }
         }
 
@@ -578,6 +623,59 @@ mod tests {
         assert!(stats.entries_submitted > 0, "Should have submitted entries");
 
         writer.shutdown().unwrap();
+    }
+
+    /// #19: a burst far larger than the channel capacity must not deadlock —
+    /// the submitting thread blocks on backpressure (try_send Full -> blocking
+    /// send) and every entry is accepted and eventually written.
+    #[test]
+    fn test_backpressure_burst_does_not_deadlock() {
+        let ctx = TestContext::new();
+        let wal = Wal::new(ctx.path().join("wal.log")).unwrap();
+        let config = AsyncWalConfig {
+            max_batch_size: 10,
+            max_batch_age: Duration::from_millis(20),
+            max_queue_depth: 16, // channel capacity = max(8, 16) = 16
+            flush_interval: Duration::from_millis(10),
+            channel_buffer_size: 8,
+        };
+        let mut writer = AsyncWalWriter::new(wal, config).unwrap();
+
+        // Submit 2000 entries into a 16-slot channel — exercises the
+        // full-channel backpressure path repeatedly. Must complete, not hang.
+        let burst = 2000u64;
+        for i in 0..burst {
+            writer
+                .append(WalEntry::CreateNode {
+                    node_id: i,
+                    label_bits: 0,
+                })
+                .expect("append must not fail under backpressure");
+        }
+        assert_eq!(
+            writer.stats().entries_submitted,
+            burst,
+            "all entries accepted despite a channel smaller than the burst (no deadlock)"
+        );
+
+        // Shutdown drains + joins the writer thread without hanging. (#19 is
+        // about the submit path no longer dead-ending on a full channel;
+        // exact shutdown-drain timing is a separate, non-deterministic concern.)
+        writer.shutdown().unwrap();
+
+        // Durability: the burst survives backpressure end-to-end — a fresh
+        // Wal on the same file replays every entry (none dropped while the
+        // channel was full).
+        let mut reopened = Wal::new(ctx.path().join("wal.log")).unwrap();
+        let recovered = reopened.recover().unwrap();
+        let create_nodes = recovered
+            .iter()
+            .filter(|e| matches!(e, WalEntry::CreateNode { .. }))
+            .count() as u64;
+        assert_eq!(
+            create_nodes, burst,
+            "WAL replay must recover every entry submitted under backpressure"
+        );
     }
 
     #[test]

@@ -109,6 +109,13 @@ impl CypherParser {
             || self.peek_keyword("TERMINATE") // For TERMINATE QUERY
             || self.peek_keyword("SAVEPOINT") // phase6_opencypher-advanced-types §5
             || self.peek_keyword("RELEASE") // RELEASE SAVEPOINT
+            // EXPLAIN / PROFILE prefix a whole query. Without these the
+            // main parse loop broke at position 0 and returned an EMPTY
+            // AST for any `EXPLAIN ...` / `PROFILE ...` input — the
+            // engine never saw the Explain/Profile clause and the
+            // executor's planner rejected the empty re-parse.
+            || self.peek_keyword("EXPLAIN")
+            || self.peek_keyword("PROFILE")
     }
 
     /// Check if character is identifier start
