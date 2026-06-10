@@ -431,3 +431,114 @@ fn api_create_index_or_replace_repopulates() {
         "OR REPLACE must re-backfill existing nodes (id='t1')"
     );
 }
+
+/// SET on an indexed property must move the typed-index entry: the node
+/// must be found by its NEW value (via seek) and no longer by the OLD
+/// value. Before the fix both directions were wrong — seek by the new
+/// value returned nothing and seek by the old value returned the
+/// renamed node (stale entry). REMOVE of the property must evict the
+/// entry too. Reproduced end-to-end over HTTP on the 2.3.2 image.
+#[test]
+#[serial_test::serial]
+fn set_on_indexed_property_updates_typed_index() {
+    let ctx = crate::testing::TestContext::new();
+    let mut engine = Engine::with_isolated_catalog(ctx.path()).unwrap();
+
+    engine
+        .execute_cypher("CREATE INDEX FOR (n:SIdx) ON (n.code)")
+        .expect("CREATE INDEX");
+    engine
+        .execute_cypher("CREATE (:SIdx {code: 'old'})")
+        .expect("CREATE");
+
+    engine
+        .execute_cypher("MATCH (n:SIdx {code: 'old'}) SET n.code = 'new'")
+        .expect("SET");
+
+    let by_new = engine
+        .execute_cypher("MATCH (n:SIdx {code: 'new'}) RETURN n.code")
+        .expect("seek by new value");
+    assert_eq!(
+        by_new.rows.len(),
+        1,
+        "node must be found by its NEW value after SET"
+    );
+    assert!(
+        !by_new
+            .notifications
+            .iter()
+            .any(|n| n.code == "Nexus.Performance.UnindexedPropertyAccess"),
+        "the seek (not a scan) must serve the new value; notes = {:?}",
+        by_new.notifications
+    );
+
+    let by_old = engine
+        .execute_cypher("MATCH (n:SIdx {code: 'old'}) RETURN n.code")
+        .expect("seek by old value");
+    assert_eq!(
+        by_old.rows.len(),
+        0,
+        "stale index entry must be gone — old value matches nothing"
+    );
+
+    // REMOVE evicts the entry entirely.
+    engine
+        .execute_cypher("MATCH (n:SIdx {code: 'new'}) REMOVE n.code")
+        .expect("REMOVE");
+    let after_remove = engine
+        .execute_cypher("MATCH (n:SIdx {code: 'new'}) RETURN n.code")
+        .expect("seek after remove");
+    assert_eq!(
+        after_remove.rows.len(),
+        0,
+        "removed property must not be index-reachable"
+    );
+}
+
+/// A non-transactional Cypher CREATE must maintain the typed property
+/// index immediately: the executor CREATE operator handles the label
+/// index but not the typed B-tree, so a freshly created node was
+/// invisible to the seek (and a follow-up `MATCH {prop} SET` silently
+/// no-opped) until a restart or an explicit-tx commit rebuilt it.
+#[test]
+#[serial_test::serial]
+fn cypher_create_maintains_typed_index_immediately() {
+    let ctx = crate::testing::TestContext::new();
+    let mut engine = Engine::with_isolated_catalog(ctx.path()).unwrap();
+
+    engine
+        .execute_cypher("CREATE INDEX FOR (n:CIdx) ON (n.code)")
+        .expect("CREATE INDEX");
+    engine
+        .execute_cypher("CREATE (:CIdx {code: 'fresh'})")
+        .expect("CREATE");
+
+    let label_id = engine.catalog.get_label_id("CIdx").expect("label");
+    let key_id = engine.catalog.get_key_id("code").expect("key");
+    let hits = engine
+        .indexes
+        .property_index
+        .find_exact(
+            label_id,
+            key_id,
+            crate::index::PropertyValue::String("fresh".into()),
+        )
+        .expect("find_exact");
+    assert_eq!(
+        hits.len(),
+        1,
+        "Cypher CREATE must index the node's properties immediately"
+    );
+
+    let res = engine
+        .execute_cypher("MATCH (n:CIdx {code: 'fresh'}) RETURN n.code")
+        .expect("seek");
+    assert_eq!(res.rows.len(), 1, "seek must find the fresh node");
+    assert!(
+        !res.notifications
+            .iter()
+            .any(|n| n.code == "Nexus.Performance.UnindexedPropertyAccess"),
+        "the seek (not a scan) must serve it; notes = {:?}",
+        res.notifications
+    );
+}

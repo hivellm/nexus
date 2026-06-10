@@ -46,6 +46,13 @@ impl Engine {
     ) -> Result<()> {
         tracing::info!("[persist_node_state] node_id={}", node_id);
         let NodeWriteState { properties, labels } = state;
+        // Capture the PRE-write property bag and labels so the typed
+        // property index refresh below can evict the node's old
+        // `(label, key, value)` entries (stale entries serve wrong seeks).
+        let old_properties = self.load_node_properties_map(node_id)?;
+        let old_label_ids = self
+            .effective_label_ids_from_record(node_id)
+            .unwrap_or_default();
         tracing::info!(
             "[persist_node_state] Calling update_node_properties with properties={:?}",
             properties
@@ -85,6 +92,17 @@ impl Engine {
         // phase6_spatial-index-autopopulate §3 — refresh spatial indexes
         // after SET / REMOVE so the tree stays in sync with node state.
         self.spatial_refresh_node(node_id, &effective_label_ids, &props_value);
+        // Typed property B-tree refresh: evict old (label, key, value)
+        // entries, add the new ones (registered indexes only) — a SET on
+        // an indexed property previously left the index stale, producing
+        // wrong seek results in both directions.
+        self.typed_index_refresh_node(
+            node_id,
+            &old_label_ids,
+            &old_properties,
+            &effective_label_ids,
+            &props_value,
+        );
         Ok(())
     }
 

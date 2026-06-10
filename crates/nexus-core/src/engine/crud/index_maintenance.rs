@@ -472,6 +472,90 @@ impl Engine {
         Ok(())
     }
 
+    /// Refresh the typed property B-tree after a SET / REMOVE / SET-label
+    /// write: remove the node's OLD `(label, key, value)` entries and add
+    /// the NEW ones, restricted to registered indexes. Without this, a
+    /// SET on an indexed property left the index stale — the node became
+    /// unreachable by its new value (seek miss) while still matching its
+    /// old value (wrong results both ways).
+    ///
+    /// Best-effort like the FTS / spatial refresh siblings: failures are
+    /// logged, never escalated — the index is never the source of truth.
+    #[allow(clippy::too_many_arguments)]
+    pub(in crate::engine) fn typed_index_refresh_node(
+        &self,
+        node_id: u64,
+        old_label_ids: &[u32],
+        old_properties: &serde_json::Map<String, serde_json::Value>,
+        new_label_ids: &[u32],
+        new_properties: &serde_json::Value,
+    ) {
+        if !self.indexes.property_index.has_any_index() {
+            return;
+        }
+        for (prop_name, prop_value) in old_properties {
+            let Ok(key_id) = self.catalog.get_key_id(prop_name) else {
+                continue;
+            };
+            for &label_id in old_label_ids {
+                if self.indexes.property_index.has_index(label_id, key_id) {
+                    let pv = super::super::json_to_property_value(prop_value);
+                    if let Err(e) = self
+                        .indexes
+                        .property_index
+                        .remove_property(node_id, label_id, key_id, pv)
+                    {
+                        tracing::warn!(
+                            "typed property-index remove failed for node {node_id} \
+                             (label {label_id}, key {key_id}): {e}"
+                        );
+                    }
+                }
+            }
+        }
+        if let Err(e) = self.maintain_indexed_properties(node_id, new_label_ids, new_properties) {
+            tracing::warn!("typed property-index refresh failed for node {node_id}: {e}");
+        }
+    }
+
+    /// Maintain the typed property B-tree for every node with id in
+    /// `from..self.storage.node_count()` — the ids a just-finished
+    /// executor CREATE allocated (exact under the single-writer model).
+    /// The executor CREATE operator maintains the label index but not the
+    /// typed property index, so without this a freshly created node was
+    /// invisible to `find_exact` / `NodeIndexSeek` until a restart or an
+    /// explicit-tx commit. Best-effort: failures are logged, never
+    /// escalated.
+    pub(in crate::engine) fn index_typed_properties_for_new_nodes(&mut self, from: u64) {
+        if !self.indexes.property_index.has_any_index() {
+            return;
+        }
+        for node_id in from..self.storage.node_count() {
+            let Ok(record) = self.storage.read_node(node_id) else {
+                continue;
+            };
+            if record.is_deleted() {
+                continue;
+            }
+            let mut label_ids = Vec::new();
+            for bit in 0..64u32 {
+                if (record.label_bits & (1u64 << bit)) != 0 {
+                    label_ids.push(bit);
+                }
+            }
+            if label_ids.is_empty() {
+                continue;
+            }
+            if let Ok(Some(properties)) = self.storage.load_node_properties(node_id) {
+                if let Err(e) = self.maintain_indexed_properties(node_id, &label_ids, &properties) {
+                    tracing::warn!(
+                        "typed property-index maintenance failed for new node {node_id}: {e}"
+                    );
+                }
+            }
+        }
+    }
+
     /// ISSUE #15: scoped per-commit index maintenance for explicit
     /// transactions. Replaces the previous per-COMMIT
     /// `rebuild_indexes_from_storage()` full O(N_nodes + N_rels) scan —

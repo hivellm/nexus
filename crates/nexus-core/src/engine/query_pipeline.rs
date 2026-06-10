@@ -559,10 +559,20 @@ impl Engine {
                 cypher: query.to_string(),
                 params: self.current_params.clone(),
             };
+            // Watermark for typed property-index maintenance: the executor
+            // CREATE path writes storage + the label index but NOT the
+            // typed property B-tree, so a freshly created node was
+            // invisible to `find_exact`/NodeIndexSeek (and a follow-up
+            // MATCH {prop} SET silently no-opped). Index the id range the
+            // executor allocates (exact under the single-writer model) —
+            // same write-set source as the #15 scoped-commit maintenance.
+            let pre_create_node_count = self.storage.node_count();
             let result = self.executor.execute(&query_obj)?;
 
             // CRITICAL: Sync executor's store back to engine's storage
             self.storage = self.executor.get_store();
+
+            self.index_typed_properties_for_new_nodes(pre_create_node_count);
 
             // Refresh executor to see the changes (only if not in transaction)
             let session_id = "default";
