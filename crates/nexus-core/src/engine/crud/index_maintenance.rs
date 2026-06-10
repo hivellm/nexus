@@ -464,6 +464,85 @@ impl Engine {
         Ok(())
     }
 
+    /// ISSUE #15: scoped per-commit index maintenance for explicit
+    /// transactions. Replaces the previous per-COMMIT
+    /// `rebuild_indexes_from_storage()` full O(N_nodes + N_rels) scan —
+    /// commit cost now scales with the transaction's own write set, not
+    /// with total graph size.
+    ///
+    /// The write set is the union of the session's storage watermark
+    /// range (ids allocated since BEGIN — covers executor-path CREATEs,
+    /// which do not report into the session) and the session's
+    /// `created_nodes` / `created_relationships` lists (engine-path
+    /// CREATEs). All index inserts are set/bitmap-based and idempotent,
+    /// so overlap between the two sources is harmless.
+    ///
+    /// For every node: re-assert its label-bitmap membership and
+    /// maintain the typed property B-tree for registered `(label, key)`
+    /// indexes. The typed-index step is the part the full rebuild was
+    /// load-bearing for: the explicit-tx CREATE path does not
+    /// synchronously maintain `find_exact` / `NodeIndexSeek` (see the
+    /// `explicit_commit_keeps_property_index_seek` contract guard).
+    ///
+    /// For every relationship: re-assert it in the in-memory
+    /// relationship index (idempotent; on failure the #18 dirty-flag
+    /// self-heal path takes over).
+    ///
+    /// SET-modified properties of pre-existing nodes are NOT reindexed
+    /// here — same behavior as the non-transactional SET path, which
+    /// does not maintain the typed index either (pre-existing gap,
+    /// independent of #15).
+    pub(in crate::engine) fn apply_committed_entity_index_updates(
+        &mut self,
+        session: &session::Session,
+    ) -> Result<()> {
+        let node_range = session.tx_begin_node_watermark..self.storage.node_count();
+        let rel_range = session.tx_begin_rel_watermark..self.storage.relationship_count();
+
+        for node_id in node_range.chain(session.created_nodes.iter().copied()) {
+            let record = match self.storage.read_node(node_id) {
+                Ok(r) => r,
+                Err(_) => continue,
+            };
+            if record.is_deleted() {
+                continue;
+            }
+            let mut label_ids = Vec::new();
+            for bit in 0..64u32 {
+                if (record.label_bits & (1u64 << bit)) != 0 {
+                    label_ids.push(bit);
+                }
+            }
+            if !label_ids.is_empty() {
+                self.indexes.label_index.add_node(node_id, &label_ids)?;
+            }
+            if let Ok(Some(properties)) = self.storage.load_node_properties(node_id) {
+                self.maintain_indexed_properties(node_id, &label_ids, &properties)?;
+            }
+        }
+        for rel_id in rel_range.chain(session.created_relationships.iter().copied()) {
+            let rel = match self.storage.read_rel(rel_id) {
+                Ok(r) => r,
+                Err(_) => continue,
+            };
+            if rel.is_deleted() {
+                continue;
+            }
+            // packed struct: copy fields to locals before use.
+            let (src, dst, type_id) = (rel.src_id, rel.dst_id, rel.type_id);
+            if let Err(e) = self
+                .cache
+                .relationship_index()
+                .add_relationship(rel_id, src, dst, type_id)
+            {
+                tracing::error!("commit relationship-index update failed for rel {rel_id}: {e}");
+                self.relationship_index_dirty
+                    .store(true, std::sync::atomic::Ordering::Release);
+            }
+        }
+        Ok(())
+    }
+
     /// Apply pending index updates in batch (Phase 1 optimization).
     ///
     /// Applies all accumulated index updates from a session transaction

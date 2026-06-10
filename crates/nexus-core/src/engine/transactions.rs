@@ -27,6 +27,12 @@ impl Engine {
                     // Begin transaction for this session
                     session.begin_transaction()?;
 
+                    // ISSUE #15: capture storage watermarks so COMMIT can
+                    // index exactly the entities this transaction creates
+                    // (single-writer model — no concurrent id allocation).
+                    session.tx_begin_node_watermark = self.storage.node_count();
+                    session.tx_begin_rel_watermark = self.storage.relationship_count();
+
                     // Update session in manager
                     self.session_manager.update_session(session);
                 }
@@ -49,22 +55,20 @@ impl Engine {
                     // the pending list so no stale entries carry over.
                     self.pending_external_ids.clear();
 
+                    // ISSUE #15: scoped index maintenance over the session's
+                    // own write set (created nodes + relationships) replaces
+                    // the previous per-COMMIT `rebuild_indexes_from_storage()`
+                    // full O(N) scan, so commit cost no longer scales with
+                    // total graph size. The typed property index — the part
+                    // the rebuild was load-bearing for — is maintained per
+                    // created node via `maintain_indexed_properties`.
+                    self.apply_committed_entity_index_updates(&session)?;
+
                     // Commit transaction
                     session.commit_transaction()?;
 
                     // Flush storage to ensure durability
                     self.storage.flush()?;
-
-                    // Rebuild indexes from storage after commit.
-                    // NOTE (#15): this is an O(N) full scan and, since #11, also
-                    // re-backfills every property index — expensive per commit.
-                    // It is currently load-bearing: the explicit-transaction
-                    // CREATE path does NOT synchronously maintain the typed
-                    // property index (`find_exact`/`NodeIndexSeek`), so removing
-                    // it makes index seeks miss explicit-tx-committed nodes.
-                    // A safe optimization requires reworking explicit-tx writes
-                    // to maintain the typed index incrementally (tracked in #15).
-                    self.rebuild_indexes_from_storage()?;
 
                     // Refresh executor to see the updated indexes
                     self.refresh_executor()?;

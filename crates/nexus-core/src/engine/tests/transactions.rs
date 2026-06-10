@@ -241,6 +241,82 @@ fn explicit_commit_keeps_property_index_seek() {
     );
 }
 
+/// ISSUE #15: after the scoped per-commit index maintenance (which
+/// replaced the per-COMMIT full `rebuild_indexes_from_storage()` scan),
+/// an explicit BEGIN/COMMIT must leave the label, relationship, and
+/// typed property indexes correct — and a subsequent full rebuild must
+/// produce the same query results (no net diff between incremental
+/// commit-time maintenance and a ground-truth rebuild).
+#[test]
+#[serial_test::serial]
+fn explicit_commit_incremental_indexes_match_full_rebuild() {
+    let ctx = crate::testing::TestContext::new();
+    let mut engine = Engine::with_isolated_catalog(ctx.path()).unwrap();
+
+    engine
+        .execute_cypher("CREATE INDEX FOR (n:Inc) ON (n.id)")
+        .expect("CREATE INDEX");
+
+    // Pre-existing data outside the transaction.
+    engine
+        .execute_cypher("CREATE (:Inc {id: 'pre'})")
+        .expect("pre-tx CREATE");
+
+    engine.execute_cypher("BEGIN TRANSACTION").expect("BEGIN");
+    engine
+        .execute_cypher("CREATE (:Inc {id: 'in1'})-[:LINKED]->(:Inc {id: 'in2'})")
+        .expect("CREATE in tx");
+    engine.execute_cypher("COMMIT TRANSACTION").expect("COMMIT");
+
+    let snapshot = |engine: &mut Engine| {
+        let label_rows = engine
+            .execute_cypher("MATCH (n:Inc) RETURN n.id ORDER BY n.id")
+            .expect("label scan")
+            .rows;
+        let rel_rows = engine
+            .execute_cypher("MATCH (:Inc {id: 'in1'})-[:LINKED]->(m:Inc) RETURN m.id")
+            .expect("rel traversal")
+            .rows;
+        let seek = engine
+            .execute_cypher("MATCH (n:Inc {id: 'in2'}) RETURN n.id")
+            .expect("property seek");
+        assert!(
+            !seek
+                .notifications
+                .iter()
+                .any(|n| n.code == "Nexus.Performance.UnindexedPropertyAccess"),
+            "typed index must serve the seek; notes = {:?}",
+            seek.notifications
+        );
+        (label_rows, rel_rows, seek.rows)
+    };
+
+    let incremental = snapshot(&mut engine);
+    assert_eq!(
+        incremental.0.len(),
+        3,
+        "all 3 Inc nodes visible (label index)"
+    );
+    assert_eq!(incremental.1.len(), 1, "committed relationship traversable");
+    assert_eq!(
+        incremental.2.len(),
+        1,
+        "committed node found via typed seek"
+    );
+
+    // Ground truth: a full rebuild from storage must not change any result.
+    engine
+        .rebuild_indexes_from_storage()
+        .expect("full rebuild (ground truth)");
+    engine.refresh_executor().expect("refresh after rebuild");
+    let rebuilt = snapshot(&mut engine);
+    assert_eq!(
+        format!("{incremental:?}"),
+        format!("{rebuilt:?}"),
+        "incremental commit-time index maintenance must match a full rebuild"
+    );
+}
+
 /// ISSUE #18: when the in-memory relationship index is marked dirty (after a
 /// failed incremental update), the next `find_relationship_between` rebuilds it
 /// from storage (self-heal) so the edge is still found and the fast path is
