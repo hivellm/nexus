@@ -5,7 +5,7 @@
 ![Rust](https://img.shields.io/badge/rust-nightly%201.85%2B-orange.svg)
 ![Edition](https://img.shields.io/badge/edition-2024-blue.svg)
 ![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)
-![Status](https://img.shields.io/badge/status-v2.3.2-success.svg)
+![Status](https://img.shields.io/badge/status-v2.3.3-success.svg)
 ![Tests](https://img.shields.io/badge/tests-2310%2B%20passing-success.svg)
 ![Compatibility](https://img.shields.io/badge/Neo4j%20compat-300%2F300-success.svg)
 
