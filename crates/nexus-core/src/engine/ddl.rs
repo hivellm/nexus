@@ -5,6 +5,29 @@
 use super::Engine;
 use crate::{Error, Result, catalog, executor};
 
+/// ISSUE #22: cap on the number of rows the legacy CALL IN TRANSACTIONS
+/// engine path may materialize inside its single wrapper transaction.
+/// Returns the structured `ERR_CALL_IN_TX_RESULT_TOO_LARGE` error past
+/// the cap so an enormous subquery fails fast instead of OOMing the
+/// server. Default cap is 1M rows; override with
+/// `NEXUS_CALL_IN_TX_MAX_ROWS` for constrained deployments (and tests).
+pub(super) fn check_call_in_tx_result_cap(row_count: usize) -> Result<()> {
+    const CALL_IN_TX_MAX_ROWS: usize = 1_000_000;
+    let max_rows = std::env::var("NEXUS_CALL_IN_TX_MAX_ROWS")
+        .ok()
+        .and_then(|v| v.parse::<usize>().ok())
+        .unwrap_or(CALL_IN_TX_MAX_ROWS);
+    if row_count > max_rows {
+        return Err(Error::CypherExecution(format!(
+            "ERR_CALL_IN_TX_RESULT_TOO_LARGE: CALL {{ ... }} IN TRANSACTIONS \
+             produced {row_count} rows (cap {max_rows}). The legacy engine path \
+             materializes the whole result in one transaction; reduce the \
+             subquery result size (e.g. add a LIMIT or filter).",
+        )));
+    }
+    Ok(())
+}
+
 impl Engine {
     /// Execute index management commands (CREATE INDEX, DROP INDEX)
     pub(super) fn execute_index_commands(
@@ -983,20 +1006,15 @@ impl Engine {
                     // materialized result so an enormous subquery returns a
                     // clear, bounded error instead of OOMing the server while
                     // building `all_results` + the response.
-                    const CALL_IN_TX_MAX_ROWS: usize = 1_000_000;
                     let _batch_size = call_subquery.batch_size.unwrap_or(1000);
                     let mut tx = self.transaction_manager.write().begin_write()?;
                     let subquery_result = self.execute_cypher_ast(&call_subquery.query)?;
-                    if subquery_result.rows.len() > CALL_IN_TX_MAX_ROWS {
+                    if let Err(e) = check_call_in_tx_result_cap(subquery_result.rows.len()) {
+                        // Clean abort: release the wrapper write
+                        // transaction before surfacing the cap error so
+                        // nothing is committed and no write lock leaks.
                         self.transaction_manager.write().abort(&mut tx).ok();
-                        return Err(Error::CypherExecution(format!(
-                            "ERR_CALL_IN_TX_RESULT_TOO_LARGE: CALL {{ ... }} IN TRANSACTIONS \
-                             produced {} rows (cap {CALL_IN_TX_MAX_ROWS}). Per-`OF n ROWS` \
-                             commit batching is not yet implemented, so the whole result is \
-                             materialized in one transaction; reduce the subquery result size \
-                             (e.g. add a LIMIT or filter).",
-                            subquery_result.rows.len()
-                        )));
+                        return Err(e);
                     }
                     if columns.is_empty() {
                         columns = subquery_result.columns.clone();

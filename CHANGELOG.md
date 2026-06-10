@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed — `phase6_call-in-tx-result-cap` (#22)
+
+- **The CALL IN TRANSACTIONS materialization cap (1M rows, added for #22) is now env-configurable via `NEXUS_CALL_IN_TX_MAX_ROWS`** and the check is extracted into a tested unit (`check_call_in_tx_result_cap`) returning the structured `ERR_CALL_IN_TX_RESULT_TOO_LARGE` error with a clean wrapper-transaction abort (nothing committed, no leaked write lock). Clarification over the original #22 premise: per-`OF n ROWS` commit batching **is** implemented for top-level queries — they route through the executor operator (`run_call_subquery_in_transactions`, per-chunk commits with ON ERROR / REPORT STATUS); the capped single-transaction materialization only applies to the legacy engine path used for internally dispatched ASTs.
+
 ### Removed — `phase5_wire-or-remove-dead-integration-test`
 
 - **Removed the dead root-level `tests/integration_test.rs` (2091 lines, 30 tests) with explicit user authorization.** The file was unwired dead code — no crate's `Cargo.toml` declared a `[[test]]` target for it, it never compiled (syntax error at line 687, stale `Executor::new`/`NexusServer` constructor signatures), and the coverage diff from item 1.1 showed zero unique compilable tests: all 15 storage/catalog/WAL/tx tests are identically covered by `crates/nexus-core/tests/integration.rs` (live versions stricter). Removal has no build or coverage impact.

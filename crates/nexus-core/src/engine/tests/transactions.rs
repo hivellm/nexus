@@ -165,6 +165,47 @@ fn call_in_transactions_terminates() {
     );
 }
 
+/// ISSUE #22: the legacy CALL IN TRANSACTIONS engine path materializes
+/// the whole subquery result inside one wrapper transaction; past the
+/// cap it must return the structured ERR_CALL_IN_TX_RESULT_TOO_LARGE
+/// error instead of OOMing. The cap check is exercised directly because
+/// the legacy path is only reachable for internally dispatched ASTs —
+/// top-level client queries route through the executor operator
+/// (`run_call_subquery_in_transactions`), which commits per `OF n ROWS`
+/// chunk and is covered by `call_in_transactions_terminates` above. The
+/// call site aborts the wrapper transaction before surfacing the error,
+/// so nothing is committed.
+#[test]
+#[serial_test::serial]
+fn call_in_tx_result_cap_returns_structured_error_past_cap() {
+    use crate::engine::ddl::check_call_in_tx_result_cap;
+
+    // Under the default 1M cap.
+    assert!(check_call_in_tx_result_cap(0).is_ok());
+    assert!(check_call_in_tx_result_cap(1_000_000).is_ok());
+
+    // Past the default cap — structured error, not a panic/OOM.
+    let err = check_call_in_tx_result_cap(1_000_001)
+        .expect_err("row count above the default cap must error");
+    assert!(
+        err.to_string().contains("ERR_CALL_IN_TX_RESULT_TOO_LARGE"),
+        "expected structured cap error, got: {err}"
+    );
+
+    // Env knob override (NEXUS_CALL_IN_TX_MAX_ROWS) for constrained
+    // deployments lowers the cap.
+    // SAFETY: serialized test (no concurrent env access in this process).
+    unsafe { std::env::set_var("NEXUS_CALL_IN_TX_MAX_ROWS", "2") };
+    assert!(check_call_in_tx_result_cap(2).is_ok(), "at the env cap");
+    let err = check_call_in_tx_result_cap(3).expect_err("above the env cap");
+    assert!(
+        err.to_string().contains("ERR_CALL_IN_TX_RESULT_TOO_LARGE"),
+        "expected structured cap error, got: {err}"
+    );
+    // SAFETY: serialized test (no concurrent env access in this process).
+    unsafe { std::env::remove_var("NEXUS_CALL_IN_TX_MAX_ROWS") };
+}
+
 /// ISSUE #15 (contract guard): the typed property index must stay correct
 /// across an explicit BEGIN/COMMIT — after COMMIT a `MATCH (n:L {p:v})` finds
 /// the committed node and uses the seek (no UnindexedPropertyAccess). Any
