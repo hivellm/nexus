@@ -437,3 +437,55 @@ fn unwind_match_merge_edge_upsert() {
         "ON MATCH SET r.w = row.w"
     );
 }
+
+/// ISSUE #14 (multi-row): one UNWIND batch upserts an edge for EVERY row —
+/// `count(r)` reflects all rows and each edge carries its own row's
+/// property value.
+#[test]
+#[serial_test::serial]
+fn unwind_match_merge_edge_upsert_every_row() {
+    let ctx = crate::testing::TestContext::new();
+    let mut engine = Engine::with_isolated_catalog(ctx.path()).unwrap();
+
+    let hub = engine
+        .create_node(vec!["ZM".to_string()], serde_json::json!({"id": "hub"}))
+        .unwrap();
+    let s1 = engine
+        .create_node(vec!["ZM".to_string()], serde_json::json!({"id": "s1"}))
+        .unwrap();
+    let s2 = engine
+        .create_node(vec!["ZM".to_string()], serde_json::json!({"id": "s2"}))
+        .unwrap();
+
+    let r = engine
+        .execute_cypher(
+            "UNWIND [{tk:'s1',w:1},{tk:'s2',w:2}] AS row \
+             MATCH (a:ZM {id: 'hub'}), (b:ZM {id: row.tk}) \
+             MERGE (a)-[r:ZMREL]->(b) ON CREATE SET r.w = row.w ON MATCH SET r.w = row.w \
+             RETURN count(r) AS c",
+        )
+        .expect("multi-row UNWIND edge upsert must succeed");
+    assert_eq!(
+        r.rows[0].values[0].as_i64(),
+        Some(2),
+        "count(r) must reflect both rows, got {:?}",
+        r.rows[0].values[0]
+    );
+
+    for (dst, w) in [(s1, 1), (s2, 2)] {
+        let rid = engine
+            .find_relationship_between(hub, dst, "ZMREL")
+            .unwrap()
+            .expect("edge must exist for every row");
+        let props = engine
+            .storage
+            .load_relationship_properties(rid)
+            .unwrap()
+            .expect("edge props");
+        assert_eq!(
+            props["w"],
+            serde_json::json!(w),
+            "each edge carries its own row's property value"
+        );
+    }
+}

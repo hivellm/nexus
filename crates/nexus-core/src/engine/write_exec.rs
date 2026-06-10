@@ -25,8 +25,9 @@ impl Engine {
         let _ = crate::executor::planner::queries::drain_pending_planner_notifications();
 
         let mut context: HashMap<String, Vec<u64>> = HashMap::new();
-        // Track relationship bindings: variable -> (rel_id, rel_type)
-        let mut rel_context: HashMap<String, (u64, String)> = HashMap::new();
+        // Track relationship bindings: variable -> upserted (rel_id, rel_type)
+        // entries (one per MERGE application — see #14).
+        let mut rel_context: HashMap<String, Vec<(u64, String)>> = HashMap::new();
         let mut result: Option<executor::ResultSet> = None;
 
         // UNWIND-driven write (issue #13): `UNWIND list AS row <writes> RETURN`
@@ -51,7 +52,10 @@ impl Engine {
                     if let Some((rel_var, rel_id, rel_type)) =
                         self.process_merge_relationship(&merge_clause, &context)?
                     {
-                        rel_context.insert(rel_var, (rel_id, rel_type));
+                        rel_context
+                            .entry(rel_var)
+                            .or_default()
+                            .push((rel_id, rel_type));
                     } else {
                         // Fall back to node MERGE
                         let (variable, node_ids) = self.process_merge_clause(merge_clause)?;
@@ -179,7 +183,9 @@ impl Engine {
         // node, not every node merged so far.
         let mut base_context: HashMap<String, Vec<u64>> = HashMap::new();
         let mut accumulated: HashMap<String, Vec<u64>> = HashMap::new();
-        let mut rel_context: HashMap<String, (u64, String)> = HashMap::new();
+        // #14: accumulates ONE entry per row so a trailing `RETURN count(r)`
+        // reflects every row's upserted edge, not just the last one.
+        let mut rel_context: HashMap<String, Vec<(u64, String)>> = HashMap::new();
 
         // Clauses before UNWIND run once (e.g. a leading MATCH).
         for clause in &ast.clauses[..unwind_idx] {
@@ -216,7 +222,10 @@ impl Engine {
                         if let Some((rel_var, rel_id, rel_type)) =
                             self.process_merge_relationship(merge_clause, &row_context)?
                         {
-                            rel_context.insert(rel_var, (rel_id, rel_type));
+                            rel_context
+                                .entry(rel_var)
+                                .or_default()
+                                .push((rel_id, rel_type));
                         } else {
                             let (variable, node_ids) = self.process_merge_clause(merge_clause)?;
                             row_context.insert(variable.clone(), node_ids.clone());
@@ -687,7 +696,7 @@ impl Engine {
     pub(super) fn build_return_result_with_rels(
         &mut self,
         context: &HashMap<String, Vec<u64>>,
-        rel_context: &HashMap<String, (u64, String)>,
+        rel_context: &HashMap<String, Vec<(u64, String)>>,
         return_clause: &executor::parser::ReturnClause,
     ) -> Result<executor::ResultSet> {
         if return_clause.items.is_empty() {
@@ -731,7 +740,7 @@ impl Engine {
     pub(super) fn expression_references_rel(
         &self,
         expr: &executor::parser::Expression,
-        rel_context: &HashMap<String, (u64, String)>,
+        rel_context: &HashMap<String, Vec<(u64, String)>>,
     ) -> bool {
         match expr {
             executor::parser::Expression::Variable(v) => rel_context.contains_key(v),
@@ -750,7 +759,7 @@ impl Engine {
         &self,
         expr: &executor::parser::Expression,
         _context: &HashMap<String, Vec<u64>>,
-        rel_context: &HashMap<String, (u64, String)>,
+        rel_context: &HashMap<String, Vec<(u64, String)>>,
     ) -> Result<Value> {
         match expr {
             executor::parser::Expression::FunctionCall { name, args } => {
@@ -758,8 +767,22 @@ impl Engine {
                 if func_name == "type" && args.len() == 1 {
                     // type(r) - return relationship type
                     if let executor::parser::Expression::Variable(var) = &args[0] {
-                        if let Some((_rel_id, rel_type)) = rel_context.get(var) {
-                            return Ok(Value::String(rel_type.clone()));
+                        if let Some(entries) = rel_context.get(var) {
+                            if let Some((_rel_id, rel_type)) = entries.last() {
+                                return Ok(Value::String(rel_type.clone()));
+                            }
+                        }
+                    }
+                }
+                // #14: `count(r)` over an upserted relationship variable —
+                // number of distinct edges merged across all UNWIND rows.
+                if func_name == "count" && args.len() == 1 {
+                    if let executor::parser::Expression::Variable(var) = &args[0] {
+                        if let Some(entries) = rel_context.get(var) {
+                            let mut ids: Vec<u64> = entries.iter().map(|(id, _)| *id).collect();
+                            ids.sort_unstable();
+                            ids.dedup();
+                            return Ok(Value::Number((ids.len() as u64).into()));
                         }
                     }
                 }
@@ -767,15 +790,16 @@ impl Engine {
                 Ok(Value::Null)
             }
             executor::parser::Expression::Variable(var) => {
-                if let Some((rel_id, rel_type)) = rel_context.get(var) {
-                    // Return relationship as object
-                    let mut obj = Map::new();
-                    obj.insert("_id".to_string(), Value::Number((*rel_id).into()));
-                    obj.insert("_type".to_string(), Value::String(rel_type.clone()));
-                    Ok(Value::Object(obj))
-                } else {
-                    Ok(Value::Null)
+                if let Some(entries) = rel_context.get(var) {
+                    if let Some((rel_id, rel_type)) = entries.last() {
+                        // Return relationship as object
+                        let mut obj = Map::new();
+                        obj.insert("_id".to_string(), Value::Number((*rel_id).into()));
+                        obj.insert("_type".to_string(), Value::String(rel_type.clone()));
+                        return Ok(Value::Object(obj));
+                    }
                 }
+                Ok(Value::Null)
             }
             _ => Ok(Value::Null),
         }
