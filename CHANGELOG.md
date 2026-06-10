@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed — `phase5_wire-or-remove-dead-integration-test`
+
+- **Completed analysis of `tests/integration_test.rs` to inventory test coverage and diff against existing per-crate integration tests.** Item 1.1 in the phase5 oversized-file cleanup: identified that the root-level integration test file (1892 lines, 40+ tests) is unwired dead code (no crate's Cargo.toml declares a `[[test]]` target pointing to it, never compiled, never runs in CI). Analysis quantifies which tests are already covered by existing per-crate tests and which provide unique coverage — informs decision to wire into `crates/nexus-core/tests/` (if unique coverage justifies it) or remove (if fully redundant).
+
 ### Changed — `phase5_split-oversized-files`
 
 - **Refactored 17 oversized source files (>1500 lines) into cohesive directory modules with facade `mod.rs` re-exports; zero logic/behavior changes; public API paths preserved.** Affected files: `crates/nexus-core/src/executor/` (planner/queries, eval/projection, parser/{clauses,expressions,tests}, operators/{aggregate,procedures}), `crates/nexus-core/src/engine/` ({mod,tests,crud}), `crates/nexus-core/src/wal/`, `crates/nexus-core/src/catalog/`, `crates/nexus-core/src/graph/correlation/` ({mod,pattern_recognition}), `crates/nexus-core/src/storage/mod`, `crates/nexus-server/src/api/` ({cypher/execute,streaming}). Engine module reduced from 5853 → 861 lines; all 300/300 Neo4j compatibility test semantics untouched (HTTP response format unchanged). Note: `tests/integration_test.rs` identified as unwired (never compiled) — follow-up task `phase5_wire-or-remove-dead-integration-test` created.
