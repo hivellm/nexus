@@ -461,6 +461,19 @@ impl CypherParser {
                     "REMOVE" => Clause::Remove(self.parse_remove_clause()?),
                     "WITH" => Clause::With(self.parse_with_clause()?),
                     "UNWIND" => Clause::Unwind(self.parse_unwind_clause()?),
+                    // EXPLAIN/PROFILE CALL { … } / CALL proc(...) — same
+                    // dual shape as the top-level parser. Previously
+                    // missing, so EXPLAIN/PROFILE over a CALL failed to
+                    // parse.
+                    "CALL" => {
+                        self.skip_whitespace();
+                        let next = self.peek_char();
+                        if next == Some('{') || next == Some('(') {
+                            Clause::CallSubquery(self.parse_call_subquery_clause()?)
+                        } else {
+                            Clause::CallProcedure(self.parse_call_procedure_clause()?)
+                        }
+                    }
                     "UNION" => {
                         self.skip_whitespace();
                         let union_type = if self.peek_keyword("ALL") {
@@ -575,6 +588,19 @@ impl CypherParser {
                     "REMOVE" => Clause::Remove(self.parse_remove_clause()?),
                     "WITH" => Clause::With(self.parse_with_clause()?),
                     "UNWIND" => Clause::Unwind(self.parse_unwind_clause()?),
+                    // EXPLAIN/PROFILE CALL { … } / CALL proc(...) — same
+                    // dual shape as the top-level parser. Previously
+                    // missing, so EXPLAIN/PROFILE over a CALL failed to
+                    // parse.
+                    "CALL" => {
+                        self.skip_whitespace();
+                        let next = self.peek_char();
+                        if next == Some('{') || next == Some('(') {
+                            Clause::CallSubquery(self.parse_call_subquery_clause()?)
+                        } else {
+                            Clause::CallProcedure(self.parse_call_procedure_clause()?)
+                        }
+                    }
                     "UNION" => {
                         self.skip_whitespace();
                         let union_type = if self.peek_keyword("ALL") {

@@ -658,3 +658,60 @@ fn unwind_match_merge_edge_upsert_every_row() {
         );
     }
 }
+
+/// The legacy engine CALL-subquery path must execute an inner read
+/// subquery. It previously failed on every inner MATCH ... RETURN: the
+/// read fallback re-parsed `query_to_string`'s Debug output instead of
+/// Cypher. The fallback now hands the parsed AST to the executor via the
+/// one-shot preparsed override.
+#[test]
+#[serial_test::serial]
+fn legacy_call_subquery_path_executes_inner_read() {
+    let ctx = crate::testing::TestContext::new();
+    let mut engine = Engine::with_isolated_catalog(ctx.path()).unwrap();
+    engine
+        .execute_cypher("CREATE (:LSeed {v: 1}), (:LSeed {v: 2}), (:LSeed {v: 3})")
+        .expect("seed CREATE");
+
+    let ast = crate::executor::parser::CypherParser::new(
+        "CALL { MATCH (s:LSeed) RETURN s } IN TRANSACTIONS OF 2 ROWS".to_string(),
+    )
+    .parse()
+    .expect("parse");
+
+    let result = engine
+        .execute_call_subquery_commands(&ast)
+        .expect("legacy CALL path must execute the inner read subquery");
+    assert_eq!(
+        result.rows.len(),
+        3,
+        "all 3 seed rows must come back through the legacy path"
+    );
+}
+
+/// PROFILE over a CALL subquery must parse and execute. The
+/// EXPLAIN/PROFILE inner parser had no CALL arm, so
+/// `PROFILE CALL { ... } IN TRANSACTIONS` failed to parse; the legacy
+/// engine path that executes it also failed on re-parsed Debug output
+/// (both fixed in phase7_fix-query-to-string-debug-reconstruction).
+#[test]
+#[serial_test::serial]
+fn profile_over_call_subquery_parses_and_executes() {
+    let ctx = crate::testing::TestContext::new();
+    let mut engine = Engine::with_isolated_catalog(ctx.path()).unwrap();
+    engine
+        .execute_cypher("CREATE (:PSeed {v: 1}), (:PSeed {v: 2}), (:PSeed {v: 3})")
+        .expect("seed CREATE");
+
+    let r = engine
+        .execute_cypher("PROFILE CALL { MATCH (s:PSeed) RETURN s } IN TRANSACTIONS OF 2 ROWS")
+        .expect("PROFILE CALL must parse and execute");
+    assert_eq!(r.columns, vec!["profile".to_string()], "profile column");
+    assert_eq!(r.rows.len(), 1, "one profile row");
+    let profile = &r.rows[0].values[0];
+    assert_eq!(
+        profile.get("rows_returned").and_then(|v| v.as_u64()),
+        Some(3),
+        "profiled execution must return the 3 seed rows, got {profile:?}"
+    );
+}

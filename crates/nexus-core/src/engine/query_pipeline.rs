@@ -942,9 +942,14 @@ impl Engine {
                 } else {
                     // If there's a RETURN clause with other expressions, let the executor handle it
                     // The executor will process the RETURN, but since nodes are deleted,
-                    // it will likely return empty results or handle it appropriately
+                    // it will likely return empty results or handle it appropriately.
+                    // Hand the parsed AST to the executor via the one-shot
+                    // override — `query_to_string` emits Debug output, not
+                    // Cypher, so re-parsing it always failed.
+                    self.executor
+                        .install_preparsed_ast_override(Some(ast.clone()));
                     let query_obj = executor::Query {
-                        cypher: self.query_to_string(ast),
+                        cypher: String::new(),
                         params: ast.params.clone(),
                     };
                     return self.executor.execute(&query_obj);
@@ -988,10 +993,15 @@ impl Engine {
             self.refresh_executor()?;
         }
 
-        // Execute the query normally
+        // Execute the query normally. Hand the parsed AST to the executor
+        // via the one-shot override — `query_to_string` emits Debug output,
+        // not Cypher, so re-parsing it always failed (this broke every
+        // inner read subquery on the legacy CALL path).
+        self.executor
+            .install_preparsed_ast_override(Some(ast.clone()));
         let query_obj = executor::Query {
-            cypher: self.query_to_string(ast),
-            params: std::collections::HashMap::new(),
+            cypher: String::new(),
+            params: ast.params.clone(),
         };
         self.executor.execute(&query_obj)
     }
