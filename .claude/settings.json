@@ -1,74 +1,41 @@
 {
+  "permissions": {
+    "allow": [
+      "Bash(*)",
+      "Read(*)",
+      "Write(*)",
+      "Edit(*)",
+      "Glob(*)",
+      "Grep(*)",
+      "Agent(*)",
+      "TodoWrite(*)",
+      "WebFetch(*)",
+      "WebSearch(*)",
+      "Skill(*)",
+      "mcp__tml__*",
+      "mcp__rulebook__*",
+      "Bash(ls:*)",
+      "Bash(cat:*)",
+      "Bash(grep:*)",
+      "Bash(rg:*)",
+      "Bash(find:*)",
+      "Bash(git status:*)",
+      "Bash(git diff:*)",
+      "Bash(git log:*)",
+      "Bash(git blame:*)",
+      "Bash(npm run type-check:*)",
+      "Bash(npm test:*)",
+      "mcp__rulebook"
+    ]
+  },
   "hooks": {
-    "SessionStart": [
-      {
-        "matcher": "compact",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "bash E:/HiveLLM/Nexus/.claude/hooks/on-compact-reinject.sh"
-          }
-        ]
-      },
-      {
-        "hooks": [
-          {
-            "type": "command",
-            "command": "bash E:/HiveLLM/Nexus/.claude/hooks/resume-from-handoff.sh"
-          }
-        ]
-      },
-      {
-        "hooks": [
-          {
-            "type": "command",
-            "command": "bash E:/HiveLLM/Nexus/.claude/hooks/terse-activate.sh"
-          }
-        ]
-      }
-    ],
-    "Stop": [
-      {
-        "hooks": [
-          {
-            "type": "command",
-            "command": "bash E:/HiveLLM/Nexus/.claude/hooks/check-context-and-handoff.sh"
-          }
-        ]
-      }
-    ],
     "PreToolUse": [
       {
+        "matcher": "Edit|Write",
         "hooks": [
           {
             "type": "command",
-            "command": "bash E:/HiveLLM/Nexus/.claude/hooks/enforce-no-deferred.sh"
-          }
-        ]
-      },
-      {
-        "hooks": [
-          {
-            "type": "command",
-            "command": "bash E:/HiveLLM/Nexus/.claude/hooks/enforce-no-shortcuts.sh"
-          }
-        ]
-      },
-      {
-        "hooks": [
-          {
-            "type": "command",
-            "command": "bash E:/HiveLLM/Nexus/.claude/hooks/enforce-mcp-for-tasks.sh"
-          }
-        ]
-      }
-    ],
-    "UserPromptSubmit": [
-      {
-        "hooks": [
-          {
-            "type": "command",
-            "command": "bash E:/HiveLLM/Nexus/.claude/hooks/terse-mode-tracker.sh"
+            "command": "bash $CLAUDE_PROJECT_DIR/.claude/hooks/enforce-pre-tool.sh"
           }
         ]
       }
@@ -76,5 +43,10 @@
   },
   "env": {
     "CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS": "1"
-  }
+  },
+  "statusLine": {
+    "type": "command",
+    "command": "echo \"$(basename \"$(pwd)\")$(git branch --show-current 2>/dev/null | sed \"s/^/ | /\")\""
+  },
+  "model": "sonnet"
 }
