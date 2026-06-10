@@ -1,9 +1,9 @@
 # Tasks: phase5_split-oversized-files-wave2
 
 ## 1. Implementation (same recipe as wave 1: directory module + facade mod.rs, zero logic changes, check --tests clean per file)
-- [ ] 1.1 Split crates/nexus-core/src/index/mod.rs (1797)
-- [ ] 1.2 Split crates/nexus-core/src/graph/algorithms/traversal.rs (1715)
-- [ ] 1.3 Split crates/nexus-core/src/graph/clustering.rs (1669)
+- [x] 1.1 Split crates/nexus-core/src/index/mod.rs (1797) <!-- mod.rs 179; +dist/label_index/knn_index/property_index; 49/49 tests -->
+- [x] 1.2 Split crates/nexus-core/src/graph/algorithms/traversal.rs (1715) <!-- traversal/{mod,bfs_dfs,shortest_path,components,centrality,similarity,mst} -->
+- [x] 1.3 Split crates/nexus-core/src/graph/clustering.rs (1669) <!-- clustering/ dir; 24/24 tests -->
 - [ ] 1.4 Split crates/nexus-core/src/graph/core.rs (1641)
 - [ ] 1.5 Split crates/nexus-core/src/graph/correlation/data_flow/mod.rs (1632)
 - [ ] 1.6 Split crates/nexus-core/src/graph/procedures.rs (1594)
