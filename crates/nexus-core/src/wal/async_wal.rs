@@ -359,6 +359,24 @@ impl AsyncWalWriter {
             }
         }
 
+        // Final drain on exit (#19 durability): the shutdown flag pops the
+        // loop at the top, which can leave ACCEPTED Append commands sitting
+        // in the channel — dropping them would break the "accepted ⇒
+        // durable" contract (`append()` already returned Ok to the caller).
+        // Consume everything still queued before the final flush.
+        while let Ok(cmd) = receiver.try_recv() {
+            match cmd {
+                WalCommand::Append(entry) => {
+                    batch.push(entry);
+                    if batch.len() >= config.max_batch_size {
+                        Self::flush_batch(&mut wal, &batch, &stats, config);
+                        batch.clear();
+                    }
+                }
+                WalCommand::Flush | WalCommand::Shutdown => {}
+            }
+        }
+
         // Final flush on exit
         if !batch.is_empty() {
             Self::flush_batch(&mut wal, &batch, &stats, config);
@@ -644,6 +662,20 @@ mod tests {
         // about the submit path no longer dead-ending on a full channel;
         // exact shutdown-drain timing is a separate, non-deterministic concern.)
         writer.shutdown().unwrap();
+
+        // Durability: the burst survives backpressure end-to-end — a fresh
+        // Wal on the same file replays every entry (none dropped while the
+        // channel was full).
+        let mut reopened = Wal::new(ctx.path().join("wal.log")).unwrap();
+        let recovered = reopened.recover().unwrap();
+        let create_nodes = recovered
+            .iter()
+            .filter(|e| matches!(e, WalEntry::CreateNode { .. }))
+            .count() as u64;
+        assert_eq!(
+            create_nodes, burst,
+            "WAL replay must recover every entry submitted under backpressure"
+        );
     }
 
     #[test]
