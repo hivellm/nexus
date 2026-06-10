@@ -5,7 +5,15 @@ All notable changes to Nexus will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [2.3.3] — 2026-06-10
+
+> Audit-closure release: finishes the 2.3.3 audit-task batch (GH
+> #14–#22) and fixes seven additional pre-existing bugs found by manual
+> Docker validation — index correctness on SET/CREATE, explicit
+> transactions over HTTP, rollback of executor-created nodes, async-WAL
+> shutdown durability, the chain-walk off-by-one, and top-level
+> EXPLAIN/PROFILE parsing. Full workspace suite green (4716 tests);
+> Docker E2E battery 11/11 + durability checks.
 
 ### Fixed — `phase6_fix-rebuild-indexes-per-commit` (#15)
 
