@@ -13,6 +13,6 @@
 - [x] 1.10 Split crates/nexus-core/src/storage/adjacency_list.rs (1520) <!-- adjacency_list/{mod,types,store,tests}; 34/34 tests -->
 
 ## 2. Tail (mandatory — enforced by rulebook v5.3.0)
-- [ ] 2.1 Update or create documentation covering the implementation (CHANGELOG entry)
-- [ ] 2.2 Write tests covering the new behavior (pure move: existing tests cover; verify no test-count regression)
-- [ ] 2.3 Run tests and confirm they pass (fmt + clippy -D warnings + cargo +nightly test --workspace)
+- [x] 2.1 Update or create documentation covering the implementation (CHANGELOG entry) <!-- wave-2 bullet appended to Unreleased/Changed -->
+- [x] 2.2 Write tests covering the new behavior (pure move: existing tests cover; verify no test-count regression) <!-- per-module counts preserved: 49+24+0+19+33+12+20+5+12+34 -->
+- [x] 2.3 Run tests and confirm they pass <!-- cargo +nightly test --workspace: 4703 passed, 0 FAILED, rc=0; fmt --check clean; clippy --all-targets --all-features -D warnings clean; zero files >1500 raw lines left in crates/ -->
