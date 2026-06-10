@@ -37,6 +37,18 @@ pub struct NodeRelationshipIndex {
 }
 
 /// Comprehensive relationship index system
+///
+/// # Lock-order invariant (#17)
+///
+/// Acquire locks in field order — `type_index` → `node_index` →
+/// `edge_index` → `stats` — and NEVER acquire an earlier lock while
+/// holding a later one (in particular: never take any other field's
+/// lock while holding `stats`). Mutating paths (`add_relationship`,
+/// `remove_relationship`, `clear`) take each lock in its own scoped
+/// block, fully sequential. Read paths that hold `node_index.read()`
+/// while taking `stats.write()` (`get_high_degree_relationships`,
+/// `optimize_high_degree_nodes`) are safe because no path acquires in
+/// the opposite order; do not introduce one.
 #[derive(Debug)]
 pub struct RelationshipIndex {
     /// Type-based index for fast relationship type filtering
@@ -238,13 +250,18 @@ impl RelationshipIndex {
             }
         }
 
-        // Update stats
+        // Update stats. Same #17 lock discipline as add_relationship: read
+        // `node_index.len()` into a local BEFORE taking `stats.write()`.
+        // Also keeps `total_nodes` correct after removals (empty node
+        // entries are pruned above, so the count shrinks accordingly).
+        let node_count = self.node_index.read().unwrap().len() as u64;
         {
             let mut stats = self.stats.write().unwrap();
             if stats.total_relationships > 0 {
                 stats.total_relationships -= 1;
                 stats.memory_usage = stats.memory_usage.saturating_sub(16);
             }
+            stats.total_nodes = node_count; // approximate (nodes with ≥1 rel)
         }
 
         Ok(())
@@ -569,6 +586,28 @@ mod tests {
         let stats = index.stats();
         assert_eq!(stats.total_relationships, 2);
         assert!(stats.memory_usage > 0);
+    }
+
+    /// #17: `total_nodes` must track the set of nodes with ≥1 indexed
+    /// relationship across BOTH add and remove (remove previously left it
+    /// stale at the last add-time value).
+    #[test]
+    fn total_nodes_stays_correct_across_add_and_remove() {
+        let index = RelationshipIndex::new();
+
+        // Two rels over three distinct nodes: 10→20, 20→30.
+        index.add_relationship(1, 10, 20, 1).unwrap();
+        index.add_relationship(2, 20, 30, 1).unwrap();
+        assert_eq!(index.stats().total_nodes, 3, "nodes 10, 20, 30 indexed");
+
+        // Removing 10→20 prunes node 10 (no rels left); 20 and 30 remain.
+        index.remove_relationship(1, 10, 20, 1).unwrap();
+        assert_eq!(index.stats().total_nodes, 2, "node 10 pruned after removal");
+
+        // Removing the last rel empties the node index entirely.
+        index.remove_relationship(2, 20, 30, 1).unwrap();
+        assert_eq!(index.stats().total_nodes, 0, "all nodes pruned");
+        assert_eq!(index.stats().total_relationships, 0);
     }
 
     /// #17: concurrent `add_relationship` + `stats()` must make progress (no
