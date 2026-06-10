@@ -370,6 +370,42 @@ fn relationship_index_self_heals_when_dirty() {
     );
 }
 
+/// ISSUE #18: a failed relationship-index add (simulated by a wiped index +
+/// dirty flag) must NOT let a repeated edge-MERGE create a duplicate edge —
+/// the existence check self-heals from storage before deciding to create.
+#[test]
+#[serial_test::serial]
+fn merge_does_not_duplicate_edge_after_failed_index_add() {
+    use std::sync::atomic::Ordering;
+    let ctx = crate::testing::TestContext::new();
+    let mut engine = Engine::with_isolated_catalog(ctx.path()).unwrap();
+
+    engine
+        .execute_cypher("CREATE (:DH {id: 'a'}), (:DH {id: 'b'})")
+        .expect("seed nodes");
+    engine
+        .execute_cypher("MATCH (a:DH {id: 'a'}), (b:DH {id: 'b'}) MERGE (a)-[r:DD]->(b)")
+        .expect("first edge MERGE");
+    let rels_after_first = engine.storage.relationship_count();
+
+    // Simulate the #18 failure mode: index entry lost, dirty flag set.
+    engine.cache.relationship_index().clear().ok();
+    engine
+        .relationship_index_dirty
+        .store(true, Ordering::Release);
+
+    // Re-running the MERGE must find the existing edge (self-heal / chain
+    // walk against authoritative storage) and create nothing.
+    engine
+        .execute_cypher("MATCH (a:DH {id: 'a'}), (b:DH {id: 'b'}) MERGE (a)-[r:DD]->(b)")
+        .expect("second edge MERGE");
+    assert_eq!(
+        engine.storage.relationship_count(),
+        rels_after_first,
+        "repeated MERGE after a failed index add must not duplicate the edge"
+    );
+}
+
 /// ISSUE #14: `UNWIND rows AS row MATCH (a {row.fk}),(b {row.tk}) MERGE
 /// (a)-[r:T]->(b) ON CREATE/ON MATCH SET r.w = row.w` upserts the edge for
 /// every row (per-row MATCH after UNWIND + ON CREATE/ON MATCH SET on the edge),
