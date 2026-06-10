@@ -377,6 +377,55 @@ mod tests {
         assert_eq!(std::mem::size_of::<RelationshipRecord>(), REL_RECORD_SIZE);
     }
 
+    /// ISSUE #16: `RecordStore::clone` must be a shared HANDLE (a handful
+    /// of `Arc::clone`s over the same mmaps / files / property store), not
+    /// a file re-open + re-mmap. This guards the per-write
+    /// `refresh_executor` path: a write must never trigger a RecordStore
+    /// reopen, and a write through one handle must be immediately visible
+    /// through every other handle.
+    #[test]
+    fn clone_is_shared_handle_not_reopen() {
+        let (mut store, _dir) = create_test_store();
+        let clone = store.clone();
+
+        // Structural guard: the clone shares the SAME mmaps, file handles
+        // and property store (no reopen happened).
+        assert!(
+            Arc::ptr_eq(&store.nodes_mmap, &clone.nodes_mmap),
+            "clone must share the nodes mmap (no re-mmap)"
+        );
+        assert!(
+            Arc::ptr_eq(&store.rels_mmap, &clone.rels_mmap),
+            "clone must share the rels mmap (no re-mmap)"
+        );
+        assert!(
+            Arc::ptr_eq(&store.nodes_file, &clone.nodes_file),
+            "clone must share the nodes file handle (no reopen)"
+        );
+        assert!(
+            Arc::ptr_eq(&store.property_store, &clone.property_store),
+            "clone must share the property store"
+        );
+
+        // Behavioral guard: write through the original, read through the
+        // clone — engine + executor see one store.
+        let node_id = store.allocate_node_id();
+        let mut record = NodeRecord::default();
+        record.add_label(7);
+        store.write_node(node_id, &record).unwrap();
+
+        let seen = clone.read_node(node_id).unwrap();
+        assert!(
+            seen.has_label(7),
+            "write through one handle must be visible through the other"
+        );
+        assert_eq!(
+            clone.node_count(),
+            store.node_count(),
+            "id counters are shared across handles"
+        );
+    }
+
     #[test]
     fn test_node_crud() {
         let (mut store, _dir) = create_test_store();
