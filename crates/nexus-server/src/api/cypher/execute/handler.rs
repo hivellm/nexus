@@ -242,6 +242,55 @@ pub async fn execute_cypher(
         }
     }
 
+    // Explicit transaction commands (BEGIN / COMMIT / ROLLBACK / SAVEPOINT)
+    // must reach the ENGINE's session-transaction machinery. Without this
+    // branch they fall through to the bare executor clone at the bottom of
+    // this handler, which silently no-ops them (HTTP 200, empty result) —
+    // so BEGIN never opened a transaction, ROLLBACK never rolled anything
+    // back, and COMMIT/ROLLBACK without BEGIN "succeeded". Found by manual
+    // Docker validation of phase6_fix-rollback-executor-created-nodes.
+    {
+        use nexus_core::executor::parser::Clause;
+        let has_tx_cmd = ast.clauses.iter().any(|c| {
+            matches!(
+                c,
+                Clause::BeginTransaction
+                    | Clause::CommitTransaction
+                    | Clause::RollbackTransaction
+                    | Clause::Savepoint(_)
+                    | Clause::RollbackToSavepoint(_)
+                    | Clause::ReleaseSavepoint(_)
+            )
+        });
+        if has_tx_cmd {
+            let mut engine = server.engine.write().await;
+            let execution_time = start_time.elapsed().as_millis() as u64;
+            return match engine.execute_cypher(&request.query) {
+                Ok(result) => {
+                    let rows: Vec<serde_json::Value> = result
+                        .rows
+                        .into_iter()
+                        .map(|row| serde_json::Value::Array(row.values))
+                        .collect();
+                    Json(CypherResponse {
+                        columns: result.columns,
+                        rows,
+                        execution_time_ms: execution_time,
+                        error: None,
+                        notifications: result.notifications,
+                    })
+                }
+                Err(e) => Json(CypherResponse {
+                    columns: vec![],
+                    rows: vec![],
+                    execution_time_ms: execution_time,
+                    error: Some(format!("Execution error: {}", e)),
+                    notifications: Vec::new(),
+                }),
+            };
+        }
+    }
+
     // UNWIND-driven writes (issue #13): `UNWIND list AS row MERGE/SET/...`.
     // The string-prefix routing below only flags writes that *start with*
     // CREATE/MERGE, so an UNWIND-prefixed write falls through to the read
