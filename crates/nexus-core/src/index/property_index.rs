@@ -109,6 +109,20 @@ impl PropertyIndex {
         }
     }
 
+    /// True when at least one property index is registered for `label_id`
+    /// (#21). Lets per-write maintenance skip the per-property
+    /// `get_key_id` catalog reads entirely for nodes whose labels have no
+    /// index. O(#registered indexes) HashMap key scan — registered
+    /// indexes are few. The registration set is the `property_trees` map
+    /// itself, kept in sync by `create_index` / `remove_index` and the
+    /// startup rebuild (#11).
+    pub fn has_index_for_label(&self, label_id: u32) -> bool {
+        self.property_trees
+            .read()
+            .keys()
+            .any(|&(l, _)| l == label_id)
+    }
+
     /// Add a property value for a node
     pub fn add_property(
         &self,
@@ -691,5 +705,30 @@ mod tests {
         );
         index.drop_index(1, 1).unwrap();
         assert!(!index.has_any_index(), "after drop_index, none remain");
+    }
+
+    #[test]
+    fn has_index_for_label_reflects_registration() {
+        // #21: the per-node prefilter guard — a node whose labels have no
+        // registered index does zero per-property catalog work. CREATE /
+        // DROP INDEX must keep the answer current.
+        let index = PropertyIndex::new();
+        assert!(
+            !index.has_index_for_label(1),
+            "fresh index: no label has one"
+        );
+
+        index.create_index(1, 7).unwrap();
+        assert!(index.has_index_for_label(1), "label 1 indexed after create");
+        assert!(
+            !index.has_index_for_label(2),
+            "other labels remain un-indexed"
+        );
+
+        index.drop_index(1, 7).unwrap();
+        assert!(
+            !index.has_index_for_label(1),
+            "label 1 un-indexed after drop"
+        );
     }
 }

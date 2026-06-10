@@ -441,6 +441,14 @@ impl Engine {
         if !self.indexes.property_index.has_any_index() {
             return Ok(());
         }
+        // #21: prefilter — indexes exist, but none for THIS node's labels:
+        // skip the per-property `get_key_id` catalog (LMDB) reads too.
+        if !label_ids
+            .iter()
+            .any(|&l| self.indexes.property_index.has_index_for_label(l))
+        {
+            return Ok(());
+        }
         for (prop_name, prop_value) in props {
             let Ok(key_id) = self.catalog.get_key_id(prop_name) else {
                 continue;
