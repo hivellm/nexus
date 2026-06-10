@@ -406,6 +406,55 @@ fn merge_does_not_duplicate_edge_after_failed_index_add() {
     );
 }
 
+/// ROLLBACK must undo a standalone Cypher CREATE executed inside an
+/// explicit transaction. The executor write path does not report created
+/// ids into `session.created_nodes`, so the rollback arm now also sweeps
+/// the session's storage watermark range (found by manual Docker
+/// validation; reproduced on the published 2.3.2 image).
+#[test]
+#[serial_test::serial]
+fn rollback_undoes_executor_created_nodes() {
+    let ctx = crate::testing::TestContext::new();
+    let mut engine = Engine::with_isolated_catalog(ctx.path()).unwrap();
+
+    // Pre-existing data must survive the rollback untouched.
+    engine
+        .execute_cypher("CREATE (:RBKeep {id: 'keep'})")
+        .expect("pre-tx CREATE");
+
+    engine.execute_cypher("BEGIN TRANSACTION").expect("BEGIN");
+    engine
+        .execute_cypher("CREATE (:RBGone {id: 'g1'}), (:RBGone {id: 'g2'})")
+        .expect("CREATE in tx");
+    engine
+        .execute_cypher("ROLLBACK TRANSACTION")
+        .expect("ROLLBACK");
+
+    let gone = engine
+        .execute_cypher("MATCH (n:RBGone) RETURN count(n) AS c")
+        .expect("read after rollback");
+    assert_eq!(
+        gone.rows[0].values[0].as_i64(),
+        Some(0),
+        "rolled-back CREATE must not be visible, got {:?}",
+        gone.rows[0].values[0]
+    );
+
+    let kept = engine
+        .execute_cypher("MATCH (n:RBKeep) RETURN count(n) AS c")
+        .expect("read kept");
+    assert_eq!(
+        kept.rows[0].values[0].as_i64(),
+        Some(1),
+        "pre-transaction data must survive the rollback"
+    );
+
+    // The engine accepts new work after the rollback (clean state).
+    engine
+        .execute_cypher("CREATE (:RBKeep {id: 'after'})")
+        .expect("write after rollback");
+}
+
 /// ISSUE #20: the O(degree) chain-walk warning must fire DURING the walk,
 /// the moment it crosses the 1000-hop threshold — including when the edge is
 /// eventually FOUND (the early return skipped the old post-loop warning

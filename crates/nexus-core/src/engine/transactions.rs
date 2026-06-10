@@ -89,9 +89,30 @@ impl Engine {
                         })?;
 
                     // CRITICAL: Clone created_nodes list before marking as deleted
-                    // because get_session may return a cloned session
-                    let nodes_to_delete = session.created_nodes.clone();
-                    let rels_to_delete = session.created_relationships.clone();
+                    // because get_session may return a cloned session.
+                    //
+                    // Union with the session's storage watermark range: a
+                    // standalone CREATE inside an explicit tx routes through
+                    // the EXECUTOR write path, which does not report into
+                    // `created_nodes` — the watermark range (captured at
+                    // BEGIN, exact under the single-writer model) covers
+                    // those, same source as the #15 scoped-commit fix.
+                    // Without it, ROLLBACK silently kept executor-created
+                    // entities. Gated on an active transaction so a stray
+                    // ROLLBACK can never sweep ids from a stale watermark.
+                    let mut nodes_to_delete = session.created_nodes.clone();
+                    let mut rels_to_delete = session.created_relationships.clone();
+                    if session.has_active_transaction() {
+                        nodes_to_delete
+                            .extend(session.tx_begin_node_watermark..self.storage.node_count());
+                        rels_to_delete.extend(
+                            session.tx_begin_rel_watermark..self.storage.relationship_count(),
+                        );
+                        nodes_to_delete.sort_unstable();
+                        nodes_to_delete.dedup();
+                        rels_to_delete.sort_unstable();
+                        rels_to_delete.dedup();
+                    }
 
                     // Remove nodes from index and mark as deleted in storage BEFORE rollback
                     // This ensures we clean up nodes that were written to storage (mmap writes immediately)
