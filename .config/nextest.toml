@@ -25,3 +25,8 @@ test-threads = 2
 retries = 1
 fail-fast = false
 default-filter = 'not binary(tck_runner)'
+
+# JUnit report for the CI stability tracker (rust-test.yml uploads
+# target/nextest/ci/junit.xml).
+[profile.ci.junit]
+path = "junit.xml"

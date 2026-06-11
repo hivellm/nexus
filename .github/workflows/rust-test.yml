@@ -24,6 +24,12 @@ on:
 
 env:
   CARGO_TERM_COLOR: always
+  # Hosted-runner resource ceiling: full debug info across this
+  # workspace exhausts the runner during linking (observed mold/clang
+  # "Bus error (core dumped)" build crashes and OOM SIGKILLs in the
+  # test phase). Tests do not need debug symbols in CI.
+  CARGO_PROFILE_DEV_DEBUG: 0
+  CARGO_PROFILE_TEST_DEBUG: 0
 
 jobs:
   rust-tests:
@@ -69,7 +75,13 @@ jobs:
         run: cargo build --tests --workspace
       - name: Run unit and integration tests
         timeout-minutes: 30
-        run: cargo nextest run --workspace --all-targets --test-threads 4
+        # Use the dedicated CI profile from .config/nextest.toml
+        # (test-threads=2, retries=1, fail-fast=false). The default
+        # profile's 4 threads over-committed the hosted runner — the
+        # step died with SIGTERM/SIGKILL (exit 143/137) mid-suite on
+        # every run since at least 2.3.1 while the same suite passes
+        # locally (4716/4716).
+        run: cargo nextest run --workspace --all-targets --profile ci
         env:
           NEXTEST_TIMEOUT: 300s
       # tck_runner is a cucumber-driven (`harness = false`) binary
@@ -87,7 +99,7 @@ jobs:
         if: always()
         with:
           name: junit-${{ matrix.os }}.xml
-          path: target/nextest/default/junit.xml
+          path: target/nextest/ci/junit.xml
           if-no-files-found: ignore
 
   # Monitor test stability over time
