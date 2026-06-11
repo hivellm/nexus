@@ -73,6 +73,14 @@ jobs:
         uses: taiki-e/install-action@nextest
       - name: Build
         run: cargo build --tests --workspace
+      # Diagnostic: the run step has died with zero nextest output (no
+      # "Starting" banner) after minutes of silence — a hang in the
+      # list phase, where nextest executes every test binary with
+      # `--list`. Listing separately, with a tight timeout and verbose
+      # output, names the binary that hangs instead of dying silently.
+      - name: List tests (isolates list-phase hangs)
+        timeout-minutes: 8
+        run: cargo nextest list --workspace --all-targets --profile ci --verbose 2>&1 | tail -50
       - name: Run unit and integration tests
         timeout-minutes: 30
         # Use the dedicated CI profile from .config/nextest.toml
