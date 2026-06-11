@@ -1150,3 +1150,125 @@ fn count_over_label_cartesian_product_matches_catalog_product() {
         .unwrap();
     assert_eq!(r2.rows[0].values[0].as_u64(), Some(expected_product));
 }
+
+/// phase7_point-property-accessors-parity — the 10 section-18 queries
+/// from the Neo4j compatibility suite that were failing. Covers: the
+/// query-initial WITH unit row (any `WITH <const> ...` returned ZERO
+/// rows), point property accessors (x/y/z, longitude/latitude/height,
+/// crs), 3D construction, and the positional point.withinBBox form.
+#[test]
+#[serial_test::serial]
+fn point_property_accessors_match_neo4j() {
+    let ctx = crate::testing::TestContext::new();
+    let mut engine = Engine::with_isolated_catalog(ctx.path()).unwrap();
+
+    let row1 = |engine: &mut Engine, q: &str| -> Vec<serde_json::Value> {
+        let rs = engine
+            .execute_cypher(q)
+            .unwrap_or_else(|e| panic!("query must succeed: {q}: {e}"));
+        assert_eq!(rs.rows.len(), 1, "exactly one row for: {q}");
+        rs.rows[0].values.clone()
+    };
+
+    // Query-initial WITH operates on a unit row (root cause of all the
+    // "row count 0" suite failures).
+    let v = row1(&mut engine, "WITH 1 AS x RETURN x");
+    assert_eq!(v[0], serde_json::json!(1));
+
+    // 18.22 — 3D cartesian property access.
+    let v = row1(
+        &mut engine,
+        "WITH point({x: 1.0, y: 2.0, z: 3.0}) AS p RETURN p.x AS x, p.y AS y, p.z AS z",
+    );
+    assert_eq!(
+        (v[0].as_f64(), v[1].as_f64(), v[2].as_f64()),
+        (Some(1.0), Some(2.0), Some(3.0))
+    );
+
+    // 18.23 — WGS-84 3D: longitude / latitude / height accessors.
+    let v = row1(
+        &mut engine,
+        "WITH point({longitude: 2.3, latitude: 48.85, height: 100.0}) AS p \
+         RETURN p.longitude AS lon, p.latitude AS lat, p.height AS h",
+    );
+    assert_eq!(
+        (v[0].as_f64(), v[1].as_f64(), v[2].as_f64()),
+        (Some(2.3), Some(48.85), Some(100.0))
+    );
+
+    // 18.24 — default cartesian CRS name.
+    let v = row1(
+        &mut engine,
+        "WITH point({x: 1.0, y: 2.0}) AS p RETURN p.crs AS crs",
+    );
+    assert_eq!(v[0], serde_json::json!("cartesian"));
+
+    // 18.25 — default WGS-84 CRS name.
+    let v = row1(
+        &mut engine,
+        "WITH point({longitude: 2.3, latitude: 48.85}) AS p RETURN p.crs AS crs",
+    );
+    assert_eq!(v[0], serde_json::json!("wgs-84"));
+
+    // 3D CRS names.
+    let v = row1(
+        &mut engine,
+        "WITH point({x: 1.0, y: 2.0, z: 3.0}) AS p RETURN p.crs AS crs",
+    );
+    assert_eq!(v[0], serde_json::json!("cartesian-3d"));
+    let v = row1(
+        &mut engine,
+        "WITH point({longitude: 2.3, latitude: 48.85, height: 1.0}) AS p RETURN p.crs AS crs",
+    );
+    assert_eq!(v[0], serde_json::json!("wgs-84-3d"));
+
+    // 18.21-style — positional point.withinBBox(p, lowerLeft, upperRight).
+    let v = row1(
+        &mut engine,
+        "RETURN point.withinBBox(point({longitude: 2.5, latitude: 48.5}), \
+         point({longitude: 2.0, latitude: 48.0}), \
+         point({longitude: 3.0, latitude: 49.0})) AS v",
+    );
+    assert_eq!(v[0], serde_json::json!(true), "inside the bbox");
+    let v = row1(
+        &mut engine,
+        "RETURN point.withinBBox(point({longitude: 13.4, latitude: 52.5}), \
+         point({longitude: 2.0, latitude: 48.0}), \
+         point({longitude: 3.0, latitude: 49.0})) AS v",
+    );
+    assert_eq!(v[0], serde_json::json!(false), "outside the bbox");
+
+    // The legacy map form keeps working.
+    let v = row1(
+        &mut engine,
+        "RETURN point.withinBBox(point({x: 1.0, y: 1.0}), \
+         {bottomLeft: point({x: 0.0, y: 0.0}), topRight: point({x: 2.0, y: 2.0})}) AS v",
+    );
+    assert_eq!(v[0], serde_json::json!(true));
+
+    // 18.04 — withinBBox as a MATCH WHERE filter over a stored point
+    // property (positional form). Exercises the planner's
+    // stringify-and-reparse filter path: Point's Display must emit
+    // round-trippable Cypher (quoted canonical crs name).
+    engine
+        .execute_cypher("CREATE (:Place {loc: point({x: 1.0, y: 1.0})}), (:Place {loc: point({x: 5.0, y: 5.0})})")
+        .expect("seed places");
+    let rs = engine
+        .execute_cypher(
+            "MATCH (p:Place) WHERE point.withinBBox(p.loc, point({x: 0.0, y: 0.0}), point({x: 2.0, y: 2.0})) RETURN count(p) AS cnt",
+        )
+        .expect("withinBBox WHERE filter must parse and execute");
+    assert_eq!(rs.rows.len(), 1);
+    assert_eq!(
+        rs.rows[0].values[0],
+        serde_json::json!(1),
+        "only the (1,1) place is inside the bbox"
+    );
+
+    // An upstream MATCH that found nothing still yields zero rows
+    // (the unit-row seed must not fire when variables are referenced).
+    let rs = engine
+        .execute_cypher("MATCH (n:NoSuchLabel) WITH n.x AS x RETURN x")
+        .expect("query must succeed");
+    assert_eq!(rs.rows.len(), 0, "empty MATCH stays empty through WITH");
+}

@@ -400,7 +400,7 @@ impl Executor {
         tracing::trace!("execute_with: {} items, distinct={}", items.len(), distinct);
 
         // Materialize current rows from variables
-        let rows = if !context.result_set.rows.is_empty() {
+        let mut rows = if !context.result_set.rows.is_empty() {
             let existing_columns = context.result_set.columns.clone();
             context
                 .result_set
@@ -413,6 +413,26 @@ impl Executor {
         };
 
         tracing::trace!("execute_with: processing {} input rows", rows.len());
+
+        // openCypher: a query-initial WITH operates on one implicit unit
+        // row — `WITH 1 AS x RETURN x` / `WITH point({...}) AS p ...`
+        // must yield a row. Same rule `execute_project` applies for a
+        // standalone RETURN: seed the unit row only when nothing
+        // upstream produced rows, no variables are bound, and every
+        // item is evaluable without variables (pure literals /
+        // constant function calls). An upstream MATCH that found
+        // nothing leaves variable-referencing items, which fail the
+        // `can_evaluate_without_variables` check and correctly keep
+        // the result empty.
+        if rows.is_empty()
+            && context.variables.is_empty()
+            && !items.is_empty()
+            && items
+                .iter()
+                .all(|item| self.can_evaluate_without_variables(&item.expression))
+        {
+            rows = vec![HashMap::new()];
+        }
 
         if rows.is_empty() {
             // No rows - nothing to project

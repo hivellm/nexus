@@ -40,11 +40,7 @@ impl Executor {
                     Ok(v) => v,
                     Err(e) => return Some(Err(e)),
                 };
-                let bbox_val = match self.evaluate_projection_expression(row, context, &args[1]) {
-                    Ok(v) => v,
-                    Err(e) => return Some(Err(e)),
-                };
-                if p_val.is_null() || bbox_val.is_null() {
+                if p_val.is_null() {
                     return Some(Ok(Value::Null));
                 }
                 let Value::Object(_) = &p_val else {
@@ -54,31 +50,58 @@ impl Executor {
                     Ok(p) => p,
                     Err(e) => return Some(Err(Error::CypherSyntax(format!("Invalid point: {e}")))),
                 };
-                let bbox_obj = match bbox_val.as_object() {
-                    Some(o) => o,
-                    None => {
-                        return Some(Err(Error::CypherSyntax(
-                            "ERR_BBOX_MALFORMED: bbox must be a map".to_string(),
-                        )));
+                // Two accepted shapes (both Neo4j-compatible):
+                //   point.withinBBox(p, lowerLeft, upperRight)  — positional points
+                //   point.withinBBox(p, {bottomLeft, topRight}) — legacy map form
+                let (bl_v, tr_v) = if args.len() >= 3 {
+                    let bl = match self.evaluate_projection_expression(row, context, &args[1]) {
+                        Ok(v) => v,
+                        Err(e) => return Some(Err(e)),
+                    };
+                    let tr = match self.evaluate_projection_expression(row, context, &args[2]) {
+                        Ok(v) => v,
+                        Err(e) => return Some(Err(e)),
+                    };
+                    if bl.is_null() || tr.is_null() {
+                        return Some(Ok(Value::Null));
                     }
-                };
-                let bl_v = match bbox_obj.get("bottomLeft") {
-                    Some(v) => v,
-                    None => {
-                        return Some(Err(Error::CypherSyntax(
-                            "ERR_BBOX_MALFORMED: missing 'bottomLeft'".to_string(),
-                        )));
+                    (bl, tr)
+                } else {
+                    let bbox_val = match self.evaluate_projection_expression(row, context, &args[1])
+                    {
+                        Ok(v) => v,
+                        Err(e) => return Some(Err(e)),
+                    };
+                    if bbox_val.is_null() {
+                        return Some(Ok(Value::Null));
                     }
+                    let bbox_obj = match bbox_val.as_object() {
+                        Some(o) => o,
+                        None => {
+                            return Some(Err(Error::CypherSyntax(
+                                "ERR_BBOX_MALFORMED: bbox must be a map".to_string(),
+                            )));
+                        }
+                    };
+                    let bl = match bbox_obj.get("bottomLeft") {
+                        Some(v) => v.clone(),
+                        None => {
+                            return Some(Err(Error::CypherSyntax(
+                                "ERR_BBOX_MALFORMED: missing 'bottomLeft'".to_string(),
+                            )));
+                        }
+                    };
+                    let tr = match bbox_obj.get("topRight") {
+                        Some(v) => v.clone(),
+                        None => {
+                            return Some(Err(Error::CypherSyntax(
+                                "ERR_BBOX_MALFORMED: missing 'topRight'".to_string(),
+                            )));
+                        }
+                    };
+                    (bl, tr)
                 };
-                let tr_v = match bbox_obj.get("topRight") {
-                    Some(v) => v,
-                    None => {
-                        return Some(Err(Error::CypherSyntax(
-                            "ERR_BBOX_MALFORMED: missing 'topRight'".to_string(),
-                        )));
-                    }
-                };
-                let bl = match crate::geospatial::Point::from_json_value(bl_v) {
+                let bl = match crate::geospatial::Point::from_json_value(&bl_v) {
                     Ok(p) => p,
                     Err(e) => {
                         return Some(Err(Error::CypherSyntax(format!(
@@ -86,7 +109,7 @@ impl Executor {
                         ))));
                     }
                 };
-                let tr = match crate::geospatial::Point::from_json_value(tr_v) {
+                let tr = match crate::geospatial::Point::from_json_value(&tr_v) {
                     Ok(p) => p,
                     Err(e) => {
                         return Some(Err(Error::CypherSyntax(format!(

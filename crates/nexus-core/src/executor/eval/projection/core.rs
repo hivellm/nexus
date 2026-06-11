@@ -137,6 +137,22 @@ impl Executor {
                             property
                         }
                     }
+                    // WGS-84 3D points expose the vertical coordinate as
+                    // `height` in Neo4j; internally it is stored as `z`.
+                    "height" => {
+                        if let Some(Value::Object(ref obj)) = entity_opt {
+                            if obj.contains_key("x")
+                                && obj.contains_key("y")
+                                && obj.contains_key("crs")
+                            {
+                                "z"
+                            } else {
+                                property
+                            }
+                        } else {
+                            property
+                        }
+                    }
                     _ => property,
                 };
 

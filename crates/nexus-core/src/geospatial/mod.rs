@@ -292,18 +292,30 @@ impl Point {
 }
 
 impl std::fmt::Display for Point {
+    /// Round-trippable Cypher: the planner stringifies filter
+    /// predicates and the operator re-parses them, so this MUST be
+    /// valid `point({...})` syntax. The crs uses the canonical quoted
+    /// name (`'cartesian'`, `'wgs-84-3d'`, …) — the previous Debug
+    /// form (`crs: Cartesian`, unquoted) made the re-parser consume
+    /// the `C` as a quote character and corrupt the rest of the
+    /// predicate.
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         if let Some(z) = self.z {
             write!(
                 f,
-                "point({{x: {}, y: {}, z: {}, crs: {:?}}})",
-                self.x, self.y, z, self.coordinate_system
+                "point({{x: {}, y: {}, z: {}, crs: '{}'}})",
+                self.x,
+                self.y,
+                z,
+                self.crs_name()
             )
         } else {
             write!(
                 f,
-                "point({{x: {}, y: {}, crs: {:?}}})",
-                self.x, self.y, self.coordinate_system
+                "point({{x: {}, y: {}, crs: '{}'}})",
+                self.x,
+                self.y,
+                self.crs_name()
             )
         }
     }
