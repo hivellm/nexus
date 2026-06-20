@@ -896,7 +896,17 @@ mod tests {
         let locks = InMemoryShardLockManager::new();
         let mutator = RecordingMutator::default();
         let metrics = MultiShardTxMetrics::default();
-        let orch = fresh_orchestrator(&locks, &mutator, &metrics);
+        // Generous per-call acquire budget: tx_b must keep retrying shard 1
+        // until the churn thread force-releases it below. `fresh_orchestrator`
+        // uses a 50ms budget, but on a loaded/virtualized CI runner the
+        // churn thread's `sleep(20ms)` oversleeps well past 50ms, so tx_b
+        // would give up before the release. 2s leaves ample margin while the
+        // happy path still completes in ~20ms.
+        let orch = MultiShardTx::new(&locks, &mutator, &metrics).with_config(MultiShardTxConfig {
+            tx_timeout: Duration::from_secs(5),
+            lock_acquire_timeout: Duration::from_secs(2),
+            leader_retries: 3,
+        });
 
         // Acquire shard 1 manually (simulating the old leader).
         locks
