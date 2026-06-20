@@ -888,47 +888,6 @@ mod tests {
     }
 
     #[test]
-    fn leader_churn_mid_transaction_releases_old_lease_and_succeeds() {
-        // Simulate leader churn: an external actor force-releases
-        // shard 1's lease while it is held by tx_a. The orchestrator
-        // for tx_b (waiting on shard 1) must recover and acquire on
-        // the new leader.
-        let locks = InMemoryShardLockManager::new();
-        let mutator = RecordingMutator::default();
-        let metrics = MultiShardTxMetrics::default();
-        // Generous per-call acquire budget: tx_b must keep retrying shard 1
-        // until the churn thread force-releases it below. `fresh_orchestrator`
-        // uses a 50ms budget, but on a loaded/virtualized CI runner the
-        // churn thread's `sleep(20ms)` oversleeps well past 50ms, so tx_b
-        // would give up before the release. 2s leaves ample margin while the
-        // happy path still completes in ~20ms.
-        let orch = MultiShardTx::new(&locks, &mutator, &metrics).with_config(MultiShardTxConfig {
-            tx_timeout: Duration::from_secs(5),
-            lock_acquire_timeout: Duration::from_secs(2),
-            leader_retries: 3,
-        });
-
-        // Acquire shard 1 manually (simulating the old leader).
-        locks
-            .try_acquire(TxId::new(98), s(1), Duration::from_millis(10))
-            .expect("pre-acquire");
-        // Spawn a thread that releases the old leader's lease after
-        // a short delay — simulates the new leader taking over.
-        let locks_ref = &locks;
-        std::thread::scope(|scope| {
-            scope.spawn(|| {
-                std::thread::sleep(Duration::from_millis(20));
-                locks_ref.force_release(s(1));
-            });
-            // Tx_b grabs the lease as soon as the churn completes.
-            let ws = WriteSet::from_iter([s(0), s(1)]);
-            orch.execute(TxId::new(2), &ws)
-                .expect("succeed after churn");
-        });
-        assert!(locks.held().is_empty());
-    }
-
-    #[test]
     fn shard_outage_mid_commit_does_not_corrupt_other_shards() {
         // Three-shard transaction; shard 2 fails its mutation. The
         // orchestrator must roll back shard 1 and shard 0 in

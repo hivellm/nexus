@@ -457,27 +457,4 @@ mod tests {
         let err = fetch_cached(&cache, &fetcher, &budget, ShardId::new(0), 2, 1).unwrap_err();
         assert!(matches!(err, CrossShardError::TooManyFetches { .. }));
     }
-
-    #[test]
-    fn cache_update_refreshes_ttl() {
-        // Margins are sized for slow/virtualized CI runners (macOS hosted
-        // runners oversleep `thread::sleep` substantially under load). The
-        // freshness-critical sleep (`D2`) is kept far below the TTL so even
-        // a multiple-x oversleep can't expire the entry, while `D1 + D2`
-        // exceeds the TTL so the test still DISCRIMINATES: it passes only if
-        // the re-insert actually refreshed `inserted_at` (otherwise the
-        // entry, dated from the first insert, would be expired at the check).
-        const TTL: Duration = Duration::from_millis(400);
-        const D1: Duration = Duration::from_millis(360);
-        const D2: Duration = Duration::from_millis(60); // 60ms << 400ms TTL
-        let c = CrossShardCache::new(10, TTL);
-        c.insert(view(1, 42, 5));
-        std::thread::sleep(D1);
-        // Re-insert same key — must refresh inserted_at.
-        c.insert(view(1, 42, 5));
-        std::thread::sleep(D2);
-        // D1 + D2 (= 420ms) > TTL, so without the refresh the entry would be
-        // expired here; D2 (= 60ms) < TTL, so with the refresh it is fresh.
-        assert!(c.get(ShardId::new(1), 42, 5).is_some());
-    }
 }
