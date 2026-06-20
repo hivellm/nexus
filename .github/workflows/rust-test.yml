@@ -76,23 +76,23 @@ jobs:
         uses: taiki-e/install-action@nextest
       - name: Build
         run: cargo build --tests --workspace
-      # Diagnostic: the run step has died with zero nextest output (no
-      # "Starting" banner) after minutes of silence — a hang in the
-      # list phase, where nextest executes every test binary with
-      # `--list`. Listing separately, with a tight timeout and verbose
-      # output, names the binary that hangs instead of dying silently.
-      - name: List tests (isolates list-phase hangs)
-        timeout-minutes: 8
-        run: cargo nextest list --workspace --all-targets --profile ci --verbose 2>&1 | tail -50
       - name: Run unit and integration tests
         timeout-minutes: 30
-        # Use the dedicated CI profile from .config/nextest.toml
-        # (test-threads=2, retries=1, fail-fast=false). The default
-        # profile's 4 threads over-committed the hosted runner — the
-        # step died with SIGTERM/SIGKILL (exit 143/137) mid-suite on
-        # every run since at least 2.3.1 while the same suite passes
-        # locally (4716/4716).
-        run: cargo nextest run --workspace --all-targets --profile ci
+        # NO `--all-targets`: it pulls in the ~25 criterion benches
+        # (`harness = false`, e.g. `v2_tcp_transport` which binds TCP
+        # sockets and launches a 3-node Raft cluster). nextest's list
+        # phase invokes every target with `--list`; a harness=false
+        # bench that doesn't speak the libtest list protocol HANGS the
+        # whole run on the Linux runner — 8 min of total silence then
+        # SIGTERM, on every run since at least 2.3.1. The default test
+        # set (`--workspace`) is exactly the unit + integration tests
+        # this step is named for (4701 tests); benches are compile-
+        # checked by the clippy `--all-targets` lint job instead.
+        #
+        # Profile `ci` (.config/nextest.toml): test-threads=2, retries=1,
+        # fail-fast=off — the default profile's 4 threads over-committed
+        # the hosted runner.
+        run: cargo nextest run --workspace --profile ci
         env:
           NEXTEST_TIMEOUT: 300s
       # tck_runner is a cucumber-driven (`harness = false`) binary
