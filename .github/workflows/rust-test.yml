@@ -30,6 +30,9 @@ env:
   # test phase). Tests do not need debug symbols in CI.
   CARGO_PROFILE_DEV_DEBUG: 0
   CARGO_PROFILE_TEST_DEBUG: 0
+  # CI starts from a cold cache, so incremental compilation only adds
+  # artifacts and slows the build (GH #24).
+  CARGO_INCREMENTAL: 0
 
 jobs:
   rust-tests:

@@ -38,6 +38,9 @@ on:
 
 env:
   CARGO_TERM_COLOR: always
+  # CI starts from a cold cache, so incremental compilation only adds
+  # artifacts and slows the build (GH #24).
+  CARGO_INCREMENTAL: 0
 
 permissions:
   contents: read
