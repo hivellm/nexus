@@ -106,7 +106,11 @@ mod x86_parity {
 
         #[test]
         fn avx2_sum_i64_matches_scalar(values in proptest::collection::vec(any::<i64>(), 0usize..=512)) {
-            prop_assume!(cpu().avx2);
+            // Skip (pass) when the host lacks avx2: a per-case
+            // `prop_assume!` would reject every case and abort the test.
+            if !cpu().avx2 {
+                return Ok(());
+            }
             // SAFETY: avx2 verified.
             let got = unsafe { x86::sum_i64_avx2(&values) };
             prop_assert_eq!(got, scalar::sum_i64(&values));
@@ -114,7 +118,11 @@ mod x86_parity {
 
         #[test]
         fn avx512_sum_i64_matches_scalar(values in proptest::collection::vec(any::<i64>(), 0usize..=512)) {
-            prop_assume!(cpu().avx512f);
+            // Skip (pass) when the host lacks avx512f: a per-case
+            // `prop_assume!` would reject every case and abort the test.
+            if !cpu().avx512f {
+                return Ok(());
+            }
             // SAFETY: avx512f verified.
             let got = unsafe { x86::sum_i64_avx512(&values) };
             prop_assert_eq!(got, scalar::sum_i64(&values));
@@ -122,7 +130,11 @@ mod x86_parity {
 
         #[test]
         fn avx2_sum_f64_matches_scalar(values in proptest::collection::vec(-1e6f64..1e6, 0usize..=512)) {
-            prop_assume!(cpu().avx2);
+            // Skip (pass) when the host lacks avx2: a per-case
+            // `prop_assume!` would reject every case and abort the test.
+            if !cpu().avx2 {
+                return Ok(());
+            }
             let scale = values.iter().copied().map(f64::abs).fold(0.0, f64::max);
             // SAFETY: avx2 verified.
             let got = unsafe { x86::sum_f64_avx2(&values) };
@@ -131,7 +143,11 @@ mod x86_parity {
 
         #[test]
         fn avx512_sum_f64_matches_scalar(values in proptest::collection::vec(-1e6f64..1e6, 0usize..=512)) {
-            prop_assume!(cpu().avx512f);
+            // Skip (pass) when the host lacks avx512f: a per-case
+            // `prop_assume!` would reject every case and abort the test.
+            if !cpu().avx512f {
+                return Ok(());
+            }
             let scale = values.iter().copied().map(f64::abs).fold(0.0, f64::max);
             // SAFETY: avx512f verified.
             let got = unsafe { x86::sum_f64_avx512(&values) };
@@ -140,7 +156,11 @@ mod x86_parity {
 
         #[test]
         fn avx2_sum_f32_matches_scalar(values in proptest::collection::vec(-1e4f32..1e4, 0usize..=512)) {
-            prop_assume!(cpu().avx2);
+            // Skip (pass) when the host lacks avx2: a per-case
+            // `prop_assume!` would reject every case and abort the test.
+            if !cpu().avx2 {
+                return Ok(());
+            }
             let scale = values.iter().copied().map(f32::abs).fold(0.0, f32::max);
             // SAFETY: avx2 verified.
             let got = unsafe { x86::sum_f32_avx2(&values) };
@@ -149,7 +169,11 @@ mod x86_parity {
 
         #[test]
         fn avx512_sum_f32_matches_scalar(values in proptest::collection::vec(-1e4f32..1e4, 0usize..=512)) {
-            prop_assume!(cpu().avx512f);
+            // Skip (pass) when the host lacks avx512f: a per-case
+            // `prop_assume!` would reject every case and abort the test.
+            if !cpu().avx512f {
+                return Ok(());
+            }
             let scale = values.iter().copied().map(f32::abs).fold(0.0, f32::max);
             // SAFETY: avx512f verified.
             let got = unsafe { x86::sum_f32_avx512(&values) };
@@ -158,7 +182,11 @@ mod x86_parity {
 
         #[test]
         fn avx2_min_max_f64_match_scalar(values in proptest::collection::vec(prop_oneof![Just(f64::NAN), -1e6f64..1e6], 1usize..=512)) {
-            prop_assume!(cpu().avx2);
+            // Skip (pass) when the host lacks avx2: a per-case
+            // `prop_assume!` would reject every case and abort the test.
+            if !cpu().avx2 {
+                return Ok(());
+            }
             // SAFETY: avx2 verified.
             prop_assert_eq!(unsafe { x86::min_f64_avx2(&values) }, scalar::min_f64(&values));
             prop_assert_eq!(unsafe { x86::max_f64_avx2(&values) }, scalar::max_f64(&values));
@@ -166,7 +194,11 @@ mod x86_parity {
 
         #[test]
         fn avx512_min_max_f64_match_scalar(values in proptest::collection::vec(prop_oneof![Just(f64::NAN), -1e6f64..1e6], 1usize..=512)) {
-            prop_assume!(cpu().avx512f);
+            // Skip (pass) when the host lacks avx512f: a per-case
+            // `prop_assume!` would reject every case and abort the test.
+            if !cpu().avx512f {
+                return Ok(());
+            }
             // SAFETY: avx512f verified.
             prop_assert_eq!(unsafe { x86::min_f64_avx512(&values) }, scalar::min_f64(&values));
             prop_assert_eq!(unsafe { x86::max_f64_avx512(&values) }, scalar::max_f64(&values));
@@ -174,7 +206,11 @@ mod x86_parity {
 
         #[test]
         fn avx2_min_max_f32_match_scalar(values in proptest::collection::vec(prop_oneof![Just(f32::NAN), -1e4f32..1e4], 1usize..=512)) {
-            prop_assume!(cpu().avx2);
+            // Skip (pass) when the host lacks avx2: a per-case
+            // `prop_assume!` would reject every case and abort the test.
+            if !cpu().avx2 {
+                return Ok(());
+            }
             // SAFETY: avx2 verified.
             prop_assert_eq!(unsafe { x86::min_f32_avx2(&values) }, scalar::min_f32(&values));
             prop_assert_eq!(unsafe { x86::max_f32_avx2(&values) }, scalar::max_f32(&values));
@@ -182,7 +218,11 @@ mod x86_parity {
 
         #[test]
         fn avx512_min_max_f32_match_scalar(values in proptest::collection::vec(prop_oneof![Just(f32::NAN), -1e4f32..1e4], 1usize..=512)) {
-            prop_assume!(cpu().avx512f);
+            // Skip (pass) when the host lacks avx512f: a per-case
+            // `prop_assume!` would reject every case and abort the test.
+            if !cpu().avx512f {
+                return Ok(());
+            }
             // SAFETY: avx512f verified.
             prop_assert_eq!(unsafe { x86::min_f32_avx512(&values) }, scalar::min_f32(&values));
             prop_assert_eq!(unsafe { x86::max_f32_avx512(&values) }, scalar::max_f32(&values));

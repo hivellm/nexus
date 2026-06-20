@@ -111,7 +111,11 @@ mod x86_parity {
 
         #[test]
         fn sse42_dot_matches_scalar((a, b) in bounded_pair(512)) {
-            prop_assume!(cpu().sse42);
+            // Skip (pass) when the host lacks sse42: a per-case
+            // `prop_assume!` would reject every case and abort the test.
+            if !cpu().sse42 {
+                return Ok(());
+            }
             let scale = a.iter().chain(b.iter()).copied().map(f32::abs).fold(0.0_f32, f32::max);
             // SAFETY: sse42 is verified present via cpu().sse42 above.
             let got = unsafe { x86::dot_f32_sse42(&a, &b) };
@@ -121,7 +125,11 @@ mod x86_parity {
 
         #[test]
         fn sse42_l2_sq_matches_scalar((a, b) in bounded_pair(512)) {
-            prop_assume!(cpu().sse42);
+            // Skip (pass) when the host lacks sse42: a per-case
+            // `prop_assume!` would reject every case and abort the test.
+            if !cpu().sse42 {
+                return Ok(());
+            }
             let scale = a.iter().chain(b.iter()).copied().map(f32::abs).fold(0.0_f32, f32::max);
             // SAFETY: sse42 verified.
             let got = unsafe { x86::l2_sq_f32_sse42(&a, &b) };
@@ -131,7 +139,11 @@ mod x86_parity {
 
         #[test]
         fn sse42_cosine_matches_scalar((a, b) in bounded_pair(512)) {
-            prop_assume!(cpu().sse42);
+            // Skip (pass) when the host lacks sse42: a per-case
+            // `prop_assume!` would reject every case and abort the test.
+            if !cpu().sse42 {
+                return Ok(());
+            }
             // SAFETY: sse42 verified.
             let got = unsafe { x86::cosine_f32_sse42(&a, &b) };
             let expected = scalar::cosine_f32(&a, &b);
@@ -140,7 +152,11 @@ mod x86_parity {
 
         #[test]
         fn sse42_normalize_matches_scalar(v in proptest::collection::vec(-4.0f32..4.0, 1usize..=512)) {
-            prop_assume!(cpu().sse42);
+            // Skip (pass) when the host lacks sse42: a per-case
+            // `prop_assume!` would reject every case and abort the test.
+            if !cpu().sse42 {
+                return Ok(());
+            }
             let mut s = v.clone();
             let mut d = v.clone();
             let sn = scalar::normalize_f32(&mut s);
@@ -154,7 +170,11 @@ mod x86_parity {
 
         #[test]
         fn avx2_dot_matches_scalar((a, b) in bounded_pair(512)) {
-            prop_assume!(cpu().avx2);
+            // Skip (pass) when the host lacks avx2: a per-case
+            // `prop_assume!` would reject every case and abort the test.
+            if !cpu().avx2 {
+                return Ok(());
+            }
             let scale = a.iter().chain(b.iter()).copied().map(f32::abs).fold(0.0_f32, f32::max);
             // SAFETY: avx2+fma verified via cpu().avx2 flag.
             let got = unsafe { x86::dot_f32_avx2(&a, &b) };
@@ -164,7 +184,11 @@ mod x86_parity {
 
         #[test]
         fn avx2_l2_sq_matches_scalar((a, b) in bounded_pair(512)) {
-            prop_assume!(cpu().avx2);
+            // Skip (pass) when the host lacks avx2: a per-case
+            // `prop_assume!` would reject every case and abort the test.
+            if !cpu().avx2 {
+                return Ok(());
+            }
             let scale = a.iter().chain(b.iter()).copied().map(f32::abs).fold(0.0_f32, f32::max);
             // SAFETY: avx2 verified.
             let got = unsafe { x86::l2_sq_f32_avx2(&a, &b) };
@@ -174,7 +198,11 @@ mod x86_parity {
 
         #[test]
         fn avx2_cosine_matches_scalar((a, b) in bounded_pair(512)) {
-            prop_assume!(cpu().avx2);
+            // Skip (pass) when the host lacks avx2: a per-case
+            // `prop_assume!` would reject every case and abort the test.
+            if !cpu().avx2 {
+                return Ok(());
+            }
             // SAFETY: avx2 verified.
             let got = unsafe { x86::cosine_f32_avx2(&a, &b) };
             let expected = scalar::cosine_f32(&a, &b);
@@ -183,7 +211,11 @@ mod x86_parity {
 
         #[test]
         fn avx2_normalize_matches_scalar(v in proptest::collection::vec(-4.0f32..4.0, 1usize..=512)) {
-            prop_assume!(cpu().avx2);
+            // Skip (pass) when the host lacks avx2: a per-case
+            // `prop_assume!` would reject every case and abort the test.
+            if !cpu().avx2 {
+                return Ok(());
+            }
             let mut s = v.clone();
             let mut d = v.clone();
             let sn = scalar::normalize_f32(&mut s);
@@ -197,7 +229,11 @@ mod x86_parity {
 
         #[test]
         fn avx512_dot_matches_scalar((a, b) in bounded_pair(512)) {
-            prop_assume!(cpu().avx512f);
+            // Skip (pass) when the host lacks avx512f: a per-case
+            // `prop_assume!` would reject every case and abort the test.
+            if !cpu().avx512f {
+                return Ok(());
+            }
             let scale = a.iter().chain(b.iter()).copied().map(f32::abs).fold(0.0_f32, f32::max);
             // SAFETY: avx512f verified.
             let got = unsafe { x86::dot_f32_avx512(&a, &b) };
@@ -207,7 +243,11 @@ mod x86_parity {
 
         #[test]
         fn avx512_l2_sq_matches_scalar((a, b) in bounded_pair(512)) {
-            prop_assume!(cpu().avx512f);
+            // Skip (pass) when the host lacks avx512f: a per-case
+            // `prop_assume!` would reject every case and abort the test.
+            if !cpu().avx512f {
+                return Ok(());
+            }
             let scale = a.iter().chain(b.iter()).copied().map(f32::abs).fold(0.0_f32, f32::max);
             // SAFETY: avx512f verified.
             let got = unsafe { x86::l2_sq_f32_avx512(&a, &b) };
@@ -217,7 +257,11 @@ mod x86_parity {
 
         #[test]
         fn avx512_cosine_matches_scalar((a, b) in bounded_pair(512)) {
-            prop_assume!(cpu().avx512f);
+            // Skip (pass) when the host lacks avx512f: a per-case
+            // `prop_assume!` would reject every case and abort the test.
+            if !cpu().avx512f {
+                return Ok(());
+            }
             // SAFETY: avx512f verified.
             let got = unsafe { x86::cosine_f32_avx512(&a, &b) };
             let expected = scalar::cosine_f32(&a, &b);
@@ -226,7 +270,11 @@ mod x86_parity {
 
         #[test]
         fn avx512_normalize_matches_scalar(v in proptest::collection::vec(-4.0f32..4.0, 1usize..=512)) {
-            prop_assume!(cpu().avx512f);
+            // Skip (pass) when the host lacks avx512f: a per-case
+            // `prop_assume!` would reject every case and abort the test.
+            if !cpu().avx512f {
+                return Ok(());
+            }
             let mut s = v.clone();
             let mut d = v.clone();
             let sn = scalar::normalize_f32(&mut s);

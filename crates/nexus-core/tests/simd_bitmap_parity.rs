@@ -45,7 +45,11 @@ mod x86_parity {
 
         #[test]
         fn avx2_popcount_matches_scalar(words in proptest::collection::vec(any::<u64>(), 0usize..=1024)) {
-            prop_assume!(cpu().avx2);
+            // Skip (pass) when the host lacks avx2: a per-case
+            // `prop_assume!` would reject every case and abort the test.
+            if !cpu().avx2 {
+                return Ok(());
+            }
             // Call through the public dispatch — avx2 pick will run when the
             // host advertises AVX2. The parity assertion is the contract.
             let _ = &words;  // keep compile happy in case of future edits
@@ -56,7 +60,11 @@ mod x86_parity {
 
         #[test]
         fn avx2_and_popcount_matches_scalar((a, b) in word_pair(1024)) {
-            prop_assume!(cpu().avx2);
+            // Skip (pass) when the host lacks avx2: a per-case
+            // `prop_assume!` would reject every case and abort the test.
+            if !cpu().avx2 {
+                return Ok(());
+            }
             let scalar_result = scalar::and_popcount_u64(&a, &b);
             let simd_result = bitmap::and_popcount_u64(&a, &b);
             prop_assert_eq!(simd_result, scalar_result);
@@ -64,7 +72,11 @@ mod x86_parity {
 
         #[test]
         fn avx512_popcount_matches_scalar_long_input(words in proptest::collection::vec(any::<u64>(), 8usize..=2048)) {
-            prop_assume!(cpu().avx512_vpopcntdq);
+            // Skip (pass) when the host lacks avx512_vpopcntdq: a per-case
+            // `prop_assume!` would reject every case and abort the test.
+            if !cpu().avx512_vpopcntdq {
+                return Ok(());
+            }
             // Hits the 8-lane chunk path AND the masked tail.
             let scalar_result = scalar::popcount_u64(&words);
             let simd_result = bitmap::popcount_u64(&words);

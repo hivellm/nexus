@@ -104,49 +104,77 @@ mod x86_parity {
 
         #[test]
         fn avx2_eq_i64(values in proptest::collection::vec(any::<i64>(), 0usize..=256), s in any::<i64>()) {
-            prop_assume!(cpu().avx2);
+            // Skip (pass) when the host lacks avx2: a per-case
+            // `prop_assume!` would reject every case and abort the test.
+            if !cpu().avx2 {
+                return Ok(());
+            }
             // SAFETY: avx2 verified.
             prop_assert_eq!(unsafe { x86::eq_i64_avx2(&values, s) }, scalar::eq_i64(&values, s));
         }
 
         #[test]
         fn avx512_eq_i64(values in proptest::collection::vec(any::<i64>(), 0usize..=256), s in any::<i64>()) {
-            prop_assume!(cpu().avx512f);
+            // Skip (pass) when the host lacks avx512f: a per-case
+            // `prop_assume!` would reject every case and abort the test.
+            if !cpu().avx512f {
+                return Ok(());
+            }
             // SAFETY: avx512f verified.
             prop_assert_eq!(unsafe { x86::eq_i64_avx512(&values, s) }, scalar::eq_i64(&values, s));
         }
 
         #[test]
         fn avx2_lt_i64(values in proptest::collection::vec(any::<i64>(), 0usize..=256), s in any::<i64>()) {
-            prop_assume!(cpu().avx2);
+            // Skip (pass) when the host lacks avx2: a per-case
+            // `prop_assume!` would reject every case and abort the test.
+            if !cpu().avx2 {
+                return Ok(());
+            }
             // SAFETY: avx2 verified.
             prop_assert_eq!(unsafe { x86::lt_i64_avx2(&values, s) }, scalar::lt_i64(&values, s));
         }
 
         #[test]
         fn avx512_lt_i64(values in proptest::collection::vec(any::<i64>(), 0usize..=256), s in any::<i64>()) {
-            prop_assume!(cpu().avx512f);
+            // Skip (pass) when the host lacks avx512f: a per-case
+            // `prop_assume!` would reject every case and abort the test.
+            if !cpu().avx512f {
+                return Ok(());
+            }
             // SAFETY: avx512f verified.
             prop_assert_eq!(unsafe { x86::lt_i64_avx512(&values, s) }, scalar::lt_i64(&values, s));
         }
 
         #[test]
         fn avx2_gt_i64(values in proptest::collection::vec(any::<i64>(), 0usize..=256), s in any::<i64>()) {
-            prop_assume!(cpu().avx2);
+            // Skip (pass) when the host lacks avx2: a per-case
+            // `prop_assume!` would reject every case and abort the test.
+            if !cpu().avx2 {
+                return Ok(());
+            }
             // SAFETY: avx2 verified.
             prop_assert_eq!(unsafe { x86::gt_i64_avx2(&values, s) }, scalar::gt_i64(&values, s));
         }
 
         #[test]
         fn avx512_gt_i64(values in proptest::collection::vec(any::<i64>(), 0usize..=256), s in any::<i64>()) {
-            prop_assume!(cpu().avx512f);
+            // Skip (pass) when the host lacks avx512f: a per-case
+            // `prop_assume!` would reject every case and abort the test.
+            if !cpu().avx512f {
+                return Ok(());
+            }
             // SAFETY: avx512f verified.
             prop_assert_eq!(unsafe { x86::gt_i64_avx512(&values, s) }, scalar::gt_i64(&values, s));
         }
 
         #[test]
         fn avx2_le_ge_ne_i64(values in proptest::collection::vec(any::<i64>(), 0usize..=256), s in any::<i64>()) {
-            prop_assume!(cpu().avx2);
+            // Skip (pass) when the host lacks avx2: a per-case
+            // `prop_assume!` would reject every case and abort the test.
+            if !cpu().avx2 {
+                return Ok(());
+            }
             // SAFETY: avx2 verified.
             prop_assert_eq!(unsafe { x86::le_i64_avx2(&values, s) }, scalar::le_i64(&values, s));
             prop_assert_eq!(unsafe { x86::ge_i64_avx2(&values, s) }, scalar::ge_i64(&values, s));
@@ -155,7 +183,11 @@ mod x86_parity {
 
         #[test]
         fn avx512_le_ge_ne_i64(values in proptest::collection::vec(any::<i64>(), 0usize..=256), s in any::<i64>()) {
-            prop_assume!(cpu().avx512f);
+            // Skip (pass) when the host lacks avx512f: a per-case
+            // `prop_assume!` would reject every case and abort the test.
+            if !cpu().avx512f {
+                return Ok(());
+            }
             // SAFETY: avx512f verified.
             prop_assert_eq!(unsafe { x86::le_i64_avx512(&values, s) }, scalar::le_i64(&values, s));
             prop_assert_eq!(unsafe { x86::ge_i64_avx512(&values, s) }, scalar::ge_i64(&values, s));
@@ -167,7 +199,11 @@ mod x86_parity {
             values in proptest::collection::vec(prop_oneof![Just(f64::NAN), -1e6f64..1e6], 0usize..=256),
             s in -1e6f64..1e6,
         ) {
-            prop_assume!(cpu().avx2);
+            // Skip (pass) when the host lacks avx2: a per-case
+            // `prop_assume!` would reject every case and abort the test.
+            if !cpu().avx2 {
+                return Ok(());
+            }
             // SAFETY: avx2 verified.
             prop_assert_eq!(unsafe { x86::eq_f64_avx2(&values, s) }, scalar::eq_f64(&values, s));
             prop_assert_eq!(unsafe { x86::ne_f64_avx2(&values, s) }, scalar::ne_f64(&values, s));
@@ -182,7 +218,11 @@ mod x86_parity {
             values in proptest::collection::vec(prop_oneof![Just(f64::NAN), -1e6f64..1e6], 0usize..=256),
             s in -1e6f64..1e6,
         ) {
-            prop_assume!(cpu().avx512f);
+            // Skip (pass) when the host lacks avx512f: a per-case
+            // `prop_assume!` would reject every case and abort the test.
+            if !cpu().avx512f {
+                return Ok(());
+            }
             // SAFETY: avx512f verified.
             prop_assert_eq!(unsafe { x86::eq_f64_avx512(&values, s) }, scalar::eq_f64(&values, s));
             prop_assert_eq!(unsafe { x86::ne_f64_avx512(&values, s) }, scalar::ne_f64(&values, s));
