@@ -37,6 +37,11 @@ fn err_json(status: StatusCode, message: impl Into<String>) -> Response {
 }
 
 /// Pull the controller off the server or 503 if sharding is disabled.
+// `result_large_err`: the Err is an axum `Response` — these helpers
+// deliberately carry a pre-built HTTP error response, not a domain
+// error. Callers `match` on it and return it verbatim (cold cluster-
+// admin path); boxing it would only add a heap allocation per error.
+#[allow(clippy::result_large_err)]
 async fn require_controller(server: &NexusServer) -> Result<Arc<ClusterController>, Response> {
     let guard = server.cluster_controller.read().await;
     guard.clone().ok_or_else(|| {
@@ -48,6 +53,9 @@ async fn require_controller(server: &NexusServer) -> Result<Arc<ClusterControlle
 }
 
 /// Gate admin-only endpoints behind the `Admin` permission.
+// `result_large_err`: see `require_controller` — the Err is a pre-built
+// axum `Response`, returned verbatim by callers on the cold admin path.
+#[allow(clippy::result_large_err)]
 async fn require_admin(server: &NexusServer, auth: &Option<AuthContext>) -> Result<(), Response> {
     // When auth is disabled the server already refuses public binds
     // without it; the auth middleware is the one that populates
