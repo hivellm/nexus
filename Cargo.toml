@@ -126,5 +126,10 @@ strip = true
 
 [profile.dev]
 opt-level = 0
-debug = true
+# `line-tables-only` keeps file:line in panics and backtraces while
+# dropping the bulky variable/type debuginfo emitted for every workspace
+# crate AND every dependency. This is the single biggest `target/` size
+# lever (and ~30-40% faster incremental rebuilds — Rust perf-team,
+# Kobzol 2025). See docs/development/rust-target-hygiene.md and GH #24.
+debug = "line-tables-only"
 

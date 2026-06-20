@@ -5,6 +5,15 @@ All notable changes to Nexus will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed — `phase7_bound-target-dir-size` (#24)
+
+- **Dev builds emit `line-tables-only` debuginfo instead of full debuginfo.** `[profile.dev]` now sets `debug = "line-tables-only"` — panics and backtraces keep file:line, but the bulky per-variable/per-type DWARF emitted for every workspace crate *and* every dependency is gone. This is the single biggest `target/` size lever (and ~30-40% faster incremental rebuilds). `[profile.release]` already strips symbols. No runtime behavior change.
+- **Added `scripts/sweep-target.sh` and `scripts/sweep-target.ps1`** wrapping [`cargo-sweep`](https://github.com/holmgr/cargo-sweep): remove artifacts not accessed in N days (default 14) without breaking incrementality, with `--dry-run` and `--clean` (full `cargo clean`) options; auto-installs cargo-sweep if missing.
+- **CI sets `CARGO_INCREMENTAL: 0`** on the Rust workflows (rust-test, rust-lint, rust-bench) — runners start cold, so incremental compilation only adds artifacts and slows the build.
+- **New `docs/development/rust-target-hygiene.md`** documenting the levers, the sweep scripts, and a scheduled-job suggestion to keep `target/` bounded with no manual effort.
+
 ## [2.3.3] — 2026-06-10
 
 > Audit-closure release: finishes the 2.3.3 audit-task batch (GH
