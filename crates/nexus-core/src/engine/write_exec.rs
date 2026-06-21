@@ -45,7 +45,7 @@ impl Engine {
             match clause {
                 executor::parser::Clause::Match(match_clause) => {
                     // Process all node patterns in the match clause
-                    self.process_match_clause_multi(match_clause, &mut context)?;
+                    self.process_match_clause_multi(match_clause, &mut context, &mut rel_context)?;
                 }
                 executor::parser::Clause::Merge(merge_clause) => {
                     // Check if this is a relationship MERGE with bound variables
@@ -63,7 +63,7 @@ impl Engine {
                     }
                 }
                 executor::parser::Clause::Set(set_clause) => {
-                    self.apply_set_clause(&context, set_clause)?;
+                    self.apply_set_clause(&context, &rel_context, set_clause)?;
                 }
                 executor::parser::Clause::Remove(remove_clause) => {
                     self.apply_remove_clause(&context, remove_clause)?;
@@ -190,7 +190,9 @@ impl Engine {
         // Clauses before UNWIND run once (e.g. a leading MATCH).
         for clause in &ast.clauses[..unwind_idx] {
             match clause {
-                Clause::Match(mc) => self.process_match_clause_multi(mc, &mut base_context)?,
+                Clause::Match(mc) => {
+                    self.process_match_clause_multi(mc, &mut base_context, &mut rel_context)?
+                }
                 _ => {
                     return Err(Error::CypherExecution(
                         "Only MATCH may precede UNWIND in a write query".to_string(),
@@ -262,7 +264,9 @@ impl Engine {
                             }
                         }
                     }
-                    Clause::Set(set_clause) => self.apply_set_clause(&row_context, set_clause)?,
+                    Clause::Set(set_clause) => {
+                        self.apply_set_clause(&row_context, &rel_context, set_clause)?
+                    }
                     Clause::Remove(remove_clause) => {
                         self.apply_remove_clause(&row_context, remove_clause)?
                     }
@@ -276,7 +280,11 @@ impl Engine {
                     // `find_nodes_by_node_pattern` resolves `row.*` via the
                     // active unwind binding.
                     Clause::Match(match_clause) => {
-                        self.process_match_clause_multi(match_clause, &mut row_context)?;
+                        self.process_match_clause_multi(
+                            match_clause,
+                            &mut row_context,
+                            &mut rel_context,
+                        )?;
                     }
                     // RETURN is computed once after the loop.
                     Clause::Return(_) => {}
@@ -388,12 +396,12 @@ impl Engine {
             if let Some(on_create) = &merge_clause.on_create {
                 let mut ctx = HashMap::new();
                 ctx.insert(variable.clone(), vec![node_id]);
-                self.apply_set_clause(&ctx, on_create)?;
+                self.apply_set_clause(&ctx, &HashMap::new(), on_create)?;
             }
         } else if let Some(on_match) = &merge_clause.on_match {
             let mut ctx = HashMap::new();
             ctx.insert(variable.clone(), node_ids.clone());
-            self.apply_set_clause(&ctx, on_match)?;
+            self.apply_set_clause(&ctx, &HashMap::new(), on_match)?;
         }
 
         Ok((variable, node_ids))
@@ -445,6 +453,7 @@ impl Engine {
         &mut self,
         match_clause: &executor::parser::MatchClause,
         context: &mut HashMap<String, Vec<u64>>,
+        rel_context: &mut HashMap<String, Vec<(u64, String)>>,
     ) -> Result<()> {
         if match_clause.optional {
             return Err(Error::CypherExecution(
@@ -467,6 +476,61 @@ impl Engine {
                     node_ids.dedup();
                     context.insert(variable.clone(), node_ids);
                 }
+            }
+        }
+
+        // Bind matched relationship variables (#25) so a following
+        // `SET r.k = v` can resolve `r`. For each `(left)-[r:T]->(right)`
+        // triple whose endpoints are bound, resolve the relationship(s) of
+        // type T between them (honouring direction) and bind `r`.
+        use executor::parser::{PatternElement, RelationshipDirection};
+        let elements = &match_clause.pattern.elements;
+        for i in 0..elements.len() {
+            let PatternElement::Relationship(rel) = &elements[i] else {
+                continue;
+            };
+            let (Some(rel_var), Some(rel_type)) = (&rel.variable, rel.types.first()) else {
+                continue;
+            };
+            if i == 0 || i + 1 >= elements.len() {
+                continue;
+            }
+            let (PatternElement::Node(left), PatternElement::Node(right)) =
+                (&elements[i - 1], &elements[i + 1])
+            else {
+                continue;
+            };
+            let (Some(left_var), Some(right_var)) = (&left.variable, &right.variable) else {
+                continue;
+            };
+            // Resolve (src, dst) endpoints by direction. `Both` is treated as
+            // outgoing-then-reverse below.
+            let (src_var, dst_var) = match rel.direction {
+                RelationshipDirection::Incoming => (right_var, left_var),
+                _ => (left_var, right_var),
+            };
+            let src_ids = context.get(src_var).cloned().unwrap_or_default();
+            let dst_ids = context.get(dst_var).cloned().unwrap_or_default();
+            let mut found: Vec<(u64, String)> = Vec::new();
+            for &s in &src_ids {
+                for &d in &dst_ids {
+                    if let Some(rid) = self.find_relationship_between(s, d, rel_type)? {
+                        found.push((rid, rel_type.clone()));
+                    }
+                    if matches!(rel.direction, RelationshipDirection::Both) {
+                        if let Some(rid) = self.find_relationship_between(d, s, rel_type)? {
+                            found.push((rid, rel_type.clone()));
+                        }
+                    }
+                }
+            }
+            found.sort_unstable_by_key(|(id, _)| *id);
+            found.dedup_by_key(|(id, _)| *id);
+            if !found.is_empty() {
+                rel_context
+                    .entry(rel_var.clone())
+                    .or_default()
+                    .extend(found);
             }
         }
 
@@ -544,9 +608,24 @@ impl Engine {
             }
             rid
         } else {
-            // Create the relationship, then apply ON CREATE SET (#14).
-            let props = Value::Object(Map::new());
-            let new_rel_id = self.create_relationship(src_id, dst_id, rel_type.clone(), props)?;
+            // Create the relationship with the pattern's inline properties
+            // (#25 — previously dropped: a hardcoded empty map was used, so
+            // `MERGE (a)-[r:T {k:v}]->(b)` created a propless edge), then
+            // layer ON CREATE SET on top (which may override them). Uses
+            // `eval_write_value` so inline props resolve UNWIND `row.*`
+            // bindings on the per-row MERGE path.
+            let mut props_map = Map::new();
+            if let Some(prop_map) = &rel_pattern.properties {
+                for (key, expr) in &prop_map.properties {
+                    props_map.insert(key.clone(), self.eval_write_value(expr)?);
+                }
+            }
+            let new_rel_id = self.create_relationship(
+                src_id,
+                dst_id,
+                rel_type.clone(),
+                Value::Object(props_map),
+            )?;
             if let Some(on_create) = &merge_clause.on_create {
                 self.apply_merge_rel_set(&rel_var, new_rel_id, on_create)?;
             }
@@ -598,6 +677,76 @@ impl Engine {
             self.storage
                 .update_relationship_properties(rel_id, Value::Object(props))?;
         }
+        Ok(())
+    }
+
+    /// Apply a single `SET <rel>.<property> = <value>` to one relationship
+    /// (#25). Loads the rel's current props, evaluates the RHS (resolving
+    /// `r.<prop>` self-refs and UNWIND `row.*` bindings via
+    /// `evaluate_set_expression`), writes the property, and persists.
+    pub(super) fn set_relationship_property(
+        &mut self,
+        rel_var: &str,
+        rel_id: u64,
+        property: &str,
+        value: &executor::parser::Expression,
+    ) -> Result<()> {
+        let mut props: Map<String, Value> = self
+            .storage
+            .load_relationship_properties(rel_id)?
+            .and_then(|v| match v {
+                Value::Object(m) => Some(m),
+                _ => None,
+            })
+            .unwrap_or_default();
+        let v = self.evaluate_set_expression(value, rel_var, &props)?;
+        // Null means "remove the property" (openCypher SET-to-null semantics).
+        if matches!(v, Value::Null) {
+            props.remove(property);
+        } else {
+            props.insert(property.to_string(), v);
+        }
+        self.storage
+            .update_relationship_properties(rel_id, Value::Object(props))?;
+        Ok(())
+    }
+
+    /// Apply `SET <rel> += <mapExpr>` to one relationship (#25): merge the
+    /// evaluated map into the rel's props (null map = no-op; a null value in
+    /// the map removes that key), mirroring the node `MapMerge` semantics.
+    pub(super) fn merge_relationship_map(
+        &mut self,
+        rel_var: &str,
+        rel_id: u64,
+        map: &executor::parser::Expression,
+    ) -> Result<()> {
+        let mut props: Map<String, Value> = self
+            .storage
+            .load_relationship_properties(rel_id)?
+            .and_then(|v| match v {
+                Value::Object(m) => Some(m),
+                _ => None,
+            })
+            .unwrap_or_default();
+        match self.evaluate_set_expression(map, rel_var, &props)? {
+            Value::Null => return Ok(()),
+            Value::Object(rhs) => {
+                for (k, v) in rhs.into_iter() {
+                    if matches!(v, Value::Null) {
+                        props.remove(&k);
+                    } else {
+                        props.insert(k, v);
+                    }
+                }
+            }
+            _ => {
+                return Err(Error::CypherExecution(format!(
+                    "ERR_SET_NON_MAP: SET {rel_var} += <rhs> requires a MAP or NULL"
+                )));
+            }
+        }
+        self.storage
+            .update_relationship_properties(rel_id, Value::Object(props))?;
         Ok(())
     }
 
@@ -828,6 +977,7 @@ impl Engine {
     pub(super) fn apply_set_clause(
         &mut self,
         context: &HashMap<String, Vec<u64>>,
+        rel_context: &HashMap<String, Vec<(u64, String)>>,
         set_clause: &executor::parser::SetClause,
     ) -> Result<()> {
         tracing::info!(
@@ -849,6 +999,16 @@ impl Engine {
                     property,
                     value,
                 } => {
+                    // #25 — `SET r.k = v` on a matched/merged relationship
+                    // variable. Resolve `r` from the relationship context
+                    // (the write-path MATCH now binds rel vars); apply to
+                    // every bound relationship.
+                    if let Some(rels) = rel_context.get(target) {
+                        for (rel_id, _ty) in rels.clone() {
+                            self.set_relationship_property(target, rel_id, property, value)?;
+                        }
+                        continue;
+                    }
                     let node_ids = context.get(target).ok_or_else(|| {
                         Error::CypherExecution(format!(
                             "Unknown variable '{}' in SET clause",
@@ -936,6 +1096,13 @@ impl Engine {
                 }
                 // phase6_opencypher-quickwins §6 — `SET lhs += mapExpr`.
                 executor::parser::SetItem::MapMerge { target, map } => {
+                    // #25 — `SET r += {…}` on a relationship variable.
+                    if let Some(rels) = rel_context.get(target) {
+                        for (rel_id, _ty) in rels.clone() {
+                            self.merge_relationship_map(target, rel_id, map)?;
+                        }
+                        continue;
+                    }
                     let node_ids = context.get(target).ok_or_else(|| {
                         Error::CypherExecution(format!(
                             "Unknown variable '{}' in SET clause",
@@ -1114,7 +1281,7 @@ impl Engine {
             for update_clause in &foreach_clause.update_clauses {
                 match update_clause {
                     executor::parser::ForeachUpdateClause::Set(set_clause) => {
-                        self.apply_set_clause(&iteration_context, set_clause)?;
+                        self.apply_set_clause(&iteration_context, &HashMap::new(), set_clause)?;
                     }
                     executor::parser::ForeachUpdateClause::Delete(delete_clause) => {
                         // Apply DELETE for this iteration

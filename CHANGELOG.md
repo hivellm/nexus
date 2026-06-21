@@ -5,7 +5,18 @@ All notable changes to Nexus will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [2.3.4] — 2026-06-20
+
+> Fixes the openCypher MERGE relationship-property gap (GH #25): inline
+> rel props are now persisted on create and `SET` works on relationship
+> variables — idempotent edge upsert with properties via MERGE, no more
+> delete-then-create workaround. Also rolls up the `target/`-size build
+> hygiene work (#24).
+
+### Fixed — `phase7_merge-persists-rel-props` (#25)
+
+- **`MERGE (a)-[r:T {k:v}]->(b)` now persists inline relationship properties** when the edge is created. Previously the MERGE create path used a hardcoded empty property map, so the edge was created but `r.k` read back as `null` — while the same inline props via `CREATE` persisted. The create branch now evaluates `rel_pattern.properties` (resolving UNWIND `row.*` bindings) and stores them; `ON CREATE SET` still layers on top. Re-running the MERGE stays idempotent and keeps the properties.
+- **`SET` on a relationship variable is now supported.** `MATCH (a)-[r:T]->(b) SET r.k = v` (and `SET r += {…}`) previously failed with "Unknown variable 'r' in SET clause" because the write-path MATCH never bound relationship variables. The MATCH now binds a matched `(a)-[r:T]->(b)` relationship (honouring direction) into a relationship context, and `apply_set_clause` resolves rel-variable targets — `SET r.k = v` writes the property, `SET r += {…}` merges the map (a null value removes the key), `SET r.k = null` removes the key. This removes the need for the non-idempotent delete-then-create edge-rewrite workaround.
 
 ### Changed — `phase7_bound-target-dir-size` (#24)
 
