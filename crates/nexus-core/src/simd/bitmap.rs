@@ -185,12 +185,15 @@ mod x86 {
         let len = words.len();
         let ptr = words.as_ptr() as *const __m256i;
 
-        // Process 4 × u64 (= 32 bytes) per iteration. Flush the byte
-        // accumulator to the 64-bit running total every 256 iterations
-        // to avoid overflow (max byte value = 8, 32 lanes per vector,
-        // 256 × 256 = 64k fits in u8).
+        // Process 4 × u64 (= 32 bytes) per iteration. `acc_bytes` is a
+        // per-BYTE accumulator (`_mm256_add_epi8`): each chunk adds at
+        // most 8 to every u8 lane (a byte's popcount is 0..=8), so a lane
+        // OVERFLOWS after 256 / 8 = 32 adds. Flush the byte accumulator to
+        // the 64-bit running total before that — every 31 chunks
+        // (31 × 8 = 248 ≤ 255). (Was 255, which wrapped the u8 lanes mod
+        // 256 and undercounted any input ≥ 128 words.)
         let chunks = len / 4;
-        let flush_every = 255;
+        let flush_every = 31;
         let mut since_flush = 0usize;
         for i in 0..chunks {
             let v = _mm256_loadu_si256(ptr.add(i));
@@ -221,8 +224,10 @@ mod x86 {
         let ap = a.as_ptr() as *const __m256i;
         let bp = b.as_ptr() as *const __m256i;
 
+        // Per-byte u8 accumulator — flush before the 256/8 = 32-add
+        // overflow point (see `popcount_u64_avx2`); 31 × 8 = 248 ≤ 255.
         let chunks = len / 4;
-        let flush_every = 255;
+        let flush_every = 31;
         let mut since_flush = 0usize;
         for i in 0..chunks {
             let av = _mm256_loadu_si256(ap.add(i));
@@ -390,5 +395,39 @@ mod tests {
         assert_eq!(tiers[1].0, "and_popcount_u64");
         // Both ops share the same tier.
         assert_eq!(tiers[0].1, tiers[1].1);
+    }
+}
+
+#[cfg(all(test, target_arch = "x86_64"))]
+mod x86_kernel_regression {
+    use super::*;
+
+    /// Directly exercise the AVX2 popcount/and_popcount kernels (not just
+    /// the dispatch, which prefers AVX-512 when present) across sizes that
+    /// cross the byte-accumulator flush boundary. Guards a real bug: the
+    /// per-byte u8 accumulator must flush before 256/8 = 32 adds, else
+    /// lanes wrap mod 256 and undercount inputs ≥ 128 words (GH PR #26 CI).
+    #[test]
+    fn avx2_kernels_match_scalar_across_sizes() {
+        if !cpu().avx2 {
+            return; // host lacks AVX2 — nothing to exercise here.
+        }
+        for &len in &[0usize, 1, 8, 31, 32, 124, 128, 256, 512, 1000, 1024, 4096] {
+            let a: Vec<u64> = (0..len)
+                .map(|i| 0x1357_9BDF_2468_ACE0 ^ (i as u64 * 31))
+                .collect();
+            let b: Vec<u64> = (0..len)
+                .map(|i| 0xF0F0_F0F0_0F0F_0F0F ^ (i as u64 * 17))
+                .collect();
+            // SAFETY: guarded by `cpu().avx2` above.
+            let pc = unsafe { x86::popcount_u64_avx2(&a) };
+            let apc = unsafe { x86::and_popcount_u64_avx2(&a, &b) };
+            assert_eq!(pc, scalar::popcount_u64(&a), "avx2 popcount len={len}");
+            assert_eq!(
+                apc,
+                scalar::and_popcount_u64(&a, &b),
+                "avx2 and_popcount len={len}"
+            );
+        }
     }
 }
