@@ -286,3 +286,32 @@ fn set_map_merge_on_relationship_variable() {
     );
     assert_eq!(props.get("drop"), None, "null value removed the key");
 }
+
+/// #25: `SET r += {…}` must also work when the relationship is matched via
+/// ANONYMOUS endpoints (`MATCH (:P {id:'e'})-[r:T]->(:P {id:'f'})`) — the
+/// endpoint nodes are resolved by their pattern, not just from bound vars.
+#[test]
+fn set_on_relationship_with_anonymous_endpoints() {
+    let ctx = crate::testing::TestContext::new();
+    let mut engine = Engine::with_isolated_catalog(ctx.path()).unwrap();
+    let a = engine
+        .create_node(vec!["P".to_string()], serde_json::json!({"id": "e"}))
+        .unwrap();
+    let b = engine
+        .create_node(vec!["P".to_string()], serde_json::json!({"id": "f"}))
+        .unwrap();
+    engine
+        .execute_cypher("MATCH (a:P {id:'e'}), (b:P {id:'f'}) MERGE (a)-[r:T]->(b)")
+        .expect("propless MERGE");
+    // Anonymous endpoints — only the relationship is named.
+    engine
+        .execute_cypher("MATCH (:P {id:'e'})-[r:T]->(:P {id:'f'}) SET r.k = 'av', r += {m: 4}")
+        .expect("SET on rel matched via anonymous endpoints");
+    let rid = engine
+        .find_relationship_between(a, b, "T")
+        .unwrap()
+        .unwrap();
+    let props = rel_props(&engine, rid);
+    assert_eq!(props.get("k"), Some(&serde_json::json!("av")));
+    assert_eq!(props.get("m"), Some(&serde_json::json!(4)));
+}

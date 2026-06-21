@@ -500,20 +500,27 @@ impl Engine {
             else {
                 continue;
             };
-            let (Some(left_var), Some(right_var)) = (&left.variable, &right.variable) else {
-                continue;
+            // Resolve each endpoint's node ids: from the bound context when it
+            // has a variable, otherwise by matching the node pattern directly
+            // so anonymous endpoints with label/property filters still work
+            // (e.g. `MATCH (:P {id:'e'})-[r:T]->(:P {id:'f'}) SET r.k = v`).
+            let left_ids = match &left.variable {
+                Some(v) if context.contains_key(v) => context.get(v).cloned().unwrap_or_default(),
+                _ => self.find_nodes_by_node_pattern(left)?,
+            };
+            let right_ids = match &right.variable {
+                Some(v) if context.contains_key(v) => context.get(v).cloned().unwrap_or_default(),
+                _ => self.find_nodes_by_node_pattern(right)?,
             };
             // Resolve (src, dst) endpoints by direction. `Both` is treated as
             // outgoing-then-reverse below.
-            let (src_var, dst_var) = match rel.direction {
-                RelationshipDirection::Incoming => (right_var, left_var),
-                _ => (left_var, right_var),
+            let (src_ids, dst_ids) = match rel.direction {
+                RelationshipDirection::Incoming => (&right_ids, &left_ids),
+                _ => (&left_ids, &right_ids),
             };
-            let src_ids = context.get(src_var).cloned().unwrap_or_default();
-            let dst_ids = context.get(dst_var).cloned().unwrap_or_default();
             let mut found: Vec<(u64, String)> = Vec::new();
-            for &s in &src_ids {
-                for &d in &dst_ids {
+            for &s in src_ids {
+                for &d in dst_ids {
                     if let Some(rid) = self.find_relationship_between(s, d, rel_type)? {
                         found.push((rid, rel_type.clone()));
                     }
