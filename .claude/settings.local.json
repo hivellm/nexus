@@ -139,7 +139,17 @@
       "Bash(grep:*)",
       "Bash(git reset:*)",
       "Bash(rustfmt --edition 2024 crates/nexus-core/src/graph/correlation/component/types.rs crates/nexus-core/src/graph/correlation/component/analyzer.rs crates/nexus-core/src/graph/correlation/component/layout.rs crates/nexus-core/src/graph/correlation/component/visualization.rs crates/nexus-core/src/graph/correlation/component/metrics.rs crates/nexus-core/src/graph/correlation/component/mod.rs)",
-      "Workflow(rulebook-driver)"
+      "Workflow(rulebook-driver)",
+      "Bash(git rm *)",
+      "Bash(gh workflow *)",
+      "Bash(awk -F'\\\\t' '{printf \"%-45s %s\\\\n\", $1, $2}')",
+      "Bash(git push *)",
+      "Bash(export MSYS_NO_PATHCONV=1)",
+      "Bash(gh api *)",
+      "Bash(export MSYS_NO_PATHCONV=1 *)",
+      "Read(//tmp/**)",
+      "Bash(git show *)",
+      "Bash(git check-ignore *)"
     ],
     "deny": [],
     "ask": [],
