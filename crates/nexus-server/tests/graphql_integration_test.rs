@@ -306,19 +306,46 @@ async fn test_graphql_update_node_mutation() {
 async fn test_graphql_create_relationship_mutation() {
     let (server, _ctx) = create_test_server().await;
 
-    // Create two nodes first
-    let create_result1 = execute_graphql(&server, "CREATE (n:Person {name: 'Alice'}) RETURN id(n)")
-        .await
-        .expect("Failed to create first node");
-    let node1_id = create_result1["rows"][0][0].as_u64().unwrap().to_string();
-
-    let create_result2 = execute_graphql(&server, "CREATE (n:Person {name: 'Bob'}) RETURN id(n)")
-        .await
-        .expect("Failed to create second node");
-    let node2_id = create_result2["rows"][0][0].as_u64().unwrap().to_string();
-
     // Create schema
     let schema = nexus_server::api::graphql::create_schema(server.clone());
+
+    // Seed both endpoint nodes through the `createNode` mutation —
+    // now engine-routed (bug B5 fix) — rather than the raw-executor
+    // `execute_graphql` helper. `Executor::default()` backs the test
+    // harness's separate `server.executor` with its own throwaway
+    // temp-dir store, fully disconnected from `server.engine`'s data
+    // (see `Executor::default()`'s doc comment); `createRelationship`'s
+    // `MATCH (a), (b) WHERE id(a) = ...` now runs through the engine,
+    // so its endpoints must exist in the engine's own state too.
+    let create_node_mutation = r#"
+        mutation {
+            createNode(labels: ["Person"], properties: {}) {
+                id
+            }
+        }
+    "#;
+
+    let create_result1 = schema.execute(create_node_mutation).await;
+    assert!(
+        create_result1.errors.is_empty(),
+        "Failed to create first node: {:?}",
+        create_result1.errors
+    );
+    let node1_id = create_result1.data.into_json().unwrap()["createNode"]["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+
+    let create_result2 = schema.execute(create_node_mutation).await;
+    assert!(
+        create_result2.errors.is_empty(),
+        "Failed to create second node: {:?}",
+        create_result2.errors
+    );
+    let node2_id = create_result2.data.into_json().unwrap()["createNode"]["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
 
     // Execute create relationship mutation
     let mutation = format!(
@@ -712,5 +739,121 @@ async fn test_graphql_error_handling_nonexistent_node() {
     assert!(
         data["node"].is_null(),
         "Should return null for non-existent node"
+    );
+}
+
+// ============================================================================
+// Write-path unification (bug B5): GraphQL mutations must not silently
+// lose MERGE/SET writes. Before the fix, `MutationRoot::execute_cypher`
+// called `server.executor.execute` — the raw executor's planner stubs
+// `Clause::Merge` as a plain MATCH and has no Set/Remove/Foreach
+// operators, so both mutations below would report `success: true`
+// (HTTP-200-equivalent) while persisting nothing.
+// (docs/nexus/02-bug-inventory.md, docs/nexus/04-write-path-unification.md)
+// ============================================================================
+
+#[tokio::test]
+async fn test_graphql_merge_mutation_persists_node() {
+    let (server, _ctx) = create_test_server().await;
+
+    let schema = nexus_server::api::graphql::create_schema(server.clone());
+
+    let merge_mutation = r#"
+        mutation {
+            executeCypher(queryStr: "MERGE (n:MergeWriteTest {name: 'Zoe'}) RETURN id(n)") {
+                success
+            }
+        }
+    "#;
+    let result = schema.execute(merge_mutation).await;
+    assert!(
+        result.errors.is_empty(),
+        "MERGE mutation should not have errors: {:?}",
+        result.errors
+    );
+
+    // Re-read via a SEPARATE mutation call (its own dispatch through
+    // `execute_cypher_with_params`) to prove the node was actually
+    // persisted, not just matched against nothing and silently
+    // discarded.
+    let verify_query = r#"
+        mutation {
+            executeCypher(queryStr: "MATCH (n:MergeWriteTest {name: 'Zoe'}) RETURN id(n)") {
+                affectedNodes
+            }
+        }
+    "#;
+    let verify = schema.execute(verify_query).await;
+    assert!(
+        verify.errors.is_empty(),
+        "verification query should not have errors: {:?}",
+        verify.errors
+    );
+    let data = verify.data.into_json().unwrap();
+    assert_eq!(
+        data["executeCypher"]["affectedNodes"].as_i64(),
+        Some(1),
+        "MERGE issued through a GraphQL mutation must persist exactly one node"
+    );
+}
+
+#[tokio::test]
+async fn test_graphql_set_mutation_persists_property() {
+    let (server, _ctx) = create_test_server().await;
+
+    let schema = nexus_server::api::graphql::create_schema(server.clone());
+
+    // Seed through the same engine-routed mutation path (not the raw
+    // executor) so the SET's MATCH later sees the same catalog/store
+    // state the node was created under.
+    let seed = r#"
+        mutation {
+            executeCypher(queryStr: "CREATE (n:SetWriteTest {name: 'Ivy', age: 0})") {
+                success
+            }
+        }
+    "#;
+    let seed_result = schema.execute(seed).await;
+    assert!(
+        seed_result.errors.is_empty(),
+        "seed CREATE should not have errors: {:?}",
+        seed_result.errors
+    );
+
+    let set_mutation = r#"
+        mutation {
+            executeCypher(queryStr: "MATCH (n:SetWriteTest {name: 'Ivy'}) SET n.age = 42") {
+                success
+            }
+        }
+    "#;
+    let result = schema.execute(set_mutation).await;
+    assert!(
+        result.errors.is_empty(),
+        "SET mutation should not have errors: {:?}",
+        result.errors
+    );
+
+    // Re-read via a separate query to prove the property persisted
+    // rather than being silently ignored (the raw executor has no SET
+    // operator at all).
+    let verify_query = r#"
+        mutation {
+            executeCypher(queryStr: "MATCH (n:SetWriteTest {name: 'Ivy', age: 42}) RETURN id(n)") {
+                affectedNodes
+            }
+        }
+    "#;
+    let verify = schema.execute(verify_query).await;
+    assert!(
+        verify.errors.is_empty(),
+        "verification query should not have errors: {:?}",
+        verify.errors
+    );
+    let data = verify.data.into_json().unwrap();
+    assert_eq!(
+        data["executeCypher"]["affectedNodes"].as_i64(),
+        Some(1),
+        "SET issued through a GraphQL mutation must persist the updated property"
     );
 }
