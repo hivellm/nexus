@@ -17,16 +17,16 @@
 - [x] 2.3 Parity harness 22 passed / 0 failed / 1 ignored (case 15 = L1 string routing, flips in section 4); nexus-core 2408/0; nexus-server 465/0; clippy `-D warnings` + fmt clean
 
 ## 4. AST-predicate routing (Step 3)
-- [ ] 3.1 Lift RPC's `needs_engine_interception(&ast)` into shared `api/cypher/routing.rs`, used by HTTP + RPC
-- [ ] 3.2 Delete the string-prefix heuristics (`query_upper.starts_with(...)`) from handler.rs
-- [ ] 3.3 Routing unit-test table: mixed queries (MATCH+CREATE, UNWIND+MERGE, WITH+MERGE), leading comments, lowercase keywords, EXPLAIN/PROFILE-prefixed writes
+- [x] 3.1 Lifted RPC's `needs_engine_interception(&ast)` into shared `crates/nexus-server/src/api/cypher/routing.rs` (`pub(crate) fn needs_engine_interception` + `pub(crate) fn first_write_kind`), used by HTTP (`handler.rs`) + RPC (`protocol/rpc/dispatch/cypher.rs`, private copy deleted, now imports the shared fn)
+- [x] 3.2 Deleted the string-prefix heuristics (`query_upper.starts_with(...)`, `is_ddl_query`/`is_create_query`/`is_merge_query`/`is_match_query`/`_is_set_query`/`_is_delete_query`/`_is_remove_query`) from `handler.rs`; routing now derives from `routing::first_write_kind`/`routing::needs_engine_interception` on the already-parsed AST — no second parse pass
+- [x] 3.3 Routing unit-test table added in `routing.rs` (12 tests): MATCH+CREATE, UNWIND+MERGE, WITH+MERGE, leading `//` comment + CREATE, lowercase create, EXPLAIN-prefixed write, PROFILE-prefixed read, BEGIN, SHOW DATABASES, plain MATCH read, standalone RETURN, plus a `first_write_kind` ordering test — all green
 
 ## 5. Delete the fork (Step 4)
-- [ ] 4.1 Remove `mod write_ops` and delete `crates/nexus-server/src/api/cypher/execute/write_ops.rs`
-- [ ] 4.2 Convert the parity harness to assert engine-path behavior only
-- [ ] 4.3 Verify original bugs closed: MERGE-rel creates edge idempotently, `SET r.k` persists, `CREATE...RETURN r.prop` projects the value (spec scenarios in specs/http-write-path/spec.md)
+- [x] 4.1 Removed `mod write_ops` from `execute/mod.rs` and deleted `crates/nexus-server/src/api/cypher/execute/write_ops.rs` (1,109 lines); also removed the now-fully-dead helpers it was the only caller of in `api/cypher/mod.rs` (`expression_to_json_value`, `property_map_to_json`, `ensure_node_from_pattern`, `ensure_node_from_pattern_with_ext_id`, `resolve_external_id_for_server`, `ast_conflict_policy_to_storage`, `create_relationship_from_pattern` — 265 lines) plus the now-unused `PropertyMap` import
+- [x] 4.2 Rewrote the `write_path_parity.rs` module doc comment: fork-vs-engine framing replaced with a "fork deleted, engine-path-only" status section; every bug in the B1-B9/L1 catalogue marked FIXED; harness runs unignored (23/23)
+- [x] 4.3 Verified: case_10/11 (MERGE-rel creates edge idempotently + inline props persist), case_12 (`SET r.k`/`SET r += {}`/`SET r.k = null` all persist on a relationship), case_08 (`CREATE...RETURN r.prop` projects the value in the same statement) — all green
 
 ## 6. Tail (mandatory — enforced by rulebook v5.3.0)
-- [ ] 5.1 Update docs: `docs/nexus/04-write-path-unification.md` progress + CHANGELOG entries for behavioral fixes
-- [ ] 5.2 Write tests covering the new behavior (harness + routing table + regression tests for B1/B2/B3/B8)
-- [ ] 5.3 Run tests and confirm they pass (`cargo +nightly test -p nexus-server`, clippy zero warnings)
+- [x] 5.1 Docs updated: `docs/nexus/04-write-path-unification.md` gained a "Steps 0–4 SHIPPED" status section; CHANGELOG `[Unreleased — 2.5.0]` documents the reroute, engine-gap fixes, aggregation column order, AST routing, and fork deletion
+- [x] 5.2 Tests: 23-case parity harness (all bugs B1–B9/L1/G1–G4 covered), 12-case routing table in `routing.rs`, engine-level tests for every core fix (write.rs, transactions.rs, tokens.rs)
+- [x] 5.3 All green: harness 23/0/0; nexus-server 478 passed / 0 failed; nexus-core 2408 passed / 0 failed; clippy `--all-targets -D warnings` clean; fmt clean

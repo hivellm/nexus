@@ -5,6 +5,25 @@
 >
 > Part of the [Nexus 2.5.0 competitive analysis](README.md).
 
+## Status (2026-07-12) — Steps 0–4 SHIPPED on `release/2.5.0`
+
+- **Step 0** parity harness: 23 cases via the public HTTP handler — found
+  **9 divergences beyond the predicted B1–B3** (B4/B6/B7/B8/B9 engine+parser
+  gaps, G1–G4 surfaced during the reroute, incl. G4: aggregation column
+  order swapped vs the written RETURN — client-visible in every SDK).
+- **Step 1** RPC + RESP3 `$params` threading: shipped.
+- **Step 2** HTTP CREATE/MERGE → `execute_cypher_with_params`; audit
+  logging relocated to the handler wrapper; all engine gaps fixed first
+  (so the reroute regressed nothing).
+- **Step 3** AST-predicate routing: shared `api/cypher/routing.rs`
+  (`needs_engine_interception` + `first_write_kind`) used by HTTP + RPC;
+  string-prefix heuristics deleted; 12-case routing test table.
+- **Step 4** `write_ops.rs` fork DELETED (1,109 lines + 265 lines of dead
+  helpers). Harness now runs un-ignored: **23/23 green**.
+- Remaining: Step 5 (GraphQL) + Step 6 (streaming MCP) →
+  `phase2_graphql-streaming-write-unification`; Step 7 (engine dispatch
+  consolidation) → `phase3_engine-dispatch-consolidation`; Step 8 → 2.6.
+
 ## TL;DR
 
 The "dual write path" is actually **five** divergent write implementations,

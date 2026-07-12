@@ -30,6 +30,7 @@ use std::time::Instant;
 use nexus_core::executor::Query;
 use nexus_core::executor::parser::{Clause, CypherParser, CypherQuery};
 
+use crate::api::cypher::routing::needs_engine_interception;
 use crate::api::cypher::{
     CypherResponse, execute_api_key_commands, execute_database_commands,
     execute_query_management_commands, execute_user_commands,
@@ -263,6 +264,11 @@ async fn execute_query(
     // phase6_nexus-delete-executor-bug). Threading `params` through here
     // (instead of the params-dropping `execute_cypher(&str)`) fixes
     // silent `$params` data loss on the RPC transport (bug B6).
+    //
+    // `needs_engine_interception` now lives in `api::cypher::routing`
+    // (write-path unification Step 3) so the HTTP `/cypher` handler and
+    // this RPC dispatcher share one definition of "needs the engine"
+    // instead of keeping independently-drifting copies.
     if needs_engine_interception(&ast) {
         let engine_arc = state.server.engine.clone();
         let result = {
@@ -290,27 +296,6 @@ async fn execute_query(
         Ok(Err(e)) => Err(format!("Cypher error: {e}")),
         Err(join_err) => Err(format!("ERR internal join error: {join_err}")),
     }
-}
-
-/// True when a query must go through `engine.execute_cypher` instead
-/// of the direct executor path. Mirrors the REST handler's
-/// `is_match_query || is_create_query || is_merge_query` routing —
-/// any clause the engine intercepts before running the executor must
-/// go through the engine, or the interception is skipped and
-/// mutations silently no-op.
-fn needs_engine_interception(ast: &CypherQuery) -> bool {
-    ast.clauses.iter().any(|c| {
-        matches!(
-            c,
-            Clause::Match(_)
-                | Clause::Create(_)
-                | Clause::Delete(_)
-                | Clause::Merge(_)
-                | Clause::Set(_)
-                | Clause::Remove(_)
-                | Clause::Foreach(_)
-        )
-    })
 }
 
 /// Convert a `ResultSet` into the canonical NexusValue envelope described

@@ -383,44 +383,28 @@ pub async fn execute_cypher(
         }
     }
 
-    // Check if this is a CREATE, MERGE, SET, DELETE, REMOVE, or MATCH query
-    let query_upper = request.query.trim().to_uppercase();
-    // DDL statements (`CREATE INDEX`, `CREATE SPATIAL INDEX`,
-    // `CREATE FULLTEXT INDEX`, `CREATE CONSTRAINT`, `DROP INDEX`,
-    // `DROP CONSTRAINT`) MUST fall through to the executor path so
-    // the `execute_create_index` / `execute_drop_index` operators
-    // register the index on the shared `IndexManager` + the
-    // executor-shared `spatial_indexes` map. The node-CREATE branch
-    // below only understands `CREATE (node { ... })` patterns — it
-    // silently no-ops DDL, which manifested as
-    // `ERR_SPATIAL_INDEX_NOT_FOUND` on every subsequent
-    // `spatial.*` call in slice-A smoke tests.
-    let is_ddl_query = query_upper.starts_with("CREATE INDEX")
-        || query_upper.starts_with("CREATE OR REPLACE INDEX")
-        || query_upper.starts_with("CREATE SPATIAL INDEX")
-        || query_upper.starts_with("CREATE OR REPLACE SPATIAL INDEX")
-        || query_upper.starts_with("CREATE FULLTEXT INDEX")
-        || query_upper.starts_with("CREATE OR REPLACE FULLTEXT INDEX")
-        || query_upper.starts_with("CREATE CONSTRAINT")
-        || query_upper.starts_with("CREATE OR REPLACE CONSTRAINT")
-        || query_upper.starts_with("DROP INDEX")
-        || query_upper.starts_with("DROP CONSTRAINT");
-    let is_create_query = !is_ddl_query && query_upper.starts_with("CREATE");
-    let is_merge_query = query_upper.starts_with("MERGE");
-    let _is_set_query = query_upper.starts_with("SET");
-    let _is_delete_query = query_upper.starts_with("DELETE");
-    let _is_remove_query = query_upper.starts_with("REMOVE");
-    // MATCH queries can start with MATCH or have MATCH after UNWIND/WITH/OPTIONAL clauses
-    // We need to detect MATCH anywhere in the query to route it through the Engine
-    let is_match_query = query_upper.starts_with("MATCH")
-        || query_upper.contains(" MATCH ")
-        || query_upper.contains(" MATCH(")
-        || query_upper.starts_with("OPTIONAL MATCH")
-        || query_upper.contains(" OPTIONAL MATCH");
+    // Route on the parsed AST instead of query text (write-path
+    // unification Step 3, `docs/nexus/04-write-path-unification.md`;
+    // `api::cypher::routing` module docs explain the shared predicate in
+    // full). `routing::first_write_kind` finds the first `CREATE`/`MERGE`
+    // clause anywhere in `ast.clauses`; `routing::needs_engine_interception`
+    // is the broader "must this reach the engine at all" check (MATCH /
+    // CREATE / DELETE / MERGE / SET / REMOVE / FOREACH). Clause-typed
+    // routing — unlike the former `query_upper.starts_with(...)`
+    // heuristics — naturally excludes every DDL form (`CREATE INDEX`,
+    // `CREATE SPATIAL INDEX`, `CREATE CONSTRAINT`, ...): those parse into
+    // their own `Clause::CreateIndex`/`Clause::CreateConstraint`/etc.
+    // variants, never `Clause::Create`, so they still fall through to the
+    // executor path below with no separate string-based DDL exclusion
+    // list needed. It also fixes bug L1 — a query whose write clause
+    // isn't the first token (a leading `//` comment, a lowercase
+    // `create`, or `MATCH (a),(b) CREATE (a)-[r]->(b)`) is now routed to
+    // the engine instead of silently falling through to the read-only
+    // executor.
+    let write_kind = routing::first_write_kind(&ast);
 
-    if is_create_query || is_merge_query {
-        let operation_type = if is_merge_query { "MERGE" } else { "CREATE" };
-        let failure_context = if is_merge_query {
+    if let Some(operation_type) = write_kind {
+        let failure_context = if operation_type == "MERGE" {
             "http_write_merge"
         } else {
             "http_write_create"
@@ -496,8 +480,11 @@ pub async fn execute_cypher(
         };
     }
 
-    // For MATCH queries, use the engine's executor to access the shared storage
-    if is_match_query {
+    // Any remaining engine-intercepted clause (MATCH reads, or a write
+    // clause combination `first_write_kind` didn't classify as CREATE/MERGE,
+    // e.g. a bare `MATCH ... SET`/`MATCH ... DELETE`) still needs the
+    // engine rather than the lock-free executor below.
+    if routing::needs_engine_interception(&ast) {
         {
             // Use the engine's execute_cypher method which uses its internal executor
             let mut engine_guard = server.engine.write().await;

@@ -8,47 +8,55 @@
 //! evidence, since a query can report `error: None` while silently
 //! persisting nothing (or the wrong thing).
 //!
-//! This harness is Step 0 of `docs/nexus/04-write-path-unification.md`:
-//! the safety net that must be green (ignoring documented divergences)
-//! before Step 2 reroutes HTTP writes to
-//! `Engine::execute_cypher_with_params` and Step 4 deletes the
-//! `write_ops.rs` fork. Cases marked `#[ignore]` below are expected to
-//! start passing once that rerouting lands — un-ignore them then.
+//! # Status: fork deleted, engine-path-only (checklist section 5, item 4.2)
 //!
-//! # Known divergences (write_ops.rs fork vs. engine `write_exec.rs`)
+//! This harness started as the Step 0 safety net for
+//! `docs/nexus/04-write-path-unification.md`, run against BOTH the
+//! now-deleted `execute/write_ops.rs` fork and the engine's
+//! `write_exec.rs` interpreter, to catalogue every divergence before
+//! anything was deleted. Steps 2-4 have since landed: `handler.rs` routes
+//! every write clause through `Engine::execute_cypher_with_params` using
+//! AST-typed routing (`api::cypher::routing`), and `write_ops.rs` itself
+//! is gone. Every case in this file now exercises that single engine
+//! path and is expected to be GREEN — there is no second implementation
+//! left to diverge from.
 //!
-//! `handler.rs` routes a query to `execute/write_ops.rs::execute_create_or_merge`
-//! whenever the (uppercased) query text starts with `CREATE` or `MERGE`;
-//! every other write form (`MATCH ... SET`, `MATCH ... MERGE`, UNWIND-driven
-//! writes, transaction commands) is routed to
-//! `Engine::execute_cypher_with_params`, which drives the already-fixed
-//! `write_exec.rs` interpreter. `write_ops.rs` reimplements CREATE/MERGE/SET/
-//! REMOVE/DELETE against a node-only `variable_context: HashMap<String,
-//! Vec<u64>>` and never learned relationship semantics:
+//! # Bug catalogue (historical — root causes lived in the deleted
+//! # `write_ops.rs` fork unless noted otherwise)
 //!
-//! - **B1** — a `MERGE` pattern containing a relationship element
-//!   (`MERGE (a:L1 {..})-[r:T]->(b:L2 {..})`) never creates the edge:
-//!   `execute_create_or_merge`'s MERGE loop only matches
-//!   `PatternElement::Node(_)`; `PatternElement::Relationship(_)` has no
-//!   arm and is silently skipped (cases 10, 11).
-//! - **B2** — `SET r.k = v` / `SET r += {..}` on a relationship variable is
-//!   dropped when the enclosing query is routed to `write_ops.rs` (i.e. it
-//!   starts with `CREATE`/`MERGE`): the SET handler looks up `target` in
-//!   `variable_context`, which relationship patterns never populate,
-//!   logging `WARN Variable r not found in context` and doing nothing.
-//!   Queries that start with `MATCH` route around `write_ops.rs` entirely
-//!   (case 12/13 verify which side of that line they land on).
-//! - **B3** — `CREATE (a)-[r:T {w:5}]->(b) RETURN r.w` (same-statement
-//!   projection) returns `null`: the RETURN projection's `PropertyAccess`
-//!   branch resolves `variable` against the same node-only
-//!   `variable_context`, so a relationship-variable property access always
-//!   misses (case 8). The value is nonetheless stored correctly — a
-//!   separate `MATCH` reads it back (case 9 keeps that as a green guard).
+//! The original `handler.rs` routed a query to
+//! `execute/write_ops.rs::execute_create_or_merge` whenever the
+//! (uppercased) query text started with `CREATE` or `MERGE`; every other
+//! write form (`MATCH ... SET`, `MATCH ... MERGE`, UNWIND-driven writes,
+//! transaction commands) was routed to `Engine::execute_cypher_with_params`,
+//! which drives the `write_exec.rs` interpreter. `write_ops.rs`
+//! reimplemented CREATE/MERGE/SET/REMOVE/DELETE against a node-only
+//! `variable_context: HashMap<String, Vec<u64>>` and never learned
+//! relationship semantics:
+//!
+//! - **B1 (FIXED by deleting the fork)** — a `MERGE` pattern containing a
+//!   relationship element (`MERGE (a:L1 {..})-[r:T]->(b:L2 {..})`) never
+//!   created the edge: `execute_create_or_merge`'s MERGE loop only
+//!   matched `PatternElement::Node(_)`; `PatternElement::Relationship(_)`
+//!   had no arm and was silently skipped (cases 10, 11).
+//! - **B2 (FIXED by deleting the fork)** — `SET r.k = v` / `SET r += {..}`
+//!   on a relationship variable was dropped whenever the enclosing query
+//!   was routed to `write_ops.rs` (i.e. it started with `CREATE`/`MERGE`):
+//!   the SET handler looked up `target` in `variable_context`, which
+//!   relationship patterns never populated, logging `WARN Variable r not
+//!   found in context` and doing nothing (cases 12/13).
+//! - **B3 (FIXED by deleting the fork)** — `CREATE (a)-[r:T {w:5}]->(b)
+//!   RETURN r.w` (same-statement projection) returned `null`: the RETURN
+//!   projection's `PropertyAccess` branch resolved `variable` against the
+//!   same node-only `variable_context`, so a relationship-variable
+//!   property access always missed (case 8). The value was nonetheless
+//!   stored correctly — a separate `MATCH` reads it back (case 9 keeps
+//!   that as a green guard).
 //!
 //! While building this harness, four ADDITIONAL divergences were found
 //! empirically that proposal.md did not anticipate — all in the ENGINE
 //! (`nexus-core`), not `write_ops.rs`. They have since been FIXED
-//! (checklist section 2, items 2.0a-2.0d) and their cases un-ignored below:
+//! (checklist section 2, items 2.0a-2.0d):
 //!
 //! - **B4 (FIXED)** — `SET target.prop = $param` via the `MATCH ... SET`
 //!   engine path (`Engine::evaluate_set_expression` in
@@ -68,11 +76,13 @@
 //!   `eval_write_value` (`engine/write_exec.rs`) that resolves against
 //!   `self.current_params` and errors cleanly (naming the parameter) when
 //!   it is not bound, rather than silently degrading to an empty UNWIND.
-//! - **B7** — `CREATE (n {p:1}) REMOVE n.p` in ONE `write_ops.rs`-routed
-//!   statement does not persist the removal; the equivalent two-statement
-//!   form (`CREATE` then a separate `MATCH ... REMOVE`, which routes to
-//!   the engine) removes the key correctly (case 6c). Still open — closes
-//!   with Step 2/4 (HTTP write-path rerouting), not an engine-core gap.
+//! - **B7 (FIXED by deleting the fork)** — `CREATE (n {p:1}) REMOVE n.p`
+//!   in ONE `write_ops.rs`-routed statement did not persist the removal;
+//!   the equivalent two-statement form (`CREATE` then a separate
+//!   `MATCH ... REMOVE`, which already routed to the engine) removed the
+//!   key correctly (case 6c). Not an engine-core gap — closed once HTTP
+//!   write-path rerouting sent the combined statement through the same
+//!   engine AST interpreter as everything else.
 //! - **B8 (FIXED)** — `SET n.p = null` via the `MATCH ... SET` engine path
 //!   stored a literal JSON `null` instead of removing the key
 //!   (`write_exec.rs::apply_set_clause` had no null-removal special case),
@@ -93,11 +103,11 @@
 //!
 //! One more finding was flagged even though its case was GREEN at the
 //! time: **case 17b** (`BEGIN`/`CREATE`/`ROLLBACK`) passed because
-//! `write_ops.rs`'s CREATE calls the low-level `Engine::create_node`
+//! `write_ops.rs`'s CREATE called the low-level `Engine::create_node`
 //! directly, while `nexus-core` had its own `#[ignore]`d
 //! `test_transaction_rollback_persists_across_queries` suggesting the SAME
 //! sequence via `Engine::execute_cypher` (the executor-driven CREATE path
-//! Step 2 will reroute HTTP onto) did NOT roll back correctly. Investigated
+//! HTTP now uses for every write) did NOT roll back correctly. Investigated
 //! for checklist item 2.0e: that `#[ignore]` was STALE — the rollback path
 //! already has a watermark-based fix (`engine/transactions.rs`'s
 //! `RollbackTransaction` arm unions the session's storage-id watermark
@@ -105,19 +115,28 @@
 //! catch executor-routed writes that never call back into
 //! `session.created_nodes`). Confirmed via
 //! `engine::tests::transactions::rollback_undoes_executor_created_nodes`
-//! (pre-existing, passes) plus a new
-//! `rollback_undoes_executor_created_nodes_via_params_entrypoint` test
-//! exercising the exact `execute_cypher_with_params` entry point Step 2
-//! will use. The stale `#[ignore]`s on
+//! (pre-existing, passes) plus
+//! `rollback_undoes_executor_created_nodes_via_params_entrypoint`, which
+//! exercises the exact `execute_cypher_with_params` entry point HTTP now
+//! uses for every write. The stale `#[ignore]`s on
 //! `test_transaction_rollback_persists_across_queries`,
 //! `test_multiple_operations_in_transaction`, and
 //! `test_rollback_multiple_operations` in
-//! `crates/nexus-core/tests/transaction_session_test.rs` have been removed
-//! — no engine fix was needed for 17b.
+//! `crates/nexus-core/tests/transaction_session_test.rs` were removed —
+//! no engine fix was needed for 17b.
 //!
-//! Every `#[ignore]` below documents which class (or, where the actual
-//! observed behaviour didn't match the proposal's hypothesis, the
-//! concretely observed divergence) applies, per checklist item 1.3.
+//! One last divergence closed the set: **L1** — `handler.rs`'s
+//! `query_upper.starts_with("CREATE")`/`.contains(" MATCH ")` string-prefix
+//! routing missed any write clause that wasn't the first token (a leading
+//! `//` comment, a lowercase `create`, `MATCH (a),(b) CREATE (a)-[r]->(b)`)
+//! and silently fell through to the read-only executor — HTTP 200,
+//! nothing persisted (case 15, `docs/nexus/02-bug-inventory.md`). Fixed
+//! by switching `handler.rs` to the AST-predicate routing in
+//! `api::cypher::routing` (checklist section 4), which finds write
+//! clauses anywhere in the parsed AST regardless of surrounding text.
+//!
+//! With B1-B9 and L1 all fixed and `write_ops.rs` deleted, every case
+//! below runs unignored against the single engine write path.
 
 #![allow(unused_imports)]
 use super::*;
@@ -931,19 +950,21 @@ async fn case_14_match_then_create_relationship() {
     );
 }
 
-// **B9 (parser half FIXED, checklist 2.0d) + L1 routing half still open** —
-// a query whose first non-blank line is a `//` comment used to fail to
-// parse at all (`Query must contain at least one clause`): fixed by
-// teaching `CypherParser::skip_whitespace` (`executor/parser/tokens.rs`)
-// to skip `//` line comments and `/* */` block comments. With parsing
-// fixed, the case now exposes the SECOND layer: `handler.rs`'s
-// string-prefix routing (`query_upper.starts_with("CREATE")`) does not see
-// the CREATE behind the comment and misroutes the query to the read-only
-// executor path — HTTP 200, nothing persisted (bug L1,
-// docs/nexus/02-bug-inventory.md). Un-ignore when AST-predicate routing
-// lands (tasks.md section 4).
+// **B9 (parser half, checklist 2.0d) + L1 (routing half, tasks.md
+// section 4) — BOTH FIXED.** A query whose first non-blank line is a
+// `//` comment used to fail to parse at all (`Query must contain at
+// least one clause`): fixed by teaching `CypherParser::skip_whitespace`
+// (`executor/parser/tokens.rs`) to skip `//` line comments and `/* */`
+// block comments. That exposed a second layer: `handler.rs`'s
+// string-prefix routing (`query_upper.starts_with("CREATE")`) didn't see
+// the CREATE behind the comment and misrouted the query to the
+// read-only executor path — HTTP 200, nothing persisted (bug L1,
+// docs/nexus/02-bug-inventory.md). Fixed by switching `handler.rs` to
+// the AST-predicate routing in `api::cypher::routing`
+// (`routing::first_write_kind` / `routing::needs_engine_interception`),
+// which finds the `CREATE` clause anywhere in the parsed AST regardless
+// of what text precedes it.
 #[tokio::test]
-#[ignore = "known-divergence L1: string-prefix routing misroutes comment-prefixed writes to the read path; parser half (B9) already fixed — un-ignore after AST routing (section 4)"]
 async fn case_15_leading_comment_then_create() {
     let ctx = TestContext::new();
     let server = build_test_server(&ctx);
