@@ -252,25 +252,22 @@ async fn execute_query(
         return admin_result;
     }
 
-    // Route mutating and MATCH queries through `engine.execute_cypher`
-    // — the only path that intercepts DELETE / DETACH DELETE / CREATE /
-    // MERGE / SET / REMOVE / FOREACH before they hit the executor's
-    // operator pipeline. The executor's `Operator::Delete` / `DetachDelete`
-    // handler is a no-op that relies on this upstream interception;
-    // calling `executor.execute` directly for a query with `DELETE`
-    // silently succeeds with zero rows and leaves the database
-    // untouched (see phase6_nexus-delete-executor-bug).
-    //
-    // Read-only queries (no MATCH, no mutation) keep using the
-    // parallel executor path because it supports params — MATCH-path
-    // already drops params today via `engine.execute_cypher(&str)`, so
-    // this split preserves the one capability the executor path has
-    // that engine.execute_cypher does not.
+    // Route mutating and MATCH queries through
+    // `engine.execute_cypher_with_params` — the only path that
+    // intercepts DELETE / DETACH DELETE / CREATE / MERGE / SET / REMOVE
+    // / FOREACH before they hit the executor's operator pipeline. The
+    // executor's `Operator::Delete` / `DetachDelete` handler is a no-op
+    // that relies on this upstream interception; calling
+    // `executor.execute` directly for a query with `DELETE` silently
+    // succeeds with zero rows and leaves the database untouched (see
+    // phase6_nexus-delete-executor-bug). Threading `params` through here
+    // (instead of the params-dropping `execute_cypher(&str)`) fixes
+    // silent `$params` data loss on the RPC transport (bug B6).
     if needs_engine_interception(&ast) {
         let engine_arc = state.server.engine.clone();
         let result = {
             let mut engine = engine_arc.write().await;
-            engine.execute_cypher(&query)
+            engine.execute_cypher_with_params(&query, params)
         };
         let elapsed_ms = started.elapsed().as_millis() as i64;
         return match result {
@@ -503,6 +500,60 @@ mod tests {
                 match &rows[0] {
                     NexusValue::Array(cols) => {
                         assert_eq!(cols[0].as_int(), Some(42));
+                    }
+                    other => panic!("expected row Array, got {other:?}"),
+                }
+            }
+            other => panic!("expected rows Array, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn cypher_parameterized_write_persists_value() {
+        // Regression test for bug B6: RPC's write-path branch
+        // (`needs_engine_interception`) used to call the params-dropping
+        // `engine.execute_cypher(&query)`, so a write query referencing
+        // `$param` could never resolve it — `self.current_params` is only
+        // populated by `execute_cypher_with_params`. Dynamic labels
+        // (`CREATE (n:$lbl)`) resolve strictly against `current_params`
+        // (see `dynamic_labels::resolve_labels`), so an unresolved `$lbl`
+        // fails fast with `ERR_INVALID_LABEL` instead of silently
+        // no-oping — a deterministic way to prove params actually reach
+        // the engine over this transport.
+        let s = session();
+        let params = NexusValue::Map(vec![(
+            NexusValue::Str("lbl".into()),
+            NexusValue::Str("RpcParamLabel".into()),
+        )]);
+        run(
+            &s,
+            "CYPHER",
+            &[NexusValue::Str("CREATE (n:$lbl)".into()), params],
+        )
+        .await
+        .unwrap();
+
+        let out = run(
+            &s,
+            "CYPHER",
+            &[NexusValue::Str(
+                "MATCH (n:RpcParamLabel) RETURN count(n) AS c".into(),
+            )],
+        )
+        .await
+        .unwrap();
+        let pairs = expect_map(out);
+        match lookup(&pairs, "rows") {
+            NexusValue::Array(rows) => {
+                assert_eq!(rows.len(), 1);
+                match &rows[0] {
+                    NexusValue::Array(cols) => {
+                        assert_eq!(
+                            cols[0].as_int(),
+                            Some(1),
+                            "expected exactly one node created under the parameterized label, got {:?}",
+                            cols[0]
+                        );
                     }
                     other => panic!("expected row Array, got {other:?}"),
                 }

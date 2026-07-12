@@ -1,7 +1,7 @@
 //! Cypher commands on the RESP3 transport.
 //!
-//! These handlers are a thin wrapper around `Engine::execute_cypher` — the
-//! sync core of the Cypher stack. The wrapper does three things:
+//! These handlers are a thin wrapper around `Engine::execute_cypher_with_params`
+//! — the sync core of the Cypher stack. The wrapper does three things:
 //!
 //! 1. Pulls the engine out of `Arc<TokioRwLock<Engine>>` and runs the
 //!    actual query inside `spawn_blocking` so the tokio reactor thread
@@ -13,6 +13,7 @@
 //! 3. Maps runtime errors to `Verbatim(txt, …)` so `redis-cli` renders
 //!    multi-line Cypher diagnostics with the right line-feeds.
 
+use std::collections::HashMap;
 use std::time::Instant;
 
 use crate::protocol::resp3::parser::Resp3Value;
@@ -87,13 +88,20 @@ pub async fn cypher_explain(state: &SessionState, args: &[Resp3Value]) -> Resp3V
 async fn run_cypher(
     state: &SessionState,
     query: String,
-    _params: Option<serde_json::Value>,
+    params: Option<serde_json::Value>,
 ) -> Resp3Value {
+    let params_map: HashMap<String, serde_json::Value> = match params {
+        Some(serde_json::Value::Object(map)) => map.into_iter().collect(),
+        Some(_) => {
+            return err("ERR CYPHER.WITH parameter argument must be a JSON object");
+        }
+        None => HashMap::new(),
+    };
     let engine = state.server.engine.clone();
     let started = Instant::now();
     let out = tokio::task::spawn_blocking(move || {
         let mut guard = engine.blocking_write();
-        guard.execute_cypher(&query)
+        guard.execute_cypher_with_params(&query, params_map)
     })
     .await;
     let elapsed_ms = started.elapsed().as_millis() as i64;
@@ -163,6 +171,122 @@ fn json_to_resp3(v: &serde_json::Value) -> Resp3Value {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicBool, AtomicU8};
+
+    /// Build a `SessionState` backed by a real, isolated `Engine` so
+    /// write-path tests (`run_cypher`) exercise the same code the wire
+    /// protocol drives. Mirrors `admin::tests::empty_state`.
+    fn session() -> SessionState {
+        let ctx = nexus_core::testing::TestContext::new();
+        let engine =
+            nexus_core::Engine::with_data_dir(ctx.path()).expect("engine init for cypher test");
+        let engine_arc = Arc::new(tokio::sync::RwLock::new(engine));
+
+        let executor_arc = Arc::new(nexus_core::executor::Executor::default());
+        let dbm_arc = Arc::new(parking_lot::RwLock::new(
+            nexus_core::database::DatabaseManager::new(ctx.path().to_path_buf()).expect("dbm init"),
+        ));
+        let rbac_arc = Arc::new(tokio::sync::RwLock::new(
+            nexus_core::auth::RoleBasedAccessControl::new(),
+        ));
+        let audit_logger = Arc::new(
+            nexus_core::auth::AuditLogger::new(nexus_core::auth::AuditConfig {
+                enabled: false,
+                log_dir: ctx.path().join("audit"),
+                retention_days: 1,
+                compress_logs: false,
+            })
+            .expect("audit init"),
+        );
+        let auth_manager = Arc::new(nexus_core::auth::AuthManager::new(
+            nexus_core::auth::AuthConfig::default(),
+        ));
+        let jwt_manager = Arc::new(nexus_core::auth::JwtManager::new(
+            nexus_core::auth::JwtConfig::default(),
+        ));
+
+        let server = Arc::new(crate::NexusServer::new(
+            executor_arc,
+            engine_arc,
+            dbm_arc,
+            rbac_arc,
+            auth_manager,
+            jwt_manager,
+            audit_logger,
+            crate::config::RootUserConfig::default(),
+        ));
+        let _leaked = Box::leak(Box::new(ctx));
+
+        SessionState {
+            server,
+            authenticated: Arc::new(AtomicBool::new(true)),
+            auth_required: false,
+            protocol: Arc::new(AtomicU8::new(3)),
+            connection_id: 1,
+        }
+    }
+
+    fn expect_map(v: Resp3Value) -> Vec<(Resp3Value, Resp3Value)> {
+        match v {
+            Resp3Value::Map(p) => p,
+            other => panic!("expected Map, got {other:?}"),
+        }
+    }
+
+    fn lookup<'a>(pairs: &'a [(Resp3Value, Resp3Value)], key: &str) -> &'a Resp3Value {
+        pairs
+            .iter()
+            .find_map(|(k, v)| (k.as_str() == Some(key)).then_some(v))
+            .unwrap_or_else(|| panic!("key '{key}' missing"))
+    }
+
+    #[tokio::test]
+    async fn cypher_with_parameterized_write_persists_value() {
+        // Regression test for bug B6: RESP3's `run_cypher` used to accept
+        // a `_params` argument and discard it (leading underscore marked
+        // it deliberately unused), calling the params-dropping
+        // `engine.execute_cypher(&query)`. Dynamic labels
+        // (`CREATE (n:$lbl)`) resolve strictly against the engine's
+        // `current_params` (populated only by `execute_cypher_with_params`),
+        // so an unresolved `$lbl` fails fast with `ERR_INVALID_LABEL`
+        // instead of silently no-oping — a deterministic way to prove
+        // params actually reach the engine over this transport.
+        let s = session();
+        let args = vec![
+            Resp3Value::bulk("CYPHER.WITH"),
+            Resp3Value::bulk("CREATE (n:$lbl)"),
+            Resp3Value::bulk(r#"{"lbl":"Resp3ParamLabel"}"#),
+        ];
+        let created = cypher_with(&s, &args).await;
+        if let Resp3Value::Verbatim(_, msg) = &created {
+            panic!("CREATE with $lbl failed: {}", String::from_utf8_lossy(msg));
+        }
+
+        let match_args = vec![
+            Resp3Value::bulk("CYPHER"),
+            Resp3Value::bulk("MATCH (n:Resp3ParamLabel) RETURN count(n) AS c"),
+        ];
+        let out = cypher(&s, &match_args).await;
+        let pairs = expect_map(out);
+        match lookup(&pairs, "rows") {
+            Resp3Value::Array(rows) => {
+                assert_eq!(rows.len(), 1);
+                match &rows[0] {
+                    Resp3Value::Array(cols) => {
+                        assert_eq!(
+                            cols[0],
+                            Resp3Value::Integer(1),
+                            "expected exactly one node created under the parameterized label, got {:?}",
+                            cols[0]
+                        );
+                    }
+                    other => panic!("expected row Array, got {other:?}"),
+                }
+            }
+            other => panic!("expected rows Array, got {other:?}"),
+        }
+    }
 
     #[test]
     fn json_primitives_lower_to_expected_variants() {

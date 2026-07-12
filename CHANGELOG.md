@@ -11,6 +11,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **The runtime image is now `FROM scratch` with a fully static musl binary — 0 OS packages, 0 CVEs.** Docker Scout reported 14 disputed/won't-fix low CVEs on the previous DHI/debian runtime (glibc ×7, systemd ×4, coreutils ×2, openssl ×1) with no Debian fix available; since the seven glibc findings attach to `libc6`, no amount of package removal could reach zero with a dynamically-linked binary. `nexus-server` is now built for `x86_64-unknown-linux-musl` (fully static, jemalloc retained via `disable_initial_exec_tls`) and shipped in an empty base: Scout reports **0C 0H 0M 0L, 0 packages**. Image size drops 70.2 MB → 25.8 MB (−63%). Trade-off: the image has no shell — `docker exec … sh` no longer works; debug via `docker logs` and the HTTP API.
 
+### Fixed
+
+- **RPC and RESP3 transports no longer drop `$params` on write queries.** The RPC dispatch (port 15475 — the default transport for every first-party SDK) and the RESP3 `CYPHER` handler called the params-dropping `engine.execute_cypher(&str)`, so `CREATE (n {x:$v})` silently stored `null` over those transports — the same data-loss class fixed for HTTP in 2.4.0. Both now call `execute_cypher_with_params`; parameterized writes persist and round-trip on every transport.
+
 ### Added
 
 - **`nexus-server --healthcheck`** — std-only HTTP/1.0 probe against `127.0.0.1:<port from NEXUS_ADDR>/health`, exiting 0/1. Used as the container `HEALTHCHECK` (exec-form) since the scratch image has no bash.
