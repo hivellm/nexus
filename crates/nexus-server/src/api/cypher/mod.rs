@@ -8,6 +8,8 @@ pub mod execute;
 
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod write_path_parity;
 
 pub(crate) use commands::{
     execute_api_key_commands, execute_database_commands, execute_query_management_commands,
