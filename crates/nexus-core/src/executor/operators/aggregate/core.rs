@@ -791,159 +791,138 @@ impl Executor {
                         Aggregation::PercentileDisc {
                             column, percentile, ..
                         } => {
-                            let col_idx =
-                                self.get_column_index(column, &context.result_set.columns);
-                            if let Some(idx) = col_idx {
-                                let mut values: Vec<f64> = group_rows
-                                    .iter()
-                                    .filter_map(|row| {
-                                        if idx < row.values.len() {
-                                            self.value_to_number(&row.values[idx]).ok()
-                                        } else {
-                                            None
-                                        }
-                                    })
-                                    .collect();
+                            // phase4_cypher-parity-quick-wins §2.2 — was
+                            // `get_column_index(column, &context.result_set.columns)`,
+                            // which only matches a bare variable name. `column`
+                            // here is the dotted PropertyAccess string (e.g.
+                            // "n.v"), so the lookup always missed and this
+                            // aggregate silently returned NULL. `extract_value_from_row`
+                            // (the same helper Sum/Avg/Min/Max use) resolves the
+                            // dotted form by pulling the property out of the
+                            // bound node object.
+                            let mut values: Vec<f64> = group_rows
+                                .iter()
+                                .filter_map(|row| {
+                                    self.extract_value_from_row(row, column, columns_for_lookup)
+                                        .and_then(|v| self.value_to_number(&v).ok())
+                                })
+                                .collect();
 
-                                if values.is_empty() {
-                                    Value::Null
-                                } else {
-                                    values.sort_by(|a, b| {
-                                        a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal)
-                                    });
-                                    // Discrete percentile: nearest value
-                                    let index = ((*percentile * (values.len() - 1) as f64).round()
-                                        as usize)
-                                        .min(values.len() - 1);
-                                    Value::Number(
-                                        serde_json::Number::from_f64(values[index])
-                                            .unwrap_or(serde_json::Number::from(0)),
-                                    )
-                                }
-                            } else {
+                            if values.is_empty() {
                                 Value::Null
+                            } else {
+                                values.sort_by(|a, b| {
+                                    a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal)
+                                });
+                                // Discrete percentile: nearest value
+                                let index = ((*percentile * (values.len() - 1) as f64).round()
+                                    as usize)
+                                    .min(values.len() - 1);
+                                Value::Number(
+                                    serde_json::Number::from_f64(values[index])
+                                        .unwrap_or(serde_json::Number::from(0)),
+                                )
                             }
                         }
                         Aggregation::PercentileCont {
                             column, percentile, ..
                         } => {
-                            let col_idx =
-                                self.get_column_index(column, &context.result_set.columns);
-                            if let Some(idx) = col_idx {
-                                let mut values: Vec<f64> = group_rows
-                                    .iter()
-                                    .filter_map(|row| {
-                                        if idx < row.values.len() {
-                                            self.value_to_number(&row.values[idx]).ok()
-                                        } else {
-                                            None
-                                        }
-                                    })
-                                    .collect();
+                            // See PercentileDisc above for why this uses
+                            // extract_value_from_row instead of get_column_index.
+                            let mut values: Vec<f64> = group_rows
+                                .iter()
+                                .filter_map(|row| {
+                                    self.extract_value_from_row(row, column, columns_for_lookup)
+                                        .and_then(|v| self.value_to_number(&v).ok())
+                                })
+                                .collect();
 
-                                if values.is_empty() {
-                                    Value::Null
-                                } else {
-                                    values.sort_by(|a, b| {
-                                        a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal)
-                                    });
-                                    // Continuous percentile: linear interpolation
-                                    let position = *percentile * (values.len() - 1) as f64;
-                                    let lower_idx = position.floor() as usize;
-                                    let upper_idx = position.ceil() as usize;
-
-                                    let result = if lower_idx == upper_idx {
-                                        values[lower_idx]
-                                    } else {
-                                        let lower = values[lower_idx];
-                                        let upper = values[upper_idx];
-                                        let fraction = position - lower_idx as f64;
-                                        lower + (upper - lower) * fraction
-                                    };
-
-                                    Value::Number(
-                                        serde_json::Number::from_f64(result)
-                                            .unwrap_or(serde_json::Number::from(0)),
-                                    )
-                                }
-                            } else {
+                            if values.is_empty() {
                                 Value::Null
+                            } else {
+                                values.sort_by(|a, b| {
+                                    a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal)
+                                });
+                                // Continuous percentile: linear interpolation
+                                let position = *percentile * (values.len() - 1) as f64;
+                                let lower_idx = position.floor() as usize;
+                                let upper_idx = position.ceil() as usize;
+
+                                let result = if lower_idx == upper_idx {
+                                    values[lower_idx]
+                                } else {
+                                    let lower = values[lower_idx];
+                                    let upper = values[upper_idx];
+                                    let fraction = position - lower_idx as f64;
+                                    lower + (upper - lower) * fraction
+                                };
+
+                                Value::Number(
+                                    serde_json::Number::from_f64(result)
+                                        .unwrap_or(serde_json::Number::from(0)),
+                                )
                             }
                         }
                         Aggregation::StDev { column, .. } => {
-                            let col_idx =
-                                self.get_column_index(column, &context.result_set.columns);
-                            if let Some(idx) = col_idx {
-                                let values: Vec<f64> = group_rows
-                                    .iter()
-                                    .filter_map(|row| {
-                                        if idx < row.values.len() {
-                                            self.value_to_number(&row.values[idx]).ok()
-                                        } else {
-                                            None
-                                        }
-                                    })
-                                    .collect();
+                            // See PercentileDisc above for why this uses
+                            // extract_value_from_row instead of get_column_index.
+                            let values: Vec<f64> = group_rows
+                                .iter()
+                                .filter_map(|row| {
+                                    self.extract_value_from_row(row, column, columns_for_lookup)
+                                        .and_then(|v| self.value_to_number(&v).ok())
+                                })
+                                .collect();
 
-                                if values.len() < 2 {
-                                    Value::Null
-                                } else {
-                                    // Sample standard deviation (Bessel's correction: n-1)
-                                    let mean = values.iter().sum::<f64>() / values.len() as f64;
-                                    let variance = values
-                                        .iter()
-                                        .map(|v| {
-                                            let diff = v - mean;
-                                            diff * diff
-                                        })
-                                        .sum::<f64>()
-                                        / (values.len() - 1) as f64;
-                                    let std_dev = variance.sqrt();
-                                    Value::Number(
-                                        serde_json::Number::from_f64(std_dev)
-                                            .unwrap_or(serde_json::Number::from(0)),
-                                    )
-                                }
-                            } else {
+                            if values.len() < 2 {
                                 Value::Null
+                            } else {
+                                // Sample standard deviation (Bessel's correction: n-1)
+                                let mean = values.iter().sum::<f64>() / values.len() as f64;
+                                let variance = values
+                                    .iter()
+                                    .map(|v| {
+                                        let diff = v - mean;
+                                        diff * diff
+                                    })
+                                    .sum::<f64>()
+                                    / (values.len() - 1) as f64;
+                                let std_dev = variance.sqrt();
+                                Value::Number(
+                                    serde_json::Number::from_f64(std_dev)
+                                        .unwrap_or(serde_json::Number::from(0)),
+                                )
                             }
                         }
                         Aggregation::StDevP { column, .. } => {
-                            let col_idx =
-                                self.get_column_index(column, &context.result_set.columns);
-                            if let Some(idx) = col_idx {
-                                let values: Vec<f64> = group_rows
-                                    .iter()
-                                    .filter_map(|row| {
-                                        if idx < row.values.len() {
-                                            self.value_to_number(&row.values[idx]).ok()
-                                        } else {
-                                            None
-                                        }
-                                    })
-                                    .collect();
+                            // See PercentileDisc above for why this uses
+                            // extract_value_from_row instead of get_column_index.
+                            let values: Vec<f64> = group_rows
+                                .iter()
+                                .filter_map(|row| {
+                                    self.extract_value_from_row(row, column, columns_for_lookup)
+                                        .and_then(|v| self.value_to_number(&v).ok())
+                                })
+                                .collect();
 
-                                if values.is_empty() {
-                                    Value::Null
-                                } else {
-                                    // Population standard deviation (divide by n)
-                                    let mean = values.iter().sum::<f64>() / values.len() as f64;
-                                    let variance = values
-                                        .iter()
-                                        .map(|v| {
-                                            let diff = v - mean;
-                                            diff * diff
-                                        })
-                                        .sum::<f64>()
-                                        / values.len() as f64;
-                                    let std_dev = variance.sqrt();
-                                    Value::Number(
-                                        serde_json::Number::from_f64(std_dev)
-                                            .unwrap_or(serde_json::Number::from(0)),
-                                    )
-                                }
-                            } else {
+                            if values.is_empty() {
                                 Value::Null
+                            } else {
+                                // Population standard deviation (divide by n)
+                                let mean = values.iter().sum::<f64>() / values.len() as f64;
+                                let variance = values
+                                    .iter()
+                                    .map(|v| {
+                                        let diff = v - mean;
+                                        diff * diff
+                                    })
+                                    .sum::<f64>()
+                                    / values.len() as f64;
+                                let std_dev = variance.sqrt();
+                                Value::Number(
+                                    serde_json::Number::from_f64(std_dev)
+                                        .unwrap_or(serde_json::Number::from(0)),
+                                )
                             }
                         }
                     }

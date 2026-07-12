@@ -407,6 +407,26 @@ impl Executor {
                 }
                 Some(Ok(Value::Null))
             }
+            // phase4_cypher-parity-quick-wins §1.4 — `shuffle(list)`
+            // returns a random permutation of `list`. Uses `rand`'s
+            // thread-local RNG (the same crate + pattern as
+            // `apoc::coll::shuffle`) — non-deterministic by design, so
+            // callers needing reproducible order must sort explicitly.
+            "shuffle" => {
+                if let Some(arg) = args.first() {
+                    let value = match self.evaluate_projection_expression(row, context, arg) {
+                        Ok(v) => v,
+                        Err(e) => return Some(Err(e)),
+                    };
+                    if let Value::Array(mut arr) = value {
+                        use rand::seq::SliceRandom;
+                        let mut rng = rand::thread_rng();
+                        arr.shuffle(&mut rng);
+                        return Some(Ok(Value::Array(arr)));
+                    }
+                }
+                Some(Ok(Value::Null))
+            }
             // List functions
             "flatten" => {
                 // flatten(list) - flattens a list of lists by one level

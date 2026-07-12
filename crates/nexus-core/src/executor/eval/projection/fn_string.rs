@@ -460,6 +460,174 @@ impl Executor {
                 let skip = char_len - take;
                 Some(Ok(Value::String(s.chars().skip(skip).collect())))
             }
+            // phase4_cypher-parity-quick-wins §1.2 — `ascii(s)` returns the
+            // Unicode code point of the first character of `s` (matching
+            // openCypher/Neo4j semantics: character, not byte). Empty
+            // string and non-STRING input return NULL, mirroring the
+            // `left`/`right` type-error convention above.
+            "ascii" => {
+                let arg = match args.first() {
+                    Some(a) => match self.evaluate_projection_expression(row, context, a) {
+                        Ok(v) => v,
+                        Err(e) => return Some(Err(e)),
+                    },
+                    None => return Some(Ok(Value::Null)),
+                };
+                match arg {
+                    Value::String(s) => match s.chars().next() {
+                        Some(c) => Some(Ok(Value::Number((c as u32 as i64).into()))),
+                        None => Some(Ok(Value::Null)),
+                    },
+                    _ => Some(Ok(Value::Null)),
+                }
+            }
+            // phase4_cypher-parity-quick-wins §1.2 — `chr(n)` is the
+            // inverse of `ascii()`: builds a one-character string from a
+            // Unicode code point. Code points that are not valid Unicode
+            // scalar values (e.g. UTF-16 surrogate halves) return NULL
+            // rather than erroring, since `char::from_u32` already gives
+            // us that distinction for free.
+            "chr" => {
+                let arg = match args.first() {
+                    Some(a) => match self.evaluate_projection_expression(row, context, a) {
+                        Ok(v) => v,
+                        Err(e) => return Some(Err(e)),
+                    },
+                    None => return Some(Ok(Value::Null)),
+                };
+                let code = match arg {
+                    Value::Number(n) => n
+                        .as_i64()
+                        .or_else(|| n.as_f64().map(|f| f as i64))
+                        .and_then(|i| u32::try_from(i).ok()),
+                    _ => None,
+                };
+                match code.and_then(char::from_u32) {
+                    Some(c) => Some(Ok(Value::String(c.to_string()))),
+                    None => Some(Ok(Value::Null)),
+                }
+            }
+            // phase4_cypher-parity-quick-wins §1.2 — `lpad`/`rpad(original,
+            // length, [padString])`. `padString` defaults to a single
+            // space when omitted. When `original` is already at least
+            // `length` characters long, both truncate to the first
+            // `length` characters (Oracle-style LPAD/RPAD semantics: the
+            // truncation is a plain prefix-substring, independent of the
+            // padding side).
+            "lpad" | "rpad" => {
+                if args.len() < 2 {
+                    return Some(Ok(Value::Null));
+                }
+                let s_val = match self.evaluate_projection_expression(row, context, &args[0]) {
+                    Ok(v) => v,
+                    Err(e) => return Some(Err(e)),
+                };
+                let len_val = match self.evaluate_projection_expression(row, context, &args[1]) {
+                    Ok(v) => v,
+                    Err(e) => return Some(Err(e)),
+                };
+                let pad_val = match args.get(2) {
+                    Some(expr) => match self.evaluate_projection_expression(row, context, expr) {
+                        Ok(v) => v,
+                        Err(e) => return Some(Err(e)),
+                    },
+                    None => Value::String(" ".to_string()),
+                };
+                if matches!(s_val, Value::Null)
+                    || matches!(len_val, Value::Null)
+                    || matches!(pad_val, Value::Null)
+                {
+                    return Some(Ok(Value::Null));
+                }
+                let s = match s_val {
+                    Value::String(s) => s,
+                    _ => return Some(Ok(Value::Null)),
+                };
+                let target_len = match &len_val {
+                    Value::Number(n) => n
+                        .as_i64()
+                        .or_else(|| n.as_f64().map(|f| f as i64))
+                        .unwrap_or(0)
+                        .max(0) as usize,
+                    _ => return Some(Ok(Value::Null)),
+                };
+                let pad = match pad_val {
+                    Value::String(p) if !p.is_empty() => p,
+                    Value::String(_) => " ".to_string(),
+                    _ => return Some(Ok(Value::Null)),
+                };
+                let chars: Vec<char> = s.chars().collect();
+                if chars.len() >= target_len {
+                    return Some(Ok(Value::String(chars[..target_len].iter().collect())));
+                }
+                let need = target_len - chars.len();
+                let mut padding = String::new();
+                while padding.chars().count() < need {
+                    padding.push_str(&pad);
+                }
+                let padding: String = padding.chars().take(need).collect();
+                let result = if name == "lpad" {
+                    format!("{padding}{s}")
+                } else {
+                    format!("{s}{padding}")
+                };
+                Some(Ok(Value::String(result)))
+            }
+            // phase4_cypher-parity-quick-wins §1.2 — `normalize(s [,
+            // form])` applies Unicode normalization; `form` defaults to
+            // NFC and accepts NFC/NFD/NFKC/NFKD (case-insensitive, as
+            // Neo4j allows both `'NFC'` and lowercase spellings). An
+            // unrecognised form is a query error, not a silent NULL,
+            // since it is almost always a caller typo.
+            "normalize" => {
+                let arg = match args.first() {
+                    Some(a) => match self.evaluate_projection_expression(row, context, a) {
+                        Ok(v) => v,
+                        Err(e) => return Some(Err(e)),
+                    },
+                    None => return Some(Ok(Value::Null)),
+                };
+                if matches!(arg, Value::Null) {
+                    return Some(Ok(Value::Null));
+                }
+                let s = match arg {
+                    Value::String(s) => s,
+                    other => {
+                        return Some(Err(Error::TypeMismatch {
+                            expected: "STRING".to_string(),
+                            actual: super::type_name_of(&other).to_string(),
+                        }));
+                    }
+                };
+                let form = match args.get(1) {
+                    Some(expr) => match self.evaluate_projection_expression(row, context, expr) {
+                        Ok(Value::Null) => return Some(Ok(Value::Null)),
+                        Ok(Value::String(f)) => f,
+                        Ok(other) => {
+                            return Some(Err(Error::TypeMismatch {
+                                expected: "STRING normal form".to_string(),
+                                actual: super::type_name_of(&other).to_string(),
+                            }));
+                        }
+                        Err(e) => return Some(Err(e)),
+                    },
+                    None => "NFC".to_string(),
+                };
+                use unicode_normalization::UnicodeNormalization;
+                let normalized: String = match form.to_ascii_uppercase().as_str() {
+                    "NFC" => s.nfc().collect(),
+                    "NFD" => s.nfd().collect(),
+                    "NFKC" => s.nfkc().collect(),
+                    "NFKD" => s.nfkd().collect(),
+                    other => {
+                        return Some(Err(Error::CypherExecution(format!(
+                            "ERR_INVALID_NORMAL_FORM: normalize() expects NFC, NFD, NFKC, or \
+                             NFKD, got `{other}`"
+                        ))));
+                    }
+                };
+                Some(Ok(Value::String(normalized)))
+            }
             // phase6_opencypher-advanced-types §1 — BYTES family.
             // Uses the `{"_bytes": "<base64>"}` wire shape so
             // the JSON-based runtime stays unchanged. NULL-in →

@@ -951,7 +951,6 @@ async fn test_vectorizer_codebase_search() {
 }
 
 #[tokio::test]
-#[ignore = "Health endpoint returns 'Healthy' instead of 'ok'"]
 async fn test_vectorizer_integration_with_api() {
     let (app, _server, _vectorizer, _ctx): (
         Router,
@@ -973,7 +972,19 @@ async fn test_vectorizer_integration_with_api() {
     let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
     let health: Value = serde_json::from_slice(&body).unwrap();
 
-    assert_eq!(health["status"], "ok");
+    // `HealthStatus` serializes via its derived `Serialize` (variant name
+    // as-is, no `#[serde(rename)]`), so the value is one of "Healthy" /
+    // "Degraded" / "Unhealthy" — never the old (never valid) "ok" string
+    // this test used to assert. The component probes key off the
+    // `NEXUS_DATA_DIR` env var rather than this test's isolated
+    // `TestContext` data dir (see `nexus_server::api::health::probe_data_dir`),
+    // so the exact value is environment-dependent; assert the documented
+    // shape instead of a specific status.
+    let status = health["status"].as_str().expect("status is a string");
+    assert!(
+        matches!(status, "Healthy" | "Degraded" | "Unhealthy"),
+        "unexpected health status value: {status}"
+    );
 }
 
 #[tokio::test]

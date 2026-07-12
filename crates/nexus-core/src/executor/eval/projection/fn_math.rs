@@ -380,6 +380,41 @@ impl Executor {
                 Some(Ok(Value::Null))
             }
             "log" => {
+                // phase4_cypher-parity-quick-wins §1.3 — two-arg
+                // `log(x, base)` computes the base-`base` logarithm of
+                // `x`; the original one-arg form (natural log) is
+                // untouched below. NULL in either argument propagates,
+                // matching every other arm in this file.
+                if args.len() >= 2 {
+                    let x_val = match self.evaluate_projection_expression(row, context, &args[0]) {
+                        Ok(v) => v,
+                        Err(e) => return Some(Err(e)),
+                    };
+                    let base_val = match self.evaluate_projection_expression(row, context, &args[1])
+                    {
+                        Ok(v) => v,
+                        Err(e) => return Some(Err(e)),
+                    };
+                    if x_val.is_null() || base_val.is_null() {
+                        return Some(Ok(Value::Null));
+                    }
+                    let x = match self.value_to_number(&x_val) {
+                        Ok(n) => n,
+                        Err(e) => return Some(Err(e)),
+                    };
+                    let base = match self.value_to_number(&base_val) {
+                        Ok(n) => n,
+                        Err(e) => return Some(Err(e)),
+                    };
+                    return Some(
+                        serde_json::Number::from_f64(x.log(base))
+                            .map(Value::Number)
+                            .ok_or_else(|| Error::TypeMismatch {
+                                expected: "number".to_string(),
+                                actual: "non-finite".to_string(),
+                            }),
+                    );
+                }
                 if let Some(arg) = args.first() {
                     let value = match self.evaluate_projection_expression(row, context, arg) {
                         Ok(v) => v,
@@ -401,6 +436,29 @@ impl Executor {
                                 actual: "non-finite".to_string(),
                             }),
                     );
+                }
+                Some(Ok(Value::Null))
+            }
+            // phase4_cypher-parity-quick-wins §1.3 — `isNaN(x)` reports
+            // whether `x` is the floating-point NaN value. NULL
+            // propagates; non-numeric input goes through the same
+            // `value_to_number` conversion (and TypeMismatch error) as
+            // every other math builtin above, rather than silently
+            // returning false.
+            "isnan" => {
+                if let Some(arg) = args.first() {
+                    let value = match self.evaluate_projection_expression(row, context, arg) {
+                        Ok(v) => v,
+                        Err(e) => return Some(Err(e)),
+                    };
+                    if value.is_null() {
+                        return Some(Ok(Value::Null));
+                    }
+                    let num = match self.value_to_number(&value) {
+                        Ok(n) => n,
+                        Err(e) => return Some(Err(e)),
+                    };
+                    return Some(Ok(Value::Bool(num.is_nan())));
                 }
                 Some(Ok(Value::Null))
             }

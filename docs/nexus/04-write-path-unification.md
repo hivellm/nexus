@@ -5,7 +5,7 @@
 >
 > Part of the [Nexus 2.5.0 competitive analysis](README.md).
 
-## Status (2026-07-12) — Steps 0–4 SHIPPED on `release/2.5.0`
+## Status (2026-07-12) — Steps 0–4 and 7 SHIPPED on `release/2.5.0`
 
 - **Step 0** parity harness: 23 cases via the public HTTP handler — found
   **9 divergences beyond the predicted B1–B3** (B4/B6/B7/B8/B9 engine+parser
@@ -20,9 +20,22 @@
   string-prefix heuristics deleted; 12-case routing test table.
 - **Step 4** `write_ops.rs` fork DELETED (1,109 lines + 265 lines of dead
   helpers). Harness now runs un-ignored: **23/23 green**.
-- Remaining: Step 5 (GraphQL) + Step 6 (streaming MCP) →
-  `phase2_graphql-streaming-write-unification`; Step 7 (engine dispatch
-  consolidation) → `phase3_engine-dispatch-consolidation`; Step 8 → 2.6.
+- **Step 7** (`phase3_engine-dispatch-consolidation`) `execute_cypher_dispatch`
+  + `execute_cypher_ast` collapsed into one private `Engine::dispatch(ast,
+  DispatchSource)` in `crates/nexus-core/src/engine/query_pipeline.rs`.
+  The diff surfaced 6 real divergences (missing `SHOW CONSTRAINTS` routing,
+  a legacy `LOAD CSV`/`CALL {...}` special case bypassing the native
+  planner operators, the typed-property-index fix from `0a46cadf` only
+  reaching one fork, a double CREATE/DELETE replay risk on `DELETE ...
+  RETURN <expr>`, and `$param` values silently dropped via an always-empty
+  `ast.params` in two spots) — all fixed in the unified version, each with
+  a regression test in `engine/tests/dispatch_consolidation.rs`.
+  `Engine::execute_cypher(&str)` now delegates to
+  `execute_cypher_with_params(query, HashMap::new())`, closing off the L5
+  footgun class structurally.
+- **Steps 5–6** (GraphQL + streaming MCP → engine) SHIPPED via
+  `phase2_graphql-streaming-write-unification` (red-first proven).
+- Remaining: Step 8 (executor-native write operators) → 2.6 epic.
 
 ## TL;DR
 

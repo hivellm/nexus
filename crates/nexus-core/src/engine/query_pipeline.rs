@@ -1,18 +1,53 @@
 //! Top-level Cypher execution pipeline: `execute_cypher`, `execute_cypher_with_params`,
 //! `execute_cypher_with_context`, `execute_cypher_dispatch`, `execute_cypher_ast`,
 //! EXPLAIN/PROFILE, and supporting helpers. Extracted from `engine/mod.rs`.
+//!
+//! `execute_cypher_dispatch` and `execute_cypher_ast` are thin shims over
+//! the single private [`Engine::dispatch`] (phase3_engine-dispatch-
+//! consolidation) — see its doc comment for the divergences that existed
+//! between the two before this consolidation.
 
 use super::Engine;
 use crate::{Error, Result, executor};
 use serde_json::Value;
 use std::collections::HashMap;
 
+/// Distinguishes the two calling contexts unified into [`Engine::dispatch`]
+/// (phase3_engine-dispatch-consolidation, migration Step 7 of
+/// `docs/nexus/04-write-path-unification.md`). See `Engine::dispatch`'s
+/// own doc comment for the full rationale and the divergences this
+/// consolidation fixed.
+enum DispatchSource<'a> {
+    /// The once-per-query entry from
+    /// [`Engine::execute_cypher_with_context`]. Owns the raw query text
+    /// and may see EXPLAIN/PROFILE as the query's own outer clause.
+    TopLevel(&'a str),
+    /// PROFILE's own execution ([`Engine::execute_cypher_internal`]) and
+    /// any other caller that only holds a parsed AST — no raw query
+    /// text, and EXPLAIN/PROFILE are never re-checked (the caller
+    /// already stripped that wrapper; re-checking would recurse
+    /// forever).
+    Internal,
+}
+
 impl Engine {
-    /// Execute a Cypher query with no tenant scoping — the
-    /// pre-cluster-mode entry point. Standalone deployments and the
-    /// internal test suite use this directly.
+    /// Execute a Cypher query with no parameters and no tenant scoping.
+    ///
+    /// **Prefer [`Self::execute_cypher_with_params`]** for any query that
+    /// references `$param` placeholders or dynamic labels (`CREATE
+    /// (n:$lbl)`) — this method has no way to supply them, and the
+    /// `$param` text simply never resolves. This exact footgun caused bug
+    /// B4 (HTTP, fixed in 2.4.0) and B6 (RPC/RESP3): a caller reached for
+    /// the convenient no-params overload for a query that actually had
+    /// parameters available, and the write silently lost data instead of
+    /// erroring. This method delegates to
+    /// [`Self::execute_cypher_with_params`] with an empty parameter map,
+    /// so the params-dropping class of bug is structurally unreachable
+    /// through this entry point — use whichever reads better for a
+    /// genuinely param-less query (standalone deployments, the internal
+    /// test suite, literal-only Cypher).
     pub fn execute_cypher(&mut self, query: &str) -> Result<executor::ResultSet> {
-        self.execute_cypher_with_context(query, None, crate::cluster::TenantIsolationMode::None)
+        self.execute_cypher_with_params(query, HashMap::new())
     }
 
     /// Execute a Cypher query with a client-supplied parameter map.
@@ -211,30 +246,91 @@ impl Engine {
     /// pre-check and post-record. Split out so the outer function
     /// can bracket every success path with a single
     /// `record_usage` call instead of instrumenting each of the
-    /// ~8 `return Ok(...)` sites inside.
+    /// ~8 `return Ok(...)` sites inside. Thin shim over the unified
+    /// [`Self::dispatch`] (phase3_engine-dispatch-consolidation).
     fn execute_cypher_dispatch(
         &mut self,
         ast: &executor::parser::CypherQuery,
         query: &str,
     ) -> Result<executor::ResultSet> {
-        // Check for EXPLAIN command
-        if let Some(executor::parser::Clause::Explain(explain_clause)) = ast.clauses.first() {
-            // Use stored query string if available, otherwise convert from AST
-            let query_str = explain_clause
-                .query_string
-                .clone()
-                .unwrap_or_else(|| self.query_to_string(&explain_clause.query));
-            return self.execute_explain_with_string(&explain_clause.query, &query_str);
-        }
+        self.dispatch(ast, DispatchSource::TopLevel(query))
+    }
 
-        // Check for PROFILE command
-        if let Some(executor::parser::Clause::Profile(profile_clause)) = ast.clauses.first() {
-            // Use stored query string if available, otherwise convert from AST
-            let query_str = profile_clause
-                .query_string
-                .clone()
-                .unwrap_or_else(|| self.query_to_string(&profile_clause.query));
-            return self.execute_profile_with_string(&profile_clause.query, &query_str);
+    /// Unified internal dispatcher (phase3_engine-dispatch-consolidation,
+    /// migration Step 7 of `docs/nexus/04-write-path-unification.md`).
+    ///
+    /// Before this consolidation, [`Self::execute_cypher_dispatch`] (the
+    /// once-per-query real-traffic entry) and [`Self::execute_cypher_ast`]
+    /// (PROFILE's own execution + any internal AST-holding caller) were
+    /// ~200-line near-identical forks that had drifted apart:
+    ///
+    /// - `SHOW CONSTRAINTS` routing was missing from the AST-only fork —
+    ///   reached through PROFILE it fell through to the generic executor,
+    ///   which silently drops unmatched clauses instead of listing
+    ///   constraints.
+    /// - `LOAD CSV` / `CALL { ... }` had a special-case dispatch ONLY on
+    ///   the AST-only fork, routing to the legacy `execute_load_csv_commands`
+    ///   / `execute_call_subquery_commands` helpers in `engine/ddl.rs`.
+    ///   Those predate the native planner operators (`Operator::LoadCsv`,
+    ///   `Operator::CallSubquery`) that the query-text fork's generic
+    ///   fallthrough already used, and are strictly less capable (e.g.
+    ///   `execute_call_subquery_commands` rejects `IN CONCURRENT
+    ///   TRANSACTIONS` and non-`FAIL` `ON ERROR` policies that
+    ///   `Operator::CallSubquery` fully implements). Dropped here so both
+    ///   callers get the same, modern execution.
+    /// - The typed-property-index maintenance fix (`0a46cadf fix(engine):
+    ///   typed property index follows SET/REMOVE and Cypher CREATE`) only
+    ///   ever reached the query-text fork's standalone-CREATE branch; the
+    ///   AST-only fork routed standalone CREATE through the older
+    ///   `execute_create_query` (manual pattern walk in `match_exec.rs`),
+    ///   so a `PROFILE`d CREATE left the new node invisible to
+    ///   `find_exact`/NodeIndexSeek.
+    /// - `DELETE ... RETURN <expr>` (non-count) diverged between a safe
+    ///   RETURN-only replay AST (`phase6 §8.2`) and a full-AST replay that
+    ///   would re-plan and re-execute the query's own CREATE/DELETE
+    ///   clauses a second time against the post-delete state.
+    /// - Both the RETURN-tail and final-fallback branches on the AST-only
+    ///   fork threaded `ast.params` (always `{}` — the parser never
+    ///   populates it) instead of `self.current_params`, silently
+    ///   dropping `$param` values on any query that reached them through
+    ///   PROFILE or `CALL { ... }` recursion — the same footgun class as
+    ///   `Engine::execute_cypher(&str)` (L5), one layer deeper.
+    ///
+    /// `source` carries exactly what legitimately differs between the two
+    /// callers: whether the raw query text is available (only the
+    /// top-level entry owns it — the executor's planner needs real Cypher
+    /// text to re-parse `$param`/dynamic-label forms; internal callers
+    /// install a one-shot `preparsed_ast_override` instead, since
+    /// `query_to_string` emits Rust `Debug` output, never valid Cypher),
+    /// and whether EXPLAIN/PROFILE may appear as the query's own outer
+    /// clause (only true at the top level — internal callers already had
+    /// that wrapper stripped by their caller, and re-checking here would
+    /// recurse forever).
+    fn dispatch(
+        &mut self,
+        ast: &executor::parser::CypherQuery,
+        source: DispatchSource<'_>,
+    ) -> Result<executor::ResultSet> {
+        if let DispatchSource::TopLevel(_) = source {
+            // Check for EXPLAIN command
+            if let Some(executor::parser::Clause::Explain(explain_clause)) = ast.clauses.first() {
+                // Use stored query string if available, otherwise convert from AST
+                let query_str = explain_clause
+                    .query_string
+                    .clone()
+                    .unwrap_or_else(|| self.query_to_string(&explain_clause.query));
+                return self.execute_explain_with_string(&explain_clause.query, &query_str);
+            }
+
+            // Check for PROFILE command
+            if let Some(executor::parser::Clause::Profile(profile_clause)) = ast.clauses.first() {
+                // Use stored query string if available, otherwise convert from AST
+                let query_str = profile_clause
+                    .query_string
+                    .clone()
+                    .unwrap_or_else(|| self.query_to_string(&profile_clause.query));
+                return self.execute_profile_with_string(&profile_clause.query, &query_str);
+            }
         }
 
         // Check for administrative commands that need special handling
@@ -464,7 +560,15 @@ impl Engine {
                     // `write.create_delete_cycle`) executes cleanly.
                     let tail_ast = executor::parser::CypherQuery {
                         clauses: vec![executor::parser::Clause::Return(return_clause.clone())],
-                        params: ast.params.clone(),
+                        // FIXED (phase3_engine-dispatch-consolidation):
+                        // `ast.params` is always `{}` — the parser never
+                        // populates it (see
+                        // `executor/parser/clauses/mod.rs`) — so a
+                        // `$param` reference inside this RETURN tail was
+                        // silently dropped. The real supplied params
+                        // live on `self.current_params` for the duration
+                        // of the call.
+                        params: self.current_params.clone(),
                         graph_scope: ast.graph_scope.clone(),
                     };
                     struct OverrideGuard {
@@ -481,7 +585,7 @@ impl Engine {
                     };
                     let query_obj = executor::Query {
                         cypher: String::new(),
-                        params: ast.params.clone(),
+                        params: self.current_params.clone(),
                     };
                     return self.executor.execute(&query_obj);
                 }
@@ -505,16 +609,42 @@ impl Engine {
         // If query has CREATE (with or without MATCH), handle via Engine for persistence
         if has_create {
             if has_match {
-                // MATCH ... CREATE: execute MATCH first, then CREATE with results
-                let result = self.execute_match_create_query(ast, Some(query))?;
+                // MATCH ... CREATE: execute MATCH first, then CREATE with
+                // results. TopLevel owns the raw query text; Internal
+                // callers install a one-shot AST override instead and
+                // pass an empty string, so `execute_match_create_query`'s
+                // `None` fallback (`query_to_string`, Rust `Debug`
+                // output, never valid Cypher) is never reached — that
+                // fallback previously made any MATCH...CREATE reached
+                // through PROFILE / internal recursion fail to re-parse.
+                let query_str_opt = match source {
+                    DispatchSource::TopLevel(q) => Some(q),
+                    DispatchSource::Internal => {
+                        self.executor
+                            .install_preparsed_ast_override(Some(ast.clone()));
+                        Some("")
+                    }
+                };
+                let result = self.execute_match_create_query(ast, query_str_opt)?;
 
                 // CRITICAL: Sync executor's store back to engine's storage
                 // The executor has a cloned store, so changes need to be synced back
                 self.storage = self.executor.get_store();
 
-                // NOTE: Do NOT call refresh_executor() here!
-                // The caller should call refresh_executor() explicitly when ready
-                // This allows batching multiple CREATE statements before refreshing
+                match source {
+                    DispatchSource::TopLevel(_) => {
+                        // NOTE: Do NOT call refresh_executor() here!
+                        // The caller should call refresh_executor() explicitly when ready
+                        // This allows batching multiple CREATE statements before refreshing
+                    }
+                    DispatchSource::Internal => {
+                        // Internal callers are single-shot (PROFILE,
+                        // CALL-subquery recursion) — there is no
+                        // follow-up batched statement to defer the
+                        // refresh to, so do it eagerly.
+                        self.refresh_executor()?;
+                    }
+                }
 
                 return Ok(result);
             }
@@ -555,10 +685,6 @@ impl Engine {
                     }],
                 ));
             }
-            let query_obj = executor::Query {
-                cypher: query.to_string(),
-                params: self.current_params.clone(),
-            };
             // Watermark for typed property-index maintenance: the executor
             // CREATE path writes storage + the label index but NOT the
             // typed property B-tree, so a freshly created node was
@@ -566,8 +692,30 @@ impl Engine {
             // MATCH {prop} SET silently no-opped). Index the id range the
             // executor allocates (exact under the single-writer model) —
             // same write-set source as the #15 scoped-commit maintenance.
+            // Shared by both callers now — previously only the query-text
+            // fork applied this fix; the AST-only fork's standalone
+            // CREATE routed through the older `execute_create_query`
+            // (manual pattern walk in `match_exec.rs`), which never
+            // indexed the node at all.
             let pre_create_node_count = self.storage.node_count();
-            let result = self.executor.execute(&query_obj)?;
+            let result = match source {
+                DispatchSource::TopLevel(query) => {
+                    let query_obj = executor::Query {
+                        cypher: query.to_string(),
+                        params: self.current_params.clone(),
+                    };
+                    self.executor.execute(&query_obj)?
+                }
+                DispatchSource::Internal => {
+                    self.executor
+                        .install_preparsed_ast_override(Some(ast.clone()));
+                    let query_obj = executor::Query {
+                        cypher: String::new(),
+                        params: self.current_params.clone(),
+                    };
+                    self.executor.execute(&query_obj)?
+                }
+            };
 
             // CRITICAL: Sync executor's store back to engine's storage
             self.storage = self.executor.get_store();
@@ -588,14 +736,38 @@ impl Engine {
             return Ok(result);
         }
 
-        // Execute the query normally. Attach the scoped AST so the
-        // cluster-mode label rewrite (performed at the top of this
-        // function) survives the executor's re-parse.
-        let query_obj = executor::Query {
-            cypher: query.to_string(),
-            params: self.current_params.clone(),
-        };
-        self.executor.execute(&query_obj)
+        // Execute the query normally. TopLevel attaches the scoped AST by
+        // re-parsing the original query text (a cluster-mode label
+        // rewrite, if any, was already installed as a one-shot override
+        // by the caller before dispatch ran — see
+        // `execute_cypher_with_context`'s `OverrideGuard`). Internal
+        // callers have no raw query text, so they install `ast` itself
+        // (already scoped, since it was built via the same cluster-mode
+        // path) as a one-shot override instead of reconstructing Cypher
+        // text via `query_to_string` (Rust `Debug` output, never valid
+        // Cypher). Both arms use `self.current_params` — the AST's own
+        // `.params` field is always `{}` (the parser never populates it);
+        // using it here silently dropped `$param` values on every query
+        // that reached this fallback through PROFILE or CALL-subquery
+        // recursion.
+        match source {
+            DispatchSource::TopLevel(query) => {
+                let query_obj = executor::Query {
+                    cypher: query.to_string(),
+                    params: self.current_params.clone(),
+                };
+                self.executor.execute(&query_obj)
+            }
+            DispatchSource::Internal => {
+                self.executor
+                    .install_preparsed_ast_override(Some(ast.clone()));
+                let query_obj = executor::Query {
+                    cypher: String::new(),
+                    params: self.current_params.clone(),
+                };
+                self.executor.execute(&query_obj)
+            }
+        }
     }
 
     /// Execute EXPLAIN command - returns execution plan without executing query
@@ -716,293 +888,15 @@ impl Engine {
         self.execute_cypher_ast(&ast)
     }
 
-    /// Execute Cypher AST (internal, used to avoid EXPLAIN/PROFILE recursion)
+    /// Execute Cypher AST (internal, used to avoid EXPLAIN/PROFILE
+    /// recursion). Thin shim over the unified [`Self::dispatch`]
+    /// (phase3_engine-dispatch-consolidation) — see `Self::dispatch`'s
+    /// doc comment for the list of behavioral divergences this
+    /// consolidation fixed.
     pub(super) fn execute_cypher_ast(
         &mut self,
         ast: &executor::parser::CypherQuery,
     ) -> Result<executor::ResultSet> {
-        // Check for administrative commands that need special handling
-        let has_admin_db_cmd = ast.clauses.iter().any(|c| {
-            matches!(
-                c,
-                executor::parser::Clause::CreateDatabase(_)
-                    | executor::parser::Clause::DropDatabase(_)
-                    | executor::parser::Clause::ShowDatabases
-                    | executor::parser::Clause::UseDatabase(_)
-            )
-        });
-
-        if has_admin_db_cmd {
-            return Err(Error::CypherExecution(
-                "Database management commands (CREATE/DROP DATABASE, SHOW DATABASES, USE DATABASE) must be executed at server level".to_string(),
-            ));
-        }
-
-        // Check for transaction commands
-        let has_begin = ast
-            .clauses
-            .iter()
-            .any(|c| matches!(c, executor::parser::Clause::BeginTransaction));
-        let has_commit = ast
-            .clauses
-            .iter()
-            .any(|c| matches!(c, executor::parser::Clause::CommitTransaction));
-        let has_rollback = ast
-            .clauses
-            .iter()
-            .any(|c| matches!(c, executor::parser::Clause::RollbackTransaction));
-        let has_savepoint_cmd = ast.clauses.iter().any(|c| {
-            matches!(
-                c,
-                executor::parser::Clause::Savepoint(_)
-                    | executor::parser::Clause::RollbackToSavepoint(_)
-                    | executor::parser::Clause::ReleaseSavepoint(_)
-            )
-        });
-
-        if has_begin || has_commit || has_rollback || has_savepoint_cmd {
-            return self.execute_transaction_commands(ast, None);
-        }
-
-        // Check for index management commands
-        let has_create_index = ast
-            .clauses
-            .iter()
-            .any(|c| matches!(c, executor::parser::Clause::CreateIndex(_)));
-        let has_drop_index = ast
-            .clauses
-            .iter()
-            .any(|c| matches!(c, executor::parser::Clause::DropIndex(_)));
-
-        if has_create_index || has_drop_index {
-            return self.execute_index_commands(ast);
-        }
-
-        // Check for constraint management commands
-        let has_create_constraint = ast
-            .clauses
-            .iter()
-            .any(|c| matches!(c, executor::parser::Clause::CreateConstraint(_)));
-        let has_drop_constraint = ast
-            .clauses
-            .iter()
-            .any(|c| matches!(c, executor::parser::Clause::DropConstraint(_)));
-
-        if has_create_constraint || has_drop_constraint {
-            return self.execute_constraint_commands(ast);
-        }
-
-        // Check for function management commands
-        let has_show_functions = ast
-            .clauses
-            .iter()
-            .any(|c| matches!(c, executor::parser::Clause::ShowFunctions));
-        let has_create_function = ast
-            .clauses
-            .iter()
-            .any(|c| matches!(c, executor::parser::Clause::CreateFunction(_)));
-        let has_drop_function = ast
-            .clauses
-            .iter()
-            .any(|c| matches!(c, executor::parser::Clause::DropFunction(_)));
-
-        if has_show_functions || has_create_function || has_drop_function {
-            return self.execute_function_commands(ast);
-        }
-
-        // Check for LOAD CSV commands
-        let has_load_csv = ast
-            .clauses
-            .iter()
-            .any(|c| matches!(c, executor::parser::Clause::LoadCsv(_)));
-
-        if has_load_csv {
-            return self.execute_load_csv_commands(ast);
-        }
-
-        // Check for CALL subquery commands
-        let has_call_subquery = ast
-            .clauses
-            .iter()
-            .any(|c| matches!(c, executor::parser::Clause::CallSubquery(_)));
-
-        if has_call_subquery {
-            return self.execute_call_subquery_commands(ast);
-        }
-
-        // Check for user management commands (should be handled at server level)
-        let has_user_cmd = ast.clauses.iter().any(|c| {
-            matches!(
-                c,
-                executor::parser::Clause::ShowUsers
-                    | executor::parser::Clause::CreateUser(_)
-                    | executor::parser::Clause::Grant(_)
-                    | executor::parser::Clause::Revoke(_)
-            )
-        });
-
-        if has_user_cmd {
-            return Err(Error::CypherExecution(
-                "User management commands (SHOW USERS, CREATE USER, GRANT, REVOKE) must be executed at server level".to_string(),
-            ));
-        }
-
-        // Check if query contains CREATE or DELETE
-        let has_create = ast
-            .clauses
-            .iter()
-            .any(|c| matches!(c, executor::parser::Clause::Create(_)));
-        let has_delete = ast
-            .clauses
-            .iter()
-            .any(|c| matches!(c, executor::parser::Clause::Delete(_)));
-        let has_merge = ast
-            .clauses
-            .iter()
-            .any(|c| matches!(c, executor::parser::Clause::Merge(_)));
-        let has_set_clause = ast
-            .clauses
-            .iter()
-            .any(|c| matches!(c, executor::parser::Clause::Set(_)));
-        let has_remove_clause = ast
-            .clauses
-            .iter()
-            .any(|c| matches!(c, executor::parser::Clause::Remove(_)));
-        let has_foreach = ast
-            .clauses
-            .iter()
-            .any(|c| matches!(c, executor::parser::Clause::Foreach(_)));
-        let has_match = ast
-            .clauses
-            .iter()
-            .any(|c| matches!(c, executor::parser::Clause::Match(_)));
-        // phase6 §8 — CREATE-bound variables satisfy DELETE's context
-        // requirement too, matching openCypher semantics.
-        let has_create_bound_vars = ast.clauses.iter().any(|c| {
-            if let executor::parser::Clause::Create(cc) = c {
-                cc.pattern.elements.iter().any(|el| {
-                    if let executor::parser::PatternElement::Node(node) = el {
-                        node.variable.is_some()
-                    } else {
-                        false
-                    }
-                })
-            } else {
-                false
-            }
-        });
-
-        // Handle DELETE (with or without MATCH)
-        if has_delete {
-            let deleted_count = if has_match || has_create_bound_vars {
-                // MATCH ... DELETE or CREATE ... DELETE: execute the
-                // upstream pattern first, then DELETE with results.
-                self.execute_match_delete_query(ast)?
-            } else {
-                return Err(Error::CypherSyntax(
-                    "DELETE requires an upstream MATCH, CREATE, or WITH".to_string(),
-                ));
-            };
-            self.refresh_executor()?;
-
-            // Check if there's a RETURN clause after DELETE
-            let return_clause_opt = ast.clauses.iter().find_map(|c| {
-                if let executor::parser::Clause::Return(rc) = c {
-                    Some(rc)
-                } else {
-                    None
-                }
-            });
-
-            if let Some(return_clause) = return_clause_opt {
-                // Check if RETURN contains count aggregation
-                let mut is_count_only = false;
-                let mut count_alias = "count".to_string();
-
-                if return_clause.items.len() == 1 {
-                    let executor::parser::ReturnItem { expression, alias } =
-                        &return_clause.items[0];
-                    if let executor::parser::Expression::FunctionCall { name, args: _ } = expression
-                    {
-                        if name.to_lowercase() == "count" {
-                            is_count_only = true;
-                            count_alias = alias.clone().unwrap_or_else(|| "count".to_string());
-                        }
-                    }
-                }
-
-                if is_count_only {
-                    // Return count of deleted nodes
-                    return Ok(executor::ResultSet::new(
-                        vec![count_alias],
-                        vec![executor::Row {
-                            values: vec![serde_json::Value::Number(deleted_count.into())],
-                        }],
-                    ));
-                } else {
-                    // If there's a RETURN clause with other expressions, let the executor handle it
-                    // The executor will process the RETURN, but since nodes are deleted,
-                    // it will likely return empty results or handle it appropriately.
-                    // Hand the parsed AST to the executor via the one-shot
-                    // override — `query_to_string` emits Debug output, not
-                    // Cypher, so re-parsing it always failed.
-                    self.executor
-                        .install_preparsed_ast_override(Some(ast.clone()));
-                    let query_obj = executor::Query {
-                        cypher: String::new(),
-                        params: ast.params.clone(),
-                    };
-                    return self.executor.execute(&query_obj);
-                }
-            } else {
-                // No RETURN clause - return count of deleted nodes
-                return Ok(executor::ResultSet::new(
-                    vec!["count".to_string()],
-                    vec![executor::Row {
-                        values: vec![serde_json::Value::Number(deleted_count.into())],
-                    }],
-                ));
-            }
-        }
-
-        // Handle MERGE / SET / REMOVE / FOREACH write queries before falling back to read executor
-        if has_merge || has_set_clause || has_remove_clause || has_foreach {
-            let result = self.execute_write_query(ast)?;
-            return Ok(result);
-        }
-
-        // If query has CREATE (with or without MATCH), handle via Engine for persistence
-        if has_create {
-            if has_match {
-                // MATCH ... CREATE: execute MATCH first, then CREATE with results
-                let result = self.execute_match_create_query(ast, None)?;
-
-                // CRITICAL: Sync executor's store back to engine's storage
-                self.storage = self.executor.get_store();
-
-                // Refresh executor to see the changes
-                self.refresh_executor()?;
-
-                return Ok(result);
-            } else {
-                // Standalone CREATE
-                self.execute_create_query(ast)?;
-            }
-
-            // Refresh executor to see the changes
-            self.refresh_executor()?;
-        }
-
-        // Execute the query normally. Hand the parsed AST to the executor
-        // via the one-shot override — `query_to_string` emits Debug output,
-        // not Cypher, so re-parsing it always failed (this broke every
-        // inner read subquery on the legacy CALL path).
-        self.executor
-            .install_preparsed_ast_override(Some(ast.clone()));
-        let query_obj = executor::Query {
-            cypher: String::new(),
-            params: ast.params.clone(),
-        };
-        self.executor.execute(&query_obj)
+        self.dispatch(ast, DispatchSource::Internal)
     }
 }
