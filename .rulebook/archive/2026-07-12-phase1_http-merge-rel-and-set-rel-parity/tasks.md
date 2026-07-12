@@ -27,6 +27,6 @@
 - [x] 4.3 Verified: case_10/11 (MERGE-rel creates edge idempotently + inline props persist), case_12 (`SET r.k`/`SET r += {}`/`SET r.k = null` all persist on a relationship), case_08 (`CREATE...RETURN r.prop` projects the value in the same statement) — all green
 
 ## 6. Tail (mandatory — enforced by rulebook v5.3.0)
-- [x] 5.1 Docs updated: `docs/nexus/04-write-path-unification.md` gained a "Steps 0–4 SHIPPED" status section; CHANGELOG `[Unreleased — 2.5.0]` documents the reroute, engine-gap fixes, aggregation column order, AST routing, and fork deletion
-- [x] 5.2 Tests: 23-case parity harness (all bugs B1–B9/L1/G1–G4 covered), 12-case routing table in `routing.rs`, engine-level tests for every core fix (write.rs, transactions.rs, tokens.rs)
-- [x] 5.3 All green: harness 23/0/0; nexus-server 478 passed / 0 failed; nexus-core 2408 passed / 0 failed; clippy `--all-targets -D warnings` clean; fmt clean
+- [x] 5.1 Update or create documentation covering the implementation — `docs/nexus/04-write-path-unification.md` gained a "Steps 0–4 SHIPPED" status section; CHANGELOG `[Unreleased — 2.5.0]` documents the reroute, engine-gap fixes, aggregation column order, AST routing, and fork deletion
+- [x] 5.2 Write tests covering the new behavior — 23-case parity harness (all bugs B1–B9/L1/G1–G4 covered), 12-case routing table in `routing.rs`, engine-level tests for every core fix (write.rs, transactions.rs, tokens.rs)
+- [x] 5.3 Run tests and confirm they pass — harness 23/0/0; nexus-server 478 passed / 0 failed; nexus-core 2408 passed / 0 failed; clippy `--all-targets -D warnings` clean; fmt clean
