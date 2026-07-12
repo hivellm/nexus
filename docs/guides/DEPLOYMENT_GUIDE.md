@@ -63,21 +63,26 @@ docker run -d \
 The Dockerfile uses a multi-stage build for optimal image size:
 
 ### Build Stage
-- Uses `rustlang/rust:nightly` base image
-- Installs build dependencies (pkg-config, libssl-dev)
-- Builds the project in release mode
-- Produces optimized binary
+- Uses `rustlang/rust:nightly` base image with `musl-tools`
+- Builds `nexus-server` for `x86_64-unknown-linux-musl` — a **fully static
+  binary** (verified by a `file`-based gate in the build)
 
-### Runtime Stage
-- Uses `dhi.io/debian-base:trixie` (Docker Hardened Image) for approved, minimal base
-- Installs only runtime dependencies (ca-certificates, libssl3)
-- Creates non-root user (`nexus`) for security
-- Sets up data and config directories
-- Includes health check
+### Runtime Stage (zero-CVE, since 2.5.0)
+- **`FROM scratch`** — the image contains ONLY the static binary, the
+  `nexus` user database entries, the directory skeleton, and a CA bundle.
+  0 OS packages → **0 CVEs by construction** (Docker Scout: 0C 0H 0M 0L)
+- Runs as non-root user (`nexus`, uid 1000)
+- Health check runs the binary itself: `nexus-server --healthcheck`
+  (HTTP probe to `/health`, exit 0/1) — no bash in the image
+
+> **No shell inside the container.** `docker exec -it nexus sh` does NOT
+> work on the scratch image. Debug via `docker logs nexus`, the HTTP API
+> (`/health`, `/stats`), or by mounting the data volume into a throwaway
+> debug container: `docker run --rm -it -v nexus-data:/data debian:trixie-slim bash`.
 
 ### Image Size
 - Build stage: ~2GB (temporary)
-- Runtime stage: ~150MB (final image)
+- Runtime stage: ~26MB (final image; was ~70MB on the 2.4.0 debian-based runtime)
 
 ## Docker Compose
 

@@ -85,8 +85,9 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
       --target x86_64-unknown-linux-musl \
  && mkdir -p /out/release \
  && cp target/x86_64-unknown-linux-musl/release/nexus-server /out/release/nexus-server \
- && file /out/release/nexus-server | grep -Eq 'static-pie linked|statically linked' \
- && ! ldd /out/release/nexus-server 2>/dev/null
+ && file /out/release/nexus-server | grep -Eq 'static-pie linked|statically linked'
+# (`ldd` is NOT a reliable static gate: glibc's ldd prints "statically
+# linked" and exits 0 for static-PIE binaries, so only `file` is checked.)
 
 # User-prep stage
 #
