@@ -12,9 +12,9 @@
 - [x] 2.0f Harness cases un-ignored: 5b, 5d, 7 now GREEN (18 passed / 0 failed). Case 15 stays ignored with updated reason — parser half (B9) fixed, but string-prefix ROUTING still misroutes comment-prefixed writes (L1); flips green with section 4. Full nexus-core: 2403 passed / 0 failed
 
 ## 3. Route HTTP writes to the engine (Step 2)
-- [ ] 2.1 Move audit logging (`audit_logger.log_write_operation`) into a wrapper around the engine call in handler.rs (BLOCKING: must land before write_ops deletion)
-- [ ] 2.2 Replace the `is_create_query || is_merge_query → execute_create_or_merge` branch in handler.rs with the same `execute_cypher_with_params` call the MATCH/UNWIND branches use
-- [ ] 2.3 Parity harness green on the engine-routed path; existing `api/cypher/tests.rs` green
+- [x] 2.1 Audit logging relocated: write audits now emitted from a handler.rs wrapper around the engine call (success + failure variants; failures logged via tracing instead of `let _ =`)
+- [x] 2.2 CREATE/MERGE-prefixed queries route to `execute_cypher_with_params` (write_ops.rs call site removed; module retained until section 5). The reroute surfaced 4 MORE engine gaps, all fixed in nexus-core: G1 executor CREATE-property `$param` resolution (`operators/create.rs` — params threaded through `expression_to_json_value`/`resolve_property_expr_for_create` + both dispatch call sites), G2 CREATE-bound variables visible to REMOVE in combined statements, G3 dispatch routing standalone MERGE-rel to `execute_write_query` (was falling to the executor's MERGE-as-MATCH stub → 0 edges), G4 aggregation column order (`Operator::Aggregate` gained `output_order`; planner records the written RETURN/WITH alias order; executor permutes `[group keys..., aggs...]` back — `RETURN count(r) AS c, r.w AS w` returned `[w, c]` positionally swapped)
+- [x] 2.3 Parity harness 22 passed / 0 failed / 1 ignored (case 15 = L1 string routing, flips in section 4); nexus-core 2408/0; nexus-server 465/0; clippy `-D warnings` + fmt clean
 
 ## 4. AST-predicate routing (Step 3)
 - [ ] 3.1 Lift RPC's `needs_engine_interception(&ast)` into shared `api/cypher/routing.rs`, used by HTTP + RPC

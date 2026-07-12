@@ -135,6 +135,12 @@ pub async fn clean_cache(
 /// value from the request's parameter map — without it, every
 /// parameterized write (`CREATE`, `MERGE`, `SET`) silently stored
 /// `null` instead of the actual value.
+///
+/// Only caller was `execute/write_ops.rs`, unreferenced since
+/// `handler.rs` routes CREATE/MERGE through the engine instead
+/// (phase1_http-merge-rel-and-set-rel-parity §3, item 2.2). Kept
+/// until §5 item 4.1 deletes the fork.
+#[allow(dead_code)]
 fn expression_to_json_value(
     expr: &nexus_core::executor::parser::Expression,
     params: &HashMap<String, serde_json::Value>,
@@ -190,6 +196,9 @@ fn expression_to_json_value(
     }
 }
 
+// Dead since `write_ops.rs` lost its only call site (see
+// `expression_to_json_value` above); kept until §5 item 4.1.
+#[allow(dead_code)]
 fn property_map_to_json(
     property_map: &Option<PropertyMap>,
     params: &HashMap<String, serde_json::Value>,
@@ -206,6 +215,9 @@ fn property_map_to_json(
     serde_json::Value::Object(props)
 }
 
+// Dead since `write_ops.rs` lost its only call site; kept until §5
+// item 4.1.
+#[allow(dead_code)]
 fn ensure_node_from_pattern(
     engine: &mut nexus_core::Engine,
     node_pattern: &nexus_core::executor::parser::NodePattern,
@@ -228,6 +240,10 @@ fn ensure_node_from_pattern(
 /// the engine API directly and never reaches the executor's create
 /// operator. Without this the `_id` carried on the parsed AST would be
 /// silently dropped on /cypher requests.
+///
+/// Dead since `write_ops.rs` lost its only call site; kept until §5
+/// item 4.1.
+#[allow(dead_code)]
 fn resolve_external_id_for_server(
     expr: &nexus_core::executor::parser::Expression,
     parameters: &HashMap<String, serde_json::Value>,
@@ -258,6 +274,9 @@ fn resolve_external_id_for_server(
         .map_err(|e| format!("invalid _id `{}`: {}", raw, e))
 }
 
+// Dead since `write_ops.rs` lost its only call site; kept until §5
+// item 4.1.
+#[allow(dead_code)]
 fn ast_conflict_policy_to_storage(
     p: nexus_core::executor::parser::AstConflictPolicy,
 ) -> nexus_core::storage::external_id::ConflictPolicy {
@@ -270,6 +289,9 @@ fn ast_conflict_policy_to_storage(
     }
 }
 
+// Dead since `write_ops.rs` lost its only call site; kept until §5
+// item 4.1.
+#[allow(dead_code)]
 fn ensure_node_from_pattern_with_ext_id(
     engine: &mut nexus_core::Engine,
     node_pattern: &nexus_core::executor::parser::NodePattern,
@@ -313,6 +335,9 @@ fn ensure_node_from_pattern_with_ext_id(
     }
 }
 
+// Dead since `write_ops.rs` lost its only call site; kept until §5
+// item 4.1.
+#[allow(dead_code)]
 fn create_relationship_from_pattern(
     engine: &mut nexus_core::Engine,
     rel_pattern: &nexus_core::executor::parser::RelationshipPattern,

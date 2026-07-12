@@ -536,6 +536,19 @@ impl Engine {
                     ))),
                 }
             }
+            // G1 — `CREATE (n:L {x: $v})` / `CREATE (a)-[r:T {w: $w}]->(b)`
+            // via `execute_cypher_with_params` (harness cases 02/09):
+            // resolve `$param` against the map installed by
+            // `execute_cypher_with_params` on `self.current_params`,
+            // mirroring the `Expression::Parameter` arm already added to
+            // `eval_write_value` (`engine/write_exec.rs`) for UNWIND-write
+            // values. A missing parameter is a clear client error — CREATE
+            // properties must never silently degrade to NULL.
+            executor::parser::Expression::Parameter(name) => {
+                self.current_params.get(name).cloned().ok_or_else(|| {
+                    Error::CypherExecution(format!("Parameter `${name}` was not provided"))
+                })
+            }
             _ => Err(Error::CypherExecution(
                 "Complex expressions not supported in CREATE properties".to_string(),
             )),

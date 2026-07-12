@@ -279,6 +279,15 @@ pub enum Operator {
         aggregations: Vec<Aggregation>,
         /// Projection items (for evaluating literals in aggregation functions without MATCH)
         projection_items: Option<Vec<ProjectionItem>>,
+        /// The RETURN/WITH-clause column order (aliases, as written). The
+        /// aggregate assembles output as `[group-by keys..., aggregation
+        /// aliases...]`, losing the written order whenever an aggregate
+        /// precedes a grouping key (`RETURN count(r) AS c, r.w AS w` came
+        /// back `[w, c]`). Neo4j preserves clause order and SDK clients
+        /// consume rows positionally, so when this is set the executor
+        /// permutes its output back to the written order (write-path
+        /// unification, divergence G4).
+        output_order: Option<Vec<String>>,
         /// Source operator (for optimization analysis)
         source: Option<Box<Operator>>,
         /// Whether streaming optimization is applied

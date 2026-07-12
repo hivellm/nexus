@@ -292,7 +292,12 @@ impl Executor {
             if existing_rows.is_empty() {
                 // CREATE standalone - create nodes and relationships directly
                 let (created_node_ids, created_rel_ids) = self
-                    .execute_create_pattern_with_variables(pattern, resolved_external_id, policy)?;
+                    .execute_create_pattern_with_variables(
+                        pattern,
+                        resolved_external_id,
+                        policy,
+                        &context.params,
+                    )?;
 
                 // Collect all created entities (nodes and relationships)
                 let mut columns: Vec<String> = created_node_ids.keys().cloned().collect();
@@ -528,6 +533,7 @@ impl Executor {
                     group_by,
                     aggregations,
                     projection_items,
+                    output_order,
                     source: _,
                     streaming_optimized: _,
                     push_down_optimized: _,
@@ -538,6 +544,7 @@ impl Executor {
                         group_by,
                         aggregations,
                         projection_items.as_deref(),
+                        output_order.as_deref(),
                     )?;
                     aggregate_executed = true;
                 }

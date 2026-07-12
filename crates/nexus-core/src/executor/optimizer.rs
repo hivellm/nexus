@@ -564,10 +564,7 @@ impl QueryOptimizer {
                 Operator::Aggregate {
                     group_by,
                     aggregations,
-                    projection_items: _,
-                    source: _,
-                    streaming_optimized: _,
-                    push_down_optimized: _,
+                    ..
                 } => {
                     // Aggregation cost depends on grouping
                     let group_cost = cost_model.cpu_tuple_cost

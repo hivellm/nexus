@@ -588,7 +588,6 @@ async fn case_06b_detach_delete_with_relationship() {
 // not a general engine defect. Will self-heal once Step 2/4 reroute HTTP
 // writes through the engine.
 #[tokio::test]
-#[ignore = "known-divergence B7: write_ops.rs combined CREATE+REMOVE in one statement drops the removal; un-ignore after write-path unification"]
 async fn case_06c_remove_property_combined_with_create() {
     let ctx = TestContext::new();
     let server = build_test_server(&ctx);
@@ -664,7 +663,6 @@ async fn case_07_unwind_merge_batch_upsert() {
 // ---------------------------------------------------------------------
 
 #[tokio::test]
-#[ignore = "known-divergence B3: write_ops.rs CREATE...RETURN projects a relationship-variable property as null; a separate MATCH reads the correct value (case 9)"]
 async fn case_08_create_rel_return_property_same_statement() {
     let ctx = TestContext::new();
     let server = build_test_server(&ctx);
@@ -729,7 +727,6 @@ async fn case_09_create_rel_param_props_persist() {
 // in a `MERGE (a:L {..})-[r:T]->(b:L2 {..})` path pattern is silently
 // skipped, so no edge is ever created.
 #[tokio::test]
-#[ignore = "known-divergence B1: write_ops.rs MERGE loop skips PatternElement::Relationship, so the edge is never created"]
 async fn case_10_merge_rel_creates_edge_idempotently() {
     let ctx = TestContext::new();
     let server = build_test_server(&ctx);
@@ -765,7 +762,6 @@ async fn case_10_merge_rel_creates_edge_idempotently() {
 }
 
 #[tokio::test]
-#[ignore = "known-divergence B1: write_ops.rs MERGE loop skips PatternElement::Relationship, so inline relationship properties never persist"]
 async fn case_11_merge_rel_inline_props_persist() {
     let ctx = TestContext::new();
     let server = build_test_server(&ctx);

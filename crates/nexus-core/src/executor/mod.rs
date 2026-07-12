@@ -197,7 +197,7 @@ mod tests {
             make_row_with_value(nan_number_value()),
         ];
 
-        let result = executor.execute_aggregate(&mut context, &["k".to_string()], &[]);
+        let result = executor.execute_aggregate(&mut context, &["k".to_string()], &[], None);
 
         // The point of phase2: either this is a clean Ok (serialisation
         // succeeded on this platform) or it surfaces as a real error.

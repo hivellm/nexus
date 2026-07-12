@@ -47,10 +47,106 @@ impl Engine {
                     // Process all node patterns in the match clause
                     self.process_match_clause_multi(match_clause, &mut context, &mut rel_context)?;
                 }
+                // G2 — a CREATE clause in the SAME statement as a
+                // following SET/REMOVE/RETURN (e.g. `CREATE (n:X {p:1})
+                // REMOVE n.p`) must bind its variables into `context` /
+                // `rel_context` just like MATCH/MERGE do, so the
+                // downstream clause can resolve them. Previously this
+                // arm fell through to the catch-all `_ => {}` below and
+                // silently dropped the CREATE, leaving `n` unbound and
+                // REMOVE erroring with "Unknown variable 'n'". Mirrors
+                // the CREATE handling already present in the
+                // UNWIND-write loop (`execute_unwind_write_query`),
+                // extended here to also support relationship elements.
+                executor::parser::Clause::Create(create_clause) => {
+                    let mut last_node_id: Option<u64> = None;
+                    for (i, element) in create_clause.pattern.elements.iter().enumerate() {
+                        match element {
+                            executor::parser::PatternElement::Node(node) => {
+                                let mut props = Map::new();
+                                if let Some(pm) = &node.properties {
+                                    for (k, expr) in &pm.properties {
+                                        props.insert(k.clone(), self.eval_write_value(expr)?);
+                                    }
+                                }
+                                let id =
+                                    self.create_node(node.labels.clone(), Value::Object(props))?;
+                                if let Some(var) = &node.variable {
+                                    context.insert(var.clone(), vec![id]);
+                                }
+                                last_node_id = Some(id);
+                            }
+                            executor::parser::PatternElement::Relationship(rel) => {
+                                let source_id = last_node_id.ok_or_else(|| {
+                                    Error::CypherExecution(
+                                        "Relationship must follow a node".to_string(),
+                                    )
+                                })?;
+                                let target_id = match create_clause.pattern.elements.get(i + 1) {
+                                    Some(executor::parser::PatternElement::Node(target_node)) => {
+                                        let mut props = Map::new();
+                                        if let Some(pm) = &target_node.properties {
+                                            for (k, expr) in &pm.properties {
+                                                props.insert(
+                                                    k.clone(),
+                                                    self.eval_write_value(expr)?,
+                                                );
+                                            }
+                                        }
+                                        let tid = self.create_node(
+                                            target_node.labels.clone(),
+                                            Value::Object(props),
+                                        )?;
+                                        if let Some(var) = &target_node.variable {
+                                            context.insert(var.clone(), vec![tid]);
+                                        }
+                                        last_node_id = Some(tid);
+                                        tid
+                                    }
+                                    _ => {
+                                        return Err(Error::CypherExecution(
+                                            "Relationship must be followed by a node".to_string(),
+                                        ));
+                                    }
+                                };
+                                let rel_type = rel.types.first().ok_or_else(|| {
+                                    Error::CypherExecution(
+                                        "Relationship must have a type".to_string(),
+                                    )
+                                })?;
+                                let mut rel_props = Map::new();
+                                if let Some(pm) = &rel.properties {
+                                    for (k, expr) in &pm.properties {
+                                        rel_props.insert(k.clone(), self.eval_write_value(expr)?);
+                                    }
+                                }
+                                let rel_id = self.create_relationship(
+                                    source_id,
+                                    target_id,
+                                    rel_type.clone(),
+                                    Value::Object(rel_props),
+                                )?;
+                                if let Some(var) = &rel.variable {
+                                    rel_context
+                                        .entry(var.clone())
+                                        .or_default()
+                                        .push((rel_id, rel_type.clone()));
+                                }
+                            }
+                            executor::parser::PatternElement::QuantifiedGroup(_) => {
+                                return Err(Error::CypherExecution(
+                                    "ERR_QPP_NOT_IN_CREATE: quantified path patterns \
+                                     are read-only; use a MATCH clause instead"
+                                        .to_string(),
+                                ));
+                            }
+                        }
+                    }
+                }
                 executor::parser::Clause::Merge(merge_clause) => {
                     // Check if this is a relationship MERGE with bound variables
                     if let Some((rel_var, rel_id, rel_type)) =
-                        self.process_merge_relationship(&merge_clause, &context)?
+                        self.process_merge_relationship(&merge_clause, &mut context)?
                     {
                         rel_context
                             .entry(rel_var)
@@ -233,7 +329,7 @@ impl Engine {
                 match clause {
                     Clause::Merge(merge_clause) => {
                         if let Some((rel_var, rel_id, rel_type)) =
-                            self.process_merge_relationship(merge_clause, &row_context)?
+                            self.process_merge_relationship(merge_clause, &mut row_context)?
                         {
                             rel_context
                                 .entry(rel_var)
@@ -418,6 +514,53 @@ impl Engine {
         Ok((variable, node_ids))
     }
 
+    /// MERGE (find-or-create) a single node pattern with no `ON
+    /// CREATE`/`ON MATCH` handling of its own (#25/G3). Used by
+    /// [`Self::process_merge_relationship`] to resolve the endpoint nodes
+    /// of a standalone relationship-MERGE pattern (`MERGE (a:L1 {..})-[r:T]->(b:L2
+    /// {..})`) that has no preceding MATCH to bind them — `ON CREATE` /
+    /// `ON MATCH` on the enclosing `MergeClause` still targets the
+    /// relationship only, per the existing `process_merge_relationship`
+    /// contract; mirrors the match-or-create logic in
+    /// [`Self::process_merge_clause`] minus that per-clause SET handling.
+    pub(super) fn merge_single_node(
+        &mut self,
+        node_pattern: &executor::parser::NodePattern,
+    ) -> Result<u64> {
+        // Null-key contract (Neo4j parity): MERGE cannot use a null
+        // property value.
+        if let Some(prop_map) = &node_pattern.properties {
+            for (key, expr) in &prop_map.properties {
+                if matches!(
+                    self.expression_to_json_value(expr)?,
+                    serde_json::Value::Null
+                ) {
+                    return Err(Error::CypherExecution(format!(
+                        "Cannot merge node using null property value for {key}"
+                    )));
+                }
+            }
+        }
+
+        let mut node_ids = self.find_nodes_by_node_pattern(node_pattern)?;
+        node_ids.sort_unstable();
+        node_ids.dedup();
+
+        if let Some(&id) = node_ids.first() {
+            return Ok(id);
+        }
+
+        let labels = node_pattern.labels.clone();
+        let mut props = Map::new();
+        if let Some(prop_map) = &node_pattern.properties {
+            for (key, expr) in &prop_map.properties {
+                let value = self.expression_to_json_value(expr)?;
+                props.insert(key.clone(), value);
+            }
+        }
+        self.create_node(labels, Value::Object(props))
+    }
+
     pub(super) fn process_match_clause(
         &mut self,
         match_clause: &executor::parser::MatchClause,
@@ -560,7 +703,7 @@ impl Engine {
     pub(super) fn process_merge_relationship(
         &mut self,
         merge_clause: &executor::parser::MergeClause,
-        context: &HashMap<String, Vec<u64>>,
+        context: &mut HashMap<String, Vec<u64>>,
     ) -> Result<Option<(String, u64, String)>> {
         // Check if pattern has: Node, Relationship, Node structure
         let elements = &merge_clause.pattern.elements;
@@ -584,11 +727,11 @@ impl Engine {
 
         // Get source and destination variable names
         let src_var = match &src_node.variable {
-            Some(v) => v,
+            Some(v) => v.clone(),
             None => return Ok(None),
         };
         let dst_var = match &dst_node.variable {
-            Some(v) => v,
+            Some(v) => v.clone(),
             None => return Ok(None),
         };
 
@@ -602,19 +745,36 @@ impl Engine {
             None => return Ok(None),
         };
 
-        // Check that source and destination nodes are already bound
-        let src_ids = match context.get(src_var) {
-            Some(ids) if !ids.is_empty() => ids,
-            _ => return Ok(None),
+        // G3 — resolve source/destination node ids. When an enclosing
+        // MATCH/UNWIND already bound the variable (existing contract:
+        // present in `context` with a non-empty id list), reuse it
+        // as-is. When the variable is bound but resolved to ZERO nodes
+        // (e.g. a MATCH that found nothing), preserve the prior
+        // behaviour of bailing out to the node-only MERGE fallback.
+        // When the variable is not in `context` at all, this is a
+        // STANDALONE relationship-MERGE pattern with no preceding MATCH
+        // (`MERGE (a:L1 {..})-[r:T]->(b:L2 {..})`, harness cases 10/11)
+        // — MERGE (find-or-create) the endpoint node inline and bind it,
+        // so the path pattern resolves its own endpoints instead of
+        // silently requiring an upstream MATCH.
+        let src_id = match context.get(&src_var) {
+            Some(ids) if !ids.is_empty() => ids[0],
+            Some(_) => return Ok(None),
+            None => {
+                let id = self.merge_single_node(src_node)?;
+                context.insert(src_var.clone(), vec![id]);
+                id
+            }
         };
-        let dst_ids = match context.get(dst_var) {
-            Some(ids) if !ids.is_empty() => ids,
-            _ => return Ok(None),
+        let dst_id = match context.get(&dst_var) {
+            Some(ids) if !ids.is_empty() => ids[0],
+            Some(_) => return Ok(None),
+            None => {
+                let id = self.merge_single_node(dst_node)?;
+                context.insert(dst_var.clone(), vec![id]);
+                id
+            }
         };
-
-        // For simplicity, use first node of each
-        let src_id = src_ids[0];
-        let dst_id = dst_ids[0];
 
         // Check if relationship already exists
         let existing_rel = self.find_relationship_between(src_id, dst_id, &rel_type)?;

@@ -16,8 +16,9 @@ impl Executor {
         context: &mut ExecutionContext,
         group_by: &[String],
         aggregations: &[Aggregation],
+        output_order: Option<&[String]>,
     ) -> Result<()> {
-        self.execute_aggregate_with_projections(context, group_by, aggregations, None)
+        self.execute_aggregate_with_projections(context, group_by, aggregations, None, output_order)
     }
     /// Execute Aggregate operator with projection items (for evaluating literals in virtual row)
     pub(in crate::executor) fn execute_aggregate_with_projections(
@@ -26,6 +27,7 @@ impl Executor {
         group_by: &[String],
         aggregations: &[Aggregation],
         projection_items: Option<&[ProjectionItem]>,
+        output_order: Option<&[String]>,
     ) -> Result<()> {
         use std::collections::HashMap;
 
@@ -279,6 +281,7 @@ impl Executor {
             let mut columns = group_by.to_vec();
             columns.extend(aggregations.iter().map(|agg| self.aggregation_alias(agg)));
             context.result_set.columns = columns;
+            reorder_aggregate_output(context, output_order);
             let row_maps = self.result_set_as_rows(context);
             self.update_variables_from_rows(context, &row_maps);
             return Ok(());
@@ -471,6 +474,7 @@ impl Executor {
             let mut columns = group_by.to_vec();
             columns.extend(aggregations.iter().map(|agg| self.aggregation_alias(agg)));
             context.result_set.columns = columns;
+            reorder_aggregate_output(context, output_order);
             let row_maps = self.result_set_as_rows(context);
             self.update_variables_from_rows(context, &row_maps);
             return Ok(());
@@ -1385,10 +1389,58 @@ impl Executor {
         let mut columns = group_by.to_vec();
         columns.extend(aggregations.iter().map(|agg| self.aggregation_alias(agg)));
         context.result_set.columns = columns;
+        reorder_aggregate_output(context, output_order);
 
         let row_maps = self.result_set_as_rows(context);
         self.update_variables_from_rows(context, &row_maps);
 
         Ok(())
+    }
+}
+
+/// Restore the RETURN/WITH-clause column order after aggregation.
+///
+/// The aggregate operator assembles its output as `[group-by keys...,
+/// aggregation aliases...]`, which diverges from the order the user wrote
+/// whenever an aggregate precedes a grouping key — `RETURN count(r) AS c,
+/// r.w AS w` came back as `[w, c]`. Neo4j preserves clause order and SDK
+/// clients consume rows positionally, so the divergence is client-visible
+/// (write-path unification, divergence G4). When the requested order maps
+/// 1:1 onto the assembled columns, permute columns + row values into that
+/// order; otherwise leave the result untouched (safe fallback for internal
+/// callers that pass no order, and for plans whose assembled names diverge
+/// from the clause aliases).
+fn reorder_aggregate_output(context: &mut ExecutionContext, output_order: Option<&[String]>) {
+    let Some(wanted) = output_order else {
+        return;
+    };
+    let current = context.result_set.columns.clone();
+    if wanted.len() != current.len() {
+        return;
+    }
+    let Some(perm) = wanted
+        .iter()
+        .map(|name| current.iter().position(|c| c == name))
+        .collect::<Option<Vec<usize>>>()
+    else {
+        return;
+    };
+    // Require a genuine permutation (duplicate names would alias the
+    // same source index) and skip the no-op identity case.
+    let mut seen = vec![false; perm.len()];
+    for &p in &perm {
+        if seen[p] {
+            return;
+        }
+        seen[p] = true;
+    }
+    if perm.iter().enumerate().all(|(i, &p)| i == p) {
+        return;
+    }
+    context.result_set.columns = perm.iter().map(|&p| current[p].clone()).collect();
+    for row in &mut context.result_set.rows {
+        if row.values.len() == perm.len() {
+            row.values = perm.iter().map(|&p| row.values[p].clone()).collect();
+        }
     }
 }

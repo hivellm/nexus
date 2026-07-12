@@ -4,7 +4,51 @@
 //! JSON response.
 
 use super::super::*;
-use super::write_ops::execute_create_or_merge;
+
+/// Emit a write-operation audit log entry for the `/cypher` CREATE/MERGE
+/// path.
+///
+/// Mirrors the `WriteOperationParams` / `AuditResult` shape
+/// `write_ops.rs` used to build per-clause, but records a single
+/// query-level entry instead: `Engine::execute_cypher_with_params` is
+/// the one write entry point (phase1_http-merge-rel-and-set-rel-parity,
+/// `docs/nexus/04-write-path-unification.md` Step 2) and does not expose
+/// per-node/per-relationship hooks the way the old hand-rolled
+/// `write_ops.rs` interpreter did. A query-level success/failure record
+/// still answers the audit question that matters — who ran this write,
+/// when, and did it succeed.
+///
+/// A failure to persist the audit entry itself does not fail the
+/// request (fail-open, per `docs/security/SECURITY_AUDIT.md`) but is
+/// never silently swallowed: it goes through
+/// [`nexus_core::auth::record_audit_log_failure`], which bumps the
+/// `audit_log_failures_total` counter and emits a `tracing::error!`.
+async fn log_write_audit(
+    server: &NexusServer,
+    actor_info: &(Option<String>, Option<String>, Option<String>),
+    operation_type: &str,
+    cypher_query: &str,
+    result: nexus_core::auth::AuditResult,
+    failure_context: &'static str,
+) {
+    let (actor_user_id, actor_username, api_key_id) = actor_info.clone();
+    if let Err(e) = server
+        .audit_logger
+        .log_write_operation(nexus_core::auth::WriteOperationParams {
+            actor_user_id,
+            actor_username,
+            api_key_id,
+            operation_type: operation_type.to_string(),
+            entity_type: "PATTERN".to_string(),
+            entity_id: None,
+            cypher_query: Some(cypher_query.to_string()),
+            result,
+        })
+        .await
+    {
+        nexus_core::auth::record_audit_log_failure(failure_context, &e);
+    }
+}
 
 pub async fn execute_cypher(
     State(server): State<Arc<NexusServer>>,
@@ -375,15 +419,81 @@ pub async fn execute_cypher(
         || query_upper.contains(" OPTIONAL MATCH");
 
     if is_create_query || is_merge_query {
-        return execute_create_or_merge(
-            server,
-            &request,
-            &ast,
-            start_time,
-            actor_info,
-            is_merge_query,
-        )
-        .await;
+        let operation_type = if is_merge_query { "MERGE" } else { "CREATE" };
+        let failure_context = if is_merge_query {
+            "http_write_merge"
+        } else {
+            "http_write_create"
+        };
+
+        // Route through the engine's single write entry point — the
+        // same call the MATCH/UNWIND branches above use — instead of
+        // the `write_ops.rs` fork, which never learned relationship
+        // semantics (MERGE-rel, SET on a relationship variable,
+        // same-statement `RETURN r.prop` all silently dropped data;
+        // see phase1_http-merge-rel-and-set-rel-parity proposal.md).
+        let mut engine_guard = server.engine.write().await;
+        let dispatch_result =
+            engine_guard.execute_cypher_with_params(&request.query, request.params.clone());
+        // Release the write lock before the (async) audit-log call —
+        // auditing never touches the engine, and holding a write lock
+        // across an `.await` unnecessarily serializes unrelated writes.
+        drop(engine_guard);
+
+        let execution_time = start_time.elapsed().as_millis() as u64;
+        return match dispatch_result {
+            Ok(result_set) => {
+                tracing::info!(
+                    "{} query executed successfully in {}ms, {} rows returned",
+                    operation_type,
+                    execution_time,
+                    result_set.rows.len()
+                );
+                log_write_audit(
+                    &server,
+                    &actor_info,
+                    operation_type,
+                    &request.query,
+                    nexus_core::auth::AuditResult::Success,
+                    failure_context,
+                )
+                .await;
+
+                Json(CypherResponse {
+                    columns: result_set.columns,
+                    rows: result_set
+                        .rows
+                        .into_iter()
+                        .map(|row| serde_json::Value::Array(row.values))
+                        .collect(),
+                    execution_time_ms: execution_time,
+                    error: None,
+                    notifications: result_set.notifications,
+                })
+            }
+            Err(e) => {
+                tracing::error!("{} query execution failed: {}", operation_type, e);
+                log_write_audit(
+                    &server,
+                    &actor_info,
+                    operation_type,
+                    &request.query,
+                    nexus_core::auth::AuditResult::Failure {
+                        error: e.to_string(),
+                    },
+                    failure_context,
+                )
+                .await;
+
+                Json(CypherResponse {
+                    columns: vec![],
+                    rows: vec![],
+                    execution_time_ms: execution_time,
+                    error: Some(e.to_string()),
+                    notifications: Vec::new(),
+                })
+            }
+        };
     }
 
     // For MATCH queries, use the engine's executor to access the shared storage

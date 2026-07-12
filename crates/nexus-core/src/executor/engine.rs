@@ -173,7 +173,7 @@ impl Executor {
         use super::context::ExecutionContext;
         let mut context = ExecutionContext::new(HashMap::new(), None);
         context.set_variable(variable, serde_json::Value::Array(rows));
-        self.execute_aggregate(&mut context, &[], std::slice::from_ref(aggregation))?;
+        self.execute_aggregate(&mut context, &[], std::slice::from_ref(aggregation), None)?;
         Ok(context.result_set.rows.len())
     }
 
