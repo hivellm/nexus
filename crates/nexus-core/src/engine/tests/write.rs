@@ -315,3 +315,112 @@ fn set_on_relationship_with_anonymous_endpoints() {
     assert_eq!(props.get("k"), Some(&serde_json::json!("av")));
     assert_eq!(props.get("m"), Some(&serde_json::json!(4)));
 }
+
+// ─── phase1_http-merge-rel-and-set-rel-parity (B4, B8) ────────────────────
+
+/// B4: `MATCH (n) SET n.p = $param` must resolve the parameter to its real
+/// value via `evaluate_set_expression`'s `Expression::Parameter` arm, not
+/// hard-code it to `Value::Null`.
+#[test]
+fn set_node_property_resolves_parameter() {
+    let ctx = crate::testing::TestContext::new();
+    let mut engine = Engine::with_isolated_catalog(ctx.path()).unwrap();
+    engine
+        .execute_cypher("CREATE (n:B4 {id: 1})")
+        .expect("baseline CREATE");
+
+    let mut params = std::collections::HashMap::new();
+    params.insert("v".to_string(), serde_json::json!(42));
+    engine
+        .execute_cypher_with_params("MATCH (n:B4 {id: 1}) SET n.p = $v", params)
+        .expect("SET n.p = $param must succeed");
+
+    let read = engine
+        .execute_cypher("MATCH (n:B4 {id: 1}) RETURN n.p AS p")
+        .expect("read after SET $param");
+    assert_eq!(
+        read.rows[0].values[0].as_i64(),
+        Some(42),
+        "SET n.p = $param must persist the parameterized value, not null"
+    );
+}
+
+/// B4: a missing parameter still resolves to NULL (safe no-op), matching
+/// the pre-existing `SET n += $missing` contract — the fix only changes
+/// behaviour for a *bound* parameter.
+#[test]
+fn set_node_property_missing_parameter_is_null() {
+    let ctx = crate::testing::TestContext::new();
+    let mut engine = Engine::with_isolated_catalog(ctx.path()).unwrap();
+    engine
+        .execute_cypher("CREATE (n:B4Missing {id: 1})")
+        .expect("baseline CREATE");
+
+    engine
+        .execute_cypher("MATCH (n:B4Missing {id: 1}) SET n.p = $absent")
+        .expect("SET with an unbound parameter must not error");
+
+    let read = engine
+        .execute_cypher("MATCH (n:B4Missing {id: 1}) RETURN n.p AS p")
+        .expect("read after SET with unbound param");
+    assert!(
+        read.rows[0].values[0].is_null(),
+        "an unbound parameter must resolve to NULL, got {:?}",
+        read.rows[0].values[0]
+    );
+}
+
+/// B8: `SET n.p = null` must REMOVE the property key (Neo4j semantics: a
+/// null-valued property is absent), not store a literal JSON null.
+#[test]
+fn set_node_property_null_removes_key() {
+    let ctx = crate::testing::TestContext::new();
+    let mut engine = Engine::with_isolated_catalog(ctx.path()).unwrap();
+    engine
+        .execute_cypher("CREATE (n:B8 {id: 1, p: 'to-remove'})")
+        .expect("baseline CREATE");
+
+    engine
+        .execute_cypher("MATCH (n:B8 {id: 1}) SET n.p = null")
+        .expect("SET n.p = null");
+
+    let read = engine
+        .execute_cypher("MATCH (n:B8 {id: 1}) RETURN n")
+        .expect("read after SET n.p = null");
+    let node = read.rows[0].values[0]
+        .as_object()
+        .expect("RETURN n is a node object");
+    assert!(
+        !node.contains_key("p"),
+        "SET n.p = null must remove the key p, not store a null value; node = {:?}",
+        node
+    );
+}
+
+/// B8: setting a SECOND property to null on the same statement removes only
+/// that key, leaving unrelated properties untouched.
+#[test]
+fn set_node_property_null_leaves_other_properties_untouched() {
+    let ctx = crate::testing::TestContext::new();
+    let mut engine = Engine::with_isolated_catalog(ctx.path()).unwrap();
+    engine
+        .execute_cypher("CREATE (n:B8Multi {id: 1, keep: 'k', drop: 'd'})")
+        .expect("baseline CREATE");
+
+    engine
+        .execute_cypher("MATCH (n:B8Multi {id: 1}) SET n.drop = null")
+        .expect("SET n.drop = null");
+
+    let read = engine
+        .execute_cypher("MATCH (n:B8Multi {id: 1}) RETURN n")
+        .expect("read after SET n.drop = null");
+    let node = read.rows[0].values[0]
+        .as_object()
+        .expect("RETURN n is a node object");
+    assert!(!node.contains_key("drop"), "drop key must be removed");
+    assert_eq!(
+        node.get("keep"),
+        Some(&serde_json::json!("k")),
+        "unrelated key must survive the null-removal SET"
+    );
+}

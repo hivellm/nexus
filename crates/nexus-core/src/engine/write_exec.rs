@@ -158,8 +158,19 @@ impl Engine {
                 }
                 Ok(serde_json::Value::Array(a))
             }
-            // Scalars + UNWIND row bindings (Variable / PropertyAccess) +
-            // (when bound) `$param` are handled here.
+            // B6 — `UNWIND $rows AS row` (and any other write-path position
+            // that materialises a full value via `eval_write_value`, e.g. a
+            // MERGE-relationship inline property) resolves the parameter
+            // against `self.current_params`. A missing parameter is a clear
+            // client error rather than silently degrading to an empty
+            // UNWIND list.
+            executor::parser::Expression::Parameter(name) => {
+                self.current_params.get(name).cloned().ok_or_else(|| {
+                    Error::CypherExecution(format!("Parameter `${name}` was not provided"))
+                })
+            }
+            // Scalars + UNWIND row bindings (Variable / PropertyAccess) are
+            // handled here.
             _ => self.expression_to_json_value(expr),
         }
     }
@@ -1072,7 +1083,14 @@ impl Engine {
                                 }
                             }
                         }
-                        state.properties.insert(property.clone(), json_value);
+                        // B8 — `SET n.p = null` removes the key (Neo4j
+                        // semantics: a property whose value is NULL is
+                        // absent), rather than storing a literal JSON null.
+                        if matches!(json_value, serde_json::Value::Null) {
+                            state.properties.remove(property);
+                        } else {
+                            state.properties.insert(property.clone(), json_value);
+                        }
                     }
                 }
                 executor::parser::SetItem::Label { target, label } => {

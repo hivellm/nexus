@@ -57,8 +57,13 @@ fn test_transaction_persists_across_queries() {
     );
 }
 
+// 17b (phase1_http-merge-rel-and-set-rel-parity, checklist 2.0e): confirmed
+// passing — the watermark-based rollback fix (`engine/transactions.rs`
+// `RollbackTransaction` arm, "Union with the session's storage watermark
+// range") already reverts executor-created nodes. This `#[ignore]` was
+// stale; see `engine::tests::transactions::rollback_undoes_executor_created_nodes`
+// for the dedicated engine-level regression coverage.
 #[test]
-#[ignore] // TODO: Fix rollback - nodes not being removed from index/storage
 fn test_transaction_rollback_persists_across_queries() {
     let mut engine = create_engine();
 
@@ -188,8 +193,9 @@ fn test_commit_then_begin_new_transaction() {
     assert_eq!(result.rows.len(), 2);
 }
 
+// 17b: confirmed passing — see the note above
+// `test_transaction_rollback_persists_across_queries`.
 #[test]
-#[ignore] // TODO: Fix rollback - nodes not being removed from index/storage
 fn test_multiple_operations_in_transaction() {
     let mut engine = create_engine();
 
@@ -219,8 +225,9 @@ fn test_multiple_operations_in_transaction() {
     assert_eq!(result.rows.len(), 1);
 }
 
+// 17b: confirmed passing — see the note above
+// `test_transaction_rollback_persists_across_queries`.
 #[test]
-#[ignore] // TODO: Fix rollback - nodes not being removed from index/storage
 fn test_rollback_multiple_operations() {
     let mut engine = create_engine();
 

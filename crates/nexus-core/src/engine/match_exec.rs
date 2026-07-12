@@ -638,11 +638,17 @@ impl Engine {
                 }
                 Ok(serde_json::Value::Object(out))
             }
-            // Parameter placeholders surface as NULL in this narrow
-            // evaluator — parameter-binding lives on the executor side.
-            // Treating them as NULL keeps `SET n += $missing` safely a
-            // no-op when the parameter is absent.
-            executor::parser::Expression::Parameter(_) => Ok(serde_json::Value::Null),
+            // B4 — resolve `$param` against the parameter map installed by
+            // `execute_cypher_with_params` on `self.current_params` for the
+            // duration of the call. A missing parameter still resolves to
+            // NULL (rather than erroring) so `SET n += $missing` stays a
+            // safe no-op — only a *bound* parameter needs its real value
+            // threaded through instead of being hard-coded to NULL.
+            executor::parser::Expression::Parameter(name) => Ok(self
+                .current_params
+                .get(name)
+                .cloned()
+                .unwrap_or(serde_json::Value::Null)),
             _ => Err(Error::CypherExecution(
                 "Unsupported expression type in SET clause".to_string(),
             )),

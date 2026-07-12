@@ -47,48 +47,73 @@
 //!
 //! While building this harness, four ADDITIONAL divergences were found
 //! empirically that proposal.md did not anticipate — all in the ENGINE
-//! (`nexus-core`), not `write_ops.rs`, so rerouting HTTP writes to the
-//! engine (Step 2) will NOT fix them and, for B4, will actively regress a
-//! form that works today:
+//! (`nexus-core`), not `write_ops.rs`. They have since been FIXED
+//! (checklist section 2, items 2.0a-2.0d) and their cases un-ignored below:
 //!
-//! - **B4** — `SET target.prop = $param` via the `MATCH ... SET` engine
-//!   path (`Engine::evaluate_set_expression` in `engine/match_exec.rs`)
-//!   has no arm for `Expression::Parameter` and hard-codes it to
-//!   `Value::Null` (case 5b). `write_ops.rs`'s own `SET` resolves
-//!   `$param` correctly today via `expression_to_json_value` in
-//!   `api/cypher/mod.rs` — so a combined `CREATE (n) SET n.x = $v`
-//!   statement (routed to `write_ops.rs`) works, but the equivalent
-//!   `MATCH (n) SET n.x = $v` (routed to the engine) does not. Deleting
-//!   `write_ops.rs` without first fixing `evaluate_set_expression` would
-//!   regress every parameterized SET.
-//! - **B6** — `UNWIND $rows AS row` (a `$param`-bound list) errors out of
-//!   `Engine::eval_write_value` / `expression_to_json_value`
+//! - **B4 (FIXED)** — `SET target.prop = $param` via the `MATCH ... SET`
+//!   engine path (`Engine::evaluate_set_expression` in
+//!   `engine/match_exec.rs`) had no arm for `Expression::Parameter` and
+//!   hard-coded it to `Value::Null` (case 5b). Fixed by resolving the
+//!   parameter against `self.current_params` (the map
+//!   `execute_cypher_with_params` installs for the duration of the call),
+//!   mirroring the existing `dynamic_labels::resolve_labels` convention. A
+//!   missing parameter still resolves to `Value::Null` (safe no-op),
+//!   preserving the pre-existing `SET n += $missing` contract.
+//! - **B6 (FIXED)** — `UNWIND $rows AS row` (a `$param`-bound list) errored
+//!   out of `Engine::eval_write_value` / `expression_to_json_value`
 //!   ("Complex expressions not supported in CREATE properties" — a
 //!   misleading message since this fails before any CREATE/MERGE clause
-//!   runs). Only a literal UNWIND list (`UNWIND [{...}] AS row`) is
-//!   supported (case 7).
+//!   runs). Only a literal UNWIND list (`UNWIND [{...}] AS row`) was
+//!   supported (case 7). Fixed by adding an `Expression::Parameter` arm to
+//!   `eval_write_value` (`engine/write_exec.rs`) that resolves against
+//!   `self.current_params` and errors cleanly (naming the parameter) when
+//!   it is not bound, rather than silently degrading to an empty UNWIND.
 //! - **B7** — `CREATE (n {p:1}) REMOVE n.p` in ONE `write_ops.rs`-routed
 //!   statement does not persist the removal; the equivalent two-statement
 //!   form (`CREATE` then a separate `MATCH ... REMOVE`, which routes to
-//!   the engine) removes the key correctly (case 6c).
-//! - **B8** — `SET n.p = null` via the `MATCH ... SET` engine path stores
-//!   a literal JSON `null` instead of removing the key
-//!   (`write_exec.rs::apply_set_clause` has no null-removal special case),
-//!   diverging from Neo4j semantics (case 5d).
-//! - **B9** — a query whose first non-blank line is a `//` comment fails
-//!   to PARSE at all (`Cypher syntax error: Query must contain at least
-//!   one clause`, `executor/planner/queries/planner_core.rs:98`) before
-//!   `handler.rs`'s routing heuristic is ever reached. A parser gap, not
-//!   a `write_ops.rs`/routing bug (case 15).
+//!   the engine) removes the key correctly (case 6c). Still open — closes
+//!   with Step 2/4 (HTTP write-path rerouting), not an engine-core gap.
+//! - **B8 (FIXED)** — `SET n.p = null` via the `MATCH ... SET` engine path
+//!   stored a literal JSON `null` instead of removing the key
+//!   (`write_exec.rs::apply_set_clause` had no null-removal special case),
+//!   diverging from Neo4j semantics (case 5d). Fixed: the `SetItem::Property`
+//!   arm now removes the key when the evaluated value is `Value::Null`
+//!   instead of inserting it (the map-merge `SetItem::MapMerge` arm and the
+//!   relationship-property paths already had this null-removal behaviour;
+//!   only the direct node-property `SET` path was missing it).
+//! - **B9 (FIXED)** — a query whose first non-blank line is a `//` comment
+//!   failed to PARSE at all (`Cypher syntax error: Query must contain at
+//!   least one clause`, `executor/planner/queries/planner_core.rs:98`)
+//!   before `handler.rs`'s routing heuristic was ever reached. Root cause:
+//!   `CypherParser::skip_whitespace` (`executor/parser/tokens.rs`) only
+//!   skipped literal whitespace — Cypher `//` line comments and `/* */`
+//!   block comments were unhandled anywhere in the tokenizer. Fixed by
+//!   teaching `skip_whitespace` to also skip both comment forms, so they
+//!   are transparent everywhere whitespace already was (case 15).
 //!
-//! One more finding is worth flagging even though its case is GREEN
-//! today: **case 17b** (`BEGIN`/`CREATE`/`ROLLBACK`) passes only because
+//! One more finding was flagged even though its case was GREEN at the
+//! time: **case 17b** (`BEGIN`/`CREATE`/`ROLLBACK`) passed because
 //! `write_ops.rs`'s CREATE calls the low-level `Engine::create_node`
-//! directly. `nexus-core` has its own `#[ignore]`d
-//! `test_transaction_rollback_persists_across_queries` showing that the
-//! SAME sequence via `Engine::execute_cypher` (the executor-driven CREATE
-//! path Step 2 will reroute HTTP onto) does NOT roll back correctly. Case
-//! 17b should be re-run immediately after Step 2 lands — it may flip red.
+//! directly, while `nexus-core` had its own `#[ignore]`d
+//! `test_transaction_rollback_persists_across_queries` suggesting the SAME
+//! sequence via `Engine::execute_cypher` (the executor-driven CREATE path
+//! Step 2 will reroute HTTP onto) did NOT roll back correctly. Investigated
+//! for checklist item 2.0e: that `#[ignore]` was STALE — the rollback path
+//! already has a watermark-based fix (`engine/transactions.rs`'s
+//! `RollbackTransaction` arm unions the session's storage-id watermark
+//! range with `created_nodes`/`created_relationships`, specifically to
+//! catch executor-routed writes that never call back into
+//! `session.created_nodes`). Confirmed via
+//! `engine::tests::transactions::rollback_undoes_executor_created_nodes`
+//! (pre-existing, passes) plus a new
+//! `rollback_undoes_executor_created_nodes_via_params_entrypoint` test
+//! exercising the exact `execute_cypher_with_params` entry point Step 2
+//! will use. The stale `#[ignore]`s on
+//! `test_transaction_rollback_persists_across_queries`,
+//! `test_multiple_operations_in_transaction`, and
+//! `test_rollback_multiple_operations` in
+//! `crates/nexus-core/tests/transaction_session_test.rs` have been removed
+//! — no engine fix was needed for 17b.
 //!
 //! Every `#[ignore]` below documents which class (or, where the actual
 //! observed behaviour didn't match the proposal's hypothesis, the
@@ -372,23 +397,15 @@ async fn case_05a_set_literal_value_persists() {
     );
 }
 
-// **B4** — `SET target.prop = $param` via the `MATCH ... SET` engine path
-// never resolves the parameter. `Engine::evaluate_set_expression`
-// (`crates/nexus-core/src/engine/match_exec.rs`) has no arm for
-// `Expression::Parameter`; it deliberately maps every parameter to
-// `Value::Null` (see the comment directly above that match arm: "Parameter
-// placeholders surface as NULL in this narrow evaluator — parameter-binding
-// lives on the executor side"). This is an ENGINE-level gap, not a
-// `write_ops.rs` bug — rerouting HTTP writes through the engine (Step 2)
-// will NOT fix it, and will actually *regress* the combined
-// `CREATE (n) SET n.x = $v` form, which today works because `write_ops.rs`
-// resolves `$param` itself via `expression_to_json_value` in
-// `api/cypher/mod.rs`. Flagging as a required companion fix for the
-// unification work (see `create_with_parameterized_node_property_persists`-
-// style tests in `api/cypher/tests.rs`, which only exercise the
-// write_ops-routed combined-statement form and would start failing).
+// **B4 (FIXED, checklist 2.0a)** — `SET target.prop = $param` via the
+// `MATCH ... SET` engine path used to never resolve the parameter:
+// `Engine::evaluate_set_expression` (`crates/nexus-core/src/engine/match_exec.rs`)
+// had no arm for `Expression::Parameter` and deliberately mapped every
+// parameter to `Value::Null`. Fixed by resolving against
+// `self.current_params` (the map `execute_cypher_with_params` installs for
+// the duration of the call), matching the convention already used by
+// `dynamic_labels::resolve_labels`.
 #[tokio::test]
-#[ignore = "known-divergence B4: engine `evaluate_set_expression` resolves $param to Null in SET clauses (match_exec.rs); un-ignore once the engine SET evaluator threads self.current_params"]
 async fn case_05b_set_param_value_persists() {
     let ctx = TestContext::new();
     let server = build_test_server(&ctx);
@@ -444,14 +461,13 @@ async fn case_05c_set_map_merge_persists_both_keys() {
     assert_eq!(row[1].as_i64(), Some(2), "SET n += {{..}} must persist b");
 }
 
-// **B8 (new, not in proposal.md)** — `SET n.p = null` via the `MATCH ...
-// SET` engine path stores a literal JSON `null` (`state.properties.insert(
-// property.clone(), json_value)` in `write_exec.rs::apply_set_clause` has
-// no null-removal special case) instead of removing the key, diverging
-// from Neo4j semantics (`SET x = null` removes the property). This is an
-// engine-level gap independent of HTTP routing.
+// **B8 (FIXED, checklist 2.0b)** — `SET n.p = null` via the `MATCH ...
+// SET` engine path used to store a literal JSON `null`
+// (`write_exec.rs::apply_set_clause` had no null-removal special case)
+// instead of removing the key, diverging from Neo4j semantics. Fixed: the
+// `SetItem::Property` arm now removes the key when the evaluated value is
+// `Value::Null` instead of inserting it.
 #[tokio::test]
-#[ignore = "known-divergence B8: engine apply_set_clause stores literal null instead of removing the key on SET n.p = null"]
 async fn case_05d_set_null_removes_key() {
     let ctx = TestContext::new();
     let server = build_test_server(&ctx);
@@ -596,22 +612,16 @@ async fn case_06c_remove_property_combined_with_create() {
     );
 }
 
-// **B6 (new, not in proposal.md)** — `UNWIND $rows AS row` (a
-// `$param`-bound list) is entirely unsupported by the engine's UNWIND-write
-// path: `Engine::eval_write_value` falls through to
-// `expression_to_json_value`, which has no `Expression::Parameter` arm and
-// errors with "Complex expressions not supported in CREATE properties" —
-// even though this failure has nothing to do with CREATE (it happens while
-// evaluating the UNWIND list expression itself, before any clause runs).
-// Only a LITERAL UNWIND list (`UNWIND [{...}, {...}] AS row`) works today
-// (see `crates/nexus-core/src/engine/tests/transactions.rs
-// unwind_write_merge_persists_each_row`). This is a pre-existing engine
-// limitation independent of HTTP routing — this query already goes
-// through `Engine::execute_cypher_with_params` directly (the "has_unwind
-// && has_write" branch in handler.rs), so rerouting HTTP writes to the
-// engine will not change this behavior.
+// **B6 (FIXED, checklist 2.0c)** — `UNWIND $rows AS row` (a
+// `$param`-bound list) used to be entirely unsupported by the engine's
+// UNWIND-write path: `Engine::eval_write_value` fell through to
+// `expression_to_json_value`, which had no `Expression::Parameter` arm and
+// errored with "Complex expressions not supported in CREATE properties".
+// Fixed by adding an `Expression::Parameter` arm directly to
+// `eval_write_value` (`engine/write_exec.rs`) that resolves against
+// `self.current_params` and errors cleanly (naming the parameter) if it is
+// not bound, rather than silently degrading to an empty UNWIND.
 #[tokio::test]
-#[ignore = "known-divergence B6: engine UNWIND-write path has no Expression::Parameter support for the UNWIND list itself; only literal UNWIND lists work"]
 async fn case_07_unwind_merge_batch_upsert() {
     let ctx = TestContext::new();
     let server = build_test_server(&ctx);
@@ -925,16 +935,19 @@ async fn case_14_match_then_create_relationship() {
     );
 }
 
-// **B9 (new, not in proposal.md; NOT a write_ops.rs/routing bug — a
-// PARSER-level gap)** — a query whose first non-blank line is a `//`
-// comment fails to parse at all: `CypherParser::parse` returns
-// `Cypher syntax error: Query must contain at least one clause`
-// (`crates/nexus-core/src/executor/planner/queries/planner_core.rs:98`)
-// before `handler.rs`'s uppercased-prefix routing heuristic is ever
-// reached. This is unrelated to the CREATE/MERGE string-prefix routing
-// this harness otherwise probes — it never gets that far.
+// **B9 (parser half FIXED, checklist 2.0d) + L1 routing half still open** —
+// a query whose first non-blank line is a `//` comment used to fail to
+// parse at all (`Query must contain at least one clause`): fixed by
+// teaching `CypherParser::skip_whitespace` (`executor/parser/tokens.rs`)
+// to skip `//` line comments and `/* */` block comments. With parsing
+// fixed, the case now exposes the SECOND layer: `handler.rs`'s
+// string-prefix routing (`query_upper.starts_with("CREATE")`) does not see
+// the CREATE behind the comment and misroutes the query to the read-only
+// executor path — HTTP 200, nothing persisted (bug L1,
+// docs/nexus/02-bug-inventory.md). Un-ignore when AST-predicate routing
+// lands (tasks.md section 4).
 #[tokio::test]
-#[ignore = "known-divergence B9: CypherParser rejects a query whose first line is a `//` comment (\"Query must contain at least one clause\"); a parser gap, not a write_ops.rs/routing bug"]
+#[ignore = "known-divergence L1: string-prefix routing misroutes comment-prefixed writes to the read path; parser half (B9) already fixed — un-ignore after AST routing (section 4)"]
 async fn case_15_leading_comment_then_create() {
     let ctx = TestContext::new();
     let server = build_test_server(&ctx);

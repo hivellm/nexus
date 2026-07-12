@@ -264,13 +264,55 @@ impl CypherParser {
                     .is_none_or(|c| !c.is_ascii_alphanumeric()))
     }
 
-    /// Skip whitespace
+    /// Skip whitespace and Cypher comments (`// line comment` and
+    /// `/* block comment */`, per the openCypher grammar). Comments are
+    /// treated as insignificant exactly like whitespace, so they may
+    /// appear anywhere whitespace is currently allowed — including
+    /// before the very first clause of a query (a leading `//` line was
+    /// previously left unskipped, so the parser saw `/` as the start of
+    /// the first token, matched no clause keyword, and returned an
+    /// empty `CypherQuery` that the planner then rejected with "Query
+    /// must contain at least one clause").
     pub(super) fn skip_whitespace(&mut self) {
-        while self.pos < self.input.len() {
-            let ch = self.input[self.pos..].chars().next().unwrap();
-            if ch.is_whitespace() {
-                self.consume_char();
-            } else {
+        loop {
+            let mut advanced = false;
+
+            while self.pos < self.input.len() {
+                let ch = self.input[self.pos..].chars().next().unwrap();
+                if ch.is_whitespace() {
+                    self.consume_char();
+                    advanced = true;
+                } else {
+                    break;
+                }
+            }
+
+            if self.input[self.pos..].starts_with("//") {
+                // Line comment: skip through the newline (or EOF).
+                while let Some(ch) = self.consume_char() {
+                    if ch == '\n' {
+                        break;
+                    }
+                }
+                advanced = true;
+            } else if self.input[self.pos..].starts_with("/*") {
+                // Block comment: skip through the closing `*/` (or EOF
+                // if unterminated — tolerated rather than erroring, since
+                // the surrounding parse will fail on the truncated input
+                // anyway with a clearer "unexpected end of input").
+                self.consume_char(); // '/'
+                self.consume_char(); // '*'
+                while self.pos < self.input.len() && !self.input[self.pos..].starts_with("*/") {
+                    self.consume_char();
+                }
+                if self.input[self.pos..].starts_with("*/") {
+                    self.consume_char(); // '*'
+                    self.consume_char(); // '/'
+                }
+                advanced = true;
+            }
+
+            if !advanced {
                 break;
             }
         }
