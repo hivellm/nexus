@@ -127,8 +127,16 @@ pub async fn clean_cache(
     }))
 }
 
-/// Helper function to convert Expression to JSON Value
-fn expression_to_json_value(expr: &nexus_core::executor::parser::Expression) -> serde_json::Value {
+/// Helper function to convert Expression to JSON Value.
+///
+/// `params` resolves `Expression::Parameter` (`$name`) to its bound
+/// value from the request's parameter map — without it, every
+/// parameterized write (`CREATE`, `MERGE`, `SET`) silently stored
+/// `null` instead of the actual value.
+fn expression_to_json_value(
+    expr: &nexus_core::executor::parser::Expression,
+    params: &HashMap<String, serde_json::Value>,
+) -> serde_json::Value {
     match expr {
         nexus_core::executor::parser::Expression::Literal(lit) => match lit {
             nexus_core::executor::parser::Literal::String(s) => {
@@ -155,17 +163,18 @@ fn expression_to_json_value(expr: &nexus_core::executor::parser::Expression) -> 
             tracing::warn!("expression_to_json_value: Variable expression not supported in CREATE");
             serde_json::Value::Null
         }
-        nexus_core::executor::parser::Expression::Parameter(_) => {
-            tracing::warn!(
-                "expression_to_json_value: Parameter expression not supported in CREATE"
-            );
-            serde_json::Value::Null
-        }
+        nexus_core::executor::parser::Expression::Parameter(name) => match params.get(name) {
+            Some(value) => value.clone(),
+            None => {
+                tracing::debug!("expression_to_json_value: parameter `${}` not bound", name);
+                serde_json::Value::Null
+            }
+        },
         nexus_core::executor::parser::Expression::Map(map) => {
             // This is a nested map expression - convert it
             let mut result = serde_json::Map::new();
             for (key, expr) in map {
-                result.insert(key.clone(), expression_to_json_value(expr));
+                result.insert(key.clone(), expression_to_json_value(expr, params));
             }
             serde_json::Value::Object(result)
         }
@@ -179,12 +188,15 @@ fn expression_to_json_value(expr: &nexus_core::executor::parser::Expression) -> 
     }
 }
 
-fn property_map_to_json(property_map: &Option<PropertyMap>) -> serde_json::Value {
+fn property_map_to_json(
+    property_map: &Option<PropertyMap>,
+    params: &HashMap<String, serde_json::Value>,
+) -> serde_json::Value {
     let mut props = serde_json::Map::new();
 
     if let Some(prop_map) = property_map {
         for (key, expr) in &prop_map.properties {
-            let value = expression_to_json_value(expr);
+            let value = expression_to_json_value(expr, params);
             props.insert(key.clone(), value);
         }
     }
@@ -196,6 +208,7 @@ fn ensure_node_from_pattern(
     engine: &mut nexus_core::Engine,
     node_pattern: &nexus_core::executor::parser::NodePattern,
     variable_context: &mut HashMap<String, Vec<u64>>,
+    params: &HashMap<String, serde_json::Value>,
 ) -> Result<Vec<u64>, String> {
     ensure_node_from_pattern_with_ext_id(
         engine,
@@ -203,6 +216,7 @@ fn ensure_node_from_pattern(
         variable_context,
         None,
         nexus_core::storage::external_id::ConflictPolicy::Error,
+        params,
     )
 }
 
@@ -260,6 +274,7 @@ fn ensure_node_from_pattern_with_ext_id(
     variable_context: &mut HashMap<String, Vec<u64>>,
     external_id: Option<nexus_core::catalog::external_id::ExternalId>,
     policy: nexus_core::storage::external_id::ConflictPolicy,
+    params: &HashMap<String, serde_json::Value>,
 ) -> Result<Vec<u64>, String> {
     if let Some(var_name) = &node_pattern.variable {
         if let Some(existing) = variable_context.get(var_name) {
@@ -269,7 +284,7 @@ fn ensure_node_from_pattern_with_ext_id(
         }
     }
 
-    let properties = property_map_to_json(&node_pattern.properties);
+    let properties = property_map_to_json(&node_pattern.properties, params);
 
     let result = if external_id.is_some() {
         engine.create_node_with_external_id(
@@ -301,6 +316,7 @@ fn create_relationship_from_pattern(
     rel_pattern: &nexus_core::executor::parser::RelationshipPattern,
     source_ids: &[u64],
     target_ids: &[u64],
+    params: &HashMap<String, serde_json::Value>,
 ) -> Result<(), String> {
     if source_ids.is_empty() || target_ids.is_empty() {
         return Ok(());
@@ -312,7 +328,7 @@ fn create_relationship_from_pattern(
         .cloned()
         .unwrap_or_else(|| "RELATIONSHIP".to_string());
 
-    let properties = property_map_to_json(&rel_pattern.properties);
+    let properties = property_map_to_json(&rel_pattern.properties, params);
 
     let mut create_edge = |from: u64, to: u64| match engine.create_relationship(
         from,

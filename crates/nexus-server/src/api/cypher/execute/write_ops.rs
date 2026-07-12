@@ -85,6 +85,7 @@ pub(super) async fn execute_create_or_merge(
                                 &mut variable_context,
                                 resolved_ext_id,
                                 resolved_policy,
+                                &request.params,
                             ) {
                                 Ok(nodes) => nodes,
                                 Err(err) => {
@@ -162,6 +163,7 @@ pub(super) async fn execute_create_or_merge(
                                             &mut engine,
                                             target_node,
                                             &mut variable_context,
+                                            &request.params,
                                         ) {
                                             Ok(nodes) => nodes,
                                             Err(err) => {
@@ -183,6 +185,7 @@ pub(super) async fn execute_create_or_merge(
                                             rel_pattern,
                                             &current_nodes,
                                             &target_nodes,
+                                            &request.params,
                                         ) {
                                             let execution_time =
                                                 start_time.elapsed().as_millis() as u64;
@@ -240,41 +243,15 @@ pub(super) async fn execute_create_or_merge(
                     {
                         let labels = node_pattern.labels.clone();
 
-                        // Convert properties
-                        let mut props = serde_json::Map::new();
-                        if let Some(prop_map) = &node_pattern.properties {
-                            for (key, expr) in &prop_map.properties {
-                                // Convert expression to JSON value
-                                let value = match expr {
-                                    nexus_core::executor::parser::Expression::Literal(lit) => {
-                                        match lit {
-                                            nexus_core::executor::parser::Literal::String(s) => {
-                                                serde_json::Value::String(s.clone())
-                                            }
-                                            nexus_core::executor::parser::Literal::Integer(i) => {
-                                                serde_json::Value::Number((*i).into())
-                                            }
-                                            nexus_core::executor::parser::Literal::Float(f) => {
-                                                serde_json::Number::from_f64(*f)
-                                                    .map(serde_json::Value::Number)
-                                                    .unwrap_or(serde_json::Value::Null)
-                                            }
-                                            nexus_core::executor::parser::Literal::Boolean(b) => {
-                                                serde_json::Value::Bool(*b)
-                                            }
-                                            nexus_core::executor::parser::Literal::Null => {
-                                                serde_json::Value::Null
-                                            }
-                                            nexus_core::executor::parser::Literal::Point(p) => {
-                                                p.to_json_value()
-                                            }
-                                        }
-                                    }
-                                    _ => serde_json::Value::Null,
-                                };
-                                props.insert(key.clone(), value);
-                            }
-                        }
+                        // Convert properties, resolving `$param` references
+                        // against the request's parameter map (issue: MERGE
+                        // pattern properties silently stored null for
+                        // parameterized values).
+                        let props =
+                            match property_map_to_json(&node_pattern.properties, &request.params) {
+                                serde_json::Value::Object(map) => map,
+                                _ => serde_json::Map::new(),
+                            };
 
                         let properties = serde_json::Value::Object(props.clone());
 
@@ -374,7 +351,7 @@ pub(super) async fn execute_create_or_merge(
                                                             Ok(Some(props)) => props.as_object().unwrap().clone(),
                                                             _ => serde_json::Map::new(),
                                                         };
-                                                        let json_value = expression_to_json_value(value);
+                                                        let json_value = expression_to_json_value(value, &request.params);
                                                         properties.insert(property.clone(), json_value);
 
                                                         if let Ok(Some(node_record)) = engine.get_node(node_id) {
@@ -399,7 +376,7 @@ pub(super) async fn execute_create_or_merge(
                                                     // Merge the literal map into the target's property bag.
                                                     // NULL-valued entries remove the key; absent keys are preserved.
                                                     nexus_core::executor::parser::SetItem::MapMerge { target: _, map } => {
-                                                        let rhs = expression_to_json_value(map);
+                                                        let rhs = expression_to_json_value(map, &request.params);
                                                         if let serde_json::Value::Object(rhs_map) = rhs {
                                                             let mut properties = match engine.storage.load_node_properties(node_id) {
                                                                 Ok(Some(props)) => props.as_object().cloned().unwrap_or_default(),
@@ -454,7 +431,7 @@ pub(super) async fn execute_create_or_merge(
                                                             Ok(Some(props)) => props.as_object().unwrap().clone(),
                                                             _ => serde_json::Map::new(),
                                                         };
-                                                        let json_value = expression_to_json_value(value);
+                                                        let json_value = expression_to_json_value(value, &request.params);
                                                         properties.insert(property.clone(), json_value);
 
                                                         if let Ok(Some(node_record)) = engine.get_node(*node_id) {
@@ -477,7 +454,7 @@ pub(super) async fn execute_create_or_merge(
                                                     }
                                                     // phase6_opencypher-quickwins §6 — SET lhs += mapExpr in ON MATCH.
                                                     nexus_core::executor::parser::SetItem::MapMerge { target: _, map } => {
-                                                        let rhs = expression_to_json_value(map);
+                                                        let rhs = expression_to_json_value(map, &request.params);
                                                         if let serde_json::Value::Object(rhs_map) = rhs {
                                                             let mut properties = match engine.storage.load_node_properties(*node_id) {
                                                                 Ok(Some(props)) => props.as_object().cloned().unwrap_or_default(),
@@ -527,7 +504,8 @@ pub(super) async fn execute_create_or_merge(
                                         };
 
                                     // Convert expression to JSON value
-                                    let json_value = expression_to_json_value(value);
+                                    let json_value =
+                                        expression_to_json_value(value, &request.params);
 
                                     // Update or add the property
                                     properties.insert(property.clone(), json_value);
@@ -724,7 +702,7 @@ pub(super) async fn execute_create_or_merge(
                         nexus_core::executor::parser::SetItem::MapMerge { target, map } => {
                             if let Some(node_ids) = variable_context.get(target) {
                                 for node_id in node_ids {
-                                    let rhs = expression_to_json_value(map);
+                                    let rhs = expression_to_json_value(map, &request.params);
                                     if let serde_json::Value::Object(rhs_map) = rhs {
                                         let mut properties =
                                             match engine.storage.load_node_properties(*node_id) {

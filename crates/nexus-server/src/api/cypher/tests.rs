@@ -560,3 +560,355 @@ async fn non_ascii_body_round_trips_via_handler() {
         "non-ASCII must round-trip losslessly"
     );
 }
+
+// Data-loss bug — `$param` references used as property VALUES in CREATE /
+// MERGE / SET were silently resolved to `null` because
+// `expression_to_json_value` never received the request's parameter map.
+// These tests assert the value actually PERSISTS: create with a parameter,
+// then re-read via a fresh MATCH (the CREATE...RETURN response alone is not
+// sufficient evidence — it must round-trip through storage).
+#[tokio::test]
+async fn create_with_parameterized_node_property_persists() {
+    use crate::NexusServer;
+    use nexus_core::auth::RoleBasedAccessControl;
+    use nexus_core::database::DatabaseManager;
+    use nexus_core::testing::TestContext;
+    use parking_lot::RwLock as PlRwLock;
+    use std::sync::Arc;
+    use tokio::sync::RwLock;
+
+    let ctx = TestContext::new();
+    let engine = nexus_core::Engine::with_data_dir(ctx.path()).unwrap();
+    let engine_arc = Arc::new(RwLock::new(engine));
+    let executor = nexus_core::executor::Executor::default();
+    let executor_arc = Arc::new(executor);
+    let database_manager = DatabaseManager::new(ctx.path().join("databases")).unwrap();
+    let database_manager_arc = Arc::new(PlRwLock::new(database_manager));
+    let rbac = RoleBasedAccessControl::new();
+    let rbac_arc = Arc::new(RwLock::new(rbac));
+    let auth_config = nexus_core::auth::AuthConfig::default();
+    let auth_manager = Arc::new(nexus_core::auth::AuthManager::new(auth_config));
+    let jwt_config = nexus_core::auth::JwtConfig::default();
+    let jwt_manager = Arc::new(nexus_core::auth::JwtManager::new(jwt_config));
+    let audit_logger = Arc::new(
+        nexus_core::auth::AuditLogger::new(nexus_core::auth::AuditConfig {
+            enabled: false,
+            log_dir: std::path::PathBuf::from("./logs"),
+            retention_days: 30,
+            compress_logs: false,
+        })
+        .unwrap(),
+    );
+    let server = Arc::new(NexusServer::new(
+        executor_arc,
+        engine_arc,
+        database_manager_arc,
+        rbac_arc,
+        auth_manager,
+        jwt_manager,
+        audit_logger,
+        crate::config::RootUserConfig::default(),
+    ));
+
+    let mut params = HashMap::new();
+    params.insert("v".to_string(), serde_json::json!(5));
+    let create = CypherRequest {
+        query: "CREATE (n:PTest {x: $v})".to_string(),
+        params,
+        database: None,
+    };
+    let resp = execute_cypher(
+        axum::extract::State(server.clone()),
+        None,
+        axum::Json(create),
+    )
+    .await
+    .0;
+    assert!(
+        resp.error.is_none(),
+        "parameterized CREATE errored: {:?}",
+        resp.error
+    );
+
+    let read = CypherRequest {
+        query: "MATCH (n:PTest) RETURN n.x".to_string(),
+        params: HashMap::new(),
+        database: None,
+    };
+    let resp2 = execute_cypher(axum::extract::State(server), None, axum::Json(read))
+        .await
+        .0;
+    assert!(
+        resp2.error.is_none(),
+        "MATCH after parameterized CREATE errored: {:?}",
+        resp2.error
+    );
+    assert_eq!(resp2.rows.len(), 1);
+    let value = &resp2.rows[0].as_array().expect("row is array")[0];
+    assert_eq!(
+        value.as_i64(),
+        Some(5),
+        "parameterized node property must persist as 5, not null"
+    );
+}
+
+#[tokio::test]
+async fn create_with_parameterized_relationship_property_persists() {
+    use crate::NexusServer;
+    use nexus_core::auth::RoleBasedAccessControl;
+    use nexus_core::database::DatabaseManager;
+    use nexus_core::testing::TestContext;
+    use parking_lot::RwLock as PlRwLock;
+    use std::sync::Arc;
+    use tokio::sync::RwLock;
+
+    let ctx = TestContext::new();
+    let engine = nexus_core::Engine::with_data_dir(ctx.path()).unwrap();
+    let engine_arc = Arc::new(RwLock::new(engine));
+    let executor = nexus_core::executor::Executor::default();
+    let executor_arc = Arc::new(executor);
+    let database_manager = DatabaseManager::new(ctx.path().join("databases")).unwrap();
+    let database_manager_arc = Arc::new(PlRwLock::new(database_manager));
+    let rbac = RoleBasedAccessControl::new();
+    let rbac_arc = Arc::new(RwLock::new(rbac));
+    let auth_config = nexus_core::auth::AuthConfig::default();
+    let auth_manager = Arc::new(nexus_core::auth::AuthManager::new(auth_config));
+    let jwt_config = nexus_core::auth::JwtConfig::default();
+    let jwt_manager = Arc::new(nexus_core::auth::JwtManager::new(jwt_config));
+    let audit_logger = Arc::new(
+        nexus_core::auth::AuditLogger::new(nexus_core::auth::AuditConfig {
+            enabled: false,
+            log_dir: std::path::PathBuf::from("./logs"),
+            retention_days: 30,
+            compress_logs: false,
+        })
+        .unwrap(),
+    );
+    let server = Arc::new(NexusServer::new(
+        executor_arc,
+        engine_arc,
+        database_manager_arc,
+        rbac_arc,
+        auth_manager,
+        jwt_manager,
+        audit_logger,
+        crate::config::RootUserConfig::default(),
+    ));
+
+    let mut params = HashMap::new();
+    params.insert("w".to_string(), serde_json::json!(8));
+    let create = CypherRequest {
+        query: "CREATE (a:PA)-[r:PE {w: $w}]->(b:PB)".to_string(),
+        params,
+        database: None,
+    };
+    let resp = execute_cypher(
+        axum::extract::State(server.clone()),
+        None,
+        axum::Json(create),
+    )
+    .await
+    .0;
+    assert!(
+        resp.error.is_none(),
+        "parameterized relationship CREATE errored: {:?}",
+        resp.error
+    );
+
+    let read = CypherRequest {
+        query: "MATCH (:PA)-[r:PE]->(:PB) RETURN r.w".to_string(),
+        params: HashMap::new(),
+        database: None,
+    };
+    let resp2 = execute_cypher(axum::extract::State(server), None, axum::Json(read))
+        .await
+        .0;
+    assert!(
+        resp2.error.is_none(),
+        "MATCH after parameterized relationship CREATE errored: {:?}",
+        resp2.error
+    );
+    assert_eq!(resp2.rows.len(), 1);
+    let value = &resp2.rows[0].as_array().expect("row is array")[0];
+    assert_eq!(
+        value.as_i64(),
+        Some(8),
+        "parameterized relationship property must persist as 8, not null"
+    );
+}
+
+#[tokio::test]
+async fn set_with_parameterized_value_persists() {
+    use crate::NexusServer;
+    use nexus_core::auth::RoleBasedAccessControl;
+    use nexus_core::database::DatabaseManager;
+    use nexus_core::testing::TestContext;
+    use parking_lot::RwLock as PlRwLock;
+    use std::sync::Arc;
+    use tokio::sync::RwLock;
+
+    let ctx = TestContext::new();
+    let engine = nexus_core::Engine::with_data_dir(ctx.path()).unwrap();
+    let engine_arc = Arc::new(RwLock::new(engine));
+    let executor = nexus_core::executor::Executor::default();
+    let executor_arc = Arc::new(executor);
+    let database_manager = DatabaseManager::new(ctx.path().join("databases")).unwrap();
+    let database_manager_arc = Arc::new(PlRwLock::new(database_manager));
+    let rbac = RoleBasedAccessControl::new();
+    let rbac_arc = Arc::new(RwLock::new(rbac));
+    let auth_config = nexus_core::auth::AuthConfig::default();
+    let auth_manager = Arc::new(nexus_core::auth::AuthManager::new(auth_config));
+    let jwt_config = nexus_core::auth::JwtConfig::default();
+    let jwt_manager = Arc::new(nexus_core::auth::JwtManager::new(jwt_config));
+    let audit_logger = Arc::new(
+        nexus_core::auth::AuditLogger::new(nexus_core::auth::AuditConfig {
+            enabled: false,
+            log_dir: std::path::PathBuf::from("./logs"),
+            retention_days: 30,
+            compress_logs: false,
+        })
+        .unwrap(),
+    );
+    let server = Arc::new(NexusServer::new(
+        executor_arc,
+        engine_arc,
+        database_manager_arc,
+        rbac_arc,
+        auth_manager,
+        jwt_manager,
+        audit_logger,
+        crate::config::RootUserConfig::default(),
+    ));
+
+    let mut params = HashMap::new();
+    params.insert("v".to_string(), serde_json::json!(7));
+    let create = CypherRequest {
+        query: "CREATE (n:PS) SET n.x = $v".to_string(),
+        params,
+        database: None,
+    };
+    let resp = execute_cypher(
+        axum::extract::State(server.clone()),
+        None,
+        axum::Json(create),
+    )
+    .await
+    .0;
+    assert!(
+        resp.error.is_none(),
+        "parameterized SET errored: {:?}",
+        resp.error
+    );
+
+    let read = CypherRequest {
+        query: "MATCH (n:PS) RETURN n.x".to_string(),
+        params: HashMap::new(),
+        database: None,
+    };
+    let resp2 = execute_cypher(axum::extract::State(server), None, axum::Json(read))
+        .await
+        .0;
+    assert!(
+        resp2.error.is_none(),
+        "MATCH after parameterized SET errored: {:?}",
+        resp2.error
+    );
+    assert_eq!(resp2.rows.len(), 1);
+    let value = &resp2.rows[0].as_array().expect("row is array")[0];
+    assert_eq!(
+        value.as_i64(),
+        Some(7),
+        "parameterized SET value must persist as 7, not null"
+    );
+}
+
+#[tokio::test]
+async fn create_with_multi_key_parameterized_map_persists() {
+    use crate::NexusServer;
+    use nexus_core::auth::RoleBasedAccessControl;
+    use nexus_core::database::DatabaseManager;
+    use nexus_core::testing::TestContext;
+    use parking_lot::RwLock as PlRwLock;
+    use std::sync::Arc;
+    use tokio::sync::RwLock;
+
+    let ctx = TestContext::new();
+    let engine = nexus_core::Engine::with_data_dir(ctx.path()).unwrap();
+    let engine_arc = Arc::new(RwLock::new(engine));
+    let executor = nexus_core::executor::Executor::default();
+    let executor_arc = Arc::new(executor);
+    let database_manager = DatabaseManager::new(ctx.path().join("databases")).unwrap();
+    let database_manager_arc = Arc::new(PlRwLock::new(database_manager));
+    let rbac = RoleBasedAccessControl::new();
+    let rbac_arc = Arc::new(RwLock::new(rbac));
+    let auth_config = nexus_core::auth::AuthConfig::default();
+    let auth_manager = Arc::new(nexus_core::auth::AuthManager::new(auth_config));
+    let jwt_config = nexus_core::auth::JwtConfig::default();
+    let jwt_manager = Arc::new(nexus_core::auth::JwtManager::new(jwt_config));
+    let audit_logger = Arc::new(
+        nexus_core::auth::AuditLogger::new(nexus_core::auth::AuditConfig {
+            enabled: false,
+            log_dir: std::path::PathBuf::from("./logs"),
+            retention_days: 30,
+            compress_logs: false,
+        })
+        .unwrap(),
+    );
+    let server = Arc::new(NexusServer::new(
+        executor_arc,
+        engine_arc,
+        database_manager_arc,
+        rbac_arc,
+        auth_manager,
+        jwt_manager,
+        audit_logger,
+        crate::config::RootUserConfig::default(),
+    ));
+
+    let mut params = HashMap::new();
+    params.insert("a".to_string(), serde_json::json!(1));
+    params.insert("b".to_string(), serde_json::json!(2));
+    let create = CypherRequest {
+        query: "CREATE (n:PM {x: $a, y: $b})".to_string(),
+        params,
+        database: None,
+    };
+    let resp = execute_cypher(
+        axum::extract::State(server.clone()),
+        None,
+        axum::Json(create),
+    )
+    .await
+    .0;
+    assert!(
+        resp.error.is_none(),
+        "multi-key parameterized CREATE errored: {:?}",
+        resp.error
+    );
+
+    let read = CypherRequest {
+        query: "MATCH (n:PM) RETURN n.x, n.y".to_string(),
+        params: HashMap::new(),
+        database: None,
+    };
+    let resp2 = execute_cypher(axum::extract::State(server), None, axum::Json(read))
+        .await
+        .0;
+    assert!(
+        resp2.error.is_none(),
+        "MATCH after multi-key parameterized CREATE errored: {:?}",
+        resp2.error
+    );
+    assert_eq!(resp2.rows.len(), 1);
+    let row = resp2.rows[0].as_array().expect("row is array");
+    assert_eq!(
+        row[0].as_i64(),
+        Some(1),
+        "first parameterized map key must persist as 1, not null"
+    );
+    assert_eq!(
+        row[1].as_i64(),
+        Some(2),
+        "second parameterized map key must persist as 2, not null"
+    );
+}

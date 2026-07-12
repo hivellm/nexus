@@ -2,11 +2,11 @@
 # Multi-stage Dockerfile for Nexus Graph Database
 #
 # HOW TO BUILD:
-#   docker build -t hivehub/nexus:2.3.4 -t hivehub/nexus:latest .
+#   docker build -t hivehub/nexus:2.4.0 -t hivehub/nexus:latest .
 #
 # HOW TO PUBLISH (Docker Hub — hivehub/nexus):
 #   docker login
-#   docker push hivehub/nexus:2.3.4
+#   docker push hivehub/nexus:2.4.0
 #   docker push hivehub/nexus:latest
 #
 # The `# syntax=docker/dockerfile:1.6` header opts into the
@@ -29,7 +29,7 @@
 #     -e NEXUS_ROOT_USERNAME=admin \
 #     -e NEXUS_ROOT_PASSWORD=secure_password \
 #     -e NEXUS_AUTH_ENABLED=true \
-#     hivehub/nexus:2.3.4
+#     hivehub/nexus:2.4.0
 #
 #   # Using docker run with Docker secrets (recommended for production):
 #   echo "secure_password" > secrets/root_password.txt
@@ -44,7 +44,7 @@
 #     -e NEXUS_ROOT_PASSWORD_FILE=/run/secrets/nexus_root_password \
 #     -e NEXUS_AUTH_ENABLED=true \
 #     -e NEXUS_DISABLE_ROOT_AFTER_SETUP=true \
-#     hivehub/nexus:2.3.4
+#     hivehub/nexus:2.4.0
 #
 #   # Using docker-compose (recommended):
 #   docker-compose up -d
@@ -129,12 +129,12 @@ FROM dhi.io/debian-base:trixie
 
 # OCI image metadata. `org.opencontainers.image.version` is the
 # canonical place container registries (Docker Hub, ghcr) read the
-# version from; `docker inspect hivehub/nexus:2.3.4 --format
+# version from; `docker inspect hivehub/nexus:2.4.0 --format
 # '{{ index .Config.Labels "org.opencontainers.image.version" }}'`
 # must match the tag.
 LABEL org.opencontainers.image.title="Nexus" \
       org.opencontainers.image.description="High-performance property graph database with native vector search (KNN/HNSW)" \
-      org.opencontainers.image.version="2.3.4" \
+      org.opencontainers.image.version="2.4.0" \
       org.opencontainers.image.vendor="HiveLLM" \
       org.opencontainers.image.source="https://github.com/hivellm/nexus" \
       org.opencontainers.image.documentation="https://github.com/hivellm/nexus/blob/main/README.md" \
@@ -155,6 +155,23 @@ COPY --from=user-prep --chown=1000:1000 /run/secrets /run/secrets
 # that does not persist into the image — only paths *outside* the
 # mount survive into subsequent stages.
 COPY --from=builder --chmod=0755 /out/release/nexus-server /usr/local/bin/nexus-server
+
+# Harden: drop `tar` from the image. nexus-server never invokes it, and
+# the base's `tar` is flagged by scanners for the DISPUTED CVE-2025-45582
+# (GNU tar — "works as documented per upstream", no Debian fix exists).
+# Remove the hard-linked binaries AND the package's `dpkg` metadata so the
+# medium finding is genuinely gone rather than merely hidden. The DHI base
+# records installed packages in BOTH the monolithic `/var/lib/dpkg/status`
+# (35 stanzas) and one-file-per-package under `/var/lib/dpkg/status.d/`
+# (the Google-distroless convention). Docker Scout reads the monolithic
+# file, so the `tar` stanza there is what actually keys the finding — the
+# `status.d/tar` file must go too for Trivy/Grype parity. The DHI base
+# ships sh/rm/mv/awk but defaults to `nonroot` (uid 65532), so switch to
+# root for the removal; `USER nexus` below restores the runtime user.
+USER root
+RUN rm -f /usr/bin/tar /bin/tar /var/lib/dpkg/status.d/tar \
+ && awk 'BEGIN{RS="";ORS="\n\n"} !/(^|\n)Package: tar(\n|$)/' /var/lib/dpkg/status > /var/lib/dpkg/status.new \
+ && mv /var/lib/dpkg/status.new /var/lib/dpkg/status
 
 # Set working directory
 WORKDIR /app
