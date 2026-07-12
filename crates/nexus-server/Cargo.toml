@@ -97,6 +97,15 @@ tikv-jemallocator = { version = "0.6", features = ["profiling", "unprefixed_mall
 # `stats` enables the mallctl stats::* accessors used by /debug/memory.
 tikv-jemalloc-ctl = { version = "0.6", features = ["use_std", "stats"], optional = true }
 
+# musl requires `disable_initial_exec_tls` or jemalloc fails at runtime
+# (static TLS model assumptions don't hold on musl). This table is
+# additive on top of the `not(msvc)` table above — Cargo unions the
+# `features` lists for targets where both cfgs match (musl is never
+# msvc), so static-musl builds (e.g. the `FROM scratch` Docker image)
+# get the extra feature while glibc/msvc builds are unaffected.
+[target.'cfg(target_env = "musl")'.dependencies]
+tikv-jemallocator = { version = "0.6", features = ["disable_initial_exec_tls"], optional = true }
+
 [features]
 default = []
 memory-profiling = ["dep:tikv-jemallocator", "dep:tikv-jemalloc-ctl"]

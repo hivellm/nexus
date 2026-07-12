@@ -1,26 +1,24 @@
 # syntax=docker/dockerfile:1.6
-# Multi-stage Dockerfile for Nexus Graph Database
+# Multi-stage Dockerfile for Nexus Graph Database — zero-CVE edition.
+#
+# The runtime image is `FROM scratch` carrying ONLY a fully static
+# (x86_64-unknown-linux-musl) nexus-server binary + user database +
+# CA bundle. Zero OS packages → zero CVEs by construction (the previous
+# DHI/debian runtime carried 14 disputed/won't-fix lows across glibc,
+# systemd, coreutils and openssl that no `apt upgrade` can remove).
+# Trade-off: no shell in the image — `docker exec ... sh` does not work;
+# debug via `docker logs` and the HTTP API. The container HEALTHCHECK
+# uses the binary itself (`nexus-server --healthcheck`).
 #
 # HOW TO BUILD:
-#   docker build -t hivehub/nexus:2.4.0 -t hivehub/nexus:latest .
+#   docker build -t hivehub/nexus:2.5.0 -t hivehub/nexus:latest .
 #
 # HOW TO PUBLISH (Docker Hub — hivehub/nexus):
 #   docker login
-#   docker push hivehub/nexus:2.4.0
+#   docker push hivehub/nexus:2.5.0
 #   docker push hivehub/nexus:latest
 #
-# The `# syntax=docker/dockerfile:1.6` header opts into the
-# `RUN --mount=type=cache` frontend so the cargo registry + target
-# directory are cached across rebuilds (see the build stage below).
-# Works out of the box with BuildKit — the default Docker CLI since
-# 23.0 and always on with `docker buildx build`. For older clients,
-# export `DOCKER_BUILDKIT=1` before `docker build`.
-#
 # HOW TO RUN:
-#   # Using docker run (basic):
-#   #   Publish 15474 (HTTP API) and 15475 (native RPC transport, default
-#   #   for first-party SDKs). Drop `-p 15475:15475` for HTTP-only
-#   #   deployments and also set `[rpc].enabled = false` in config.yml.
 #   docker run -d \
 #     --name nexus \
 #     -p 15474:15474 \
@@ -29,22 +27,7 @@
 #     -e NEXUS_ROOT_USERNAME=admin \
 #     -e NEXUS_ROOT_PASSWORD=secure_password \
 #     -e NEXUS_AUTH_ENABLED=true \
-#     hivehub/nexus:2.4.0
-#
-#   # Using docker run with Docker secrets (recommended for production):
-#   echo "secure_password" > secrets/root_password.txt
-#   chmod 600 secrets/root_password.txt
-#   docker run -d \
-#     --name nexus \
-#     -p 15474:15474 \
-#     -p 15475:15475 \
-#     -v nexus-data:/app/data \
-#     -v $(pwd)/secrets/root_password.txt:/run/secrets/nexus_root_password:ro \
-#     -e NEXUS_ROOT_USERNAME=admin \
-#     -e NEXUS_ROOT_PASSWORD_FILE=/run/secrets/nexus_root_password \
-#     -e NEXUS_AUTH_ENABLED=true \
-#     -e NEXUS_DISABLE_ROOT_AFTER_SETUP=true \
-#     hivehub/nexus:2.4.0
+#     hivehub/nexus:2.5.0
 #
 #   # Using docker-compose (recommended):
 #   docker-compose up -d
@@ -55,25 +38,29 @@
 #
 # For more details, see docs/guides/DEPLOYMENT_GUIDE.md
 
-# Build stage
+# Build stage — static musl binary.
+#
+# `rustlang/rust:nightly` is Debian-based; `musl-tools` provides
+# musl-gcc, which `cc`-built C deps (LMDB via heed, zstd via tantivy,
+# jemalloc via tikv-jemalloc-sys) compile against. Rust targets
+# x86_64-unknown-linux-musl with crt-static by default, producing a
+# fully static PIE with no interpreter — runnable in `scratch`.
 FROM rustlang/rust:nightly AS builder
 
-# Install build dependencies
 RUN apt-get update && apt-get install -y \
-    pkg-config \
-    libssl-dev \
-    && rm -rf /var/lib/apt/lists/*
+    musl-tools \
+    file \
+    && rm -rf /var/lib/apt/lists/* \
+ && rustup target add x86_64-unknown-linux-musl
 
-# Set working directory
 WORKDIR /app
 
 # Copy workspace files
 COPY Cargo.toml Cargo.lock ./
 
 # Copy source for every workspace member declared in the root Cargo.toml.
-# `cargo build --workspace` fails with "failed to load manifest for
-# workspace member" if any member directory is missing.
-# All crates live under `crates/` per the workspace manifest.
+# `cargo build` fails with "failed to load manifest for workspace member"
+# if any member directory is missing, even when building a single package.
 COPY crates/nexus-core ./crates/nexus-core
 COPY crates/nexus-server ./crates/nexus-server
 COPY crates/nexus-protocol ./crates/nexus-protocol
@@ -81,127 +68,95 @@ COPY crates/nexus-cli ./crates/nexus-cli
 COPY crates/nexus-bench ./crates/nexus-bench
 COPY crates/nexus-knn-bench ./crates/nexus-knn-bench
 
-# Build in release mode.
-#
-# Two BuildKit cache mounts cut rebuild time from ~4 min (observed
-# during the memtest debugging session) to a fraction of that on warm
-# caches:
-#   - `/usr/local/cargo/registry` keeps the downloaded index + source
-#     of every crate (`tantivy`, `hnsw_rs`, `heed`, ...) across builds
-#     so `cargo fetch` doesn't re-download them every time.
-#   - `/app/target` keeps the compiled artifacts — when only one
-#     source file changed, rustc + cargo only recompile the
-#     touched crates + their dependents, not the full 300-crate
-#     workspace.
-# The cache is build-local (not in the final image), so the runtime
-# stage is still the same size and shape as before.
+# Build ONLY nexus-server (the runtime ships a single binary) in release
+# mode for the musl target. BuildKit cache mounts keep the registry and
+# target dir warm across rebuilds. The binary is staged outside the
+# cache mount (only paths outside the mount survive into later stages),
+# and the build fails fast if the result is not statically linked —
+# a dynamic binary would be unrunnable in `scratch`.
+# NOTE: no `+nightly` here — the image's default toolchain IS nightly,
+# but as a *dated* toolchain (e.g. nightly-2026-07-11). `cargo +nightly`
+# would resolve to the undated channel, triggering rustup to download a
+# fresh toolchain WITHOUT the musl target added above (build fails with
+# "can't find crate for `core`").
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/app/target \
-    cargo +nightly build --release --workspace \
+    cargo build --release --package nexus-server \
+      --target x86_64-unknown-linux-musl \
  && mkdir -p /out/release \
- && cp target/release/nexus-server /out/release/nexus-server
+ && cp target/x86_64-unknown-linux-musl/release/nexus-server /out/release/nexus-server \
+ && file /out/release/nexus-server | grep -Eq 'static-pie linked|statically linked' \
+ && ! ldd /out/release/nexus-server 2>/dev/null
 
 # User-prep stage
 #
 # Run `useradd` in a throwaway `trixie-dev` stage so the `passwd`
 # package + apt + dpkg never land in the final image. We then copy
-# only the resulting `/etc/passwd`, `/etc/group`, `/etc/shadow`, and
-# `/home/nexus` lines into the distroless runtime.
+# only the resulting `/etc/passwd`, `/etc/group`, and the prepared
+# directory skeleton (with ownership) into the scratch runtime —
+# `USER nexus` and writable /app/data need them.
 FROM dhi.io/debian-base:trixie-dev AS user-prep
 RUN apt-get update && apt-get install -y --no-install-recommends passwd \
  && rm -rf /var/lib/apt/lists/* \
  && useradd -m -u 1000 nexus \
- && mkdir -p /app/data /app/config /run/secrets \
- && chown -R nexus:nexus /app /run/secrets
+ && mkdir -p /app/data /app/config /run/secrets /tmp-skel \
+ && chown -R nexus:nexus /app /run/secrets /tmp-skel \
+ && chmod 1777 /tmp-skel
 
-# Runtime stage
-#
-# `dhi.io/debian-base:trixie` is the distroless DHI variant: same
-# glibc 2.41 as the `rustlang/rust:nightly` builder, ships
-# libssl3 / libcrypto3 / libz / libzstd / libgcc_s / ca-certificates
-# / bash — the full runtime closure for `nexus-server` — but no
-# apt, no dpkg-query, no curl, no shell utils, no compilers. Drops
-# the package count from ~150 to ~25 and the Docker Scout grade
-# from C to A on a freshly published image. DHI is the
-# org-approved base; the Docker Hub `debian:trixie-slim` was not
-# on the approved list.
-FROM dhi.io/debian-base:trixie
+# Runtime stage — scratch: zero OS packages, zero CVEs.
+FROM scratch
 
 # OCI image metadata. `org.opencontainers.image.version` is the
-# canonical place container registries (Docker Hub, ghcr) read the
-# version from; `docker inspect hivehub/nexus:2.4.0 --format
-# '{{ index .Config.Labels "org.opencontainers.image.version" }}'`
-# must match the tag.
+# canonical place container registries read the version from and must
+# match the pushed tag.
 LABEL org.opencontainers.image.title="Nexus" \
       org.opencontainers.image.description="High-performance property graph database with native vector search (KNN/HNSW)" \
-      org.opencontainers.image.version="2.4.0" \
+      org.opencontainers.image.version="2.5.0" \
       org.opencontainers.image.vendor="HiveLLM" \
       org.opencontainers.image.source="https://github.com/hivellm/nexus" \
       org.opencontainers.image.documentation="https://github.com/hivellm/nexus/blob/main/README.md" \
       org.opencontainers.image.licenses="Apache-2.0"
 
-# Provision the `nexus` user (uid 1000) by lifting only the
-# user-database lines + home directory from the prep stage. No apt,
-# no `passwd` package in the final image.
+# User database (so `USER nexus` resolves) + directory skeleton with
+# ownership. scratch has no mkdir/chown — everything arrives via COPY.
 COPY --from=user-prep /etc/passwd /etc/passwd
 COPY --from=user-prep /etc/group /etc/group
-COPY --from=user-prep /etc/shadow /etc/shadow
 COPY --from=user-prep --chown=1000:1000 /home/nexus /home/nexus
 COPY --from=user-prep --chown=1000:1000 /app /app
 COPY --from=user-prep --chown=1000:1000 /run/secrets /run/secrets
+COPY --from=user-prep --chown=1000:1000 /tmp-skel /tmp
 
-# Copy binary from builder. The build stage staged the binary under
-# `/out/release/` precisely because `/app/target/` is a cache mount
-# that does not persist into the image — only paths *outside* the
-# mount survive into subsequent stages.
+# CA bundle for outbound TLS (rustls reads the system bundle via
+# rustls-native-certs). Sourced from the builder's Debian ca-certificates.
+COPY --from=builder /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/ca-certificates.crt
+
+# The static binary — the only executable in the image.
 COPY --from=builder --chmod=0755 /out/release/nexus-server /usr/local/bin/nexus-server
 
-# Harden: drop `tar` from the image. nexus-server never invokes it, and
-# the base's `tar` is flagged by scanners for the DISPUTED CVE-2025-45582
-# (GNU tar — "works as documented per upstream", no Debian fix exists).
-# Remove the hard-linked binaries AND the package's `dpkg` metadata so the
-# medium finding is genuinely gone rather than merely hidden. The DHI base
-# records installed packages in BOTH the monolithic `/var/lib/dpkg/status`
-# (35 stanzas) and one-file-per-package under `/var/lib/dpkg/status.d/`
-# (the Google-distroless convention). Docker Scout reads the monolithic
-# file, so the `tar` stanza there is what actually keys the finding — the
-# `status.d/tar` file must go too for Trivy/Grype parity. The DHI base
-# ships sh/rm/mv/awk but defaults to `nonroot` (uid 65532), so switch to
-# root for the removal; `USER nexus` below restores the runtime user.
-USER root
-RUN rm -f /usr/bin/tar /bin/tar /var/lib/dpkg/status.d/tar \
- && awk 'BEGIN{RS="";ORS="\n\n"} !/(^|\n)Package: tar(\n|$)/' /var/lib/dpkg/status > /var/lib/dpkg/status.new \
- && mv /var/lib/dpkg/status.new /var/lib/dpkg/status
-
-# Set working directory
 WORKDIR /app
 
-# Switch to non-root user
 USER nexus
 
 # Expose default ports.
 #   15474 — HTTP API (`/cypher`, `/knn_traverse`, `/health`, …).
 #   15475 — Native binary RPC transport (`nexus://host:15475`), the
-#           default for every first-party SDK since
-#           `phase2_sdk-rpc-transport-default`. Operators who want
+#           default for every first-party SDK. Operators who want
 #           HTTP-only can leave 15475 unpublished on the host side
 #           or set `[rpc].enabled = false` in `config.yml`.
 EXPOSE 15474 15475
 
-# Health check.
-#
-# Distroless trixie ships bash but no curl / wget / grep. Probe via
-# bash built-ins only: `/dev/tcp` for the socket, `read` for a single
-# response line, `[[ ... == *200 OK* ]]` for the status assertion.
-# Exits 0 only when the server replies `HTTP/1.x 200 OK` to /health.
+# Health check via the binary itself (`--healthcheck` performs an
+# HTTP/1.0 GET to 127.0.0.1:<port from NEXUS_ADDR>/health and exits
+# 0/1). No shell exists in this image, so exec-form with the absolute
+# path is mandatory.
 HEALTHCHECK --interval=30s --timeout=10s --start-period=40s --retries=3 \
-    CMD ["bash", "-c", "exec 3<>/dev/tcp/127.0.0.1/15474 && printf 'GET /health HTTP/1.0\\r\\nHost: localhost\\r\\n\\r\\n' >&3 && read -r line <&3 && [[ \"$line\" == *'200 OK'* ]]"]
+    CMD ["/usr/local/bin/nexus-server", "--healthcheck"]
 
 # Default environment variables
 ENV NEXUS_ADDR=0.0.0.0:15474
 ENV NEXUS_DATA_DIR=/app/data
 ENV RUST_LOG=info
+ENV TZ=UTC
 
 # Run server
-CMD ["nexus-server"]
-
+CMD ["/usr/local/bin/nexus-server"]

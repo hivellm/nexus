@@ -56,11 +56,100 @@ struct Args {
     /// Enable verbose logging (prints debug information to stdout/stderr)
     #[arg(long, short = 'v')]
     verbose: bool,
+
+    /// Run a one-shot health probe against a locally running server and
+    /// exit immediately (0 = healthy, 1 = unhealthy) instead of starting
+    /// the server. Intended as a container `HEALTHCHECK` command for
+    /// images that ship no shell (e.g. `FROM scratch`), where the binary
+    /// itself must double as the probe. The target port is read from the
+    /// `NEXUS_ADDR` environment variable (default 15474).
+    #[arg(long)]
+    healthcheck: bool,
+}
+
+/// Extracts the TCP port to probe for `--healthcheck` from a `NEXUS_ADDR`-style
+/// `host:port` string.
+///
+/// Falls back to the default Nexus port (15474) when `addr` is `None` or does
+/// not parse as a valid port. Takes the segment after the last `:` so
+/// IPv6-style addresses like `[::]:15474` still resolve to the correct port.
+fn healthcheck_port_from_env(addr: Option<&str>) -> u16 {
+    const DEFAULT_PORT: u16 = 15474;
+    addr.and_then(|s| s.rsplit(':').next())
+        .and_then(|port_str| port_str.parse::<u16>().ok())
+        .unwrap_or(DEFAULT_PORT)
+}
+
+/// Runs the `--healthcheck` probe and never returns: it always terminates the
+/// process via `std::process::exit`.
+///
+/// Connects to `GET /health` on `127.0.0.1:<port>` (port resolved by
+/// [`healthcheck_port_from_env`] from `NEXUS_ADDR`) using short connect/read/
+/// write timeouts so a wedged server fails the probe quickly rather than
+/// hanging the container runtime's healthcheck. Exits `0` when the response's
+/// status line contains `200`; exits `1` on any connection, I/O, or non-200
+/// failure.
+fn run_healthcheck() -> ! {
+    use std::io::{Read, Write};
+    use std::net::{SocketAddr, TcpStream};
+    use std::time::Duration;
+
+    let port = healthcheck_port_from_env(std::env::var("NEXUS_ADDR").ok().as_deref());
+    let addr: SocketAddr = ([127, 0, 0, 1], port).into();
+    let timeout = Duration::from_secs(3);
+
+    let mut stream = match TcpStream::connect_timeout(&addr, timeout) {
+        Ok(stream) => stream,
+        Err(e) => {
+            eprintln!("healthcheck: failed to connect to {addr}: {e}");
+            std::process::exit(1);
+        }
+    };
+
+    if let Err(e) = stream.set_read_timeout(Some(timeout)) {
+        eprintln!("healthcheck: failed to set read timeout: {e}");
+        std::process::exit(1);
+    }
+    if let Err(e) = stream.set_write_timeout(Some(timeout)) {
+        eprintln!("healthcheck: failed to set write timeout: {e}");
+        std::process::exit(1);
+    }
+
+    let request = b"GET /health HTTP/1.0\r\nHost: localhost\r\n\r\n";
+    if let Err(e) = stream.write_all(request) {
+        eprintln!("healthcheck: failed to send request: {e}");
+        std::process::exit(1);
+    }
+
+    let mut buf = [0u8; 512];
+    let bytes_read = match stream.read(&mut buf) {
+        Ok(n) => n,
+        Err(e) => {
+            eprintln!("healthcheck: failed to read response: {e}");
+            std::process::exit(1);
+        }
+    };
+
+    let response = String::from_utf8_lossy(&buf[..bytes_read]);
+    let status_line = response.lines().next().unwrap_or("");
+    if status_line.contains("200") {
+        std::process::exit(0);
+    }
+
+    eprintln!("healthcheck: unhealthy response: {status_line}");
+    std::process::exit(1);
 }
 
 fn main() -> anyhow::Result<()> {
     // Parse CLI arguments
     let args = Args::parse();
+
+    // `--healthcheck` is a one-shot probe, not a server boot: run it before
+    // any Tokio runtime / server startup work so it stays cheap and fast
+    // even inside a `FROM scratch` container with no shell.
+    if args.healthcheck {
+        run_healthcheck();
+    }
 
     // Configure Tokio runtime for high concurrency
     // Use CPU count * 2 for worker threads, minimum 8, maximum 32
@@ -1065,6 +1154,28 @@ mod tests {
         let config = Config::default();
         assert_eq!(config.addr.port(), 15474);
         assert_eq!(config.addr.ip(), IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)));
+    }
+
+    #[test]
+    fn test_healthcheck_port_from_env_default_when_none() {
+        assert_eq!(healthcheck_port_from_env(None), 15474);
+    }
+
+    #[test]
+    fn test_healthcheck_port_from_env_valid_host_port() {
+        assert_eq!(healthcheck_port_from_env(Some("0.0.0.0:15474")), 15474);
+        assert_eq!(healthcheck_port_from_env(Some("192.168.1.5:8080")), 8080);
+    }
+
+    #[test]
+    fn test_healthcheck_port_from_env_garbage_falls_back_to_default() {
+        assert_eq!(healthcheck_port_from_env(Some("not-an-address")), 15474);
+        assert_eq!(healthcheck_port_from_env(Some("")), 15474);
+    }
+
+    #[test]
+    fn test_healthcheck_port_from_env_ipv6_style_takes_last_segment() {
+        assert_eq!(healthcheck_port_from_env(Some("[::]:15474")), 15474);
     }
 
     #[tokio::test]
