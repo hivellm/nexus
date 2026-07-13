@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased — 2.5.0]
 
+### Benchmarks — canonical 2026 re-baseline
+
+- **`docs/performance/BENCHMARK_2026.md` is the new canonical vs-Neo4j reference** (Nexus 2.5.0-dev vs Neo4j 5.26.28, pinned versions/hardware, fully reproducible). Headline: Nexus leads **84% of 57 comparable serial scenarios** (0 gaps >2x); the historical CREATE-relationship contradiction is settled with a dedicated 5-repetition verdict — **Nexus 2.40x faster** (2.35 ms vs 5.63 ms median). Remaining losses are concentrated in high-concurrency scaling (tracked with numeric gates in `phase8_neo4j-concurrency-gaps`). The Dec-2025 report is marked SUPERSEDED.
+- **First measured KNN recall numbers** (`KNN_RECALL.md`): SIFT1M 64-cell HNSW sweep — sweet spot m16/efc100/efs50 delivers **95.0% recall@1 at 1.02 ms p95**; the "<2 ms p95" claim holds up to ~97% recall@10 (now backed by data instead of assertion).
+- **Per-transport parity suite** (`scripts/compatibility/test-transport-parity.sh`): the same write battery over HTTP, RPC, and RESP3 with normalized result diffing — 7/7 parity, the permanent release-gate regression net for the write-path unification.
+
 ### Performance
 
 - **Autocommit reads no longer take the exclusive engine lock (~2.6x concurrent read throughput).** Every MATCH previously held `engine.write().await` for its whole parse+plan+execute; read-only autocommit queries (classified from the AST by `routing::is_read_only` — exhaustive per-clause match, conservative on unknown procedures) now run on a cloned executor snapshot in `spawn_blocking` behind a brief shared lock. Writes and in-transaction reads are unchanged (read-your-own-writes preserved). Measured: 667 → 1727 qps at 8 concurrent clients (release build; benchmark ships as an on-demand `#[ignore]`d test). Same change applied to the RPC dispatcher.

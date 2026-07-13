@@ -15,6 +15,29 @@ true neighbours in 100 µs.
 The harness lives at `crates/nexus-knn-bench/` and is reproducible
 end-to-end from the recipes below.
 
+## 0. Published results — SIFT1M (2026-07-13, first measured run)
+
+Full 64-cell sweep (m ∈ {8,16,32,64} × ef_construction ∈ {100,200,400,800}
+× ef_search ∈ {50,100,200,400}), 1,000,000 base vectors (128d), 10,000
+queries, k=100, ground truth from `sift_groundtruth.ivecs`. Host: Ryzen 9
+7950X3D, Windows 10. Raw grid: `docs/performance/data/sift1m-recall.json`
+/ `.csv` (checked in). Representative operating points:
+
+| Config (m / efc / efs) | recall@1 | recall@10 | recall@100 | p50 | p95 | p99 | build |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| 8 / 100 / 50 (fastest) | 0.852 | 0.848 | 0.768 | 530 µs | 636 µs | 693 µs | 468 s |
+| **16 / 100 / 50 (sweet spot)** | **0.950** | **0.948** | 0.892 | **787 µs** | **1.02 ms** | 1.10 ms | 649 s |
+| 16 / 200 / 200 | 0.965 | 0.971 | 0.954 | 1.51 ms | 1.93 ms | 2.09 ms | 1,257 s |
+| 32 / 100 / 50 | 0.975 | 0.975 | 0.928 | 967 µs | 1.23 ms | 1.34 ms | 752 s |
+| 32 / 200 / 200 | 0.985 | 0.989 | 0.980 | 1.93 ms | 2.56 ms | 2.78 ms | 1,501 s |
+| 64 / 400 / 400 (max quality) | 0.991 | 0.996 | 0.996 | 4.93 ms | 6.70 ms | 7.70 ms | 3,442 s |
+
+Reading of the headline claims: the long-standing **"<2 ms p95"** target
+holds up to ~97% recall@10 (`16/200/200` at 1.93 ms p95); the sweet-spot
+config delivers **95% recall@1 at ~1 ms p95**. Recall ≥99% costs 2.5–7 ms
+p95 — configure per workload. GloVe-200d (angular) run: corpus downloaded,
+same command with `glove` — numbers to be appended by the same process.
+
 ## 1. Methodology
 
 | Step | Detail |
