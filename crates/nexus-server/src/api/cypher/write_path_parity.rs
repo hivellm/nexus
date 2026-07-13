@@ -809,6 +809,31 @@ async fn case_11_merge_rel_inline_props_persist() {
     );
 }
 
+// Same-statement projection of a relationship-variable property after
+// MERGE — the MERGE sibling of case 8 (which covers CREATE...RETURN r.w).
+// Found live on the 2.5.0-dev image: the value persists (case 11 proves
+// it) but `MERGE ... RETURN r.w` projected null in the same statement.
+#[tokio::test]
+async fn case_11b_merge_rel_return_property_same_statement() {
+    let ctx = TestContext::new();
+    let server = build_test_server(&ctx);
+
+    let resp = run_query(
+        &server,
+        "MERGE (a:Case11bA {id: 1})-[r:Case11bT {v: 9}]->(b:Case11bB {id: 2}) RETURN r.v AS v",
+        no_params(),
+    )
+    .await;
+    assert_no_error(&resp, "MERGE rel RETURN r.v same statement");
+    assert!(!resp.rows.is_empty(), "MERGE ... RETURN must produce a row");
+    let row = resp.rows[0].as_array().expect("row is array");
+    assert_eq!(
+        row[0].as_i64(),
+        Some(9),
+        "MERGE (a)-[r:T {{v:9}}]->(b) RETURN r.v must project 9 in the same statement"
+    );
+}
+
 #[tokio::test]
 async fn case_12_match_set_rel_property_forms() {
     let ctx = TestContext::new();

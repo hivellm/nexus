@@ -1148,6 +1148,23 @@ impl Engine {
                 }
                 Ok(Value::Null)
             }
+            // `RETURN r.prop` in the same statement as the MERGE/CREATE
+            // that bound `r`. This arm was missing — PropertyAccess on a
+            // relationship variable fell through to the catch-all Null
+            // below, so `MERGE (a)-[r:T {v:9}]->(b) RETURN r.v` projected
+            // null even though the property was persisted correctly
+            // (harness case 11b; found live on the 2.5.0-dev image).
+            executor::parser::Expression::PropertyAccess { variable, property } => {
+                if let Some(entries) = rel_context.get(variable) {
+                    if let Some((rel_id, _)) = entries.last() {
+                        let props = self.storage.load_relationship_properties(*rel_id)?;
+                        if let Some(Value::Object(map)) = props {
+                            return Ok(map.get(property).cloned().unwrap_or(Value::Null));
+                        }
+                    }
+                }
+                Ok(Value::Null)
+            }
             _ => Ok(Value::Null),
         }
     }
