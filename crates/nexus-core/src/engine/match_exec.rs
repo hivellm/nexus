@@ -34,7 +34,7 @@ impl Engine {
         // Execute MATCH to get results
         let match_query = executor::parser::CypherQuery {
             clauses: match_query_clauses,
-            params: ast.params.clone(),
+            params: self.merged_query_params(ast),
             graph_scope: ast.graph_scope.clone(),
         };
 
@@ -110,7 +110,7 @@ impl Engine {
 
         let query_obj = executor::Query {
             cypher: String::new(),
-            params: ast.params.clone(),
+            params: self.merged_query_params(ast),
         };
 
         let match_results = self.executor.execute(&query_obj)?;
@@ -174,7 +174,7 @@ impl Engine {
 
         let query_obj = executor::Query {
             cypher,
-            params: ast.params.clone(),
+            params: self.merged_query_params(ast),
         };
 
         // Execute and return result
@@ -495,6 +495,27 @@ impl Engine {
     }
 
     /// Convert expression to JSON value (helper for CREATE)
+    /// Parameters for an executor `Query` built from an engine-side AST.
+    ///
+    /// `ast.params` is ALWAYS empty — the parser never fills it (the same
+    /// trap the dispatch-consolidation fixed in `query_pipeline.rs`). The
+    /// real request parameters live on `self.current_params`, installed by
+    /// `execute_cypher_with_params` for the duration of the call. Without
+    /// this, `MATCH (n {id: $x}) DELETE n` failed with
+    /// `ERR_MISSING_PARAMETER` (found live by the per-transport parity
+    /// runner; harness case 06d). Merged with `ast.params` first so any
+    /// future parser-supplied params still win nothing silently.
+    fn merged_query_params(
+        &self,
+        ast: &executor::parser::CypherQuery,
+    ) -> std::collections::HashMap<String, serde_json::Value> {
+        let mut params = ast.params.clone();
+        for (k, v) in &self.current_params {
+            params.insert(k.clone(), v.clone());
+        }
+        params
+    }
+
     pub(super) fn expression_to_json_value(
         &self,
         expr: &executor::parser::Expression,

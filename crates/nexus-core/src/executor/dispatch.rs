@@ -291,13 +291,49 @@ impl Executor {
             let existing_rows = self.materialize_rows_from_variables(&context);
             if existing_rows.is_empty() {
                 // CREATE standalone - create nodes and relationships directly
-                let (created_node_ids, created_rel_ids) = self
+                let (mut created_node_ids, mut created_rel_ids) = self
                     .execute_create_pattern_with_variables(
                         pattern,
                         resolved_external_id,
                         policy,
                         &context.params,
                     )?;
+
+                // A statement may carry SEVERAL consecutive CREATE clauses
+                // (`CREATE (a) CREATE (b)` — standard openCypher, distinct
+                // from the comma form, which arrives as one pattern). The
+                // planner emits one Create operator per clause, but this
+                // fast path executed only `operators.first()` and the
+                // trailing loop ignored the rest — the statement silently
+                // created ONLY the first clause's entities (parity harness
+                // case 02c). Execute every remaining Create here, merging
+                // the created-entity maps so the response row and context
+                // variables cover all clauses.
+                for op in operators.iter().skip(1) {
+                    if let Operator::Create {
+                        pattern: extra_pattern,
+                        external_id_expr: extra_ext_expr,
+                        conflict_policy: extra_policy,
+                    } = op
+                    {
+                        let extra_ext_id = if let Some(expr) = extra_ext_expr.as_ref() {
+                            Some(self.resolve_external_id(expr, &context.params)?)
+                        } else {
+                            None
+                        };
+                        let extra_policy =
+                            operators::create::ast_conflict_policy_to_storage(*extra_policy);
+                        let (extra_nodes, extra_rels) = self
+                            .execute_create_pattern_with_variables(
+                                extra_pattern,
+                                extra_ext_id,
+                                extra_policy,
+                                &context.params,
+                            )?;
+                        created_node_ids.extend(extra_nodes);
+                        created_rel_ids.extend(extra_rels);
+                    }
+                }
 
                 // Collect all created entities (nodes and relationships)
                 let mut columns: Vec<String> = created_node_ids.keys().cloned().collect();
@@ -567,12 +603,14 @@ impl Executor {
                     };
                     let policy =
                         operators::create::ast_conflict_policy_to_storage(*conflict_policy);
-                    // Skip if already executed in the first block
-                    if operators
-                        .first()
-                        .map(|op| matches!(op, Operator::Create { .. }))
-                        .unwrap_or(false)
-                    {
+                    // The standalone-CREATE fast path above already executed
+                    // the plan's FIRST operator when it is a Create — but only
+                    // that one. This guard used to test `operators.first()`
+                    // for ANY Create in the loop, which skipped every
+                    // subsequent Create operator too: `CREATE (a) CREATE (b)`
+                    // silently created only `a` (parity harness case 02c).
+                    // Skip strictly the operator the fast path consumed.
+                    if op_idx == 0 {
                         continue;
                     }
 

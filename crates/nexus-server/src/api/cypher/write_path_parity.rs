@@ -302,6 +302,38 @@ async fn case_02_create_node_param_props_return_and_reread() {
     );
 }
 
+// Found while validating case_06d: a statement with CONSECUTIVE CREATE
+// clauses (`CREATE (a) CREATE (b)` — standard openCypher, distinct from
+// the comma form) silently executed only the FIRST clause. HTTP returned
+// 200 with only column `a`; node `b` never existed. Pre-existing on the
+// published builds; standard shape in tutorials and our own smoke tests,
+// where a following MERGE masked it by re-creating the missing endpoint.
+#[tokio::test]
+async fn case_02c_consecutive_create_clauses_all_execute() {
+    let ctx = TestContext::new();
+    let server = build_test_server(&ctx);
+
+    let resp = run_query(
+        &server,
+        "CREATE (a:Case2c {id: 1}) CREATE (b:Case2c {id: 2}) CREATE (c:Case2c {id: 3})",
+        no_params(),
+    )
+    .await;
+    assert_no_error(&resp, "three consecutive CREATE clauses");
+
+    let count = run_query(
+        &server,
+        "MATCH (n:Case2c) RETURN count(n) AS c",
+        no_params(),
+    )
+    .await;
+    assert_eq!(
+        first_i64(&count, "Case2c count"),
+        3,
+        "every CREATE clause in the statement must execute (got fewer nodes)"
+    );
+}
+
 #[tokio::test]
 async fn case_03_merge_node_creates_then_idempotent() {
     let ctx = TestContext::new();
@@ -595,6 +627,47 @@ async fn case_06b_detach_delete_with_relationship() {
         first_i64(&b_count, "Case6DetachB count"),
         1,
         "DETACH DELETE on a must not remove the unrelated endpoint b"
+    );
+}
+
+// Found live by the per-transport parity runner (phase7): a `$param`
+// inside a MATCH inline-property filter on the DELETE path did not bind —
+// HTTP silently deleted NOTHING (200 OK) while RPC raised
+// ERR_MISSING_PARAMETER. Same param-resolution family as B4/G1.
+#[tokio::test]
+async fn case_06d_delete_with_param_inline_property_filter() {
+    let ctx = TestContext::new();
+    let server = build_test_server(&ctx);
+
+    // Comma-form seed on purpose: consecutive CREATE clauses in one
+    // statement hit a separate pre-existing bug (second clause dropped —
+    // see case_02c) that would mask what this case is about.
+    let seed = run_query(
+        &server,
+        "CREATE (a:Case6dP {id: 1}), (b:Case6dP {id: 2})",
+        no_params(),
+    )
+    .await;
+    assert_no_error(&seed, "seed two Case6dP nodes");
+
+    let del = run_query(
+        &server,
+        "MATCH (n:Case6dP {id: $target}) DELETE n",
+        params(&[("target", serde_json::json!(1))]),
+    )
+    .await;
+    assert_no_error(&del, "MATCH inline $param filter + DELETE");
+
+    let count = run_query(
+        &server,
+        "MATCH (n:Case6dP) RETURN count(n) AS c",
+        no_params(),
+    )
+    .await;
+    assert_eq!(
+        first_i64(&count, "Case6dP count after param DELETE"),
+        1,
+        "MATCH (n {{id: $target}}) DELETE n must delete exactly the matching node"
     );
 }
 
