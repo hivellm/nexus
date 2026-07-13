@@ -270,6 +270,45 @@ async fn execute_query(
     // this RPC dispatcher share one definition of "needs the engine"
     // instead of keeping independently-drifting copies.
     if needs_engine_interception(&ast) {
+        // phase5_lock-free-read-path: mirrors the HTTP `/cypher` handler's
+        // carve-out (`api::cypher::execute::handler`) — a pure autocommit
+        // read (`routing::is_read_only`) with no open explicit transaction
+        // on the "default" session runs through a cloned `Engine::executor`
+        // snapshot in `spawn_blocking` instead of the exclusive
+        // `engine.write().await` every other clause here still needs. See
+        // that handler's inline comments for the freshness argument
+        // (`Engine::refresh_executor` keeps `Engine::executor` current
+        // after every commit/rollback/write) and the read-your-own-writes
+        // argument for staying on the engine inside an explicit
+        // transaction.
+        if crate::api::cypher::routing::is_read_only(&ast) {
+            let (lock_free_executor, in_explicit_tx) = {
+                let engine_guard = state.server.engine.read().await;
+                let in_tx = engine_guard
+                    .session_manager
+                    .get_session(&"default".to_string())
+                    .map(|session| session.has_active_transaction())
+                    .unwrap_or(false);
+                (engine_guard.executor.clone(), in_tx)
+            };
+
+            if !in_explicit_tx {
+                let q = Query {
+                    cypher: query.clone(),
+                    params: params.clone(),
+                };
+                let out = tokio::task::spawn_blocking(move || lock_free_executor.execute(&q)).await;
+                let elapsed_ms = started.elapsed().as_millis() as i64;
+                return match out {
+                    Ok(Ok(rs)) => Ok(result_set_to_nexus(rs, elapsed_ms)),
+                    Ok(Err(e)) => Err(format!("Cypher error: {e}")),
+                    Err(join_err) => Err(format!("ERR internal join error: {join_err}")),
+                };
+            }
+            // Else: an explicit transaction is open on the "default"
+            // session — fall through to the engine-locked path below.
+        }
+
         let engine_arc = state.server.engine.clone();
         let result = {
             let mut engine = engine_arc.write().await;

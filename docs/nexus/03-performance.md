@@ -92,3 +92,44 @@
 Deferred post-2.5.0: columnar representation (#2), page-cache policy (#6),
 group-commit WAL (#7), Bolt (#8 — tracked as its own epic in
 [05-v2.5.0-plan.md](05-v2.5.0-plan.md)).
+
+## Bottleneck #1 — implementation status (phase5_lock-free-read-path)
+
+Landed. Autocommit read-only queries (`MATCH` / `OPTIONAL MATCH` / `WITH` /
+`UNWIND` / `UNION` / ... with no write clause, no DDL, not inside an open
+explicit transaction — see `routing::is_read_only` in
+`crates/nexus-server/src/api/cypher/routing.rs`) now run through a cloned
+`Engine::executor` snapshot inside `tokio::task::spawn_blocking`, taking only
+a brief **shared** `engine.read().await` to obtain the clone and check the
+"default" session's transaction state, instead of the exclusive
+`engine.write().await` every MATCH previously held for its entire
+parse+plan+execute duration. Writes and in-transaction reads are unchanged —
+both still take the exclusive engine lock (single-writer ordering and
+read-your-own-writes are preserved; see the routing module and the
+`lock_free_read_path_test.rs` integration tests for the correctness
+argument). The RPC `CYPHER` dispatcher (`protocol/rpc/dispatch/cypher.rs`)
+got the identical routing change.
+
+**Measured** (`crates/nexus-server/tests/lock_free_read_path_test.rs`,
+`concurrent_match_throughput`, release build, 8 concurrent simulated
+clients × 200 `MATCH (n:Label) RETURN count(n)` queries each against a
+500-node seeded graph, two runs per side on this development machine
+while a concurrent unrelated Docker build shared the CPU — absolute
+numbers are machine-dependent, the *ratio* is the signal):
+
+| | qps @ 8 clients (runs) | avg |
+|---|---|---|
+| Before (exclusive `engine.write().await` per read) | 681.4, 652.6 | ~667 |
+| After (lock-free `Executor` clone + `spawn_blocking`) | 1812.7, 1640.4 | ~1727 |
+| **Speedup** | | **~2.6x** |
+
+Below the ≥3x stretch target quoted in the proposal (the narrow bare-`RETURN`
+fix that motivated the estimate had no catalog/session-check overhead at
+all); still a substantial, real reduction in lock contention on the dominant
+MATCH path. The gap versus the estimate is consistent with the residual
+per-request cost this change did **not** remove: a `parking_lot`-guarded
+session-map lookup + a full `Session` clone (`SessionManager::get_session`)
+on every read to check "is there an open explicit transaction", and Tokio's
+own `spawn_blocking` scheduling overhead. Both are candidates for further
+work if additional gains are needed; see the corresponding rulebook task's
+`tasks.md` for the exact commands used to reproduce these numbers.

@@ -485,6 +485,109 @@ pub async fn execute_cypher(
     // e.g. a bare `MATCH ... SET`/`MATCH ... DELETE`) still needs the
     // engine rather than the lock-free executor below.
     if routing::needs_engine_interception(&ast) {
+        // phase5_lock-free-read-path: carve the pure-read subset of this
+        // bucket (MATCH / OPTIONAL MATCH / WITH / UNWIND / ... with no
+        // write clause, no DDL, not an explicit transaction command —
+        // see `routing::is_read_only`) out of the exclusive engine lock
+        // that every other clause here still needs. Bottleneck #1 in
+        // `docs/nexus/03-performance.md`: every MATCH query used to take
+        // `server.engine.write().await` for its entire parse+plan+execute
+        // duration, serializing all reads against each other server-wide.
+        //
+        // An in-progress explicit transaction (`BEGIN TRANSACTION` not yet
+        // COMMIT/ROLLBACK-ed) must still route through the engine so a
+        // read sees that session's own uncommitted writes
+        // (read-your-own-writes) — the lock-free executor clone below can
+        // only ever reflect the last COMMIT/ROLLBACK's
+        // `Engine::refresh_executor()` snapshot, never an in-flight
+        // transaction's staged state.
+        if routing::is_read_only(&ast) {
+            // Acquire a SHARED read lock just long enough to (a) clone
+            // `Engine::executor` — the same instance
+            // `Engine::refresh_executor()` replaces with a fresh
+            // snapshot after every commit/rollback/standalone-write, so
+            // the clone taken here is guaranteed at least as fresh as
+            // the last write that finished before this `.read().await`
+            // was granted — and (b) check whether the autocommit
+            // "default" session (the only session HTTP requests ever
+            // use; see `Engine::execute_transaction_commands`) has an
+            // open explicit transaction. `Executor` clones are cheap —
+            // a thin wrapper around `Arc`'d shared state (see
+            // `executor::engine::Executor::clone`) — and, unlike the
+            // exclusive `.write().await` this branch used to take for
+            // every MATCH, an arbitrary number of readers can hold
+            // `.read().await` concurrently: this no longer serializes
+            // reads against each other.
+            let (lock_free_executor, in_explicit_tx) = {
+                let engine_guard = server.engine.read().await;
+                let in_tx = engine_guard
+                    .session_manager
+                    .get_session(&"default".to_string())
+                    .map(|session| session.has_active_transaction())
+                    .unwrap_or(false);
+                (engine_guard.executor.clone(), in_tx)
+            };
+
+            if !in_explicit_tx {
+                let query = Query {
+                    cypher: request.query.clone(),
+                    params: request.params.clone(),
+                };
+
+                let execution_result =
+                    match tokio::task::spawn_blocking(move || lock_free_executor.execute(&query))
+                        .await
+                    {
+                        Ok(result) => result,
+                        Err(e) => {
+                            return Json(CypherResponse {
+                                columns: vec![],
+                                rows: vec![],
+                                execution_time_ms: start_time.elapsed().as_millis() as u64,
+                                error: Some(format!("Task execution error: {}", e)),
+                                notifications: Vec::new(),
+                            });
+                        }
+                    };
+
+                let execution_time_ms = start_time.elapsed().as_millis() as u64;
+                return match execution_result {
+                    Ok(result_set) => {
+                        tracing::info!(
+                            "Read-only query executed via lock-free path in {}ms, {} rows returned",
+                            execution_time_ms,
+                            result_set.rows.len()
+                        );
+                        Json(CypherResponse {
+                            columns: result_set.columns,
+                            rows: result_set
+                                .rows
+                                .into_iter()
+                                .map(|row| serde_json::Value::Array(row.values))
+                                .collect(),
+                            execution_time_ms,
+                            error: None,
+                            notifications: result_set.notifications,
+                        })
+                    }
+                    Err(e) => {
+                        tracing::error!("Read-only query execution failed: {}", e);
+                        Json(CypherResponse {
+                            columns: vec![],
+                            rows: vec![],
+                            execution_time_ms,
+                            error: Some(e.to_string()),
+                            notifications: Vec::new(),
+                        })
+                    }
+                };
+            }
+            // Else: an explicit transaction is open on the "default"
+            // session — fall through to the engine-locked path below so
+            // this read observes that transaction's own uncommitted
+            // writes.
+        }
+
         {
             // Use the engine's execute_cypher method which uses its internal executor
             let mut engine_guard = server.engine.write().await;
