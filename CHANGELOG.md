@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased — 2.5.0]
 
+### Added — multi-arch Docker image (linux/amd64 + linux/arm64)
+
+- **The Docker image now ships as a multi-arch manifest** (Synap pattern: each platform builds natively via a `TARGETARCH`-selected musl target; the arm64 leg builds under qemu/binfmt on amd64 hosts — no cross-toolchain). Apple Silicon, AWS Graviton, and Ampere pull a native arm64 image (21.6 MB, NEON SIMD runtime-dispatched) instead of emulating amd64. Both platform digests scan **0C 0H 0M 0L, 0 packages**. Note: arm64 runtime validation requires real arm64 hardware — qemu-user lacks `get_robust_list`, which LMDB's robust mutexes need at env-open.
+
 ### Security — zero-CVE Docker image
 
 - **The runtime image is now `FROM scratch` with a fully static musl binary — 0 OS packages, 0 CVEs.** Docker Scout reported 14 disputed/won't-fix low CVEs on the previous DHI/debian runtime (glibc ×7, systemd ×4, coreutils ×2, openssl ×1) with no Debian fix available; since the seven glibc findings attach to `libc6`, no amount of package removal could reach zero with a dynamically-linked binary. `nexus-server` is now built for `x86_64-unknown-linux-musl` (fully static, jemalloc retained via `disable_initial_exec_tls`) and shipped in an empty base: Scout reports **0C 0H 0M 0L, 0 packages**. Image size drops 70.2 MB → 25.8 MB (−63%). Trade-off: the image has no shell — `docker exec … sh` no longer works; debug via `docker logs` and the HTTP API.

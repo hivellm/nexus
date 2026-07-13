@@ -82,7 +82,22 @@ The Dockerfile uses a multi-stage build for optimal image size:
 
 ### Image Size
 - Build stage: ~2GB (temporary)
-- Runtime stage: ~26MB (final image; was ~70MB on the 2.4.0 debian-based runtime)
+- Runtime stage: ~26MB amd64 / ~22MB arm64 (was ~70MB on the 2.4.0 debian-based runtime)
+
+### Multi-arch (since 2.5.0)
+The published image is a **multi-arch manifest** serving `linux/amd64` and
+`linux/arm64` — `docker pull hivehub/nexus` selects the native platform
+automatically on Apple Silicon, AWS Graviton, and Ampere hosts (NEON SIMD
+kernels are runtime-dispatched on arm64). Publishing both platforms:
+
+```bash
+docker buildx build --platform linux/amd64,linux/arm64 \
+  -t hivehub/nexus:<version> -t hivehub/nexus:latest --push .
+```
+
+> Note: the arm64 image cannot be smoke-tested under qemu-user emulation
+> (qemu does not implement `get_robust_list`, required by LMDB's robust
+> mutexes) — validate on real arm64 hardware.
 
 ## Docker Compose
 
