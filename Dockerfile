@@ -10,13 +10,20 @@
 # debug via `docker logs` and the HTTP API. The container HEALTHCHECK
 # uses the binary itself (`nexus-server --healthcheck`).
 #
-# HOW TO BUILD:
+# HOW TO BUILD (single arch, local):
 #   docker build -t hivehub/nexus:2.5.0 -t hivehub/nexus:latest .
 #
-# HOW TO PUBLISH (Docker Hub — hivehub/nexus):
+# HOW TO BUILD + PUBLISH MULTI-ARCH (Docker Hub — hivehub/nexus):
 #   docker login
-#   docker push hivehub/nexus:2.5.0
-#   docker push hivehub/nexus:latest
+#   docker buildx build --platform linux/amd64,linux/arm64 \
+#     -t hivehub/nexus:2.5.0 -t hivehub/nexus:latest --push .
+#
+#   Each platform builds NATIVELY (arm64 under qemu/binfmt on an amd64
+#   host — same pattern as the Synap Dockerfile). No cross-toolchain:
+#   the builder base is multi-arch and `musl-tools` provides the
+#   host-arch musl-gcc on both platforms; `TARGETARCH` picks the
+#   matching Rust target triple. The arm64 leg is slow under qemu on
+#   first build; BuildKit cache mounts make re-runs incremental.
 #
 # HOW TO RUN:
 #   docker run -d \
@@ -38,20 +45,31 @@
 #
 # For more details, see docs/guides/DEPLOYMENT_GUIDE.md
 
-# Build stage — static musl binary.
+# Build stage — static musl binary, built NATIVELY per platform.
 #
-# `rustlang/rust:nightly` is Debian-based; `musl-tools` provides
-# musl-gcc, which `cc`-built C deps (LMDB via heed, zstd via tantivy,
-# jemalloc via tikv-jemalloc-sys) compile against. Rust targets
-# x86_64-unknown-linux-musl with crt-static by default, producing a
+# `rustlang/rust:nightly` is Debian-based and multi-arch; `musl-tools`
+# provides the HOST-arch musl-gcc on both amd64 and arm64, which
+# `cc`-built C deps (LMDB via heed, zstd via tantivy, jemalloc via
+# tikv-jemalloc-sys) compile against. Rust targets
+# <arch>-unknown-linux-musl with crt-static by default, producing a
 # fully static PIE with no interpreter — runnable in `scratch`.
+# `TARGETARCH` (amd64|arm64, injected by buildx) selects the triple;
+# under `docker buildx build --platform linux/amd64,linux/arm64` each
+# leg runs natively (arm64 via qemu/binfmt on an amd64 host) — the
+# same no-cross-toolchain pattern as the Synap Dockerfile.
 FROM rustlang/rust:nightly AS builder
 
+ARG TARGETARCH
 RUN apt-get update && apt-get install -y \
     musl-tools \
     file \
     && rm -rf /var/lib/apt/lists/* \
- && rustup target add x86_64-unknown-linux-musl
+ && case "${TARGETARCH:-amd64}" in \
+      amd64) TARGET_TRIPLE=x86_64-unknown-linux-musl ;; \
+      arm64) TARGET_TRIPLE=aarch64-unknown-linux-musl ;; \
+      *) echo "unsupported TARGETARCH '${TARGETARCH}'" >&2; exit 1 ;; \
+    esac \
+ && rustup target add "${TARGET_TRIPLE}"
 
 WORKDIR /app
 
@@ -81,10 +99,15 @@ COPY crates/nexus-knn-bench ./crates/nexus-knn-bench
 # "can't find crate for `core`").
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/app/target \
-    cargo build --release --package nexus-server \
-      --target x86_64-unknown-linux-musl \
+    case "${TARGETARCH:-amd64}" in \
+      amd64) TARGET_TRIPLE=x86_64-unknown-linux-musl ;; \
+      arm64) TARGET_TRIPLE=aarch64-unknown-linux-musl ;; \
+      *) echo "unsupported TARGETARCH '${TARGETARCH}'" >&2; exit 1 ;; \
+    esac \
+ && cargo build --release --package nexus-server \
+      --target "${TARGET_TRIPLE}" \
  && mkdir -p /out/release \
- && cp target/x86_64-unknown-linux-musl/release/nexus-server /out/release/nexus-server \
+ && cp "target/${TARGET_TRIPLE}/release/nexus-server" /out/release/nexus-server \
  && file /out/release/nexus-server | grep -Eq 'static-pie linked|statically linked'
 # (`ldd` is NOT a reliable static gate: glibc's ldd prints "statically
 # linked" and exits 0 for static-PIE binaries, so only `file` is checked.)
@@ -96,7 +119,10 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
 # only the resulting `/etc/passwd`, `/etc/group`, and the prepared
 # directory skeleton (with ownership) into the scratch runtime —
 # `USER nexus` and writable /app/data need them.
-FROM dhi.io/debian-base:trixie-dev AS user-prep
+# Pinned to $BUILDPLATFORM: its output is arch-neutral text files and
+# empty directories, so there is no reason to run it under qemu (nor
+# to depend on the base having an arm64 variant).
+FROM --platform=${BUILDPLATFORM:-linux/amd64} dhi.io/debian-base:trixie-dev AS user-prep
 RUN apt-get update && apt-get install -y --no-install-recommends passwd \
  && rm -rf /var/lib/apt/lists/* \
  && useradd -m -u 1000 nexus \
