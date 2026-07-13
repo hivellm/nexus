@@ -35,8 +35,23 @@ queries, k=100, ground truth from `sift_groundtruth.ivecs`. Host: Ryzen 9
 Reading of the headline claims: the long-standing **"<2 ms p95"** target
 holds up to ~97% recall@10 (`16/200/200` at 1.93 ms p95); the sweet-spot
 config delivers **95% recall@1 at ~1 ms p95**. Recall ≥99% costs 2.5–7 ms
-p95 — configure per workload. GloVe-200d (angular) run: corpus downloaded,
-same command with `glove` — numbers to be appended by the same process.
+p95 on SIFT1M — configure per workload.
+
+## 0.1 Published results — GloVe-200d (2026-07-13, reduced grid)
+
+399,000 base vectors (200d, angular), 1,000 queries, k=100; reduced grid
+(m ∈ {16,32} × efc ∈ {100,200} × efs ∈ {50,100,200}). Raw grid:
+`docs/performance/data/glove200-recall.json` / `.csv`. GloVe at this scale
+is substantially easier than SIFT1M — every cell exceeds 99% recall@1:
+
+| Config (m / efc / efs) | recall@1 | recall@10 | p50 | p95 | build |
+|---|---:|---:|---:|---:|---:|
+| **16 / 200 / 50 (sweet spot)** | **0.993** | **0.994** | 483 µs | **884 µs** | 792 s |
+| 16 / 100 / 50 (cheapest build) | 0.991 | 0.993 | 576 µs | 1.07 ms | 388 s |
+| 32 / 200 / 200 (max quality) | 0.999 | 0.999 | 1.27 ms | 2.64 ms | 1,178 s |
+
+Headline: **99.3% recall@1 at 884 µs p95** — comfortably inside the
+"<2 ms p95" claim with recall to spare.
 
 ## 1. Methodology
 
