@@ -392,3 +392,104 @@ fn benchmark_parallel_aggregation_speedup() {
     tracing::info!("   Dataset size: 5000 nodes (above 1000 threshold for parallel processing)");
     tracing::info!("   All aggregations should have used parallel processing");
 }
+
+/// phase6_traversal-aggregation-perf §1.1/§1.2 — before/after for the
+/// widened `COUNT(*)` metadata short-circuit on an *unlabelled*
+/// `AllNodesScan` (`MATCH (n) RETURN count(n)`), which previously fell
+/// through to the full Aggregate operator pipeline (every node
+/// materialised to JSON) because `try_short_circuit_count_cross_product`
+/// only recognised `NodeByLabel` scans.
+///
+/// "Before" is reproduced by adding a `WHERE true` predicate: the
+/// short-circuit explicitly disqualifies any filtered plan (matches the
+/// task's "predicate ... falls back to scan" requirement), so this is the
+/// same operator pipeline the unlabelled count used to run unconditionally.
+#[test]
+#[ignore = "Slow benchmark test - run explicitly with cargo test -- --ignored"]
+fn benchmark_count_star_unlabelled_shortcut_before_after() {
+    let (mut engine, _ctx) = setup_test_engine().unwrap();
+
+    let node_count = 20_000;
+    tracing::info!(
+        "Creating {} unlabelled nodes for AllNodesScan COUNT(*) benchmark...",
+        node_count
+    );
+    for i in 0..node_count {
+        execute_cypher(&mut engine, &format!("CREATE (n {{id: {}}})", i));
+    }
+
+    let iterations = 20;
+
+    // "Before": WHERE true disqualifies the short-circuit, forcing the
+    // full Aggregate pipeline over every materialised row — the code
+    // path every unlabelled count(*) used to take.
+    let start = Instant::now();
+    for _ in 0..iterations {
+        execute_cypher(&mut engine, "MATCH (n) WHERE true RETURN count(n) as total");
+    }
+    let before = start.elapsed();
+    let before_avg_ms = before.as_secs_f64() * 1000.0 / iterations as f64;
+
+    // "After": the widened short-circuit fires (no predicate, bare
+    // variable, AllNodesScan).
+    let start = Instant::now();
+    for _ in 0..iterations {
+        execute_cypher(&mut engine, "MATCH (n) RETURN count(n) as total");
+    }
+    let after = start.elapsed();
+    let after_avg_ms = after.as_secs_f64() * 1000.0 / iterations as f64;
+
+    eprintln!("Unlabelled COUNT(*) short-circuit benchmark ({node_count} nodes):");
+    eprintln!("  Before (full pipeline via WHERE true): {before_avg_ms:.3}ms avg");
+    eprintln!("  After  (AllNodesScan short-circuit):   {after_avg_ms:.3}ms avg");
+    eprintln!("  Speedup: {:.2}x", before_avg_ms / after_avg_ms.max(0.001));
+
+    let result = execute_cypher(&mut engine, "MATCH (n) RETURN count(n) as total");
+    assert_eq!(result.rows[0].values[0].as_u64(), Some(node_count as u64));
+}
+
+/// phase6_traversal-aggregation-perf §3 — GROUP BY at 100k rows. The
+/// pre-sized `HashMap` capacity cap added to `execute_aggregate_with_projections`
+/// only changes behaviour above 655,360 rows (`rows.len() / 10 >
+/// MAX_PRESIZED_GROUPS`); at 100k rows the estimate is unchanged
+/// (10,000, under the 65,536 cap), so this is a regression guard —
+/// it documents the current 100k-row cost rather than claiming a
+/// speedup at this scale (the cap's benefit is on much larger inputs
+/// where the un-capped heuristic would have eagerly over-allocated).
+#[test]
+#[ignore = "Slow benchmark test - run explicitly with cargo test -- --ignored"]
+fn benchmark_group_by_100k_rows() {
+    let (mut engine, _ctx) = setup_test_engine().unwrap();
+
+    let node_count = 100_000;
+    tracing::info!(
+        "Creating {} nodes for 100k-row GROUP BY benchmark...",
+        node_count
+    );
+    for i in 0..node_count {
+        execute_cypher(&mut engine, &format!("CREATE (n:Bucket {{g: {}}})", i % 50));
+    }
+
+    let iterations = 5;
+    let query = "MATCH (n:Bucket) RETURN n.g as g, count(*) as total ORDER BY g";
+
+    let start = Instant::now();
+    for _ in 0..iterations {
+        execute_cypher(&mut engine, query);
+    }
+    let elapsed = start.elapsed();
+    let avg_ms = elapsed.as_secs_f64() * 1000.0 / iterations as f64;
+
+    eprintln!(
+        "GROUP BY (100k rows, 50 groups) benchmark: {avg_ms:.3}ms avg over {iterations} iterations"
+    );
+
+    let result = execute_cypher(&mut engine, query);
+    assert_eq!(result.rows.len(), 50, "must produce exactly 50 groups");
+    let total: u64 = result
+        .rows
+        .iter()
+        .map(|r| r.values[1].as_u64().unwrap_or(0))
+        .sum();
+    assert_eq!(total, node_count as u64);
+}

@@ -209,8 +209,21 @@ impl Executor {
         // This ensures we're using the most reliable method that should find all relationships
         let mut relationships = Vec::new();
 
+        // phase6_traversal-aggregation-perf §2 — acquire the store read
+        // lock ONCE for the whole node-relationship walk instead of once
+        // per candidate relationship. The scan fallbacks below probe up
+        // to 100,000 candidate ids and the linked-list walk re-reads on
+        // every hop; re-acquiring `parking_lot::RwLock::read()` per
+        // candidate was pure overhead on top of the (already cheap)
+        // fixed-size record read, and it's the actual "materialise before
+        // filtering" cost in this hot path — the record layout has no
+        // narrower unit than one `RelationshipRecord` to read type_id
+        // from, so the only lever available is cutting redundant lock
+        // acquisitions around that read.
+        let store = self.store();
+
         // Read the node record to get the first relationship pointer
-        if let Ok(node_record) = self.store().read_node(node_id) {
+        if let Ok(node_record) = store.read_node(node_id) {
             let mut rel_ptr = node_record.first_rel_ptr;
 
             // CRITICAL DEBUG: Log node reading and first_rel_ptr
@@ -251,7 +264,7 @@ impl Executor {
                 // for genuine sync failures while making it
                 // structurally impossible to fabricate a zero-record
                 // ghost.
-                let total_rels = self.store().relationship_count();
+                let total_rels = store.relationship_count();
                 if total_rels == 0 {
                     tracing::trace!(
                         "[find_relationships] Node {}: relationship store is empty, returning no relationships",
@@ -285,7 +298,7 @@ impl Executor {
                         break;
                     }
                     scanned_count += 1;
-                    if let Ok(rel_record) = self.store().read_rel(check_rel_id) {
+                    if let Ok(rel_record) = store.read_rel(check_rel_id) {
                         if !rel_record.is_deleted() {
                             let check_src_id = rel_record.src_id;
                             let check_dst_id = rel_record.dst_id;
@@ -348,7 +361,7 @@ impl Executor {
                     );
 
                     for rel_id in scanned_rel_ids {
-                        if let Ok(rel_record) = self.store().read_rel(rel_id) {
+                        if let Ok(rel_record) = store.read_rel(rel_id) {
                             if !rel_record.is_deleted() {
                                 relationships.push(RelationshipInfo {
                                     id: rel_id,
@@ -384,7 +397,7 @@ impl Executor {
             let mut should_use_scan = rel_ptr == 0;
             if rel_ptr != 0 && !should_use_scan_for_both {
                 let verify_rel_id = rel_ptr.saturating_sub(1);
-                if let Ok(verify_rel) = self.store().read_rel(verify_rel_id) {
+                if let Ok(verify_rel) = store.read_rel(verify_rel_id) {
                     if !verify_rel.is_deleted() {
                         let verify_src_id = verify_rel.src_id;
                         let verify_dst_id = verify_rel.dst_id;
@@ -446,7 +459,7 @@ impl Executor {
                         break;
                     }
 
-                    if let Ok(rel_record) = self.store().read_rel(check_rel_id) {
+                    if let Ok(rel_record) = store.read_rel(check_rel_id) {
                         if !rel_record.is_deleted() {
                             scanned_count += 1;
                             let check_src_id = rel_record.src_id;
@@ -491,7 +504,7 @@ impl Executor {
                     );
 
                     for rel_id in scanned_rel_ids {
-                        if let Ok(rel_record) = self.store().read_rel(rel_id) {
+                        if let Ok(rel_record) = store.read_rel(rel_id) {
                             if !rel_record.is_deleted() {
                                 relationships.push(RelationshipInfo {
                                     id: rel_id,
@@ -552,7 +565,7 @@ impl Executor {
                     current_rel_id
                 );
 
-                if let Ok(rel_record) = self.store().read_rel(current_rel_id) {
+                if let Ok(rel_record) = store.read_rel(current_rel_id) {
                     // Copy fields to local variables to avoid packed struct reference issues
                     let src_id = rel_record.src_id;
                     let dst_id = rel_record.dst_id;

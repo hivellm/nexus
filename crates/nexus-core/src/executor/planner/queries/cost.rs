@@ -220,14 +220,28 @@ impl<'a> QueryPlanner<'a> {
                 let label_stats = self.label_index.get_stats();
                 let total_nodes = label_stats.total_nodes as f64;
 
-                // Use average nodes per label as selectivity estimate
-                let label_selectivity = if total_nodes > 0.0 {
-                    label_stats.avg_nodes_per_label / total_nodes as f64
+                // phase6_traversal-aggregation-perf §4: the old formula used
+                // `avg_nodes_per_label` — the average across *every* label —
+                // for every `NodeByLabel`, so two operators scanning
+                // different labels always priced identically and
+                // `optimize_operator_order`'s scan-cost sort could never
+                // actually tell a 10-node label apart from a 10,000-node
+                // one. Use this label's own live cardinality from the
+                // label bitmap instead (same source `estimate_label_selectivity`
+                // already uses below). Falls back to the previous
+                // average-based estimate if the bitmap lookup errs, and
+                // preserves the exact prior cold-catalog behaviour
+                // (0 cardinality, `total_nodes == 0`) so a cold catalog
+                // sees no change at all.
+                let output_cardinality = if total_nodes > 0.0 {
+                    self.label_index
+                        .get_nodes_with_labels(&[*label_id])
+                        .map(|bitmap| bitmap.len() as f64)
+                        .unwrap_or(label_stats.avg_nodes_per_label)
                 } else {
-                    1.0
+                    0.0
                 };
 
-                let output_cardinality = total_nodes * label_selectivity;
                 let io_cost = output_cardinality * 10.0; // I/O cost per node read
                 let cpu_cost = output_cardinality * 2.0; // CPU cost per node processing
 
@@ -398,18 +412,58 @@ impl<'a> QueryPlanner<'a> {
     }
 
     /// Estimate relationship traversal statistics
+    ///
+    /// phase6_traversal-aggregation-perf §4: when `type_filter` names one or
+    /// more relationship types, scale `avg_relationships_per_node` by the
+    /// catalog's real per-type relationship counters (`Catalog::get_rel_count`
+    /// — increment-only, so treated as an upper bound, matching the same
+    /// caveat `Catalog::get_node_count` carries) instead of the flat
+    /// default. This is conservative by construction: an unfiltered Expand
+    /// (`type_filter` is `None` or empty), a cold catalog (all counters
+    /// still 0), or a cold label index (`total_nodes == 0`) all fall back
+    /// to the exact previous hardcoded stats — no behaviour change in any
+    /// of those cases.
     pub(super) fn estimate_relationship_stats(
         &self,
         type_filter: &Option<Vec<u32>>,
     ) -> Result<RelationshipTraversalStats> {
-        // For now, return default stats. In production, this would query actual relationship statistics
-        Ok(RelationshipTraversalStats {
+        let default_stats = RelationshipTraversalStats {
             total_relationships: 1000,
             total_nodes: 500,
             high_degree_nodes: 10,
             avg_relationships_per_node: 2.0,
             path_cache_hit_rate: 0.8,
             index_hit_rate: 0.9,
+        };
+
+        let Some(type_ids) = type_filter else {
+            return Ok(default_stats);
+        };
+        if type_ids.is_empty() {
+            return Ok(default_stats);
+        }
+
+        let mut total_matching_rels: u64 = 0;
+        for type_id in type_ids {
+            match self.catalog.get_rel_count(*type_id) {
+                Ok(count) => total_matching_rels = total_matching_rels.saturating_add(count),
+                Err(_) => return Ok(default_stats),
+            }
+        }
+        if total_matching_rels == 0 {
+            return Ok(default_stats);
+        }
+
+        let total_nodes = self.label_index.get_stats().total_nodes;
+        if total_nodes == 0 {
+            return Ok(default_stats);
+        }
+
+        Ok(RelationshipTraversalStats {
+            total_relationships: total_matching_rels,
+            avg_relationships_per_node: total_matching_rels as f64 / total_nodes as f64,
+            total_nodes,
+            ..default_stats
         })
     }
 

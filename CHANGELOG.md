@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased — 2.5.0]
 
+### Performance
+
+- **Autocommit reads no longer take the exclusive engine lock (~2.6x concurrent read throughput).** Every MATCH previously held `engine.write().await` for its whole parse+plan+execute; read-only autocommit queries (classified from the AST by `routing::is_read_only` — exhaustive per-clause match, conservative on unknown procedures) now run on a cloned executor snapshot in `spawn_blocking` behind a brief shared lock. Writes and in-transaction reads are unchanged (read-your-own-writes preserved). Measured: 667 → 1727 qps at 8 concurrent clients (release build; benchmark ships as an on-demand `#[ignore]`d test). Same change applied to the RPC dispatcher.
+- **Traversal and aggregation fast paths.** The unfiltered `COUNT` label-bitmap shortcut covers more plan shapes (all-nodes scan, alias forms) with delete-correct results; relationship-type filtering happens at record-header level before materialization in the traversal walk; GROUP BY pre-sizes its hash map from upstream cardinality; and the planner's cost model now scales NodeByLabel/Expand costs with real catalog cardinalities (lower-cardinality join side drives first), falling back to the previous constants on cold catalogs. Plan-quality and correctness tests included; benchmarks reproducible via the `#[ignore]`d suites.
+
 ### Added — multi-arch Docker image (linux/amd64 + linux/arm64)
 
 - **The Docker image now ships as a multi-arch manifest** (Synap pattern: each platform builds natively via a `TARGETARCH`-selected musl target; the arm64 leg builds under qemu/binfmt on amd64 hosts — no cross-toolchain). Apple Silicon, AWS Graviton, and Ampere pull a native arm64 image (21.6 MB, NEON SIMD runtime-dispatched) instead of emulating amd64. Both platform digests scan **0C 0H 0M 0L, 0 packages**. Note: arm64 runtime validation requires real arm64 hardware — qemu-user lacks `get_robust_list`, which LMDB's robust mutexes need at env-open.

@@ -971,27 +971,36 @@ impl Executor {
             .map(|cache| cache.read().stats())
     }
 
-    /// Short-circuit `MATCH (a:L1), (b:L2), ... RETURN count(*)` (and
-    /// its `count(var)` + `count(var.prop)` variants, when `var` is
-    /// bound by one of the label scans) with a catalog-metadata
-    /// lookup. Returns `Some(rs)` if the plan matches; `None` if any
+    /// Short-circuit `MATCH (a:L1), (b:L2), ... RETURN count(*)` and
+    /// `MATCH (n) RETURN count(n)` (unlabelled scan), plus their
+    /// `count(var)` variants when `var` is bound by one of the scans,
+    /// with a metadata-driven count instead of materialising every
+    /// row. Returns `Some(rs)` if the plan matches; `None` if any
     /// operator disqualifies the short-circuit so the caller falls
     /// back to the full operator-driven execution.
     ///
     /// Qualifying plan shape:
-    /// - 1..=N `Operator::NodeByLabel { label_id, variable }` operators
+    /// - 1..=N scan operators, each either `Operator::NodeByLabel
+    ///   { label_id, variable }` or `Operator::AllNodesScan { variable }`
     ///   (each with a distinct variable).
     /// - exactly one trailing `Operator::Aggregate` with
     ///   `group_by` empty,
     ///   `aggregations` a single `Aggregation::Count { column, distinct: false, .. }`.
-    ///   If `column` is `Some(c)`, `c` must match one of the label-scan
-    ///   variables — that's still a row-count (DISTINCT would change
-    ///   semantics and is explicitly ruled out above).
+    ///   If `column` is `Some(c)`, `c` must be a *bare* variable (no `.`)
+    ///   matching one of the scan variables — that's still a row-count.
+    ///   A dotted `count(var.prop)` is a property-presence count (NULL /
+    ///   missing values are excluded), which is NOT the same number as
+    ///   the scan's row count, so it must fall back to the full scan
+    ///   (DISTINCT would also change semantics and is explicitly ruled
+    ///   out above).
     /// - no other operators between, before, or after.
     ///
-    /// Result = product of `catalog.get_node_count(label_id)` across the
-    /// scans. Falls back to `None` if any label has no stored count
-    /// (cold catalog) so the operator pipeline can populate stats.
+    /// Result = product of the live (non-deleted) row count of each
+    /// scan. Label counts come from the label bitmap; the unlabelled
+    /// scan counts every live node. Both walk record headers only —
+    /// no property-chain materialisation — so this stays cheap even
+    /// when a shortcut-eligible shape is `AllNodesScan` over the whole
+    /// store.
     pub(super) fn try_short_circuit_count_cross_product(
         &self,
         operators: &[Operator],
@@ -1017,36 +1026,43 @@ impl Executor {
             } => (column.clone(), alias.clone()),
             _ => return Ok(None),
         };
-        let mut label_ids: Vec<u32> = Vec::with_capacity(agg_idx);
+        // `None` = unlabelled `AllNodesScan`, `Some(label_id)` = `NodeByLabel`.
+        let mut scans: Vec<Option<u32>> = Vec::with_capacity(agg_idx);
         let mut variables: Vec<String> = Vec::with_capacity(agg_idx);
         for op in &operators[..agg_idx] {
             match op {
                 Operator::NodeByLabel { label_id, variable } => {
-                    label_ids.push(*label_id);
+                    scans.push(Some(*label_id));
+                    variables.push(variable.clone());
+                }
+                Operator::AllNodesScan { variable } => {
+                    scans.push(None);
                     variables.push(variable.clone());
                 }
                 _ => return Ok(None),
             }
         }
-        if label_ids.is_empty() {
+        if scans.is_empty() {
             return Ok(None);
         }
         if let Some(col) = &count_column {
-            let bare = col.split('.').next().unwrap_or(col);
-            if !variables.iter().any(|v| v == bare) {
+            // A dotted column is a property count, not a row count — see
+            // the doc comment above. Only a bare scan variable qualifies.
+            if col.contains('.') || !variables.iter().any(|v| v == col) {
                 return Ok(None);
             }
         }
-        // Use `execute_node_by_label` to get the LIVE row count rather
-        // than `catalog.get_node_count`: the catalog's per-label counter
-        // is an incremented-only stats histogram (DELETE does not
-        // decrement it), so it drifts over time and cannot be trusted
-        // as a row-count source. `execute_node_by_label` iterates the
-        // label bitmap and skips deleted records, matching exactly what
-        // the operator pipeline would have counted.
+        // Count live (non-deleted) rows per scan directly from record
+        // headers — cheaper than `execute_node_by_label`'s full
+        // property-chain materialisation, and still authoritative
+        // (unlike `catalog.get_node_count`, which is an increment-only
+        // histogram that DELETE never decrements, see its doc comment).
         let mut product: u64 = 1;
-        for lid in &label_ids {
-            let count = self.execute_node_by_label(*lid)?.len() as u64;
+        for scan in &scans {
+            let count = match scan {
+                Some(label_id) => self.count_live_nodes_for_label(*label_id)?,
+                None => self.count_live_nodes_all()?,
+            };
             product = match product.checked_mul(count) {
                 Some(v) => v,
                 None => return Ok(None),
@@ -1060,12 +1076,54 @@ impl Executor {
         )))
     }
 
+    /// Count live (non-deleted) nodes carrying `label_id` straight from
+    /// the label bitmap, reading only each candidate's record header
+    /// (`is_deleted`) rather than materialising its full JSON payload
+    /// the way [`Self::execute_node_by_label`] does. Used by the
+    /// `COUNT(*)` short-circuit above, where only the cardinality
+    /// matters.
+    pub(super) fn count_live_nodes_for_label(&self, label_id: u32) -> Result<u64> {
+        let bitmap = self.label_index().get_nodes(label_id)?;
+        let mut count = 0u64;
+        for node_id in bitmap.iter() {
+            if let Ok(node_record) = self.store().read_node(node_id as u64) {
+                if !node_record.is_deleted() {
+                    count += 1;
+                }
+            }
+        }
+        Ok(count)
+    }
+
+    /// Count every live (non-deleted) node in the store by walking
+    /// record headers only. Shared by [`Self::execute_count_all_nodes`]
+    /// (the `MATCH (n) RETURN count(n)` string-matched fast path) and
+    /// the `COUNT(*)` cross-product short-circuit's `AllNodesScan` arm.
+    pub(super) fn count_live_nodes_all(&self) -> Result<u64> {
+        let total_nodes = self.store().node_count();
+        let mut count = 0u64;
+        for node_id in 0..total_nodes {
+            if let Ok(node_record) = self.store().read_node(node_id) {
+                if !node_record.is_deleted() {
+                    count += 1;
+                }
+            }
+        }
+        Ok(count)
+    }
+
     /// Check if query is a simple MATCH query that can be executed directly
     pub(super) fn is_simple_match_query(&self, cypher: &str) -> bool {
         let cypher = cypher.trim();
 
-        // Simple patterns: "MATCH (n) RETURN count(n)"
-        if cypher.starts_with("MATCH (n) RETURN count(n)") {
+        // Simple pattern: exactly "MATCH (n) RETURN count(n)" (no alias, no
+        // trailing clauses). Must be an EXACT match, not `starts_with`: the
+        // direct-execution path below (`execute_count_all_nodes`) hardcodes
+        // the output column name to "count", so `MATCH (n) RETURN count(n)
+        // AS total` matching here would silently drop the alias. Aliased /
+        // widened forms fall through to `try_short_circuit_count_cross_product`,
+        // which derives the real alias from the parsed `Aggregate` operator.
+        if cypher == "MATCH (n) RETURN count(n)" {
             return true;
         }
 
@@ -1101,18 +1159,9 @@ impl Executor {
 
     /// Execute COUNT(*) directly from storage
     pub(super) fn execute_count_all_nodes(&self) -> Result<ResultSet> {
-        // Count non-deleted nodes directly from storage
-        // This is more reliable than using catalog statistics which may not be updated
-        let total_nodes = self.store().node_count();
-        let mut count = 0u64;
-
-        for node_id in 0..total_nodes {
-            if let Ok(node_record) = self.store().read_node(node_id) {
-                if !node_record.is_deleted() {
-                    count += 1;
-                }
-            }
-        }
+        // Count non-deleted nodes directly from storage.
+        // This is more reliable than using catalog statistics which may not be updated.
+        let count = self.count_live_nodes_all()?;
 
         let row = Row {
             values: vec![serde_json::Value::Number(count.into())],

@@ -66,11 +66,30 @@ impl Executor {
         // Check rows AFTER we've stored project_rows, but rows may have been modified
         let rows = context.result_set.rows.clone();
 
-        // Pre-size HashMap for GROUP BY if we have an estimate (Phase 2.3 optimization)
+        // Pre-size HashMap for GROUP BY if we have an estimate (Phase 2.3 optimization).
+        //
+        // phase6_traversal-aggregation-perf §3: the 10%-of-rows heuristic
+        // itself is unchanged here — there is no reliable *cheap* signal
+        // for the true group cardinality at this point. `Operator::Aggregate.source`
+        // exists for exactly this (a planner-supplied cardinality hint)
+        // but no planner emission site ever populates it (always `None`),
+        // and resolving a `var.prop` GROUP BY key to a registered property
+        // index's distinct-value count would need label context this
+        // operator doesn't have without new planner-to-operator plumbing
+        // — out of scope for this change. What *is* cheap and worth doing:
+        // cap the pre-sized capacity so a very large row count doesn't
+        // eagerly reserve an equally large (and likely wrong, since most
+        // GROUP BY workloads have human-scale cardinality) number of
+        // HashMap buckets before a single group is known. Below the cap,
+        // behaviour is unchanged from before.
+        const MAX_PRESIZED_GROUPS: usize = 65_536;
         let estimated_groups = if !group_by.is_empty() && !rows.is_empty() {
             // Estimate: assume ~10% of rows will be unique groups (conservative estimate)
             // In practice, this could be tuned based on actual data distribution
-            (rows.len() / 10).max(1).min(rows.len())
+            (rows.len() / 10)
+                .max(1)
+                .min(rows.len())
+                .min(MAX_PRESIZED_GROUPS)
         } else {
             1
         };
