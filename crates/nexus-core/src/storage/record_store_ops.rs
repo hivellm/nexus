@@ -221,6 +221,43 @@ impl RecordStore {
         Ok(record)
     }
 
+    /// Read every node header (up to [`Self::node_count`] records) in ONE
+    /// `nodes_mmap` lock acquisition instead of one acquisition per node.
+    ///
+    /// phase8_neo4j-concurrency-gaps §1 — `count_live_nodes_all` /
+    /// `count_live_nodes_for_label` used to call [`Self::read_node`] once
+    /// per candidate node, each call taking its own `nodes_mmap.read()`
+    /// lock (plus a second `property_store.read()` lock whenever the node
+    /// had a `prop_ptr`, for a corruption cross-check that `is_deleted()`
+    /// never needed). At thousands of nodes and dozens of concurrent
+    /// callers that is hundreds of thousands of `RwLock` acquisitions per
+    /// second on the same shared locks — the actual serialization point
+    /// behind `aggregation.count_all`'s 16w-\>64w collapse (2.5k -\> 2.9k
+    /// qps flat, p99 124ms, while Neo4j scaled to 13k), on top of the
+    /// Project-skip fix on `Executor::try_short_circuit_count_cross_product`
+    /// that made this short-circuit engage for `count(n)` at all.
+    /// `NodeRecord` is `bytemuck::Pod`, so casting the locked byte range
+    /// once and copying it into an owned `Vec` is a single bulk memcpy —
+    /// far cheaper than the lock churn it replaces — and the lock is
+    /// released the moment that copy finishes, before the caller iterates.
+    ///
+    /// Bounded by `node_count()` rather than the mmap's raw (pre-grown)
+    /// byte length: the file can be larger than the logical record count
+    /// after a capacity grow, and those trailing bytes are zeroed — a
+    /// zeroed `NodeRecord` has `flags == 0`, which `is_deleted()` reads as
+    /// "not deleted", so including them would silently over-count.
+    pub fn read_all_node_headers(&self) -> Vec<NodeRecord> {
+        std::sync::atomic::fence(std::sync::atomic::Ordering::Acquire);
+
+        let total = self.node_count() as usize;
+        let wanted_len = total.saturating_mul(NODE_RECORD_SIZE);
+
+        let guard = self.nodes_mmap.read().unwrap();
+        let usable_len = wanted_len.min(guard.len());
+        let usable_len = usable_len - (usable_len % NODE_RECORD_SIZE);
+        bytemuck::cast_slice::<u8, NodeRecord>(&guard[..usable_len]).to_vec()
+    }
+
     /// Write a relationship record
     /// Phase 3 Deep Optimization: Optimized write path
     pub fn write_rel(&mut self, rel_id: u64, record: &RelationshipRecord) -> Result<()> {
@@ -1058,21 +1095,66 @@ impl RecordStore {
     /// Load properties for a node
     /// PHASE 3: Enhanced validation with safe fallback to reverse_index
     pub fn load_node_properties(&self, node_id: u64) -> Result<Option<serde_json::Value>> {
+        let prop_ptr = self.read_node(node_id).ok().map(|r| r.prop_ptr);
+        self.load_node_properties_inner(node_id, prop_ptr)
+    }
+
+    /// Same as [`Self::load_node_properties`], but for callers that
+    /// already hold a `NodeRecord` (and thus its `prop_ptr`) from a
+    /// `read_node`/`read_node_header`-family call moments earlier.
+    ///
+    /// phase8_neo4j-concurrency-gaps §2 — `load_node_properties(node_id)`
+    /// re-reads the node record internally purely to recover `prop_ptr`.
+    /// `Executor::read_node_as_value` (the single most-called node
+    /// materialiser in the executor — every scan, expand hop, and index
+    /// seek routes through it) already has that `NodeRecord` in hand, so
+    /// that internal re-read was a second `nodes_mmap` lock acquisition
+    /// (plus a second `property_store` corruption cross-check) on every
+    /// single node materialisation. Multiplied across every node a scan
+    /// or expand hop touches, this was a meaningful share of the
+    /// per-node lock traffic behind `traversal.small_two_hop_from_hub`'s
+    /// concurrency ceiling. Identical validation/fallback logic to
+    /// `load_node_properties` — only the `prop_ptr` source differs.
+    pub fn load_node_properties_with_ptr(
+        &self,
+        node_id: u64,
+        prop_ptr: u64,
+    ) -> Result<Option<serde_json::Value>> {
+        self.load_node_properties_inner(node_id, Some(prop_ptr))
+    }
+
+    /// Shared body of [`Self::load_node_properties`] and
+    /// [`Self::load_node_properties_with_ptr`]. `prop_ptr = None` means
+    /// "the caller could not read a `NodeRecord` at all" (mirrors the
+    /// original `self.read_node(node_id)` failure branch); `Some(0)`
+    /// means "read a record, but it has no properties yet".
+    fn load_node_properties_inner(
+        &self,
+        node_id: u64,
+        prop_ptr: Option<u64>,
+    ) -> Result<Option<serde_json::Value>> {
+        // phase8_neo4j-concurrency-gaps §2 — acquire the `property_store`
+        // read lock ONCE for this whole call instead of once per branch
+        // below (up to 3 separate acquisitions previously: the entity-
+        // info validation, the offset load, and the reverse-index
+        // fallback). Every node materialisation in the executor
+        // (`read_node_as_value`, called from every scan/expand/index-seek
+        // path) goes through this function, so this is on the hottest
+        // per-node lock in the read path.
+        let prop_guard = self.property_store.read().unwrap();
+
         // First try to use prop_ptr from NodeRecord (more reliable)
-        if let Ok(node_record) = self.read_node(node_id) {
+        if let Some(prop_ptr) = prop_ptr {
             tracing::debug!(
                 "load_node_properties: node_id={}, prop_ptr={}",
                 node_id,
-                node_record.prop_ptr
+                prop_ptr
             );
-            if node_record.prop_ptr != 0 {
+            if prop_ptr != 0 {
                 // PHASE 3: Double validation - verify that prop_ptr points to Node properties
                 // Check the entity_type stored at this offset BEFORE loading
-                if let Some((stored_entity_id, stored_entity_type)) = self
-                    .property_store
-                    .read()
-                    .unwrap()
-                    .get_entity_info_at_offset(node_record.prop_ptr)
+                if let Some((stored_entity_id, stored_entity_type)) =
+                    prop_guard.get_entity_info_at_offset(prop_ptr)
                 {
                     if stored_entity_type != property_store::EntityType::Node
                         || stored_entity_id != node_id
@@ -1081,25 +1163,20 @@ impl RecordStore {
                         tracing::warn!(
                             "load_node_properties: node_id={} prop_ptr={} points to wrong entity (type={:?}, id={}), using reverse_index instead",
                             node_id,
-                            node_record.prop_ptr,
+                            prop_ptr,
                             stored_entity_type,
                             stored_entity_id
                         );
                         // Fall through to reverse_index lookup - prop_ptr is corrupted
                     } else {
                         // PHASE 3: Entity type and ID match - safe to load from prop_ptr
-                        match self
-                            .property_store
-                            .read()
-                            .unwrap()
-                            .load_properties_at_offset(node_record.prop_ptr)
-                        {
+                        match prop_guard.load_properties_at_offset(prop_ptr) {
                             Ok(Some(props)) => {
                                 let keys = props.as_object().map(|m| m.keys().collect::<Vec<_>>());
                                 tracing::debug!(
                                     "load_node_properties: node_id={}, loaded properties from prop_ptr={}, keys={:?}",
                                     node_id,
-                                    node_record.prop_ptr,
+                                    prop_ptr,
                                     keys
                                 );
                                 // PHASE 3: Additional validation - check for relationship-like properties
@@ -1108,7 +1185,7 @@ impl RecordStore {
                                         tracing::warn!(
                                             "load_node_properties: node_id={} prop_ptr={} returned relationship-like properties: {:?}. Falling back to reverse_index",
                                             node_id,
-                                            node_record.prop_ptr,
+                                            prop_ptr,
                                             keys
                                         );
                                         // Fall through to reverse_index - properties look wrong
@@ -1123,14 +1200,14 @@ impl RecordStore {
                                 tracing::debug!(
                                     "load_node_properties: node_id={}, prop_ptr={} returned None, using reverse_index",
                                     node_id,
-                                    node_record.prop_ptr
+                                    prop_ptr
                                 );
                             }
                             Err(e) => {
                                 tracing::debug!(
                                     "load_node_properties: node_id={}, error loading from prop_ptr={}: {}, using reverse_index",
                                     node_id,
-                                    node_record.prop_ptr,
+                                    prop_ptr,
                                     e
                                 );
                             }
@@ -1140,7 +1217,7 @@ impl RecordStore {
                     tracing::warn!(
                         "load_node_properties: node_id={} prop_ptr={} not found in property_store",
                         node_id,
-                        node_record.prop_ptr
+                        prop_ptr
                     );
                     // Fall through to reverse_index lookup
                 }
@@ -1158,11 +1235,7 @@ impl RecordStore {
         }
 
         // PHASE 3: Safe fallback to reverse_index lookup (always reliable)
-        let result = self
-            .property_store
-            .read()
-            .unwrap()
-            .load_properties(node_id, property_store::EntityType::Node);
+        let result = prop_guard.load_properties(node_id, property_store::EntityType::Node);
         let keys_debug = result.as_ref().ok().and_then(|opt| {
             opt.as_ref()
                 .map(|v| v.as_object().map(|m| m.keys().collect::<Vec<_>>()))

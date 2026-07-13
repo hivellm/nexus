@@ -1364,7 +1364,21 @@ impl Executor {
 
     /// Read a node as a JSON value
     pub(in crate::executor) fn read_node_as_value(&self, node_id: u64) -> Result<Value> {
-        let node_record = self.store().read_node(node_id)?;
+        // phase8_neo4j-concurrency-gaps §2 — acquire the store read lock
+        // ONCE and reuse it for both the header read and the property
+        // load below, instead of two independent `self.store()` calls.
+        // This function is the single most-called node materialiser in
+        // the executor (every scan, expand hop, and index seek routes
+        // through it), so halving its lock acquisitions directly cuts
+        // the per-core atomic/cache-line traffic that collapses
+        // `traversal.small_two_hop_from_hub` and other read scenarios
+        // under high concurrency (§1's `count_live_nodes_*` fix applies
+        // the same reasoning to the aggregation path). `self.catalog()`
+        // in between is a distinct lock (LMDB-backed), not `store`, so
+        // holding this guard across that call is not a reentrant
+        // acquire of the same lock.
+        let store = self.store();
+        let node_record = store.read_node(node_id)?;
 
         if node_record.is_deleted() {
             return Ok(Value::Null);
@@ -1375,7 +1389,15 @@ impl Executor {
             .get_labels_from_bitmap(node_record.label_bits)?;
         let _labels: Vec<Value> = label_names.into_iter().map(Value::String).collect();
 
-        let properties_value = self.store().load_node_properties(node_id)?;
+        // phase8_neo4j-concurrency-gaps §2 — pass the `prop_ptr` this
+        // function already read above instead of calling
+        // `load_node_properties(node_id)`, which internally re-reads
+        // the node record (a second `nodes_mmap` lock acquisition, plus
+        // a second `property_store` corruption cross-check) purely to
+        // re-derive the same `prop_ptr` we already have. See
+        // `RecordStore::load_node_properties_with_ptr`'s doc comment.
+        let properties_value =
+            store.load_node_properties_with_ptr(node_id, node_record.prop_ptr)?;
 
         tracing::trace!(
             "read_node_as_value: node_id={}, properties_value={:?}",

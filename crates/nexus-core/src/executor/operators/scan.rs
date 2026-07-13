@@ -37,13 +37,15 @@ impl Executor {
                 continue;
             }
 
-            // Skip deleted nodes
-            if let Ok(node_record) = self.store().read_node(node_id_u64) {
-                if node_record.is_deleted() {
-                    continue;
-                }
-            }
-
+            // phase8_neo4j-concurrency-gaps §2 — the standalone
+            // deleted-node pre-check used to call `self.store()` here
+            // AND `read_node_as_value` immediately below independently
+            // re-reads the same header and already returns `Value::Null`
+            // for a deleted node (which every caller here already
+            // treats as "skip"). That made this loop take two store
+            // read-lock acquisitions per candidate node for no
+            // behavioural difference — removed to halve the lock churn
+            // on this hot path.
             match self.read_node_as_value(node_id_u64)? {
                 Value::Null => continue,
                 value => results.push(value),
@@ -83,11 +85,9 @@ impl Executor {
             if !seen.insert(node_id_u64) {
                 continue;
             }
-            if let Ok(rec) = self.store().read_node(node_id_u64) {
-                if rec.is_deleted() {
-                    continue;
-                }
-            }
+            // phase8_neo4j-concurrency-gaps §2 — see the identical
+            // removal + rationale in `execute_node_by_label` above:
+            // `read_node_as_value` already filters deleted nodes.
             match self.read_node_as_value(node_id_u64)? {
                 Value::Null => continue,
                 v => results.push(v),
@@ -112,20 +112,17 @@ impl Executor {
                     MAX_INTERMEDIATE_ROWS
                 )));
             }
-            // Skip deleted nodes
-            if let Ok(node_record) = self.store().read_node(node_id) {
-                if node_record.is_deleted() {
-                    continue;
+            // phase8_neo4j-concurrency-gaps §2 — see the identical
+            // removal + rationale in `execute_node_by_label` above:
+            // `read_node_as_value` already filters deleted nodes, so the
+            // separate `self.store().read_node()` pre-check this loop
+            // used to do was a second lock acquisition per candidate for
+            // no behavioural difference.
+            match self.read_node_as_value(node_id)? {
+                Value::Null => continue,
+                value => {
+                    results.push(value);
                 }
-
-                // Read the node as a value
-                match self.read_node_as_value(node_id)? {
-                    Value::Null => continue,
-                    value => {
-                        results.push(value);
-                    }
-                }
-            } else {
             }
         }
 

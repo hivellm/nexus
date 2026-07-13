@@ -1064,10 +1064,39 @@ impl Executor {
             } => (column.clone(), alias.clone()),
             _ => return Ok(None),
         };
+        // phase8_neo4j-concurrency-gaps §1 — `RETURN count(<scan var>) AS x`
+        // (as opposed to bare `count(*)`) makes the planner insert an
+        // identity `Project { <var> -> <var> }` between the scan(s) and
+        // the `Aggregate` (it materialises the row `count()` reads from).
+        // That extra operator used to disqualify every `count(var)` plan
+        // from this short-circuit — including this benchmark's own
+        // `aggregation.count_all` scenario (`MATCH (n) RETURN count(n) AS
+        // c`) — silently falling through to the full per-node JSON
+        // materialisation path (`execute_all_nodes_scan` /
+        // `execute_node_by_label`, which load every property + label per
+        // node) instead of the header-only count below. That was the
+        // actual cause of the 16w-\>64w collapse (2.5k -\> 2.9k qps, p99
+        // 124ms): the short-circuit *looked* like it covered this query
+        // shape but never actually matched it.
+        //
+        // A trailing Project is safe to skip over as long as it is a
+        // pure passthrough: every item projects a bare variable to
+        // itself with no transformation. Such a Project cannot add,
+        // remove, or alter rows, so the row count above/below it is
+        // identical and short-circuiting past it stays sound.
+        let scan_end = if agg_idx >= 2
+            && let Operator::Project { items } = &operators[agg_idx - 1]
+            && items.iter().all(|item| {
+                matches!(&item.expression, parser::Expression::Variable(v) if v == &item.alias)
+            }) {
+            agg_idx - 1
+        } else {
+            agg_idx
+        };
         // `None` = unlabelled `AllNodesScan`, `Some(label_id)` = `NodeByLabel`.
-        let mut scans: Vec<Option<u32>> = Vec::with_capacity(agg_idx);
-        let mut variables: Vec<String> = Vec::with_capacity(agg_idx);
-        for op in &operators[..agg_idx] {
+        let mut scans: Vec<Option<u32>> = Vec::with_capacity(scan_end);
+        let mut variables: Vec<String> = Vec::with_capacity(scan_end);
+        for op in &operators[..scan_end] {
             match op {
                 Operator::NodeByLabel { label_id, variable } => {
                     scans.push(Some(*label_id));
@@ -1120,11 +1149,20 @@ impl Executor {
     /// the way [`Self::execute_node_by_label`] does. Used by the
     /// `COUNT(*)` short-circuit above, where only the cardinality
     /// matters.
+    ///
+    /// phase8_neo4j-concurrency-gaps §1 — reads every node header in a
+    /// single [`crate::storage::RecordStore::read_all_node_headers`]
+    /// call and indexes into the resulting in-memory snapshot for each
+    /// bitmap member, instead of taking a fresh `nodes_mmap` lock per
+    /// candidate node. See that method's doc comment for the full
+    /// contention analysis (this scenario's 16w-\>64w collapse: 2.5k -\>
+    /// 2.9k qps flat, p99 124ms, while Neo4j scaled to 13k).
     pub(super) fn count_live_nodes_for_label(&self, label_id: u32) -> Result<u64> {
         let bitmap = self.label_index().get_nodes(label_id)?;
+        let headers = self.store().read_all_node_headers();
         let mut count = 0u64;
         for node_id in bitmap.iter() {
-            if let Ok(node_record) = self.store().read_node(node_id as u64) {
+            if let Some(node_record) = headers.get(node_id as usize) {
                 if !node_record.is_deleted() {
                     count += 1;
                 }
@@ -1137,17 +1175,15 @@ impl Executor {
     /// record headers only. Shared by [`Self::execute_count_all_nodes`]
     /// (the `MATCH (n) RETURN count(n)` string-matched fast path) and
     /// the `COUNT(*)` cross-product short-circuit's `AllNodesScan` arm.
+    ///
+    /// phase8_neo4j-concurrency-gaps §1 — same single bulk-read fix as
+    /// [`Self::count_live_nodes_for_label`] above; see its doc comment.
+    /// This is the dominant scan in `aggregation.count_all` (`MATCH (n)
+    /// RETURN count(n)`), which walks every node in the store on every
+    /// call — the scenario this fix targets directly.
     pub(super) fn count_live_nodes_all(&self) -> Result<u64> {
-        let total_nodes = self.store().node_count();
-        let mut count = 0u64;
-        for node_id in 0..total_nodes {
-            if let Ok(node_record) = self.store().read_node(node_id) {
-                if !node_record.is_deleted() {
-                    count += 1;
-                }
-            }
-        }
-        Ok(count)
+        let headers = self.store().read_all_node_headers();
+        Ok(headers.iter().filter(|n| !n.is_deleted()).count() as u64)
     }
 
     /// Check if query is a simple MATCH query that can be executed directly
