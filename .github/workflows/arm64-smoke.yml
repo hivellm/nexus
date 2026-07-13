@@ -1,0 +1,80 @@
+# On-demand arm64 smoke test for the published multi-arch image.
+#
+# MANUAL TRIGGER ONLY (workflow_dispatch) — this repository intentionally
+# has no scheduled/CI workflows. Run it before tagging a release to close
+# the phase7_multiarch-docker-arm64 gate: the arm64 image cannot be
+# smoke-tested under qemu-user (qemu lacks the `get_robust_list` syscall
+# LMDB's robust mutexes require at env-open), so it must run on a REAL
+# arm64 kernel — which this native arm64 runner provides.
+#
+#   gh workflow run arm64-smoke.yml --ref <branch> -f tag=2.5.0-dev
+
+name: arm64-smoke
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "hivehub/nexus tag to smoke-test (multi-arch manifest)"
+        required: false
+        default: "2.5.0-dev"
+
+jobs:
+  smoke:
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 15
+    steps:
+      - name: Pull image (native arm64 digest via manifest)
+        run: |
+          set -euo pipefail
+          docker pull hivehub/nexus:${{ inputs.tag }}
+          ARCH=$(docker inspect hivehub/nexus:${{ inputs.tag }} --format '{{.Architecture}}')
+          echo "image architecture: $ARCH (runner: $(uname -m))"
+          test "$ARCH" = "arm64"
+
+      - name: Start server
+        run: |
+          set -euo pipefail
+          docker run -d --name nexus -p 15474:15474 -v nexus-data:/app/data \
+            hivehub/nexus:${{ inputs.tag }}
+          for i in $(seq 1 60); do
+            curl -sf http://localhost:15474/health >/dev/null && { echo "up after ${i}s"; exit 0; }
+            sleep 1
+          done
+          echo "server did not become healthy"; docker logs nexus; exit 1
+
+      - name: Cypher battery (param MERGE-rel round-trip — LMDB robust mutexes live here)
+        run: |
+          set -euo pipefail
+          curl -sf -X POST http://localhost:15474/cypher -H 'Content-Type: application/json' \
+            -d '{"query":"CREATE (a:S {id: 1}), (b:S {id: 2})"}'
+          curl -sf -X POST http://localhost:15474/cypher -H 'Content-Type: application/json' \
+            -d '{"query":"MATCH (a:S {id: 1}), (b:S {id: 2}) MERGE (a)-[r:LINK {w: $w}]->(b)","parameters":{"w":7}}'
+          RESULT=$(curl -sf -X POST http://localhost:15474/cypher -H 'Content-Type: application/json' \
+            -d '{"query":"MATCH ()-[r:LINK]->() RETURN count(r) AS c, r.w AS w"}')
+          echo "$RESULT"
+          echo "$RESULT" | grep -q '"rows":\[\[1,7\]\]'
+
+      - name: Restart persistence (LMDB/mmap on aarch64)
+        run: |
+          set -euo pipefail
+          docker restart nexus
+          for i in $(seq 1 60); do
+            curl -sf http://localhost:15474/health >/dev/null && break; sleep 1
+          done
+          RESULT=$(curl -sf -X POST http://localhost:15474/cypher -H 'Content-Type: application/json' \
+            -d '{"query":"MATCH ()-[r:LINK]->() RETURN count(r) AS c, r.w AS w"}')
+          echo "$RESULT"
+          echo "$RESULT" | grep -q '"rows":\[\[1,7\]\]'
+
+      - name: Binary healthcheck + docker health verdict
+        run: |
+          set -euo pipefail
+          docker exec nexus /usr/local/bin/nexus-server --healthcheck
+          echo "healthcheck exit 0"
+          for i in $(seq 1 12); do
+            STATUS=$(docker inspect --format '{{.State.Health.Status}}' nexus)
+            [ "$STATUS" = "healthy" ] && { echo "docker health: healthy"; exit 0; }
+            sleep 10
+          done
+          echo "docker health never reached healthy: $STATUS"; exit 1
