@@ -326,13 +326,20 @@ impl Executor {
     }
 
     /// Read lock on store (guard derefs to `&RecordStore`).
+    ///
+    /// phase9_store-lock-read-concurrency §1 — wrapped with
+    /// `perf_probe::timed` (a no-op unless `NEXUS_PERF_PROBE=1`) so the
+    /// read-ceiling profiling pass has direct wait-time evidence for
+    /// this specific lock instead of an assumption.
     pub(super) fn store(&self) -> parking_lot::RwLockReadGuard<'_, RecordStore> {
-        self.shared.store.read()
+        crate::perf_probe::timed(&crate::perf_probe::STORE_READ, || self.shared.store.read())
     }
 
     /// Write lock on store.
     pub(super) fn store_mut(&self) -> parking_lot::RwLockWriteGuard<'_, RecordStore> {
-        self.shared.store.write()
+        crate::perf_probe::timed(&crate::perf_probe::STORE_WRITE, || {
+            self.shared.store.write()
+        })
     }
 
     /// Public handle on the shared R-tree registry. Used by the
@@ -344,8 +351,13 @@ impl Executor {
     }
 
     /// Read lock on label_index (guard derefs to `&LabelIndex`).
+    ///
+    /// phase9_store-lock-read-concurrency §1 — instrumented like
+    /// `Executor::store()`; see that method's doc comment.
     pub(super) fn label_index(&self) -> parking_lot::RwLockReadGuard<'_, LabelIndex> {
-        self.shared.label_index.read()
+        crate::perf_probe::timed(&crate::perf_probe::LABEL_INDEX_READ, || {
+            self.shared.label_index.read()
+        })
     }
 
     /// Crate-visible label-index read for outside-of-executor

@@ -1068,6 +1068,22 @@ async fn async_main(_worker_threads: usize) -> anyhow::Result<()> {
         // Request/response tracing
         .layer(TraceLayer::new_for_http());
 
+    // phase9_store-lock-read-concurrency §1 — when NEXUS_PERF_PROBE=1,
+    // periodically dump the diagnostic lock/wait counters
+    // (nexus_core::perf_probe) to stderr so a bench run's server log
+    // captures a ranked cost breakdown alongside the qps numbers. A
+    // no-op background task otherwise (single env-var check, then the
+    // task exits immediately without spawning a timer).
+    if nexus_core::perf_probe::enabled() {
+        tokio::spawn(async move {
+            let mut interval = tokio::time::interval(std::time::Duration::from_secs(2));
+            loop {
+                interval.tick().await;
+                eprintln!("{}", nexus_core::perf_probe::render_snapshot());
+            }
+        });
+    }
+
     // Start server with optimized configuration for high concurrency
     let listener = TcpListener::bind(&config.addr).await?;
     info!("Nexus Server listening on {}", config.addr);

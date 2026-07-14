@@ -282,8 +282,15 @@ async fn execute_query(
         // argument for staying on the engine inside an explicit
         // transaction.
         if crate::api::cypher::routing::is_read_only(&ast) {
+            // phase9_store-lock-read-concurrency §1 — instrument the
+            // tokio `engine` RwLock read-guard wait (no-op unless
+            // `NEXUS_PERF_PROBE=1`; see `nexus_core::perf_probe`).
+            let engine_read_start = std::time::Instant::now();
             let (lock_free_executor, in_explicit_tx) = {
                 let engine_guard = state.server.engine.read().await;
+                if nexus_core::perf_probe::enabled() {
+                    nexus_core::perf_probe::ENGINE_TOKIO_READ.record(engine_read_start.elapsed());
+                }
                 let in_tx = engine_guard
                     .session_manager
                     .get_session(&"default".to_string())
@@ -297,7 +304,24 @@ async fn execute_query(
                     cypher: query.clone(),
                     params: params.clone(),
                 };
-                let out = tokio::task::spawn_blocking(move || lock_free_executor.execute(&q)).await;
+                // phase9_store-lock-read-concurrency §1 — measure the
+                // `spawn_blocking` queue wait (time from scheduling to
+                // the closure's first instruction) and the executor's
+                // own wall time separately, so a busy blocking-thread
+                // pool shows up distinctly from slow query execution.
+                let scheduled_at = std::time::Instant::now();
+                let out = tokio::task::spawn_blocking(move || {
+                    if nexus_core::perf_probe::enabled() {
+                        nexus_core::perf_probe::SPAWN_BLOCKING_QUEUE.record(scheduled_at.elapsed());
+                    }
+                    let exec_start = std::time::Instant::now();
+                    let result = lock_free_executor.execute(&q);
+                    if nexus_core::perf_probe::enabled() {
+                        nexus_core::perf_probe::EXECUTOR_EXECUTE.record(exec_start.elapsed());
+                    }
+                    result
+                })
+                .await;
                 let elapsed_ms = started.elapsed().as_millis() as i64;
                 return match out {
                     Ok(Ok(rs)) => Ok(result_set_to_nexus(rs, elapsed_ms)),
@@ -309,10 +333,16 @@ async fn execute_query(
             // session — fall through to the engine-locked path below.
         }
 
+        // phase8_neo4j-concurrency-gaps §3 — `ast` was already parsed
+        // above (outside this write lock) to decide routing; use the
+        // pre-parsed-AST entry point so the exclusive lock's critical
+        // section no longer pays for a second parse of the same query
+        // text. See `Engine::execute_cypher_ast_with_params`'s doc
+        // comment.
         let engine_arc = state.server.engine.clone();
         let result = {
             let mut engine = engine_arc.write().await;
-            engine.execute_cypher_with_params(&query, params)
+            engine.execute_cypher_ast_with_params(&ast, &query, params)
         };
         let elapsed_ms = started.elapsed().as_millis() as i64;
         return match result {

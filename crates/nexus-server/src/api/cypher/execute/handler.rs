@@ -416,9 +416,19 @@ pub async fn execute_cypher(
         // semantics (MERGE-rel, SET on a relationship variable,
         // same-statement `RETURN r.prop` all silently dropped data;
         // see phase1_http-merge-rel-and-set-rel-parity proposal.md).
+        // phase8_neo4j-concurrency-gaps §3 — `ast` was already parsed
+        // above (outside this write lock) for routing; use the
+        // pre-parsed-AST entry point instead of
+        // `execute_cypher_with_params` so the exclusive lock's
+        // critical section no longer pays for a second parse of the
+        // same query text. See `Engine::execute_cypher_ast_with_params`'s
+        // doc comment.
         let mut engine_guard = server.engine.write().await;
-        let dispatch_result =
-            engine_guard.execute_cypher_with_params(&request.query, request.params.clone());
+        let dispatch_result = engine_guard.execute_cypher_ast_with_params(
+            &ast,
+            &request.query,
+            request.params.clone(),
+        );
         // Release the write lock before the (async) audit-log call —
         // auditing never touches the engine, and holding a write lock
         // across an `.await` unnecessarily serializes unrelated writes.
@@ -589,9 +599,16 @@ pub async fn execute_cypher(
         }
 
         {
-            // Use the engine's execute_cypher method which uses its internal executor
+            // Use the engine's execute_cypher method which uses its internal executor.
+            // phase8_neo4j-concurrency-gaps §3 — reuse the `ast` parsed
+            // above instead of re-parsing inside the exclusive write
+            // lock; see `Engine::execute_cypher_ast_with_params`.
             let mut engine_guard = server.engine.write().await;
-            match engine_guard.execute_cypher_with_params(&request.query, request.params.clone()) {
+            match engine_guard.execute_cypher_ast_with_params(
+                &ast,
+                &request.query,
+                request.params.clone(),
+            ) {
                 Ok(result_set) => {
                     let execution_time = start_time.elapsed().as_millis() as u64;
                     tracing::info!(
