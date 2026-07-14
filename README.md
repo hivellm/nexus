@@ -155,7 +155,7 @@ Nexus native RPC vs Neo4j Bolt, both in Docker, shared tiny dataset (100 nodes /
 
 Top wins: `aggregation.avg_score_a` 12.5× · `aggregation.count_all` 11.1× · `ecosystem.call_in_transactions` 10.0× · `aggregation.stdev_score` 9.1× · `aggregation.min_max_score` 8.3×. Closest margin still Nexus-ahead: `traversal.two_hop_chain` 1.8×. Full report at [`target/bench/report.md`](target/bench/report.md) after running [`crates/nexus-bench/README.md`](crates/nexus-bench/README.md).
 
-> The 74-test cross-bench numbers under [`docs/performance/BENCHMARK_NEXUS_VS_NEO4J.md`](docs/performance/BENCHMARK_NEXUS_VS_NEO4J.md) (the older Dec-2025 record) are flagged stale and pending re-run on v2.0.0+; reproduction recipe + concurrent-load matrix scaffold ships with [`scripts/benchmarks/run-vs-neo4j.sh`](scripts/benchmarks/run-vs-neo4j.sh).
+> The 74-test cross-bench numbers under [`docs/performance/BENCHMARK_NEXUS_VS_NEO4J.md`](docs/performance/BENCHMARK_NEXUS_VS_NEO4J.md) are the older Dec-2025 record and are superseded by the 2.5.0 re-baseline in [`docs/performance/BENCHMARK_2026.md`](docs/performance/BENCHMARK_2026.md); reproduction recipe + concurrent-load matrix ships with [`scripts/benchmarks/run-vs-neo4j.sh`](scripts/benchmarks/run-vs-neo4j.sh).
 
 ### Security + Ops
 - **API keys + JWT + RBAC** with rate limiting (1k/min, 10k/hour default).
@@ -502,7 +502,30 @@ ORDER BY confidence DESC
 
 ## 🗺️ Roadmap
 
-### 2.3.2 — current (2026-06-08)
+### 2.5.0 — current (2026-07-14)
+- ✅ **Write-path unification.** Every transport (HTTP / RPC / RESP3 / GraphQL /
+  streaming) now executes writes through one tested engine path; the divergent
+  forks were deleted. Closes a class of transport-dependent data-loss bugs —
+  `MERGE (a)-[r]->(b)` creates the edge, `SET r.k` persists, `$param` write
+  values persist, consecutive `CREATE` clauses all run, aggregation preserves
+  the written `RETURN` column order. Verified by a 26-case parity harness + a
+  cross-transport parity runner.
+- ✅ **Concurrency.** Autocommit reads bypass the global engine lock (~2.6x
+  concurrent reads); `count(n)` @64 workers went 21.8x; a mimalloc global
+  allocator lifts concurrent reads a further 37–84%.
+- ✅ **Zero-CVE Docker image** — `FROM scratch` static musl, multi-arch
+  (linux/amd64 + linux/arm64), Docker Scout 0C/0H/0M/0L.
+- ✅ **New Cypher functions** — `randomUUID`, `ascii`/`chr`, `lpad`/`rpad`,
+  `normalize`, two-arg `log`, `isNaN`, `shuffle`, stable-string `elementId`.
+- ✅ **Canonical vs-Neo4j benchmark** (`docs/performance/BENCHMARK_2026.md`,
+  Nexus leads 84% of comparable serial scenarios) + first-measured KNN recall
+  (SIFT1M / GloVe).
+
+### 2.4.0 (2026-07-11)
+- ✅ Fixed `$param` property-value data loss over the HTTP write path
+  (`CREATE`/`MERGE`/`SET` silently stored `null`); AVX2 popcount over-count fix.
+
+### 2.3.2 (2026-06-08)
 - ✅ Bug-fix release (field reports vs 2.3.1):
   - `UNWIND [...] AS row MERGE/SET ...` writes persist every row in a single
     statement instead of silently dropping (GH #13) — unblocks batched backfill.
