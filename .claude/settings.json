@@ -25,8 +25,11 @@
       "Bash(git blame:*)",
       "Bash(npm run type-check:*)",
       "Bash(npm test:*)",
-      "mcp__rulebook"
-    ]
+      "mcp__rulebook",
+      "WebSearch",
+      "TodoWrite"
+    ],
+    "defaultMode": "acceptEdits"
   },
   "hooks": {
     "PreToolUse": [
@@ -35,7 +38,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bash $CLAUDE_PROJECT_DIR/.claude/hooks/enforce-pre-tool.sh"
+            "command": "bash $CLAUDE_PROJECT_DIR/.claude/hooks/protect-task-scaffolding.sh"
           }
         ]
       }
@@ -48,5 +51,5 @@
     "type": "command",
     "command": "echo \"$(basename \"$(pwd)\")$(git branch --show-current 2>/dev/null | sed \"s/^/ | /\")\""
   },
-  "model": "opus"
+  "model": "fable"
 }
