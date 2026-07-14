@@ -5,7 +5,21 @@ All notable changes to Nexus will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased — 2.5.0]
+## [2.5.0] — 2026-07-14
+
+> **Write-path unification, transport correctness, and concurrency.** This
+> release eliminates a class of transport-dependent data-loss bugs (the same
+> query silently behaved differently over HTTP / RPC / RESP3 / GraphQL /
+> streaming), by routing every transport through one tested engine write path
+> and deleting the divergent forks. 18+ correctness bugs closed, verified by a
+> new 26-case write-path parity harness and a cross-transport parity runner.
+> On performance: autocommit reads no longer take the global engine lock
+> (~2.6x concurrent reads), `count(n)` at 64 workers went 21.8x, and a
+> mimalloc global allocator lifts concurrent reads a further 37–84%. The
+> Docker image is now `FROM scratch` static musl — **0 CVEs** — and multi-arch
+> (linux/amd64 + linux/arm64). A canonical, reproducible vs-Neo4j benchmark
+> (Nexus leads 84% of comparable serial scenarios) plus first-measured KNN
+> recall (SIFT1M / GloVe) replace the prior contradictory numbers.
 
 ### Benchmarks — canonical 2026 re-baseline
 
