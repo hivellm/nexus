@@ -1,5 +1,11 @@
 [toolchain]
-channel = "nightly"
+# Pinned to a known-good dated nightly. The floating `nightly` channel
+# regressed with a rustc ICE in `rustc_ast/src/attr/mod.rs` (attribute
+# parsing) that crashes compiling `nexus-core` on both `cargo clippy`
+# and `cargo test`, breaking CI even though local cached nightlies
+# built fine. This is the toolchain the 2.5.0 release was built and
+# validated with; bump deliberately after verifying CI stays green.
+channel = "nightly-2026-02-27"
 components = ["rustfmt", "clippy", "rust-src"]
 profile = "minimal"
 
