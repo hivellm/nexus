@@ -252,3 +252,36 @@ this is a concrete, reproducible signal worth a dedicated follow-up
 batch, or a GC-equivalent compaction pass) — filed as a note here rather
 than a full investigation, which is out of scope for a benchmark
 rebaseline task.
+
+---
+
+## Post-gap-closure addendum (2026-07-13, phase8)
+
+The `phase8_neo4j-concurrency-gaps` task attacked the concurrency losses
+this report surfaced. Status per scenario (same host + bench dataset,
+`concurrent_sweep` at 1/4/16/64 workers; raw under `bench-out/phase8/`):
+
+| Scenario @64 workers | Before (this report) | After (phase8) | Neo4j | Gate | Verdict |
+|---|---:|---:|---:|---|---|
+| `aggregation.count_all` | 2,876 qps / p99 124 ms | **62,653 qps / p99 2.25 ms** | 13,095 | ≥8.6k, p99<15ms | **MET, 7.3x over** (and ~5x over Neo4j) |
+| `traversal.small_two_hop_from_hub` | 8,095 qps | 8,508 qps | 13,202 | ≥13.2k | improved, **gate not met** |
+
+**count_all (closed):** two compounding causes — an identity `Project` the
+planner inserts for `RETURN count(n) AS c` disqualified the label-bitmap
+COUNT short-circuit (forcing full per-node JSON materialization), and the
+count helpers re-acquired the `nodes_mmap` lock once per node. Fixed by
+skipping the no-op `Project` and adding a single-lock bulk
+`read_all_node_headers()`. The 1→64w curve went from a 546→2,876
+flatline to a near-linear 3,648→62,653.
+
+**two_hop (improved, gate deferred):** the per-node store-lock
+acquisitions in the scan loop were hoisted to once-per-scan (a
+`read_node_as_value_with_store` variant threaded through ~6 call sites),
+which moved 1–16w latency but not the 64w ceiling. The residual
+contention is the single global `ExecutorShared.store` `parking_lot::RwLock`
+itself under 64 concurrent readers — closing it needs a structural change
+(lock sharding, an `arc-swap` store snapshot, or a lock-free mmap read
+path). Carried as follow-up task `phase9_store-lock-read-concurrency`
+(with the write-ceiling item — `merge_singleton` flat ~2.5k qps from 4w —
+folded in, same root family). Item 4.1 (catalog-introspection procedures)
+refactoring shipped alongside; items 4.2/4.3 fold into the follow-up.
