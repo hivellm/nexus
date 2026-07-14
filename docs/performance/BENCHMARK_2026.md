@@ -285,3 +285,39 @@ path). Carried as follow-up task `phase9_store-lock-read-concurrency`
 (with the write-ceiling item — `merge_singleton` flat ~2.5k qps from 4w —
 folded in, same root family). Item 4.1 (catalog-introspection procedures)
 refactoring shipped alongside; items 4.2/4.3 fold into the follow-up.
+
+---
+
+## Allocator addendum (2026-07-14, phase9)
+
+phase9 profiling (evidence, not assumption) showed the 64-worker read
+ceiling is **per-query heap-allocation churn on the default system
+allocator**, not lock contention — every Rust-level lock candidate stays
+at 30 ns–100 µs even at 64 workers. Switching the global allocator to
+**mimalloc** (cross-platform; the production `FROM scratch` musl image
+and Windows both previously ran the default malloc, since jemalloc was
+gated behind the non-default `memory-profiling` feature) delivers, A/B
+isolated on the same host + bench dataset (2584 nodes):
+
+| Scenario | workers | default malloc | mimalloc | delta | Neo4j@64 |
+|---|---:|---:|---:|---:|---:|
+| `point_read.by_id` | 16 | 25,087 | **38,264** | +53% | — |
+| `point_read.by_id` | 64 | 34,764 | **48,783** | +40% | 12,133 |
+| `traversal.small_two_hop_from_hub` | 16 | 6,631 | **12,180** | +84% | — |
+| `traversal.small_two_hop_from_hub` | 64 | 8,508 | **11,656** | +37% | 13,202 |
+| `write.merge_singleton` | 1 | 1,025 | 1,054 | neutral | — |
+| `write.merge_singleton` | 64 | 1,086 | 1,166 | neutral | 12,882 |
+
+Reads gain 37–84% under concurrency; writes are allocator-neutral
+(confirmed by rebuilding with the default allocator and re-measuring —
+the merge_singleton number is identical, so the allocator is a pure read
+win, safe to ship). point_read is now ~4x over Neo4j at 64 workers and
+two_hop reaches ~88% of Neo4j (from 64%).
+
+**Write ceiling — separate, structural.** `write.merge_singleton` is
+bounded by the single-writer engine lock AND by `Engine::refresh_executor()`
+rebuilding the ENTIRE executor (`Executor::new`, re-installing every index
+registry) after each write — a fixed per-write cost independent of the
+allocator. Closing it (make refresh incremental / skip it for no-op
+MERGE / group-commit) is the phase9 §3 write-ceiling lever, tracked
+there with its ≥5k qps gate.

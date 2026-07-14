@@ -88,6 +88,15 @@ clap = { version = "4.5", features = ["derive"] }
 # System monitoring
 sysinfo = "0.38"
 
+# Global allocator. phase9 profiling proved the 64-worker concurrency
+# ceiling is NOT lock contention but per-query heap-allocation churn on
+# the default system allocator (Windows CRT malloc / musl malloc), which
+# serializes badly under many threads. mimalloc is cross-platform (glibc,
+# musl, AND msvc — unlike jemalloc) and scales cleanly under contention.
+# Compiled in by default and wired as `#[global_allocator]` unless the
+# `memory-profiling` feature swaps in jemalloc for heap profiling.
+mimalloc = { version = "0.1", default-features = false }
+
 # Memory profiling (opt-in). Enables jemalloc as the global allocator with
 # heap profiling hooks so ops can dump pprof-compatible profiles on demand.
 # Only activated via `--features memory-profiling` — default builds pay no

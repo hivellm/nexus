@@ -15,10 +15,21 @@
 //! - GET /stats - Database statistics
 //! - POST /mcp - MCP StreamableHTTP endpoint
 
-// Activate jemalloc as the global allocator when the `memory-profiling`
-// feature is enabled. Combined with `MALLOC_CONF=prof:true,...`, this lets
-// ops dump pprof heap profiles from the running process on demand (see
-// `api::debug`).
+// Global allocator selection.
+//
+// Default builds (production, including the `FROM scratch` musl image and
+// Windows) use mimalloc — phase9 profiling proved the per-query heap
+// allocation churn on the default system allocator, not lock contention,
+// is what caps read/write throughput under high thread counts. mimalloc
+// is cross-platform (glibc/musl/msvc) and contention-friendly.
+//
+// The `memory-profiling` feature instead swaps in jemalloc (non-msvc) so
+// ops can dump pprof heap profiles on demand (see `api::debug`); on that
+// build mimalloc is not the global allocator.
+#[cfg(not(feature = "memory-profiling"))]
+#[global_allocator]
+static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
+
 #[cfg(all(feature = "memory-profiling", not(target_env = "msvc")))]
 #[global_allocator]
 static GLOBAL: tikv_jemallocator::Jemalloc = tikv_jemallocator::Jemalloc;
