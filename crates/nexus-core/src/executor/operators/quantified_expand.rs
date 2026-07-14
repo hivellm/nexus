@@ -190,19 +190,36 @@ impl Executor {
                     let mut emit = row.clone();
                     emit.insert(source_var.to_string(), source_value.clone());
 
-                    let target_value = match self.read_node_as_value(current_node) {
-                        Ok(v) => v,
-                        Err(_) => continue,
-                    };
-                    emit.insert(target_var.to_string(), target_value);
+                    // phase8_neo4j-concurrency-gaps §2 — acquire the
+                    // store guard ONCE for the whole node-emit section
+                    // (the target node plus every list-promoted
+                    // inner-node var) instead of once per node read.
+                    // Scoped tightly to this block: `qpp_path_rels_
+                    // as_value_list` right below independently
+                    // re-acquires `self.store()` via
+                    // `read_relationship_as_value`, so this guard must
+                    // be released before reaching it — see
+                    // `read_node_as_value_with_store`'s non-reentrancy
+                    // note on the underlying `parking_lot::RwLock`.
+                    {
+                        let qpp_store = self.store();
+                        let target_value =
+                            match self.read_node_as_value_with_store(&qpp_store, current_node) {
+                                Ok(v) => v,
+                                Err(_) => continue,
+                            };
+                        emit.insert(target_var.to_string(), target_value);
 
-                    for (idx, spec) in inner_nodes.iter().enumerate() {
-                        if let Some(var) = &spec.var {
-                            let values: Vec<Value> = nodes_per_pos[idx]
-                                .iter()
-                                .filter_map(|nid| self.read_node_as_value(*nid).ok())
-                                .collect();
-                            emit.insert(var.to_string(), Value::Array(values));
+                        for (idx, spec) in inner_nodes.iter().enumerate() {
+                            if let Some(var) = &spec.var {
+                                let values: Vec<Value> = nodes_per_pos[idx]
+                                    .iter()
+                                    .filter_map(|nid| {
+                                        self.read_node_as_value_with_store(&qpp_store, *nid).ok()
+                                    })
+                                    .collect();
+                                emit.insert(var.to_string(), Value::Array(values));
+                            }
                         }
                     }
                     for (idx, hop) in hops.iter().enumerate() {

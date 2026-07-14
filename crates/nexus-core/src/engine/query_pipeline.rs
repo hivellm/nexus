@@ -81,6 +81,43 @@ impl Engine {
         result
     }
 
+    /// Same as [`Self::execute_cypher_with_params`], but for callers that
+    /// already parsed `query_str` into `ast` for their own routing
+    /// decision (e.g. the HTTP `/cypher` handler's
+    /// `routing::first_write_kind` / `routing::needs_engine_interception`,
+    /// or the RPC `CYPHER` dispatcher's own admin-clause check).
+    ///
+    /// phase8_neo4j-concurrency-gaps §3 — every write query previously
+    /// paid for the SAME query text being parsed twice: once by the
+    /// caller (outside the engine's exclusive write lock, for routing)
+    /// and once more by [`Self::execute_cypher_with_context`] (INSIDE
+    /// the lock, where every microsecond of parse cost extends the
+    /// critical section every other writer is blocked behind — the
+    /// dominant suspect behind `write.merge_singleton`'s flat ~2.5k qps
+    /// ceiling from 4 workers). This entry point skips that inner
+    /// re-parse by cloning the already-parsed AST instead. `query_str`
+    /// is still required alongside it: several downstream dispatch
+    /// branches (standalone CREATE, the generic executor fallback, ...)
+    /// embed the original Cypher text into `executor::Query` for the
+    /// executor's own separate parse step, which this change does not
+    /// touch.
+    pub fn execute_cypher_ast_with_params(
+        &mut self,
+        ast: &executor::parser::CypherQuery,
+        query_str: &str,
+        params: HashMap<String, Value>,
+    ) -> Result<executor::ResultSet> {
+        self.current_params = params;
+        let result = self.execute_cypher_ast_with_context(
+            ast,
+            query_str,
+            None,
+            crate::cluster::TenantIsolationMode::None,
+        );
+        self.current_params.clear();
+        result
+    }
+
     /// Execute a Cypher query, optionally rewriting catalog-visible
     /// names to the tenant's namespaced form before planning.
     ///
@@ -107,7 +144,26 @@ impl Engine {
     ) -> Result<executor::ResultSet> {
         // Parse query to check if it contains CREATE or DELETE clauses
         let mut parser = executor::parser::CypherParser::new(query.to_string());
-        let mut ast = parser.parse()?;
+        let ast = parser.parse()?;
+        self.execute_cypher_ast_with_context(&ast, query, ctx, mode)
+    }
+
+    /// Shared body of [`Self::execute_cypher_with_context`] and
+    /// [`Self::execute_cypher_ast_with_params`] — see the latter's doc
+    /// comment for why a pre-parsed-AST entry point exists at all
+    /// (phase8_neo4j-concurrency-gaps §3). Clones `ast` into an owned,
+    /// mutable local: the cluster-mode scope rewrite below mutates it
+    /// in place, and this function must not mutate the caller's copy
+    /// (the HTTP/RPC routing callers still hold their own reference to
+    /// the original, unscoped AST for other checks).
+    fn execute_cypher_ast_with_context(
+        &mut self,
+        ast: &executor::parser::CypherQuery,
+        query: &str,
+        ctx: Option<&crate::cluster::UserContext>,
+        mode: crate::cluster::TenantIsolationMode,
+    ) -> Result<executor::ResultSet> {
+        let mut ast = ast.clone();
 
         // phase6_opencypher-advanced-types §6 — honour a leading
         // `GRAPH[name]` preamble. With a `DatabaseManager` wired to

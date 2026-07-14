@@ -11,6 +11,7 @@ use super::super::parser;
 use super::super::push_with_row_cap;
 use super::super::types::Direction;
 use crate::relationship::{TraversalAction, TraversalError, TraversalVisitor};
+use crate::storage::RecordStore;
 use crate::{Error, Result};
 use serde_json::{Map, Value};
 use std::collections::HashMap;
@@ -1030,11 +1031,25 @@ impl Executor {
                     }
 
                     // Add path variable if specified
+                    //
+                    // phase8_neo4j-concurrency-gaps §2 — acquire the store
+                    // guard ONCE for the whole path (instead of once per
+                    // node in it) before mapping every node id through
+                    // `read_node_as_value_with_store`; see that method's
+                    // doc comment for the acquire-once rationale. Neither
+                    // this closure nor anything it calls touches
+                    // `self.store()` again, so holding the guard across
+                    // the whole `filter_map` is safe.
                     if !path_var.is_empty() {
+                        let path_store = self.store();
                         let path_nodes_values: Vec<Value> = path_nodes
                             .iter()
-                            .filter_map(|node_id| self.read_node_as_value(*node_id).ok())
+                            .filter_map(|node_id| {
+                                self.read_node_as_value_with_store(&path_store, *node_id)
+                                    .ok()
+                            })
                             .collect();
+                        drop(path_store);
                         new_row.insert(path_var.to_string(), Value::Array(path_nodes_values));
                     }
 
@@ -1362,22 +1377,52 @@ impl Executor {
         Value::Object(path_obj)
     }
 
-    /// Read a node as a JSON value
+    /// Read a node as a JSON value.
+    ///
+    /// Acquires its own `store()` read guard. This is the right choice
+    /// for one-off reads, but bulk scanners that materialise many nodes
+    /// in a loop should acquire the guard ONCE and call
+    /// [`Self::read_node_as_value_with_store`] per element instead — see
+    /// that method's doc comment for the concurrency rationale.
     pub(in crate::executor) fn read_node_as_value(&self, node_id: u64) -> Result<Value> {
-        // phase8_neo4j-concurrency-gaps §2 — acquire the store read lock
-        // ONCE and reuse it for both the header read and the property
-        // load below, instead of two independent `self.store()` calls.
-        // This function is the single most-called node materialiser in
-        // the executor (every scan, expand hop, and index seek routes
-        // through it), so halving its lock acquisitions directly cuts
-        // the per-core atomic/cache-line traffic that collapses
-        // `traversal.small_two_hop_from_hub` and other read scenarios
-        // under high concurrency (§1's `count_live_nodes_*` fix applies
-        // the same reasoning to the aggregation path). `self.catalog()`
-        // in between is a distinct lock (LMDB-backed), not `store`, so
-        // holding this guard across that call is not a reentrant
-        // acquire of the same lock.
         let store = self.store();
+        self.read_node_as_value_with_store(&store, node_id)
+    }
+
+    /// Same as [`Self::read_node_as_value`], but for callers that
+    /// already hold a `store()` read guard (e.g. a scan/expand loop
+    /// materialising many nodes in a row).
+    ///
+    /// phase8_neo4j-concurrency-gaps §2 — `read_node_as_value` is the
+    /// single most-called node materialiser in the executor (every
+    /// scan, expand hop, and index seek routes through it), and its
+    /// own `self.store()` acquisition was already halved to one call in
+    /// the §2.2 pass. The remaining cost is the OUTER acquisition
+    /// itself: bulk scanners (`execute_node_by_label`,
+    /// `execute_all_nodes_scan`, `execute_node_index_seek`, the
+    /// `Expand` target loop, ...) call this once PER CANDIDATE NODE,
+    /// each call independently re-acquiring the single
+    /// `ExecutorShared.store` `parking_lot::RwLock` — the exact
+    /// per-iteration-lock-acquisition-in-a-loop pattern documented in
+    /// the `per-iteration-rwlock-re-acquisition-in-scan-loops-collapses-
+    /// under-thread-count` knowledge entry (same family as §1's
+    /// `read_all_node_headers` fix for `count_live_nodes_*`). Threading
+    /// an already-held `&RecordStore` through this method lets those
+    /// loops acquire the guard once for the whole scan instead of once
+    /// per node.
+    ///
+    /// SAFETY (non-reentrancy): `parking_lot::RwLock` does not allow a
+    /// thread to recursively re-acquire a lock it already holds (see the
+    /// `parking-lot-rwlock-does-not-allow-recursive-acquire` anti-pattern
+    /// entry) — a caller passing `store` in here MUST NOT be in the
+    /// middle of a call chain that would try to acquire `self.store()`
+    /// again before this method returns. This method itself never calls
+    /// `self.store()`; `self.catalog()` is a distinct lock (LMDB-backed).
+    pub(in crate::executor) fn read_node_as_value_with_store(
+        &self,
+        store: &RecordStore,
+        node_id: u64,
+    ) -> Result<Value> {
         let node_record = store.read_node(node_id)?;
 
         if node_record.is_deleted() {

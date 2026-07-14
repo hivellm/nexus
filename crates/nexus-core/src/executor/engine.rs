@@ -46,7 +46,24 @@ impl Clone for Executor {
             query_count: std::sync::atomic::AtomicUsize::new(
                 self.query_count.load(std::sync::atomic::Ordering::Relaxed),
             ),
-            property_access_stats: self.property_access_stats.clone(),
+            // phase8_neo4j-concurrency-gaps §2 — this used to be
+            // `self.property_access_stats.clone()`, an `Arc::clone` that
+            // handed every concurrent clone a handle to the SAME shared
+            // `RwLock<HashMap<..>>`, directly contradicting this struct's
+            // own doc comment ("per-clone state ... kept distinct per
+            // clone"). The read-only HTTP/RPC path
+            // (phase5_lock-free-read-path) clones a fresh `Executor` on
+            // EVERY request, and any query with an unindexed equality
+            // filter (`try_index_based_filter` in
+            // `operators/scan.rs`) takes a `.write()` on this map —
+            // an exclusive lock every concurrent reader serialized on,
+            // once per request, for a purely observational auto-
+            // indexing hint counter that has no correctness
+            // requirement to be globally consistent. Allocating a
+            // fresh, independent map per clone (matching the doc
+            // comment's original intent) removes that shared exclusive
+            // lock from the read hot path entirely.
+            property_access_stats: Arc::new(RwLock::new(HashMap::new())),
             config: self.config.clone(),
             enable_relationship_optimizations: self.enable_relationship_optimizations,
         }

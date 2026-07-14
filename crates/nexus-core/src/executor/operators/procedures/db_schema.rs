@@ -13,25 +13,25 @@ impl Executor {
         context: &mut ExecutionContext,
         yield_columns: Option<&Vec<String>>,
     ) -> Result<()> {
-        // Get all labels from catalog - iterate through all label IDs
-        // We'll scan from 0 to a reasonable max (or use stats)
-        let mut labels = Vec::new();
-
-        // Try to get labels by iterating through possible IDs
-        // This is a workaround - ideally Catalog would have list_all_labels()
-        for label_id in 0..10000u32 {
-            if let Ok(Some(label_name)) = self.catalog().get_label_name(label_id) {
-                labels.push(label_name);
-            }
-        }
-
-        // Convert to rows
-        let mut rows = Vec::new();
-        for label in labels {
-            rows.push(Row {
-                values: vec![serde_json::Value::String(label)],
-            });
-        }
+        // phase8_neo4j-concurrency-gaps §4.1 — this used to probe
+        // `catalog().get_label_name(id)` for every id in `0..10000`
+        // (one LMDB read-transaction + cache lookup per probe,
+        // regardless of how many labels actually exist) instead of a
+        // single catalog iteration, the way `db.propertyKeys` already
+        // does via `list_all_keys()`. That was the measured 1.80x
+        // slowdown vs Neo4j (~4.1ms vs ~2.3ms p50) for what should be
+        // near-instant introspection. `Catalog::list_all_labels` is the
+        // same LMDB-iteration helper `list_all_keys` uses, so this is a
+        // direct swap with identical semantics — just O(labels) instead
+        // of O(10000).
+        let rows: Vec<Row> = self
+            .catalog()
+            .list_all_labels()
+            .into_iter()
+            .map(|(_, name)| Row {
+                values: vec![serde_json::Value::String(name)],
+            })
+            .collect();
 
         // Set columns based on YIELD clause
         let columns = if let Some(yield_cols) = yield_columns {
@@ -85,23 +85,19 @@ impl Executor {
         context: &mut ExecutionContext,
         yield_columns: Option<&Vec<String>>,
     ) -> Result<()> {
-        // Get all relationship types from catalog - iterate through possible IDs
-        let mut rel_types = Vec::new();
-
-        // Try to get types by iterating through possible IDs
-        for type_id in 0..10000u32 {
-            if let Ok(Some(type_name)) = self.catalog().get_type_name(type_id) {
-                rel_types.push(type_name);
-            }
-        }
-
-        // Convert to rows
-        let mut rows = Vec::new();
-        for rel_type in rel_types {
-            rows.push(Row {
-                values: vec![serde_json::Value::String(rel_type)],
-            });
-        }
+        // phase8_neo4j-concurrency-gaps §4.1 — same fix as
+        // `execute_db_labels_procedure` above: swap the O(10000)
+        // per-id catalog probe for `Catalog::list_all_types`'s single
+        // LMDB iteration (the same helper `db.propertyKeys` already
+        // uses via `list_all_keys`).
+        let rows: Vec<Row> = self
+            .catalog()
+            .list_all_types()
+            .into_iter()
+            .map(|(_, name)| Row {
+                values: vec![serde_json::Value::String(name)],
+            })
+            .collect();
 
         // Set columns based on YIELD clause
         let columns = if let Some(yield_cols) = yield_columns {
@@ -120,29 +116,20 @@ impl Executor {
         context: &mut ExecutionContext,
         yield_columns: Option<&Vec<String>>,
     ) -> Result<()> {
-        // Get all labels and relationship types from catalog
-        let mut labels = Vec::new();
-        for label_id in 0..10000u32 {
-            if let Ok(Some(label_name)) = self.catalog().get_label_name(label_id) {
-                labels.push(label_name);
-            }
-        }
-
-        let mut rel_types = Vec::new();
-        for type_id in 0..10000u32 {
-            if let Ok(Some(type_name)) = self.catalog().get_type_name(type_id) {
-                rel_types.push(type_name);
-            }
-        }
-
-        // Convert to JSON arrays
-        let nodes_array: Vec<serde_json::Value> = labels
+        // phase8_neo4j-concurrency-gaps §4.1 — same fix as
+        // `execute_db_labels_procedure` / `execute_db_relationship_types_procedure`
+        // above: single LMDB iteration instead of an O(10000) per-id probe.
+        let nodes_array: Vec<serde_json::Value> = self
+            .catalog()
+            .list_all_labels()
             .into_iter()
-            .map(|l| serde_json::json!({"name": l}))
+            .map(|(_, name)| serde_json::json!({"name": name}))
             .collect();
-        let relationships_array: Vec<serde_json::Value> = rel_types
+        let relationships_array: Vec<serde_json::Value> = self
+            .catalog()
+            .list_all_types()
             .into_iter()
-            .map(|t| serde_json::json!({"name": t}))
+            .map(|(_, name)| serde_json::json!({"name": name}))
             .collect();
 
         // Create result row

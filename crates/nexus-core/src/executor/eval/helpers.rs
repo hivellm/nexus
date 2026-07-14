@@ -9,6 +9,7 @@ use super::super::engine::Executor;
 use super::super::parser;
 use super::super::push_with_row_cap;
 use super::super::types::{Direction, Row};
+use crate::storage::RecordStore;
 use crate::{Error, Result};
 use serde_json::{Map, Value};
 use std::collections::HashMap;
@@ -845,8 +846,38 @@ impl Executor {
         }
     }
 
+    /// Read a relationship as a JSON value.
+    ///
+    /// Acquires its own `store()` read guard. Bulk loops that already
+    /// hold a guard (e.g. alongside repeated
+    /// `read_node_as_value_with_store` calls) should use
+    /// [`Self::read_relationship_as_value_with_store`] instead to avoid
+    /// a second acquisition per element — see that method's doc comment.
     pub(in crate::executor) fn read_relationship_as_value(
         &self,
+        rel: &RelationshipInfo,
+    ) -> Result<Value> {
+        let store = self.store();
+        self.read_relationship_as_value_with_store(&store, rel)
+    }
+
+    /// Same as [`Self::read_relationship_as_value`], but for callers
+    /// that already hold a `store()` read guard.
+    ///
+    /// phase8_neo4j-concurrency-gaps §2 — mirrors
+    /// `Executor::read_node_as_value_with_store`: bulk loops that
+    /// materialise both a node and its relationship per element (e.g.
+    /// `Expand`'s target loop) would otherwise take a SECOND
+    /// independent `self.store()` acquisition here on top of the one
+    /// already held for the node read. Threading the held guard through
+    /// avoids that, and — critically — avoids a same-thread recursive
+    /// acquire of the non-reentrant `parking_lot::RwLock` while an outer
+    /// guard from the same call chain is still alive (see the
+    /// `parking-lot-rwlock-does-not-allow-recursive-acquire` anti-pattern
+    /// entry).
+    pub(in crate::executor) fn read_relationship_as_value_with_store(
+        &self,
+        store: &RecordStore,
         rel: &RelationshipInfo,
     ) -> Result<Value> {
         let type_name = self
@@ -854,8 +885,7 @@ impl Executor {
             .get_type_name(rel.type_id)?
             .unwrap_or_else(|| format!("type_{}", rel.type_id));
 
-        let properties_value = self
-            .store()
+        let properties_value = store
             .load_relationship_properties(rel.id)?
             .unwrap_or_else(|| Value::Object(Map::new()));
 
