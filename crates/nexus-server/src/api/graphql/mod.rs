@@ -16,7 +16,12 @@ pub use types::*;
 use crate::NexusServer;
 use async_graphql::{EmptySubscription, Schema};
 use async_graphql_axum::{GraphQLRequest, GraphQLResponse};
-use axum::{extract::State, response::IntoResponse};
+use axum::extract::State;
+// `IntoResponse` is only used by `graphql_playground`, which is
+// `#[cfg(debug_assertions)]`; gate the import to match so release
+// builds don't warn on an unused import.
+#[cfg(debug_assertions)]
+use axum::response::IntoResponse;
 use std::sync::Arc;
 
 /// GraphQL schema type
