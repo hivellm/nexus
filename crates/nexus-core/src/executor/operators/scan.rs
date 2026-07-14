@@ -22,6 +22,21 @@ impl Executor {
         let cap_hint = (bitmap.len() as usize).min(MAX_INTERMEDIATE_ROWS);
         let mut results = Vec::with_capacity(cap_hint);
 
+        // phase8_neo4j-concurrency-gaps §2 — acquire the `store` read
+        // guard ONCE for the whole label scan instead of once per
+        // candidate node via `read_node_as_value`. This is the exact
+        // per-iteration-lock-acquisition-in-a-loop pattern from the
+        // `per-iteration-rwlock-re-acquisition-in-scan-loops-collapses-
+        // under-thread-count` knowledge entry: `execute_node_by_label`
+        // is the dominant materialiser behind
+        // `traversal.small_two_hop_from_hub`'s concurrency ceiling
+        // whenever the pattern falls back to NodeByLabel + Filter
+        // (e.g. an unindexed property predicate) — every candidate
+        // node under the label was independently re-acquiring the
+        // single `ExecutorShared.store` `parking_lot::RwLock`. Nothing
+        // else in this loop body touches `self.store()`, so holding
+        // the guard for the whole scan is safe.
+        let store = self.store();
         for node_id in bitmap.iter() {
             if results.len() >= MAX_INTERMEDIATE_ROWS {
                 return Err(Error::OutOfMemory(format!(
@@ -37,18 +52,21 @@ impl Executor {
                 continue;
             }
 
-            // Skip deleted nodes
-            if let Ok(node_record) = self.store().read_node(node_id_u64) {
-                if node_record.is_deleted() {
-                    continue;
-                }
-            }
-
-            match self.read_node_as_value(node_id_u64)? {
+            // phase8_neo4j-concurrency-gaps §2 — the standalone
+            // deleted-node pre-check used to call `self.store()` here
+            // AND `read_node_as_value` immediately below independently
+            // re-reads the same header and already returns `Value::Null`
+            // for a deleted node (which every caller here already
+            // treats as "skip"). That made this loop take two store
+            // read-lock acquisitions per candidate node for no
+            // behavioural difference — removed to halve the lock churn
+            // on this hot path.
+            match self.read_node_as_value_with_store(&store, node_id_u64)? {
                 Value::Null => continue,
                 value => results.push(value),
             }
         }
+        drop(store);
 
         Ok(results)
     }
@@ -71,6 +89,10 @@ impl Executor {
         let cap_hint = (bitmap.len() as usize).min(MAX_INTERMEDIATE_ROWS);
         let mut seen = HashSet::new();
         let mut results = Vec::with_capacity(cap_hint);
+        // phase8_neo4j-concurrency-gaps §2 — same acquire-once pattern
+        // as `execute_node_by_label` above: one `store()` guard for the
+        // whole seek instead of one per matched node.
+        let store = self.store();
         for node_id in bitmap.iter() {
             if results.len() >= MAX_INTERMEDIATE_ROWS {
                 return Err(Error::OutOfMemory(format!(
@@ -83,23 +105,27 @@ impl Executor {
             if !seen.insert(node_id_u64) {
                 continue;
             }
-            if let Ok(rec) = self.store().read_node(node_id_u64) {
-                if rec.is_deleted() {
-                    continue;
-                }
-            }
-            match self.read_node_as_value(node_id_u64)? {
+            // phase8_neo4j-concurrency-gaps §2 — see the identical
+            // removal + rationale in `execute_node_by_label` above:
+            // `read_node_as_value` already filters deleted nodes.
+            match self.read_node_as_value_with_store(&store, node_id_u64)? {
                 Value::Null => continue,
                 v => results.push(v),
             }
         }
+        drop(store);
         Ok(results)
     }
 
     /// Execute AllNodesScan operator (scan all nodes regardless of label)
     pub(in crate::executor) fn execute_all_nodes_scan(&self) -> Result<Vec<Value>> {
-        // Get the total number of nodes from the store
-        let total_nodes = self.store().node_count();
+        // phase8_neo4j-concurrency-gaps §2 — acquire the `store` read
+        // guard ONCE for the entire scan: `node_count()` and every
+        // `read_node_as_value_with_store` call below now share it,
+        // instead of one acquisition for the count plus one more per
+        // candidate node.
+        let store = self.store();
+        let total_nodes = store.node_count();
         let cap_hint = (total_nodes as usize).min(MAX_INTERMEDIATE_ROWS);
         let mut results = Vec::with_capacity(cap_hint);
 
@@ -112,22 +138,20 @@ impl Executor {
                     MAX_INTERMEDIATE_ROWS
                 )));
             }
-            // Skip deleted nodes
-            if let Ok(node_record) = self.store().read_node(node_id) {
-                if node_record.is_deleted() {
-                    continue;
+            // phase8_neo4j-concurrency-gaps §2 — see the identical
+            // removal + rationale in `execute_node_by_label` above:
+            // `read_node_as_value` already filters deleted nodes, so the
+            // separate `self.store().read_node()` pre-check this loop
+            // used to do was a second lock acquisition per candidate for
+            // no behavioural difference.
+            match self.read_node_as_value_with_store(&store, node_id)? {
+                Value::Null => continue,
+                value => {
+                    results.push(value);
                 }
-
-                // Read the node as a value
-                match self.read_node_as_value(node_id)? {
-                    Value::Null => continue,
-                    value => {
-                        results.push(value);
-                    }
-                }
-            } else {
             }
         }
+        drop(store);
 
         Ok(results)
     }

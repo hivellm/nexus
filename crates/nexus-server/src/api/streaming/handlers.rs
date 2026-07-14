@@ -154,89 +154,51 @@ pub(super) async fn handle_execute_cypher(
         .and_then(|v| v.as_str())
         .ok_or_else(|| ErrorData::invalid_params("Missing query", None))?;
 
+    // Optional `$params` map, threaded through to the engine exactly
+    // like the HTTP and RPC transports (`docs/nexus/
+    // 04-write-path-unification.md` Step 1/2). Missing or non-object
+    // `params` just means no parameters, not an error.
+    let params: HashMap<String, serde_json::Value> = args
+        .get("params")
+        .and_then(|v| v.as_object())
+        .map(|obj| obj.iter().map(|(k, v)| (k.clone(), v.clone())).collect())
+        .unwrap_or_default();
+
     let start_time = std::time::Instant::now();
 
-    // Check if query contains CREATE - if so, use Engine for actual node creation
-    let is_create_query = query.trim().to_uppercase().starts_with("CREATE");
+    // Parse once so the shared AST-predicate routing
+    // (`api::cypher::routing::needs_engine_interception`, write-path
+    // unification Step 3/6) decides whether this query needs the
+    // engine's write-aware dispatch or can stay on the lock-free
+    // executor. This replaces a hand-rolled CREATE-only mini-fork that
+    // only understood literal node properties — `$params` and any
+    // non-literal expression silently became null, and MERGE/SET/
+    // REMOVE/FOREACH were never handled at all (bug B7,
+    // `docs/nexus/02-bug-inventory.md`).
+    use nexus_core::executor::parser::CypherParser;
+    let mut parser = CypherParser::new(query.to_string());
+    let ast = parser
+        .parse()
+        .map_err(|e| ErrorData::internal_error(format!("Parse error: {}", e), None))?;
 
-    if is_create_query {
-        // Parse and execute CREATE using Engine
-        use nexus_core::executor::parser::CypherParser;
-
-        let mut parser = CypherParser::new(query.to_string());
-        let ast = parser
-            .parse()
-            .map_err(|e| ErrorData::internal_error(format!("Parse error: {}", e), None))?;
-
-        // Execute CREATE clauses using Engine
+    let result = if crate::api::cypher::routing::needs_engine_interception(&ast) {
         let mut engine = server.engine.write().await;
-        for clause in &ast.clauses {
-            if let nexus_core::executor::parser::Clause::Create(create_clause) = clause {
-                // Extract pattern and create nodes
-                for element in &create_clause.pattern.elements {
-                    if let nexus_core::executor::parser::PatternElement::Node(node_pattern) =
-                        element
-                    {
-                        let labels = node_pattern.labels.clone();
+        engine
+            .execute_cypher_with_params(query, params)
+            .map_err(|e| {
+                ErrorData::internal_error(format!("Cypher execution failed: {}", e), None)
+            })?
+    } else {
+        let executor = server.executor.clone();
+        let query_obj = CypherQuery {
+            cypher: query.to_string(),
+            params,
+        };
 
-                        // Convert properties
-                        let mut props = serde_json::Map::new();
-                        if let Some(prop_map) = &node_pattern.properties {
-                            for (key, expr) in &prop_map.properties {
-                                // Convert expression to JSON value
-                                let value = match expr {
-                                    nexus_core::executor::parser::Expression::Literal(lit) => {
-                                        match lit {
-                                            nexus_core::executor::parser::Literal::String(s) => {
-                                                serde_json::Value::String(s.clone())
-                                            }
-                                            nexus_core::executor::parser::Literal::Integer(i) => {
-                                                serde_json::Value::Number((*i).into())
-                                            }
-                                            nexus_core::executor::parser::Literal::Float(f) => {
-                                                serde_json::Number::from_f64(*f)
-                                                    .map(serde_json::Value::Number)
-                                                    .unwrap_or(serde_json::Value::Null)
-                                            }
-                                            nexus_core::executor::parser::Literal::Boolean(b) => {
-                                                serde_json::Value::Bool(*b)
-                                            }
-                                            nexus_core::executor::parser::Literal::Null => {
-                                                serde_json::Value::Null
-                                            }
-                                            nexus_core::executor::parser::Literal::Point(p) => {
-                                                p.to_json_value()
-                                            }
-                                        }
-                                    }
-                                    _ => serde_json::Value::Null,
-                                };
-                                props.insert(key.clone(), value);
-                            }
-                        }
-
-                        let properties = serde_json::Value::Object(props);
-
-                        // Create node using Engine
-                        engine.create_node(labels, properties).map_err(|e| {
-                            ErrorData::internal_error(format!("Failed to create node: {}", e), None)
-                        })?;
-                    }
-                }
-            }
-        }
-    }
-
-    // Execute query normally through executor for RETURN/MATCH clauses
-    let executor = server.executor.clone();
-    let query_obj = CypherQuery {
-        cypher: query.to_string(),
-        params: HashMap::new(),
+        executor.execute(&query_obj).map_err(|e| {
+            ErrorData::internal_error(format!("Cypher execution failed: {}", e), None)
+        })?
     };
-
-    let result = executor
-        .execute(&query_obj)
-        .map_err(|e| ErrorData::internal_error(format!("Cypher execution failed: {}", e), None))?;
 
     let execution_time_ms = start_time.elapsed().as_millis() as u64;
 

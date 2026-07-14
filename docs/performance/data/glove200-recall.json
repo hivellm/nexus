@@ -1,0 +1,319 @@
+{
+  "generated_at": "2026-07-13T18:34:38Z",
+  "host": "BOLADO",
+  "corpus_kind": "Glove",
+  "cells": [
+    {
+      "m": 16,
+      "ef_construction": 100,
+      "ef_search": 50,
+      "k": 100,
+      "corpus_kind": "Glove",
+      "base_count": 399000,
+      "query_count": 1000,
+      "dim": 200,
+      "build_time_seconds": 387.6979874,
+      "recall": {
+        "recall_at_1": 0.991,
+        "recall_at_10": 0.992799999999999,
+        "recall_at_100": 0.9720700000000111,
+        "query_count": 1000
+      },
+      "latency": {
+        "mean_us": 618.3613000000004,
+        "p50_us": 576.4,
+        "p95_us": 1067.6,
+        "p99_us": 1409.3,
+        "min_us": 156.2,
+        "max_us": 2722.8,
+        "samples": 1000
+      }
+    },
+    {
+      "m": 16,
+      "ef_construction": 100,
+      "ef_search": 100,
+      "k": 100,
+      "corpus_kind": "Glove",
+      "base_count": 399000,
+      "query_count": 1000,
+      "dim": 200,
+      "build_time_seconds": 387.6979874,
+      "recall": {
+        "recall_at_1": 0.991,
+        "recall_at_10": 0.992799999999999,
+        "recall_at_100": 0.9720700000000111,
+        "query_count": 1000
+      },
+      "latency": {
+        "mean_us": 661.0408000000007,
+        "p50_us": 623.4,
+        "p95_us": 1192.1,
+        "p99_us": 1521.3,
+        "min_us": 153.0,
+        "max_us": 2555.7000000000003,
+        "samples": 1000
+      }
+    },
+    {
+      "m": 16,
+      "ef_construction": 100,
+      "ef_search": 200,
+      "k": 100,
+      "corpus_kind": "Glove",
+      "base_count": 399000,
+      "query_count": 1000,
+      "dim": 200,
+      "build_time_seconds": 387.6979874,
+      "recall": {
+        "recall_at_1": 0.994,
+        "recall_at_10": 0.9952999999999993,
+        "recall_at_100": 0.9859300000000085,
+        "query_count": 1000
+      },
+      "latency": {
+        "mean_us": 1184.237500000001,
+        "p50_us": 1113.8000000000002,
+        "p95_us": 2030.3999999999999,
+        "p99_us": 2634.9,
+        "min_us": 334.3,
+        "max_us": 4036.2000000000003,
+        "samples": 1000
+      }
+    },
+    {
+      "m": 16,
+      "ef_construction": 200,
+      "ef_search": 50,
+      "k": 100,
+      "corpus_kind": "Glove",
+      "base_count": 399000,
+      "query_count": 1000,
+      "dim": 200,
+      "build_time_seconds": 791.6055221,
+      "recall": {
+        "recall_at_1": 0.993,
+        "recall_at_10": 0.9937999999999991,
+        "recall_at_100": 0.976670000000011,
+        "query_count": 1000
+      },
+      "latency": {
+        "mean_us": 501.3916999999997,
+        "p50_us": 482.8,
+        "p95_us": 883.8000000000001,
+        "p99_us": 1060.5,
+        "min_us": 155.3,
+        "max_us": 2125.7,
+        "samples": 1000
+      }
+    },
+    {
+      "m": 16,
+      "ef_construction": 200,
+      "ef_search": 100,
+      "k": 100,
+      "corpus_kind": "Glove",
+      "base_count": 399000,
+      "query_count": 1000,
+      "dim": 200,
+      "build_time_seconds": 791.6055221,
+      "recall": {
+        "recall_at_1": 0.993,
+        "recall_at_10": 0.9937999999999991,
+        "recall_at_100": 0.976670000000011,
+        "query_count": 1000
+      },
+      "latency": {
+        "mean_us": 498.86309999999963,
+        "p50_us": 466.40000000000003,
+        "p95_us": 843.2,
+        "p99_us": 1077.7,
+        "min_us": 153.6,
+        "max_us": 3085.6,
+        "samples": 1000
+      }
+    },
+    {
+      "m": 16,
+      "ef_construction": 200,
+      "ef_search": 200,
+      "k": 100,
+      "corpus_kind": "Glove",
+      "base_count": 399000,
+      "query_count": 1000,
+      "dim": 200,
+      "build_time_seconds": 791.6055221,
+      "recall": {
+        "recall_at_1": 0.994,
+        "recall_at_10": 0.9958999999999995,
+        "recall_at_100": 0.9879300000000077,
+        "query_count": 1000
+      },
+      "latency": {
+        "mean_us": 908.2402000000004,
+        "p50_us": 853.8000000000001,
+        "p95_us": 1546.3,
+        "p99_us": 2152.6000000000004,
+        "min_us": 329.29999999999995,
+        "max_us": 4431.400000000001,
+        "samples": 1000
+      }
+    },
+    {
+      "m": 32,
+      "ef_construction": 100,
+      "ef_search": 50,
+      "k": 100,
+      "corpus_kind": "Glove",
+      "base_count": 399000,
+      "query_count": 1000,
+      "dim": 200,
+      "build_time_seconds": 510.8737806,
+      "recall": {
+        "recall_at_1": 0.995,
+        "recall_at_10": 0.9965999999999994,
+        "recall_at_100": 0.9869500000000078,
+        "query_count": 1000
+      },
+      "latency": {
+        "mean_us": 785.9764999999999,
+        "p50_us": 737.0,
+        "p95_us": 1368.3,
+        "p99_us": 1601.3,
+        "min_us": 178.9,
+        "max_us": 2493.2999999999997,
+        "samples": 1000
+      }
+    },
+    {
+      "m": 32,
+      "ef_construction": 100,
+      "ef_search": 100,
+      "k": 100,
+      "corpus_kind": "Glove",
+      "base_count": 399000,
+      "query_count": 1000,
+      "dim": 200,
+      "build_time_seconds": 510.8737806,
+      "recall": {
+        "recall_at_1": 0.995,
+        "recall_at_10": 0.9965999999999994,
+        "recall_at_100": 0.9869500000000078,
+        "query_count": 1000
+      },
+      "latency": {
+        "mean_us": 772.4437999999997,
+        "p50_us": 731.8,
+        "p95_us": 1371.3,
+        "p99_us": 1606.1000000000001,
+        "min_us": 200.7,
+        "max_us": 2323.8,
+        "samples": 1000
+      }
+    },
+    {
+      "m": 32,
+      "ef_construction": 100,
+      "ef_search": 200,
+      "k": 100,
+      "corpus_kind": "Glove",
+      "base_count": 399000,
+      "query_count": 1000,
+      "dim": 200,
+      "build_time_seconds": 510.8737806,
+      "recall": {
+        "recall_at_1": 0.997,
+        "recall_at_10": 0.9980999999999997,
+        "recall_at_100": 0.9945800000000041,
+        "query_count": 1000
+      },
+      "latency": {
+        "mean_us": 1571.0210999999986,
+        "p50_us": 1517.9,
+        "p95_us": 2805.3,
+        "p99_us": 3382.9,
+        "min_us": 406.0,
+        "max_us": 4864.0,
+        "samples": 1000
+      }
+    },
+    {
+      "m": 32,
+      "ef_construction": 200,
+      "ef_search": 50,
+      "k": 100,
+      "corpus_kind": "Glove",
+      "base_count": 399000,
+      "query_count": 1000,
+      "dim": 200,
+      "build_time_seconds": 1178.2693287,
+      "recall": {
+        "recall_at_1": 0.997,
+        "recall_at_10": 0.9978999999999997,
+        "recall_at_100": 0.9885300000000071,
+        "query_count": 1000
+      },
+      "latency": {
+        "mean_us": 819.1620000000006,
+        "p50_us": 766.7,
+        "p95_us": 1453.8999999999999,
+        "p99_us": 2061.1000000000004,
+        "min_us": 201.0,
+        "max_us": 3815.4,
+        "samples": 1000
+      }
+    },
+    {
+      "m": 32,
+      "ef_construction": 200,
+      "ef_search": 100,
+      "k": 100,
+      "corpus_kind": "Glove",
+      "base_count": 399000,
+      "query_count": 1000,
+      "dim": 200,
+      "build_time_seconds": 1178.2693287,
+      "recall": {
+        "recall_at_1": 0.997,
+        "recall_at_10": 0.9978999999999997,
+        "recall_at_100": 0.9885300000000071,
+        "query_count": 1000
+      },
+      "latency": {
+        "mean_us": 831.1035999999997,
+        "p50_us": 787.8,
+        "p95_us": 1394.4,
+        "p99_us": 1925.1,
+        "min_us": 247.6,
+        "max_us": 2782.1,
+        "samples": 1000
+      }
+    },
+    {
+      "m": 32,
+      "ef_construction": 200,
+      "ef_search": 200,
+      "k": 100,
+      "corpus_kind": "Glove",
+      "base_count": 399000,
+      "query_count": 1000,
+      "dim": 200,
+      "build_time_seconds": 1178.2693287,
+      "recall": {
+        "recall_at_1": 0.999,
+        "recall_at_10": 0.9988999999999999,
+        "recall_at_100": 0.9952000000000033,
+        "query_count": 1000
+      },
+      "latency": {
+        "mean_us": 1420.2850000000014,
+        "p50_us": 1267.1,
+        "p95_us": 2641.3,
+        "p99_us": 3733.7999999999997,
+        "min_us": 455.6,
+        "max_us": 6319.8,
+        "samples": 1000
+      }
+    }
+  ]
+}

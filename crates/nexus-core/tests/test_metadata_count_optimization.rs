@@ -148,6 +148,152 @@ fn test_count_star_with_group_by() {
     );
 }
 
+/// phase6_traversal-aggregation-perf §1.2 — unlabelled `MATCH (n) RETURN
+/// count(n)` must hit the metadata short-circuit
+/// (`try_short_circuit_count_cross_product`'s new `AllNodesScan` arm), not
+/// just the label-scan form already covered above.
+#[test]
+fn test_count_star_unlabelled_scan_uses_shortcut() {
+    let (mut engine, _ctx) = setup_isolated_test_engine().unwrap();
+
+    for i in 0..12 {
+        execute_cypher(&mut engine, &format!("CREATE (n {{id: {}}})", i));
+    }
+
+    let result = execute_cypher(&mut engine, "MATCH (n) RETURN count(n)");
+    assert_eq!(result.rows.len(), 1);
+    assert_eq!(
+        result.rows[0].values[0].as_u64(),
+        Some(12),
+        "unlabelled count(n) must count every live node"
+    );
+}
+
+/// phase6_traversal-aggregation-perf §1.2 — the short-circuit must not
+/// reject alias forms of the unlabelled scan (`count(n) AS total`),
+/// mirroring the label-scan `count(*) as total` coverage above.
+#[test]
+fn test_count_star_unlabelled_scan_with_alias() {
+    let (mut engine, _ctx) = setup_isolated_test_engine().unwrap();
+
+    for i in 0..7 {
+        execute_cypher(&mut engine, &format!("CREATE (n {{id: {}}})", i));
+    }
+
+    let result = execute_cypher(&mut engine, "MATCH (n) RETURN count(n) AS total");
+    assert_eq!(result.columns, vec!["total".to_string()]);
+    assert_eq!(result.rows[0].values[0].as_u64(), Some(7));
+}
+
+/// phase6_traversal-aggregation-perf §1.3 — deletes must be reflected in
+/// both the labelled and unlabelled short-circuit paths (the bitmap /
+/// full-store walk both skip deleted record headers).
+#[test]
+fn test_count_star_respects_deletes_labelled_and_unlabelled() {
+    let test_id = TEST_COUNTER.fetch_add(1, Ordering::SeqCst);
+    let label = format!("DelNode{}", test_id);
+    let (mut engine, _ctx) = setup_isolated_test_engine().unwrap();
+
+    for i in 0..10 {
+        execute_cypher(&mut engine, &format!("CREATE (n:{} {{id: {}}})", label, i));
+    }
+    // A handful of unlabelled nodes too, so the AllNodesScan count is
+    // exercised over a mixed store rather than only the deleted label.
+    for i in 0..4 {
+        execute_cypher(&mut engine, &format!("CREATE (n {{id: {}}})", i));
+    }
+
+    execute_cypher(
+        &mut engine,
+        &format!("MATCH (n:{} {{id: 3}}) DELETE n", label),
+    );
+    execute_cypher(
+        &mut engine,
+        &format!("MATCH (n:{} {{id: 7}}) DELETE n", label),
+    );
+
+    let labelled = execute_cypher(&mut engine, &format!("MATCH (n:{}) RETURN count(n)", label));
+    assert_eq!(
+        labelled.rows[0].values[0].as_u64(),
+        Some(8),
+        "labelled count must exclude the 2 deleted nodes"
+    );
+
+    let all = execute_cypher(&mut engine, "MATCH (n) RETURN count(n)");
+    assert_eq!(
+        all.rows[0].values[0].as_u64(),
+        Some(12),
+        "unlabelled count must exclude the 2 deleted nodes (10 - 2 + 4 unlabelled)"
+    );
+}
+
+/// phase6_traversal-aggregation-perf §1.2 — `count(n.prop)` is a
+/// property-presence count (NULL/missing values excluded), not a row
+/// count. The short-circuit's bare-variable guard must reject the
+/// dotted form and fall back to the full scan so this stays correct.
+#[test]
+fn test_count_property_access_is_not_short_circuited() {
+    let test_id = TEST_COUNTER.fetch_add(1, Ordering::SeqCst);
+    let label = format!("PropCount{}", test_id);
+    let (mut engine, _ctx) = setup_isolated_test_engine().unwrap();
+
+    // 3 nodes carry `score`, 2 do not.
+    for i in 0..3 {
+        execute_cypher(
+            &mut engine,
+            &format!("CREATE (n:{} {{id: {}, score: {}}})", label, i, i),
+        );
+    }
+    for i in 3..5 {
+        execute_cypher(&mut engine, &format!("CREATE (n:{} {{id: {}}})", label, i));
+    }
+
+    let row_count = execute_cypher(&mut engine, &format!("MATCH (n:{}) RETURN count(n)", label));
+    assert_eq!(row_count.rows[0].values[0].as_u64(), Some(5));
+
+    let prop_count = execute_cypher(
+        &mut engine,
+        &format!("MATCH (n:{}) RETURN count(n.score)", label),
+    );
+    assert_eq!(
+        prop_count.rows[0].values[0].as_u64(),
+        Some(3),
+        "count(n.score) must exclude the 2 nodes missing the property, \
+         not fall back to the 5-node row count"
+    );
+}
+
+/// phase6_traversal-aggregation-perf §1.3 — MVCC visibility: a mid-transaction
+/// `count(n)` must see the transaction's own uncommitted writes, and the
+/// committed count must be stable afterwards. The short-circuit reads the
+/// same live store/bitmap the non-short-circuited path would, so this must
+/// hold whether or not the shortcut fires.
+#[test]
+#[serial_test::serial]
+fn test_count_star_inside_explicit_transaction_sees_own_writes() {
+    let test_id = TEST_COUNTER.fetch_add(1, Ordering::SeqCst);
+    let label = format!("TxCount{}", test_id);
+    let (mut engine, _ctx) = setup_isolated_test_engine().unwrap();
+
+    execute_cypher(&mut engine, &format!("CREATE (n:{} {{id: 0}})", label));
+
+    engine.execute_cypher("BEGIN TRANSACTION").expect("BEGIN");
+    execute_cypher(&mut engine, &format!("CREATE (n:{} {{id: 1}})", label));
+    execute_cypher(&mut engine, &format!("CREATE (n:{} {{id: 2}})", label));
+
+    let mid_tx = execute_cypher(&mut engine, &format!("MATCH (n:{}) RETURN count(n)", label));
+    assert_eq!(
+        mid_tx.rows[0].values[0].as_u64(),
+        Some(3),
+        "mid-transaction count(n) must see this transaction's own writes"
+    );
+
+    engine.execute_cypher("COMMIT TRANSACTION").expect("COMMIT");
+
+    let post_commit = execute_cypher(&mut engine, &format!("MATCH (n:{}) RETURN count(n)", label));
+    assert_eq!(post_commit.rows[0].values[0].as_u64(), Some(3));
+}
+
 #[test]
 fn test_count_star_with_where_filter() {
     let test_id = TEST_COUNTER.fetch_add(1, Ordering::SeqCst);

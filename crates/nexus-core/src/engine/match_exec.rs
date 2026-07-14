@@ -34,7 +34,7 @@ impl Engine {
         // Execute MATCH to get results
         let match_query = executor::parser::CypherQuery {
             clauses: match_query_clauses,
-            params: ast.params.clone(),
+            params: self.merged_query_params(ast),
             graph_scope: ast.graph_scope.clone(),
         };
 
@@ -110,7 +110,7 @@ impl Engine {
 
         let query_obj = executor::Query {
             cypher: String::new(),
-            params: ast.params.clone(),
+            params: self.merged_query_params(ast),
         };
 
         let match_results = self.executor.execute(&query_obj)?;
@@ -174,7 +174,7 @@ impl Engine {
 
         let query_obj = executor::Query {
             cypher,
-            params: ast.params.clone(),
+            params: self.merged_query_params(ast),
         };
 
         // Execute and return result
@@ -495,6 +495,27 @@ impl Engine {
     }
 
     /// Convert expression to JSON value (helper for CREATE)
+    /// Parameters for an executor `Query` built from an engine-side AST.
+    ///
+    /// `ast.params` is ALWAYS empty — the parser never fills it (the same
+    /// trap the dispatch-consolidation fixed in `query_pipeline.rs`). The
+    /// real request parameters live on `self.current_params`, installed by
+    /// `execute_cypher_with_params` for the duration of the call. Without
+    /// this, `MATCH (n {id: $x}) DELETE n` failed with
+    /// `ERR_MISSING_PARAMETER` (found live by the per-transport parity
+    /// runner; harness case 06d). Merged with `ast.params` first so any
+    /// future parser-supplied params still win nothing silently.
+    fn merged_query_params(
+        &self,
+        ast: &executor::parser::CypherQuery,
+    ) -> std::collections::HashMap<String, serde_json::Value> {
+        let mut params = ast.params.clone();
+        for (k, v) in &self.current_params {
+            params.insert(k.clone(), v.clone());
+        }
+        params
+    }
+
     pub(super) fn expression_to_json_value(
         &self,
         expr: &executor::parser::Expression,
@@ -535,6 +556,19 @@ impl Engine {
                         "Cannot resolve `{variable}.{property}` in write property value"
                     ))),
                 }
+            }
+            // G1 — `CREATE (n:L {x: $v})` / `CREATE (a)-[r:T {w: $w}]->(b)`
+            // via `execute_cypher_with_params` (harness cases 02/09):
+            // resolve `$param` against the map installed by
+            // `execute_cypher_with_params` on `self.current_params`,
+            // mirroring the `Expression::Parameter` arm already added to
+            // `eval_write_value` (`engine/write_exec.rs`) for UNWIND-write
+            // values. A missing parameter is a clear client error — CREATE
+            // properties must never silently degrade to NULL.
+            executor::parser::Expression::Parameter(name) => {
+                self.current_params.get(name).cloned().ok_or_else(|| {
+                    Error::CypherExecution(format!("Parameter `${name}` was not provided"))
+                })
             }
             _ => Err(Error::CypherExecution(
                 "Complex expressions not supported in CREATE properties".to_string(),
@@ -638,11 +672,17 @@ impl Engine {
                 }
                 Ok(serde_json::Value::Object(out))
             }
-            // Parameter placeholders surface as NULL in this narrow
-            // evaluator — parameter-binding lives on the executor side.
-            // Treating them as NULL keeps `SET n += $missing` safely a
-            // no-op when the parameter is absent.
-            executor::parser::Expression::Parameter(_) => Ok(serde_json::Value::Null),
+            // B4 — resolve `$param` against the parameter map installed by
+            // `execute_cypher_with_params` on `self.current_params` for the
+            // duration of the call. A missing parameter still resolves to
+            // NULL (rather than erroring) so `SET n += $missing` stays a
+            // safe no-op — only a *bound* parameter needs its real value
+            // threaded through instead of being hard-coded to NULL.
+            executor::parser::Expression::Parameter(name) => Ok(self
+                .current_params
+                .get(name)
+                .cloned()
+                .unwrap_or(serde_json::Value::Null)),
             _ => Err(Error::CypherExecution(
                 "Unsupported expression type in SET clause".to_string(),
             )),

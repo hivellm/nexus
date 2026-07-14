@@ -262,6 +262,67 @@ fn test_parse_skip_whitespace() {
     assert_eq!(parser.peek_char(), Some('a'));
 }
 
+/// B9 — `skip_whitespace` must also skip `//` line comments and `/* */`
+/// block comments (per the openCypher grammar), not just literal
+/// whitespace. Exercises the lexer helper directly.
+#[test]
+fn test_parse_skip_whitespace_skips_line_and_block_comments() {
+    let mut parser = CypherParser::new("  // a line comment\nMATCH".to_string());
+    parser.skip_whitespace();
+    assert!(
+        parser.peek_keyword("MATCH"),
+        "skip_whitespace must skip past a `//` line comment"
+    );
+
+    let mut parser = CypherParser::new("/* a block comment */ MATCH".to_string());
+    parser.skip_whitespace();
+    assert!(
+        parser.peek_keyword("MATCH"),
+        "skip_whitespace must skip past a `/* */` block comment"
+    );
+
+    // Multiple interleaved comments and whitespace runs.
+    let mut parser = CypherParser::new("  /* one */  // two\n  /* three */ \n MATCH".to_string());
+    parser.skip_whitespace();
+    assert!(
+        parser.peek_keyword("MATCH"),
+        "skip_whitespace must skip past interleaved comments and whitespace"
+    );
+}
+
+/// B9 — a query whose first non-blank line is a `//` comment must parse
+/// (not fail with "Query must contain at least one clause", which was the
+/// observed regression: the leading comment left the tokenizer positioned
+/// on `/`, no clause keyword matched, and `parse()` returned an empty
+/// `CypherQuery`).
+#[test]
+fn test_parse_leading_line_comment_then_create() {
+    let mut parser =
+        CypherParser::new("// a leading comment\nCREATE (n:Case15 {x: 1})".to_string());
+    let query = parser
+        .parse()
+        .expect("leading `//` comment must not fail to parse");
+    assert_eq!(
+        query.clauses.len(),
+        1,
+        "the CREATE clause after the leading comment must be parsed, got {:?}",
+        query.clauses
+    );
+    assert!(matches!(query.clauses[0], Clause::Create(_)));
+}
+
+/// B9 — a leading `/* ... */` block comment must be skipped the same way.
+#[test]
+fn test_parse_leading_block_comment_then_match() {
+    let mut parser =
+        CypherParser::new("/* leading block comment */\nMATCH (n) RETURN n".to_string());
+    let query = parser
+        .parse()
+        .expect("leading `/* */` comment must not fail to parse");
+    assert_eq!(query.clauses.len(), 2, "MATCH + RETURN must both parse");
+    assert!(matches!(query.clauses[0], Clause::Match(_)));
+}
+
 #[test]
 fn test_parse_peek_char() {
     let parser = CypherParser::new("abc".to_string());

@@ -70,6 +70,7 @@ impl Executor {
         pattern: &parser::Pattern,
         external_id: Option<crate::storage::external_id::ExternalId>,
         policy: crate::storage::external_id::ConflictPolicy,
+        params: &std::collections::HashMap<String, Value>,
     ) -> Result<(
         std::collections::HashMap<String, u64>,
         std::collections::HashMap<String, RelationshipInfo>,
@@ -86,6 +87,7 @@ impl Executor {
             &mut created_relationships,
             external_id,
             policy,
+            params,
         )?;
 
         Ok((created_nodes, created_relationships))
@@ -99,6 +101,7 @@ impl Executor {
         created_relationships: &mut std::collections::HashMap<String, RelationshipInfo>,
         external_id: Option<crate::storage::external_id::ExternalId>,
         policy: crate::storage::external_id::ConflictPolicy,
+        params: &std::collections::HashMap<String, Value>,
     ) -> Result<()> {
         // PERFORMANCE OPTIMIZATION: Reuse shared transaction manager
         let mut tx_mgr = self.transaction_manager().lock();
@@ -227,7 +230,7 @@ impl Executor {
                         let prop_count = props_map.properties.len();
                         let mut json_props = serde_json::Map::with_capacity(prop_count);
                         for (key, value_expr) in &props_map.properties {
-                            let json_value = self.expression_to_json_value(value_expr)?;
+                            let json_value = self.expression_to_json_value(value_expr, params)?;
                             json_props.insert(key.clone(), json_value);
                         }
                         tracing::trace!(
@@ -374,7 +377,7 @@ impl Executor {
                                     let mut json_props = serde_json::Map::with_capacity(prop_count);
                                     for (key, value_expr) in &props_map.properties {
                                         let json_value =
-                                            self.expression_to_json_value(value_expr)?;
+                                            self.expression_to_json_value(value_expr, params)?;
                                         json_props.insert(key.clone(), json_value);
                                     }
                                     serde_json::Value::Object(json_props)
@@ -448,7 +451,7 @@ impl Executor {
                         let prop_count = props_map.properties.len();
                         let mut json_props = serde_json::Map::with_capacity(prop_count);
                         for (key, value_expr) in &props_map.properties {
-                            let json_value = self.expression_to_json_value(value_expr)?;
+                            let json_value = self.expression_to_json_value(value_expr, params)?;
                             json_props.insert(key.clone(), json_value);
                         }
                         serde_json::Value::Object(json_props)
@@ -580,24 +583,32 @@ impl Executor {
         &self,
         expr: &parser::Expression,
         row: &std::collections::HashMap<String, Value>,
+        params: &std::collections::HashMap<String, Value>,
     ) -> Result<Value> {
-        // Static-literal fast path. Keeps the hot CREATE-with-literal
-        // case as cheap as before this lift.
-        if let Ok(v) = self.expression_to_json_value(expr) {
+        // Static-literal (and `$param`) fast path. Keeps the hot
+        // CREATE-with-literal case as cheap as before this lift.
+        if let Ok(v) = self.expression_to_json_value(expr, params) {
             return Ok(v);
         }
         // Row-aware path — resolves Variable / PropertyAccess / etc.
-        // against the row scope. Build a temporary inner ctx because
-        // the projection evaluator wants `&ExecutionContext`.
-        let inner_ctx =
-            super::super::context::ExecutionContext::new(std::collections::HashMap::new(), None);
+        // against the row scope. Build a temporary inner ctx carrying the
+        // request's parameters so `$param` references inside complex
+        // expressions resolve too (the ctx used to be built EMPTY, which
+        // made every parameterized property unresolvable here — G1).
+        let inner_ctx = super::super::context::ExecutionContext::new(params.clone(), None);
         self.evaluate_projection_expression(row, &inner_ctx, expr)
     }
 
-    /// Convert expression to JSON value
+    /// Convert expression to JSON value. `params` resolves
+    /// `Expression::Parameter` (`$name`) against the request's bound
+    /// parameters — without it, `CREATE (n {x: $v})` routed through the
+    /// executor errored with "Complex expressions not supported in CREATE
+    /// properties" even though every other write path resolves parameters
+    /// (write-path unification, G1).
     pub(in crate::executor) fn expression_to_json_value(
         &self,
         expr: &parser::Expression,
+        params: &std::collections::HashMap<String, Value>,
     ) -> Result<Value> {
         match expr {
             parser::Expression::Literal(lit) => match lit {
@@ -614,6 +625,9 @@ impl Executor {
                 parser::Literal::Null => Ok(Value::Null),
                 parser::Literal::Point(p) => Ok(p.to_json_value()),
             },
+            parser::Expression::Parameter(name) => params.get(name).cloned().ok_or_else(|| {
+                Error::CypherExecution(format!("Parameter `${name}` was not provided"))
+            }),
             parser::Expression::Variable(_) => Err(Error::CypherExecution(
                 "Variables not supported in CREATE properties".to_string(),
             )),
@@ -973,7 +987,11 @@ impl Executor {
                                 let mut resolved =
                                     serde_json::Map::with_capacity(props_map.properties.len());
                                 for (k, v) in &props_map.properties {
-                                    let val = self.resolve_property_expr_for_create(v, row)?;
+                                    let val = self.resolve_property_expr_for_create(
+                                        v,
+                                        row,
+                                        &context.params,
+                                    )?;
                                     resolved.insert(k.clone(), val);
                                 }
                                 JsonValue::Object(resolved)
@@ -1040,7 +1058,7 @@ impl Executor {
                                         .properties
                                         .iter()
                                         .filter_map(|(k, v)| {
-                                            self.expression_to_json_value(v)
+                                            self.expression_to_json_value(v, &context.params)
                                                 .ok()
                                                 .map(|val| (k.clone(), val))
                                         })

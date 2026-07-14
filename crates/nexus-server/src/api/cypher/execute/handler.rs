@@ -4,7 +4,51 @@
 //! JSON response.
 
 use super::super::*;
-use super::write_ops::execute_create_or_merge;
+
+/// Emit a write-operation audit log entry for the `/cypher` CREATE/MERGE
+/// path.
+///
+/// Mirrors the `WriteOperationParams` / `AuditResult` shape
+/// `write_ops.rs` used to build per-clause, but records a single
+/// query-level entry instead: `Engine::execute_cypher_with_params` is
+/// the one write entry point (phase1_http-merge-rel-and-set-rel-parity,
+/// `docs/nexus/04-write-path-unification.md` Step 2) and does not expose
+/// per-node/per-relationship hooks the way the old hand-rolled
+/// `write_ops.rs` interpreter did. A query-level success/failure record
+/// still answers the audit question that matters — who ran this write,
+/// when, and did it succeed.
+///
+/// A failure to persist the audit entry itself does not fail the
+/// request (fail-open, per `docs/security/SECURITY_AUDIT.md`) but is
+/// never silently swallowed: it goes through
+/// [`nexus_core::auth::record_audit_log_failure`], which bumps the
+/// `audit_log_failures_total` counter and emits a `tracing::error!`.
+async fn log_write_audit(
+    server: &NexusServer,
+    actor_info: &(Option<String>, Option<String>, Option<String>),
+    operation_type: &str,
+    cypher_query: &str,
+    result: nexus_core::auth::AuditResult,
+    failure_context: &'static str,
+) {
+    let (actor_user_id, actor_username, api_key_id) = actor_info.clone();
+    if let Err(e) = server
+        .audit_logger
+        .log_write_operation(nexus_core::auth::WriteOperationParams {
+            actor_user_id,
+            actor_username,
+            api_key_id,
+            operation_type: operation_type.to_string(),
+            entity_type: "PATTERN".to_string(),
+            entity_id: None,
+            cypher_query: Some(cypher_query.to_string()),
+            result,
+        })
+        .await
+    {
+        nexus_core::auth::record_audit_log_failure(failure_context, &e);
+    }
+}
 
 pub async fn execute_cypher(
     State(server): State<Arc<NexusServer>>,
@@ -339,59 +383,232 @@ pub async fn execute_cypher(
         }
     }
 
-    // Check if this is a CREATE, MERGE, SET, DELETE, REMOVE, or MATCH query
-    let query_upper = request.query.trim().to_uppercase();
-    // DDL statements (`CREATE INDEX`, `CREATE SPATIAL INDEX`,
-    // `CREATE FULLTEXT INDEX`, `CREATE CONSTRAINT`, `DROP INDEX`,
-    // `DROP CONSTRAINT`) MUST fall through to the executor path so
-    // the `execute_create_index` / `execute_drop_index` operators
-    // register the index on the shared `IndexManager` + the
-    // executor-shared `spatial_indexes` map. The node-CREATE branch
-    // below only understands `CREATE (node { ... })` patterns — it
-    // silently no-ops DDL, which manifested as
-    // `ERR_SPATIAL_INDEX_NOT_FOUND` on every subsequent
-    // `spatial.*` call in slice-A smoke tests.
-    let is_ddl_query = query_upper.starts_with("CREATE INDEX")
-        || query_upper.starts_with("CREATE OR REPLACE INDEX")
-        || query_upper.starts_with("CREATE SPATIAL INDEX")
-        || query_upper.starts_with("CREATE OR REPLACE SPATIAL INDEX")
-        || query_upper.starts_with("CREATE FULLTEXT INDEX")
-        || query_upper.starts_with("CREATE OR REPLACE FULLTEXT INDEX")
-        || query_upper.starts_with("CREATE CONSTRAINT")
-        || query_upper.starts_with("CREATE OR REPLACE CONSTRAINT")
-        || query_upper.starts_with("DROP INDEX")
-        || query_upper.starts_with("DROP CONSTRAINT");
-    let is_create_query = !is_ddl_query && query_upper.starts_with("CREATE");
-    let is_merge_query = query_upper.starts_with("MERGE");
-    let _is_set_query = query_upper.starts_with("SET");
-    let _is_delete_query = query_upper.starts_with("DELETE");
-    let _is_remove_query = query_upper.starts_with("REMOVE");
-    // MATCH queries can start with MATCH or have MATCH after UNWIND/WITH/OPTIONAL clauses
-    // We need to detect MATCH anywhere in the query to route it through the Engine
-    let is_match_query = query_upper.starts_with("MATCH")
-        || query_upper.contains(" MATCH ")
-        || query_upper.contains(" MATCH(")
-        || query_upper.starts_with("OPTIONAL MATCH")
-        || query_upper.contains(" OPTIONAL MATCH");
+    // Route on the parsed AST instead of query text (write-path
+    // unification Step 3, `docs/nexus/04-write-path-unification.md`;
+    // `api::cypher::routing` module docs explain the shared predicate in
+    // full). `routing::first_write_kind` finds the first `CREATE`/`MERGE`
+    // clause anywhere in `ast.clauses`; `routing::needs_engine_interception`
+    // is the broader "must this reach the engine at all" check (MATCH /
+    // CREATE / DELETE / MERGE / SET / REMOVE / FOREACH). Clause-typed
+    // routing — unlike the former `query_upper.starts_with(...)`
+    // heuristics — naturally excludes every DDL form (`CREATE INDEX`,
+    // `CREATE SPATIAL INDEX`, `CREATE CONSTRAINT`, ...): those parse into
+    // their own `Clause::CreateIndex`/`Clause::CreateConstraint`/etc.
+    // variants, never `Clause::Create`, so they still fall through to the
+    // executor path below with no separate string-based DDL exclusion
+    // list needed. It also fixes bug L1 — a query whose write clause
+    // isn't the first token (a leading `//` comment, a lowercase
+    // `create`, or `MATCH (a),(b) CREATE (a)-[r]->(b)`) is now routed to
+    // the engine instead of silently falling through to the read-only
+    // executor.
+    let write_kind = routing::first_write_kind(&ast);
 
-    if is_create_query || is_merge_query {
-        return execute_create_or_merge(
-            server,
-            &request,
+    if let Some(operation_type) = write_kind {
+        let failure_context = if operation_type == "MERGE" {
+            "http_write_merge"
+        } else {
+            "http_write_create"
+        };
+
+        // Route through the engine's single write entry point — the
+        // same call the MATCH/UNWIND branches above use — instead of
+        // the `write_ops.rs` fork, which never learned relationship
+        // semantics (MERGE-rel, SET on a relationship variable,
+        // same-statement `RETURN r.prop` all silently dropped data;
+        // see phase1_http-merge-rel-and-set-rel-parity proposal.md).
+        // phase8_neo4j-concurrency-gaps §3 — `ast` was already parsed
+        // above (outside this write lock) for routing; use the
+        // pre-parsed-AST entry point instead of
+        // `execute_cypher_with_params` so the exclusive lock's
+        // critical section no longer pays for a second parse of the
+        // same query text. See `Engine::execute_cypher_ast_with_params`'s
+        // doc comment.
+        let mut engine_guard = server.engine.write().await;
+        let dispatch_result = engine_guard.execute_cypher_ast_with_params(
             &ast,
-            start_time,
-            actor_info,
-            is_merge_query,
-        )
-        .await;
+            &request.query,
+            request.params.clone(),
+        );
+        // Release the write lock before the (async) audit-log call —
+        // auditing never touches the engine, and holding a write lock
+        // across an `.await` unnecessarily serializes unrelated writes.
+        drop(engine_guard);
+
+        let execution_time = start_time.elapsed().as_millis() as u64;
+        return match dispatch_result {
+            Ok(result_set) => {
+                tracing::info!(
+                    "{} query executed successfully in {}ms, {} rows returned",
+                    operation_type,
+                    execution_time,
+                    result_set.rows.len()
+                );
+                log_write_audit(
+                    &server,
+                    &actor_info,
+                    operation_type,
+                    &request.query,
+                    nexus_core::auth::AuditResult::Success,
+                    failure_context,
+                )
+                .await;
+
+                Json(CypherResponse {
+                    columns: result_set.columns,
+                    rows: result_set
+                        .rows
+                        .into_iter()
+                        .map(|row| serde_json::Value::Array(row.values))
+                        .collect(),
+                    execution_time_ms: execution_time,
+                    error: None,
+                    notifications: result_set.notifications,
+                })
+            }
+            Err(e) => {
+                tracing::error!("{} query execution failed: {}", operation_type, e);
+                log_write_audit(
+                    &server,
+                    &actor_info,
+                    operation_type,
+                    &request.query,
+                    nexus_core::auth::AuditResult::Failure {
+                        error: e.to_string(),
+                    },
+                    failure_context,
+                )
+                .await;
+
+                Json(CypherResponse {
+                    columns: vec![],
+                    rows: vec![],
+                    execution_time_ms: execution_time,
+                    error: Some(e.to_string()),
+                    notifications: Vec::new(),
+                })
+            }
+        };
     }
 
-    // For MATCH queries, use the engine's executor to access the shared storage
-    if is_match_query {
+    // Any remaining engine-intercepted clause (MATCH reads, or a write
+    // clause combination `first_write_kind` didn't classify as CREATE/MERGE,
+    // e.g. a bare `MATCH ... SET`/`MATCH ... DELETE`) still needs the
+    // engine rather than the lock-free executor below.
+    if routing::needs_engine_interception(&ast) {
+        // phase5_lock-free-read-path: carve the pure-read subset of this
+        // bucket (MATCH / OPTIONAL MATCH / WITH / UNWIND / ... with no
+        // write clause, no DDL, not an explicit transaction command —
+        // see `routing::is_read_only`) out of the exclusive engine lock
+        // that every other clause here still needs. Bottleneck #1 in
+        // `docs/nexus/03-performance.md`: every MATCH query used to take
+        // `server.engine.write().await` for its entire parse+plan+execute
+        // duration, serializing all reads against each other server-wide.
+        //
+        // An in-progress explicit transaction (`BEGIN TRANSACTION` not yet
+        // COMMIT/ROLLBACK-ed) must still route through the engine so a
+        // read sees that session's own uncommitted writes
+        // (read-your-own-writes) — the lock-free executor clone below can
+        // only ever reflect the last COMMIT/ROLLBACK's
+        // `Engine::refresh_executor()` snapshot, never an in-flight
+        // transaction's staged state.
+        if routing::is_read_only(&ast) {
+            // Acquire a SHARED read lock just long enough to (a) clone
+            // `Engine::executor` — the same instance
+            // `Engine::refresh_executor()` replaces with a fresh
+            // snapshot after every commit/rollback/standalone-write, so
+            // the clone taken here is guaranteed at least as fresh as
+            // the last write that finished before this `.read().await`
+            // was granted — and (b) check whether the autocommit
+            // "default" session (the only session HTTP requests ever
+            // use; see `Engine::execute_transaction_commands`) has an
+            // open explicit transaction. `Executor` clones are cheap —
+            // a thin wrapper around `Arc`'d shared state (see
+            // `executor::engine::Executor::clone`) — and, unlike the
+            // exclusive `.write().await` this branch used to take for
+            // every MATCH, an arbitrary number of readers can hold
+            // `.read().await` concurrently: this no longer serializes
+            // reads against each other.
+            let (lock_free_executor, in_explicit_tx) = {
+                let engine_guard = server.engine.read().await;
+                let in_tx = engine_guard
+                    .session_manager
+                    .get_session(&"default".to_string())
+                    .map(|session| session.has_active_transaction())
+                    .unwrap_or(false);
+                (engine_guard.executor.clone(), in_tx)
+            };
+
+            if !in_explicit_tx {
+                let query = Query {
+                    cypher: request.query.clone(),
+                    params: request.params.clone(),
+                };
+
+                let execution_result =
+                    match tokio::task::spawn_blocking(move || lock_free_executor.execute(&query))
+                        .await
+                    {
+                        Ok(result) => result,
+                        Err(e) => {
+                            return Json(CypherResponse {
+                                columns: vec![],
+                                rows: vec![],
+                                execution_time_ms: start_time.elapsed().as_millis() as u64,
+                                error: Some(format!("Task execution error: {}", e)),
+                                notifications: Vec::new(),
+                            });
+                        }
+                    };
+
+                let execution_time_ms = start_time.elapsed().as_millis() as u64;
+                return match execution_result {
+                    Ok(result_set) => {
+                        tracing::info!(
+                            "Read-only query executed via lock-free path in {}ms, {} rows returned",
+                            execution_time_ms,
+                            result_set.rows.len()
+                        );
+                        Json(CypherResponse {
+                            columns: result_set.columns,
+                            rows: result_set
+                                .rows
+                                .into_iter()
+                                .map(|row| serde_json::Value::Array(row.values))
+                                .collect(),
+                            execution_time_ms,
+                            error: None,
+                            notifications: result_set.notifications,
+                        })
+                    }
+                    Err(e) => {
+                        tracing::error!("Read-only query execution failed: {}", e);
+                        Json(CypherResponse {
+                            columns: vec![],
+                            rows: vec![],
+                            execution_time_ms,
+                            error: Some(e.to_string()),
+                            notifications: Vec::new(),
+                        })
+                    }
+                };
+            }
+            // Else: an explicit transaction is open on the "default"
+            // session — fall through to the engine-locked path below so
+            // this read observes that transaction's own uncommitted
+            // writes.
+        }
+
         {
-            // Use the engine's execute_cypher method which uses its internal executor
+            // Use the engine's execute_cypher method which uses its internal executor.
+            // phase8_neo4j-concurrency-gaps §3 — reuse the `ast` parsed
+            // above instead of re-parsing inside the exclusive write
+            // lock; see `Engine::execute_cypher_ast_with_params`.
             let mut engine_guard = server.engine.write().await;
-            match engine_guard.execute_cypher_with_params(&request.query, request.params.clone()) {
+            match engine_guard.execute_cypher_ast_with_params(
+                &ast,
+                &request.query,
+                request.params.clone(),
+            ) {
                 Ok(result_set) => {
                     let execution_time = start_time.elapsed().as_millis() as u64;
                     tracing::info!(

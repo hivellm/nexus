@@ -1153,6 +1153,18 @@ impl<'a> QueryPlanner<'a> {
                             items: projection_items.clone(),
                         });
                     }
+                    // Preserve the written clause order across the
+                    // aggregate's `[group keys..., aggs...]` assembly (G4);
+                    // same alias derivation as the projection items above.
+                    let output_order: Vec<String> = return_items
+                        .iter()
+                        .map(|item| {
+                            item.alias.clone().unwrap_or_else(|| {
+                                self.expression_to_string(&item.expression)
+                                    .unwrap_or_default()
+                            })
+                        })
+                        .collect();
                     // Add Aggregate operator with projection items
                     operators.push(Operator::Aggregate {
                         group_by: group_by_columns,
@@ -1162,6 +1174,7 @@ impl<'a> QueryPlanner<'a> {
                         } else {
                             Some(projection_items)
                         },
+                        output_order: Some(output_order),
                         source: None,
                         streaming_optimized: false,
                         push_down_optimized: false,

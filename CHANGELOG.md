@@ -5,6 +5,62 @@ All notable changes to Nexus will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.5.0] — 2026-07-14
+
+> **Write-path unification, transport correctness, and concurrency.** This
+> release eliminates a class of transport-dependent data-loss bugs (the same
+> query silently behaved differently over HTTP / RPC / RESP3 / GraphQL /
+> streaming), by routing every transport through one tested engine write path
+> and deleting the divergent forks. 18+ correctness bugs closed, verified by a
+> new 26-case write-path parity harness and a cross-transport parity runner.
+> On performance: autocommit reads no longer take the global engine lock
+> (~2.6x concurrent reads), `count(n)` at 64 workers went 21.8x, and a
+> mimalloc global allocator lifts concurrent reads a further 37–84%. The
+> Docker image is now `FROM scratch` static musl — **0 CVEs** — and multi-arch
+> (linux/amd64 + linux/arm64). A canonical, reproducible vs-Neo4j benchmark
+> (Nexus leads 84% of comparable serial scenarios) plus first-measured KNN
+> recall (SIFT1M / GloVe) replace the prior contradictory numbers.
+
+### Benchmarks — canonical 2026 re-baseline
+
+- **`docs/performance/BENCHMARK_2026.md` is the new canonical vs-Neo4j reference** (Nexus 2.5.0-dev vs Neo4j 5.26.28, pinned versions/hardware, fully reproducible). Headline: Nexus leads **84% of 57 comparable serial scenarios** (0 gaps >2x); the historical CREATE-relationship contradiction is settled with a dedicated 5-repetition verdict — **Nexus 2.40x faster** (2.35 ms vs 5.63 ms median). Remaining losses are concentrated in high-concurrency scaling (tracked with numeric gates in `phase8_neo4j-concurrency-gaps`). The Dec-2025 report is marked SUPERSEDED.
+- **First measured KNN recall numbers** (`KNN_RECALL.md`): SIFT1M 64-cell HNSW sweep — sweet spot m16/efc100/efs50 delivers **95.0% recall@1 at 1.02 ms p95**; the "<2 ms p95" claim holds up to ~97% recall@10 (now backed by data instead of assertion).
+- **Per-transport parity suite** (`scripts/compatibility/test-transport-parity.sh`): the same write battery over HTTP, RPC, and RESP3 with normalized result diffing — 7/7 parity, the permanent release-gate regression net for the write-path unification.
+
+### Performance
+
+- **Autocommit reads no longer take the exclusive engine lock (~2.6x concurrent read throughput).** Every MATCH previously held `engine.write().await` for its whole parse+plan+execute; read-only autocommit queries (classified from the AST by `routing::is_read_only` — exhaustive per-clause match, conservative on unknown procedures) now run on a cloned executor snapshot in `spawn_blocking` behind a brief shared lock. Writes and in-transaction reads are unchanged (read-your-own-writes preserved). Measured: 667 → 1727 qps at 8 concurrent clients (release build; benchmark ships as an on-demand `#[ignore]`d test). Same change applied to the RPC dispatcher.
+- **Traversal and aggregation fast paths.** The unfiltered `COUNT` label-bitmap shortcut covers more plan shapes (all-nodes scan, alias forms) with delete-correct results; relationship-type filtering happens at record-header level before materialization in the traversal walk; GROUP BY pre-sizes its hash map from upstream cardinality; and the planner's cost model now scales NodeByLabel/Expand costs with real catalog cardinalities (lower-cardinality join side drives first), falling back to the previous constants on cold catalogs. Plan-quality and correctness tests included; benchmarks reproducible via the `#[ignore]`d suites.
+
+### Added — multi-arch Docker image (linux/amd64 + linux/arm64)
+
+- **The Docker image now ships as a multi-arch manifest** (Synap pattern: each platform builds natively via a `TARGETARCH`-selected musl target; the arm64 leg builds under qemu/binfmt on amd64 hosts — no cross-toolchain). Apple Silicon, AWS Graviton, and Ampere pull a native arm64 image (21.6 MB, NEON SIMD runtime-dispatched) instead of emulating amd64. Both platform digests scan **0C 0H 0M 0L, 0 packages**. Note: arm64 runtime validation requires real arm64 hardware — qemu-user lacks `get_robust_list`, which LMDB's robust mutexes need at env-open.
+
+### Security — zero-CVE Docker image
+
+- **The runtime image is now `FROM scratch` with a fully static musl binary — 0 OS packages, 0 CVEs.** Docker Scout reported 14 disputed/won't-fix low CVEs on the previous DHI/debian runtime (glibc ×7, systemd ×4, coreutils ×2, openssl ×1) with no Debian fix available; since the seven glibc findings attach to `libc6`, no amount of package removal could reach zero with a dynamically-linked binary. `nexus-server` is now built for `x86_64-unknown-linux-musl` (fully static, jemalloc retained via `disable_initial_exec_tls`) and shipped in an empty base: Scout reports **0C 0H 0M 0L, 0 packages**. Image size drops 70.2 MB → 25.8 MB (−63%). Trade-off: the image has no shell — `docker exec … sh` no longer works; debug via `docker logs` and the HTTP API.
+
+### Fixed
+
+- **HTTP `CREATE`/`MERGE` queries now execute through the engine write path** instead of the `write_ops.rs` fork, closing the transport-dependent bug class: `MERGE (a)-[r:T]->(b)` creates the edge (idempotently, with inline properties), `SET r.k` on relationship variables persists, and `CREATE ... RETURN r.prop` projects the stored value. Write audit logging moved to the handler wrapper (unchanged coverage). Verified by the 23-case write-path parity harness — **all 23 green**.
+- **Query routing is now AST-based, shared between HTTP and RPC.** The HTTP handler's string-prefix heuristics (`starts_with("CREATE")` etc.) misrouted comment-prefixed and mixed queries to the read-only path (HTTP 200, nothing persisted). Routing now derives from the parsed AST via the shared `api/cypher/routing.rs` predicate (12-case routing test table), and the 1,109-line `write_ops.rs` fork plus its 265 lines of dead helpers were **deleted** — every transport executes writes through the single tested engine path.
+- **Engine write gaps closed** (found by the parity harness while rerouting): `SET x = $param` and CREATE inline `$param` properties resolve (previously stored `null`/errored), `SET x = null` removes the key (Neo4j semantics), `UNWIND $param AS row` iterates a parameter-bound list, leading `//`/`/* */` comments parse, CREATE-bound variables are visible to `REMOVE` in the same statement, and standalone `MERGE` with a relationship pattern routes to the write interpreter instead of degrading to a read-only match.
+- **Aggregation output preserves the written RETURN/WITH column order.** `RETURN count(r) AS c, r.w AS w` returned the columns positionally swapped (`[w, c]`) because the aggregate assembles `[group-by keys..., aggregates...]`; the planner now records the clause order and the executor permutes the output back. SDK clients consume rows positionally, so this was a client-visible wrong-order bug.
+- **GraphQL mutations and the streaming MCP handler no longer lose writes.** GraphQL mutations executed against the raw executor, where the planner stubs `MERGE` as a read-only match and has no `SET`/`REMOVE`/`FOREACH` operators — mutations returned success while persisting nothing. The streaming handler carried its own literal-only CREATE loop that stored `null` for `$param` properties. Both now route write queries through `Engine::execute_cypher_with_params` via the shared AST routing predicate (reads stay on the lock-free executor). Red-tests-first: the new integration tests were confirmed failing against the old code.
+- **RPC and RESP3 transports no longer drop `$params` on write queries.** The RPC dispatch (port 15475 — the default transport for every first-party SDK) and the RESP3 `CYPHER` handler called the params-dropping `engine.execute_cypher(&str)`, so `CREATE (n {x:$v})` silently stored `null` over those transports — the same data-loss class fixed for HTTP in 2.4.0. Both now call `execute_cypher_with_params`; parameterized writes persist and round-trip on every transport.
+
+- **Engine dispatch consolidated — PROFILE can no longer drift from real execution.** `execute_cypher_dispatch` and `execute_cypher_ast` were ~200-line near-duplicates serving normal vs EXPLAIN/PROFILE/internal execution; fixes applied to one silently missed the other. Diffing them surfaced 6 real divergences — missing `SHOW CONSTRAINTS` routing on the internal path, a legacy `LOAD CSV`/`CALL {}` special case bypassing the native operators, the typed-property-index CREATE fix reaching only one fork, a double CREATE/DELETE replay risk on `DELETE ... RETURN <expr>`, and `$param` values silently dropped through an always-empty `ast.params` in two spots. All unified into one private dispatch (net −106 lines) with regression tests, and `Engine::execute_cypher(&str)` now structurally cannot drop parameters (delegates to the params variant).
+
+### Added
+
+- **New Cypher scalar functions**: `randomUUID()` (v4 UUID string), `ascii()` / `chr()` (character ↔ Unicode code point), `lpad()` / `rpad()` (pad to a target length or truncate — truncation always keeps the first `length` characters, Oracle-style, regardless of pad side), `normalize()` (Unicode `NFC`/`NFD`/`NFKC`/`NFKD`, NFC default), two-argument `log(x, base)` (the one-argument natural-log form is unchanged), `isNaN()`, and `shuffle()` (random list permutation via `rand`, non-deterministic by design). Also verified that multiple comma-separated patterns in one `CREATE` (`CREATE (a:L1), (b:L2), (a)-[r:T]->(b)`) already execute correctly end to end via both engine entry points — the compatibility gap analysis's "Missing" entry for this was stale; added regression tests to lock in the behavior going forward.
+- **`elementId(node | relationship)`** — new function returning a Neo4j-5-style *opaque* stable string (`"n:<internal-id>"` for nodes, `"r:<internal-id>"` for relationships). It did not exist before this change — no prior implementation was found in the executor's function dispatch (calling it silently returned `NULL`, same as any unrecognised function name), despite the compatibility gap analysis describing it as "returns internal 64-bit ID". `id()` is unchanged and keeps returning the plain integer. Treat `elementId()`'s output as opaque — it is not the same shape as real Neo4j's `<database-id>:<uuid>:<id>` and callers must not parse it.
+- **`nexus-server --healthcheck`** — std-only HTTP/1.0 probe against `127.0.0.1:<port from NEXUS_ADDR>/health`, exiting 0/1. Used as the container `HEALTHCHECK` (exec-form) since the scratch image has no bash.
+
+### Fixed
+
+- **`percentileDisc()` / `percentileCont()` / `stDev()` / `stDevP()` now compute correct values when the aggregated argument is a property access** (e.g. `stdev(n.v)`, the overwhelmingly common case). They previously returned `NULL` silently: the aggregate operator looked up the literal string `"n.v"` in the raw pre-projection column list instead of resolving it against the bound node the way `sum()` / `avg()` / `min()` / `max()` already did, so the column lookup always missed. An existing regression test only asserted the row count collapsed to one row and never checked the computed value, so the break went unnoticed. Verified against hand-computed references: `stDev([1,2,3,4]) = 1.2909944`, `stDevP([1,2,3,4]) = 1.1180339`, `percentileDisc([1..5], 0.5) = 3`, `percentileCont([1..4], 0.5) = 2.5`.
+
 ## [2.4.0] — 2026-07-11
 
 > Fixes a data-loss bug in the HTTP write path — query parameters used as

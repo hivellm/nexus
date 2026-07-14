@@ -55,7 +55,7 @@ from nexus_sdk.transport import (
     parse_endpoint,
 )
 
-__version__ = "1.0.0"
+__version__ = "2.5.0"
 __all__ = [
     "NexusClient",
     "NexusError",

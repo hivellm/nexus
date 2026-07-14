@@ -11,6 +11,7 @@ use crate::testing::setup_isolated_test_engine;
 pub mod basics;
 pub mod constraints;
 pub mod crud;
+pub mod dispatch_consolidation;
 pub mod errors;
 pub mod fulltext;
 pub mod indexes;

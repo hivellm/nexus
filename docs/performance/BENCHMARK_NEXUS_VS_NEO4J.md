@@ -1,5 +1,13 @@
 # Nexus vs Neo4j Performance Benchmark Report
 
+> 🛑 **SUPERSEDED by [`BENCHMARK_2026.md`](./BENCHMARK_2026.md)** (2026-07-13,
+> `phase7_benchmark-rebaseline`). That report is the canonical baseline —
+> it resolves this document's contradictory CREATE-relationship claim
+> (settled verdict: Nexus 2.35 ms vs Neo4j 5.63 ms median — 2.4× faster,
+> 5 clean repetitions) and re-measures everything after the 2.5.0
+> lock-free-read and traversal/aggregation work. Nothing below should be
+> quoted.
+
 > ⚠️ **Stale numbers warning** (recorded 2026-04-29).
 >
 > The headline tables in this document — "Nexus 4.15× avg, 42.74×

@@ -5,7 +5,7 @@
 ![Rust](https://img.shields.io/badge/rust-nightly%201.85%2B-orange.svg)
 ![Edition](https://img.shields.io/badge/edition-2024-blue.svg)
 ![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)
-![Status](https://img.shields.io/badge/status-v2.4.0-success.svg)
+![Status](https://img.shields.io/badge/status-v2.5.0-success.svg)
 ![Tests](https://img.shields.io/badge/tests-2310%2B%20passing-success.svg)
 ![Compatibility](https://img.shields.io/badge/Neo4j%20compat-300%2F300-success.svg)
 
@@ -19,7 +19,7 @@ Nexus is a **property graph database** built for **read-heavy workloads** with *
 
 **Think Neo4j meets vector search**, shipped as a single Rust binary with a CLI, six first-party SDKs, and three transports (native binary RPC, HTTP/JSON, RESP3).
 
-### Highlights (v2.3.2)
+### Highlights (v2.5.0)
 
 - **Neo4j-compatible Cypher** — MATCH / CREATE / MERGE / SET / DELETE / REMOVE / WHERE / RETURN / ORDER BY / LIMIT / SKIP / UNION / WITH / UNWIND / FOREACH / CASE / EXISTS subqueries / list & map comprehensions / pattern comprehensions and 250+ functions & procedures. **300/300** Neo4j diff-suite tests pass ([Neo4j 2025.09.0, 2026-04-19](docs/compatibility/NEO4J_COMPATIBILITY_REPORT.md)). See the [openCypher status table](#-opencypher-support-matrix) at the bottom.
 - **APOC compatibility** — ~100 procedures across `apoc.coll.*` / `apoc.map.*` / `apoc.text.*` / `apoc.date.*` / `apoc.schema.*` / `apoc.util.*` / `apoc.convert.*` / `apoc.number.*` / `apoc.agg.*`. Drop-in replacement for most of the Neo4j APOC surface. Matrix: [`docs/procedures/APOC_COMPATIBILITY.md`](docs/procedures/APOC_COMPATIBILITY.md).
@@ -155,7 +155,7 @@ Nexus native RPC vs Neo4j Bolt, both in Docker, shared tiny dataset (100 nodes /
 
 Top wins: `aggregation.avg_score_a` 12.5× · `aggregation.count_all` 11.1× · `ecosystem.call_in_transactions` 10.0× · `aggregation.stdev_score` 9.1× · `aggregation.min_max_score` 8.3×. Closest margin still Nexus-ahead: `traversal.two_hop_chain` 1.8×. Full report at [`target/bench/report.md`](target/bench/report.md) after running [`crates/nexus-bench/README.md`](crates/nexus-bench/README.md).
 
-> The 74-test cross-bench numbers under [`docs/performance/BENCHMARK_NEXUS_VS_NEO4J.md`](docs/performance/BENCHMARK_NEXUS_VS_NEO4J.md) (the older Dec-2025 record) are flagged stale and pending re-run on v2.0.0+; reproduction recipe + concurrent-load matrix scaffold ships with [`scripts/benchmarks/run-vs-neo4j.sh`](scripts/benchmarks/run-vs-neo4j.sh).
+> The 74-test cross-bench numbers under [`docs/performance/BENCHMARK_NEXUS_VS_NEO4J.md`](docs/performance/BENCHMARK_NEXUS_VS_NEO4J.md) are the older Dec-2025 record and are superseded by the 2.5.0 re-baseline in [`docs/performance/BENCHMARK_2026.md`](docs/performance/BENCHMARK_2026.md); reproduction recipe + concurrent-load matrix ships with [`scripts/benchmarks/run-vs-neo4j.sh`](scripts/benchmarks/run-vs-neo4j.sh).
 
 ### Security + Ops
 - **API keys + JWT + RBAC** with rate limiting (1k/min, 10k/hour default).
@@ -235,11 +235,11 @@ Every SDK ships equivalent methods (`list_databases` / `listDatabases` / etc.). 
 
 ## 📦 Official SDKs
 
-Six first-party SDKs, all tracking the same 2.2.0 line. Every SDK shares the URL grammar, command-map table, and error semantics defined in [`docs/specs/sdk-transport.md`](docs/specs/sdk-transport.md).
+Six first-party SDKs, all tracking the same 2.5.0 line. Every SDK shares the URL grammar, command-map table, and error semantics defined in [`docs/specs/sdk-transport.md`](docs/specs/sdk-transport.md).
 
 | SDK            | Install                                    | Docs                                          | RPC status   |
 |----------------|--------------------------------------------|-----------------------------------------------|--------------|
-| 🦀 Rust        | `nexus-sdk = "2.2.0"`                     | [sdks/rust/](sdks/rust/README.md)             | ✅ shipped   |
+| 🦀 Rust        | `nexus-sdk = "2.5.0"`                     | [sdks/rust/](sdks/rust/README.md)             | ✅ shipped   |
 | 🐍 Python      | `pip install hivehub-nexus-sdk`            | [sdks/python/](sdks/python/README.md)         | ✅ shipped   |
 | 📘 TypeScript  | `npm install @hivehub/nexus-sdk`           | [sdks/typescript/](sdks/typescript/README.md) | ✅ shipped   |
 | 🐹 Go          | `go get github.com/hivellm/nexus-go`       | [sdks/go/](sdks/go/README.md)                 | ✅ shipped   |
@@ -502,7 +502,30 @@ ORDER BY confidence DESC
 
 ## 🗺️ Roadmap
 
-### 2.3.2 — current (2026-06-08)
+### 2.5.0 — current (2026-07-14)
+- ✅ **Write-path unification.** Every transport (HTTP / RPC / RESP3 / GraphQL /
+  streaming) now executes writes through one tested engine path; the divergent
+  forks were deleted. Closes a class of transport-dependent data-loss bugs —
+  `MERGE (a)-[r]->(b)` creates the edge, `SET r.k` persists, `$param` write
+  values persist, consecutive `CREATE` clauses all run, aggregation preserves
+  the written `RETURN` column order. Verified by a 26-case parity harness + a
+  cross-transport parity runner.
+- ✅ **Concurrency.** Autocommit reads bypass the global engine lock (~2.6x
+  concurrent reads); `count(n)` @64 workers went 21.8x; a mimalloc global
+  allocator lifts concurrent reads a further 37–84%.
+- ✅ **Zero-CVE Docker image** — `FROM scratch` static musl, multi-arch
+  (linux/amd64 + linux/arm64), Docker Scout 0C/0H/0M/0L.
+- ✅ **New Cypher functions** — `randomUUID`, `ascii`/`chr`, `lpad`/`rpad`,
+  `normalize`, two-arg `log`, `isNaN`, `shuffle`, stable-string `elementId`.
+- ✅ **Canonical vs-Neo4j benchmark** (`docs/performance/BENCHMARK_2026.md`,
+  Nexus leads 84% of comparable serial scenarios) + first-measured KNN recall
+  (SIFT1M / GloVe).
+
+### 2.4.0 (2026-07-11)
+- ✅ Fixed `$param` property-value data loss over the HTTP write path
+  (`CREATE`/`MERGE`/`SET` silently stored `null`); AVX2 popcount over-count fix.
+
+### 2.3.2 (2026-06-08)
 - ✅ Bug-fix release (field reports vs 2.3.1):
   - `UNWIND [...] AS row MERGE/SET ...` writes persist every row in a single
     statement instead of silently dropping (GH #13) — unblocks batched backfill.
@@ -608,7 +631,7 @@ Full detail: [`docs/ROADMAP.md`](docs/ROADMAP.md).
 
 ## 🧮 openCypher Support Matrix
 
-Canonical list of openCypher / Cypher 25 surfaces in Nexus v2.3.2. ✅ shipped · 🟡 partial (grammar-only or limited scope) · 🧭 queued. Validated against the [300/300 Neo4j diff suite](docs/compatibility/NEO4J_COMPATIBILITY_REPORT.md); per-clause detail lives in [`docs/specs/cypher-subset.md`](docs/specs/cypher-subset.md).
+Canonical list of openCypher / Cypher 25 surfaces in Nexus v2.5.0. ✅ shipped · 🟡 partial (grammar-only or limited scope) · 🧭 queued. Validated against the [300/300 Neo4j diff suite](docs/compatibility/NEO4J_COMPATIBILITY_REPORT.md); per-clause detail lives in [`docs/specs/cypher-subset.md`](docs/specs/cypher-subset.md).
 
 ### Reading clauses
 

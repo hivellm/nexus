@@ -984,6 +984,14 @@ RETURN rtrim('hello  ') AS right_trimmed
 RETURN replace('hello world', 'world', 'nexus') AS replaced
 RETURN split('a,b,c', ',') AS parts
 RETURN length('hello') AS len
+
+-- 2.5.0 additions
+RETURN ascii('A') AS code            -- 65
+RETURN chr(65) AS ch                 -- 'A'
+RETURN lpad('7', 3, '0') AS padded   -- '007'
+RETURN rpad('ab', 4, '.') AS padded  -- 'ab..'
+RETURN normalize('café') AS nfc      -- NFC default; NFD/NFKC/NFKD via 2nd arg
+RETURN randomUUID() AS uuid          -- v4 UUID string
 ```
 
 ### Regex Functions ✅ IMPLEMENTED
@@ -1036,6 +1044,10 @@ RETURN floor(4.7) AS floor
 RETURN round(4.5) AS rounded
 RETURN sqrt(16) AS square_root
 RETURN pow(2, 3) AS power
+RETURN log(8, 2) AS log_base2       -- 2.5.0: two-arg log(x, base)
+RETURN isNaN(0.0/0.0) AS nan_check  -- 2.5.0
+-- list: shuffle(list) — random permutation (2.5.0)
+-- graph: elementId(n) → stable string "n:<id>" / "r:<id>" (2.5.0 format)
 
 -- Trigonometric
 RETURN sin(0) AS sine

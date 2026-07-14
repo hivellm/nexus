@@ -274,9 +274,20 @@ impl SessionManager {
         session
     }
 
-    /// Get a session (returns None if not found or expired)
+    /// Get a session (returns None if not found or expired).
+    ///
+    /// phase9_store-lock-read-concurrency §1 — this takes an
+    /// EXCLUSIVE `.write()` on the shared sessions map for what is
+    /// logically a read (defensive clone + expiry sweep), and is
+    /// called once per autocommit query on both the HTTP and RPC
+    /// dispatch paths (see `dispatch_admin_if_any` callers in
+    /// `nexus-server`). Wrapped with `perf_probe::timed` (no-op
+    /// unless `NEXUS_PERF_PROBE=1`) so the read-ceiling profiling pass
+    /// has direct wait-time evidence for this lock instead of an
+    /// assumption.
     pub fn get_session(&self, session_id: &SessionId) -> Option<Session> {
-        let mut sessions = self.sessions.write();
+        let mut sessions =
+            crate::perf_probe::timed(&crate::perf_probe::SESSION_GET, || self.sessions.write());
 
         if let Some(session) = sessions.get(session_id) {
             if session.is_expired() {

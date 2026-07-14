@@ -37,7 +37,9 @@ curl -X POST http://localhost:15474/cypher \
 
 | Tag | Contents |
 |---|---|
-| `latest`, `2.3.2` | Reliability bug-fix release (GH #11–#13): UNWIND-driven writes (`UNWIND [...] AS row MERGE/SET ...`) persist every row in one statement; property indexes survive a restart (definitions persisted + rebuilt at startup); fixed a sustained-write 100% CPU busy-loop (`CALL { ... } IN TRANSACTIONS` infinite loop + O(N)-per-write label stats). |
+| `latest`, `2.5.0` | Write-path unification across every transport (HTTP / RPC / RESP3 / GraphQL / streaming) closing transport-dependent data-loss bugs (`MERGE`-edge, `SET r.k`, `$param` write values, consecutive `CREATE`, aggregation column order); lock-free autocommit reads (~2.6x) + mimalloc allocator (+37–84% concurrent reads); zero-CVE multi-arch image (linux/amd64 + linux/arm64); new Cypher functions (`randomUUID`, `ascii`/`chr`, `lpad`/`rpad`, `normalize`, two-arg `log`, `isNaN`, `shuffle`, stable `elementId`). |
+| `2.4.0` | Fixed `$param` property-value data loss over the HTTP write path (`CREATE`/`MERGE`/`SET` silently stored `null`); AVX2 popcount over-count fix. |
+| `2.3.2` | Reliability bug-fix release (GH #11–#13): UNWIND-driven writes (`UNWIND [...] AS row MERGE/SET ...`) persist every row in one statement; property indexes survive a restart (definitions persisted + rebuilt at startup); fixed a sustained-write 100% CPU busy-loop (`CALL { ... } IN TRANSACTIONS` infinite loop + O(N)-per-write label stats). |
 | `2.3.1` | Read/MERGE index line (GH #7–#9): `POST /cypher` accepts `"parameters": null`; read `MATCH (n:L {p:v})` uses a typed property-index seek (`NodeIndexSeek`) instead of a full scan; `CREATE INDEX` via the API registers + backfills the typed index. |
 | `2.3.0` | Bug-fix release (GH #3–#6): `$param` read-path binding + `parameters` body key, durable property-store reopen, GROUP BY by expression, UTF-8 `/cypher` bodies. |
 | `2.2.0` | Planner unindexed-property notification + slow-query observability. |

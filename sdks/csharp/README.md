@@ -2,7 +2,7 @@
 
 Official .NET client library for [Nexus](https://github.com/hivellm/nexus), a high-performance Neo4j-compatible graph database.
 
-> **Compatibility:** SDK 2.1.0 ↔ `nexus-server` 2.1.0. SDK and
+> **Compatibility:** SDK 2.5.0 ↔ `nexus-server` 2.5.0. SDK and
 > server move in lockstep on the same X.Y.Z train. See
 > [`docs/COMPATIBILITY_MATRIX.md`](../../docs/COMPATIBILITY_MATRIX.md).
 
@@ -24,13 +24,13 @@ Official .NET client library for [Nexus](https://github.com/hivellm/nexus), a hi
 ### NuGet Package Manager
 
 ```bash
-dotnet add package Nexus.SDK --version 1.13.0
+dotnet add package Nexus.SDK --version 2.5.0
 ```
 
 ### .csproj Reference
 
 ```xml
-<PackageReference Include="Nexus.SDK" Version="1.13.0" />
+<PackageReference Include="Nexus.SDK" Version="2.5.0" />
 ```
 
 ## Quick Start (RPC — default)

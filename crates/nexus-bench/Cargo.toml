@@ -79,3 +79,8 @@ neo4rs = { version = "0.8", optional = true }
 # Only the pure-logic tests depend on this; the integration tests
 # under `tests/` are themselves feature-gated.
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
+
+[[example]]
+name = "concurrent_sweep"
+path = "examples/concurrent_sweep.rs"
+required-features = ["live-bench"]

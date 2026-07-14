@@ -408,6 +408,18 @@ impl Executor {
                         relationships
                     };
 
+                    // phase8_neo4j-concurrency-gaps §2 — acquire the
+                    // `store` read guard ONCE for the whole per-source
+                    // target loop instead of once per relationship via
+                    // `read_node_as_value` / `read_relationship_as_value`.
+                    // Neither call in this loop body reaches
+                    // `find_relationships` (already resolved above, once
+                    // per source node) or any other `self.store()` call,
+                    // so holding the guard across every iteration here
+                    // is safe — see `read_node_as_value_with_store`'s
+                    // doc comment for the acquire-once rationale and the
+                    // non-reentrancy constraint it must satisfy.
+                    let expand_store = self.store();
                     for (rel_idx, rel_info) in filtered_relationships.iter().enumerate() {
                         let target_id = match direction {
                             Direction::Outgoing => rel_info.target_id,
@@ -422,7 +434,8 @@ impl Executor {
                             }
                         };
 
-                        let target_node = self.read_node_as_value(target_id)?;
+                        let target_node =
+                            self.read_node_as_value_with_store(&expand_store, target_id)?;
 
                         // CRITICAL FIX: Check if target variable is already bound in the row
                         // If so, we must ensure the relationship's target matches the bound value
@@ -467,7 +480,8 @@ impl Executor {
                         new_row.insert(target_var.to_string(), target_node);
                         // Update/add relationship variable if specified
                         if !rel_var.is_empty() {
-                            let relationship_value = self.read_relationship_as_value(rel_info)?;
+                            let relationship_value = self
+                                .read_relationship_as_value_with_store(&expand_store, rel_info)?;
                             new_row.insert(rel_var.to_string(), relationship_value);
                         }
 
@@ -482,6 +496,7 @@ impl Executor {
                         );
                         push_with_row_cap(&mut expanded_rows, new_row, "Expand")?;
                     }
+                    drop(expand_store);
                 }
             }
         }

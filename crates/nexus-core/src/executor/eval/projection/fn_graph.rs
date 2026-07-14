@@ -177,6 +177,38 @@ impl Executor {
                 }
                 Some(Ok(Value::Null))
             }
+            // phase4_cypher-parity-quick-wins §2.1 — `elementId()` returns
+            // a Neo4j-5-style *opaque* stable string instead of the raw
+            // internal 64-bit id that `id()` still exposes. Real Neo4j
+            // encodes `<database-id>:<random-uuid>:<id>`; Nexus has no
+            // per-database UUID reachable from the projection evaluator,
+            // so the format chosen here is the simpler deterministic
+            // `"n:<node-id>"` / `"r:<relationship-id>"` string — stable
+            // for the lifetime of the entity, distinct per entity kind,
+            // and (like Neo4j's) MUST be treated as opaque by callers,
+            // never parsed. `id()` is unchanged and keeps returning the
+            // integer.
+            "elementid" => {
+                if let Some(arg) = args.first() {
+                    let value = match self.evaluate_projection_expression(row, context, arg) {
+                        Ok(v) => v,
+                        Err(e) => return Some(Err(e)),
+                    };
+                    if let Value::Object(obj) = &value {
+                        if let Some(Value::Number(id)) = obj.get("_nexus_id") {
+                            if let Some(id_u64) = id.as_u64() {
+                                let prefix = if obj.contains_key("type") { "r" } else { "n" };
+                                return Some(Ok(Value::String(format!("{prefix}:{id_u64}"))));
+                            }
+                        }
+                    }
+                }
+                Some(Ok(Value::Null))
+            }
+            // phase4_cypher-parity-quick-wins §1.1 — `randomUUID()` returns
+            // a fresh RFC 4122 v4 UUID string on every call; no arguments,
+            // no NULL propagation (there is nothing to propagate from).
+            "randomuuid" => Some(Ok(Value::String(uuid::Uuid::new_v4().to_string()))),
             // Database functions
             "database" => {
                 // Return current database name

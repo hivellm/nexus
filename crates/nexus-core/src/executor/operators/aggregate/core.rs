@@ -16,8 +16,9 @@ impl Executor {
         context: &mut ExecutionContext,
         group_by: &[String],
         aggregations: &[Aggregation],
+        output_order: Option<&[String]>,
     ) -> Result<()> {
-        self.execute_aggregate_with_projections(context, group_by, aggregations, None)
+        self.execute_aggregate_with_projections(context, group_by, aggregations, None, output_order)
     }
     /// Execute Aggregate operator with projection items (for evaluating literals in virtual row)
     pub(in crate::executor) fn execute_aggregate_with_projections(
@@ -26,6 +27,7 @@ impl Executor {
         group_by: &[String],
         aggregations: &[Aggregation],
         projection_items: Option<&[ProjectionItem]>,
+        output_order: Option<&[String]>,
     ) -> Result<()> {
         use std::collections::HashMap;
 
@@ -64,11 +66,30 @@ impl Executor {
         // Check rows AFTER we've stored project_rows, but rows may have been modified
         let rows = context.result_set.rows.clone();
 
-        // Pre-size HashMap for GROUP BY if we have an estimate (Phase 2.3 optimization)
+        // Pre-size HashMap for GROUP BY if we have an estimate (Phase 2.3 optimization).
+        //
+        // phase6_traversal-aggregation-perf §3: the 10%-of-rows heuristic
+        // itself is unchanged here — there is no reliable *cheap* signal
+        // for the true group cardinality at this point. `Operator::Aggregate.source`
+        // exists for exactly this (a planner-supplied cardinality hint)
+        // but no planner emission site ever populates it (always `None`),
+        // and resolving a `var.prop` GROUP BY key to a registered property
+        // index's distinct-value count would need label context this
+        // operator doesn't have without new planner-to-operator plumbing
+        // — out of scope for this change. What *is* cheap and worth doing:
+        // cap the pre-sized capacity so a very large row count doesn't
+        // eagerly reserve an equally large (and likely wrong, since most
+        // GROUP BY workloads have human-scale cardinality) number of
+        // HashMap buckets before a single group is known. Below the cap,
+        // behaviour is unchanged from before.
+        const MAX_PRESIZED_GROUPS: usize = 65_536;
         let estimated_groups = if !group_by.is_empty() && !rows.is_empty() {
             // Estimate: assume ~10% of rows will be unique groups (conservative estimate)
             // In practice, this could be tuned based on actual data distribution
-            (rows.len() / 10).max(1).min(rows.len())
+            (rows.len() / 10)
+                .max(1)
+                .min(rows.len())
+                .min(MAX_PRESIZED_GROUPS)
         } else {
             1
         };
@@ -279,6 +300,7 @@ impl Executor {
             let mut columns = group_by.to_vec();
             columns.extend(aggregations.iter().map(|agg| self.aggregation_alias(agg)));
             context.result_set.columns = columns;
+            reorder_aggregate_output(context, output_order);
             let row_maps = self.result_set_as_rows(context);
             self.update_variables_from_rows(context, &row_maps);
             return Ok(());
@@ -471,6 +493,7 @@ impl Executor {
             let mut columns = group_by.to_vec();
             columns.extend(aggregations.iter().map(|agg| self.aggregation_alias(agg)));
             context.result_set.columns = columns;
+            reorder_aggregate_output(context, output_order);
             let row_maps = self.result_set_as_rows(context);
             self.update_variables_from_rows(context, &row_maps);
             return Ok(());
@@ -787,159 +810,138 @@ impl Executor {
                         Aggregation::PercentileDisc {
                             column, percentile, ..
                         } => {
-                            let col_idx =
-                                self.get_column_index(column, &context.result_set.columns);
-                            if let Some(idx) = col_idx {
-                                let mut values: Vec<f64> = group_rows
-                                    .iter()
-                                    .filter_map(|row| {
-                                        if idx < row.values.len() {
-                                            self.value_to_number(&row.values[idx]).ok()
-                                        } else {
-                                            None
-                                        }
-                                    })
-                                    .collect();
+                            // phase4_cypher-parity-quick-wins §2.2 — was
+                            // `get_column_index(column, &context.result_set.columns)`,
+                            // which only matches a bare variable name. `column`
+                            // here is the dotted PropertyAccess string (e.g.
+                            // "n.v"), so the lookup always missed and this
+                            // aggregate silently returned NULL. `extract_value_from_row`
+                            // (the same helper Sum/Avg/Min/Max use) resolves the
+                            // dotted form by pulling the property out of the
+                            // bound node object.
+                            let mut values: Vec<f64> = group_rows
+                                .iter()
+                                .filter_map(|row| {
+                                    self.extract_value_from_row(row, column, columns_for_lookup)
+                                        .and_then(|v| self.value_to_number(&v).ok())
+                                })
+                                .collect();
 
-                                if values.is_empty() {
-                                    Value::Null
-                                } else {
-                                    values.sort_by(|a, b| {
-                                        a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal)
-                                    });
-                                    // Discrete percentile: nearest value
-                                    let index = ((*percentile * (values.len() - 1) as f64).round()
-                                        as usize)
-                                        .min(values.len() - 1);
-                                    Value::Number(
-                                        serde_json::Number::from_f64(values[index])
-                                            .unwrap_or(serde_json::Number::from(0)),
-                                    )
-                                }
-                            } else {
+                            if values.is_empty() {
                                 Value::Null
+                            } else {
+                                values.sort_by(|a, b| {
+                                    a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal)
+                                });
+                                // Discrete percentile: nearest value
+                                let index = ((*percentile * (values.len() - 1) as f64).round()
+                                    as usize)
+                                    .min(values.len() - 1);
+                                Value::Number(
+                                    serde_json::Number::from_f64(values[index])
+                                        .unwrap_or(serde_json::Number::from(0)),
+                                )
                             }
                         }
                         Aggregation::PercentileCont {
                             column, percentile, ..
                         } => {
-                            let col_idx =
-                                self.get_column_index(column, &context.result_set.columns);
-                            if let Some(idx) = col_idx {
-                                let mut values: Vec<f64> = group_rows
-                                    .iter()
-                                    .filter_map(|row| {
-                                        if idx < row.values.len() {
-                                            self.value_to_number(&row.values[idx]).ok()
-                                        } else {
-                                            None
-                                        }
-                                    })
-                                    .collect();
+                            // See PercentileDisc above for why this uses
+                            // extract_value_from_row instead of get_column_index.
+                            let mut values: Vec<f64> = group_rows
+                                .iter()
+                                .filter_map(|row| {
+                                    self.extract_value_from_row(row, column, columns_for_lookup)
+                                        .and_then(|v| self.value_to_number(&v).ok())
+                                })
+                                .collect();
 
-                                if values.is_empty() {
-                                    Value::Null
-                                } else {
-                                    values.sort_by(|a, b| {
-                                        a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal)
-                                    });
-                                    // Continuous percentile: linear interpolation
-                                    let position = *percentile * (values.len() - 1) as f64;
-                                    let lower_idx = position.floor() as usize;
-                                    let upper_idx = position.ceil() as usize;
-
-                                    let result = if lower_idx == upper_idx {
-                                        values[lower_idx]
-                                    } else {
-                                        let lower = values[lower_idx];
-                                        let upper = values[upper_idx];
-                                        let fraction = position - lower_idx as f64;
-                                        lower + (upper - lower) * fraction
-                                    };
-
-                                    Value::Number(
-                                        serde_json::Number::from_f64(result)
-                                            .unwrap_or(serde_json::Number::from(0)),
-                                    )
-                                }
-                            } else {
+                            if values.is_empty() {
                                 Value::Null
+                            } else {
+                                values.sort_by(|a, b| {
+                                    a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal)
+                                });
+                                // Continuous percentile: linear interpolation
+                                let position = *percentile * (values.len() - 1) as f64;
+                                let lower_idx = position.floor() as usize;
+                                let upper_idx = position.ceil() as usize;
+
+                                let result = if lower_idx == upper_idx {
+                                    values[lower_idx]
+                                } else {
+                                    let lower = values[lower_idx];
+                                    let upper = values[upper_idx];
+                                    let fraction = position - lower_idx as f64;
+                                    lower + (upper - lower) * fraction
+                                };
+
+                                Value::Number(
+                                    serde_json::Number::from_f64(result)
+                                        .unwrap_or(serde_json::Number::from(0)),
+                                )
                             }
                         }
                         Aggregation::StDev { column, .. } => {
-                            let col_idx =
-                                self.get_column_index(column, &context.result_set.columns);
-                            if let Some(idx) = col_idx {
-                                let values: Vec<f64> = group_rows
-                                    .iter()
-                                    .filter_map(|row| {
-                                        if idx < row.values.len() {
-                                            self.value_to_number(&row.values[idx]).ok()
-                                        } else {
-                                            None
-                                        }
-                                    })
-                                    .collect();
+                            // See PercentileDisc above for why this uses
+                            // extract_value_from_row instead of get_column_index.
+                            let values: Vec<f64> = group_rows
+                                .iter()
+                                .filter_map(|row| {
+                                    self.extract_value_from_row(row, column, columns_for_lookup)
+                                        .and_then(|v| self.value_to_number(&v).ok())
+                                })
+                                .collect();
 
-                                if values.len() < 2 {
-                                    Value::Null
-                                } else {
-                                    // Sample standard deviation (Bessel's correction: n-1)
-                                    let mean = values.iter().sum::<f64>() / values.len() as f64;
-                                    let variance = values
-                                        .iter()
-                                        .map(|v| {
-                                            let diff = v - mean;
-                                            diff * diff
-                                        })
-                                        .sum::<f64>()
-                                        / (values.len() - 1) as f64;
-                                    let std_dev = variance.sqrt();
-                                    Value::Number(
-                                        serde_json::Number::from_f64(std_dev)
-                                            .unwrap_or(serde_json::Number::from(0)),
-                                    )
-                                }
-                            } else {
+                            if values.len() < 2 {
                                 Value::Null
+                            } else {
+                                // Sample standard deviation (Bessel's correction: n-1)
+                                let mean = values.iter().sum::<f64>() / values.len() as f64;
+                                let variance = values
+                                    .iter()
+                                    .map(|v| {
+                                        let diff = v - mean;
+                                        diff * diff
+                                    })
+                                    .sum::<f64>()
+                                    / (values.len() - 1) as f64;
+                                let std_dev = variance.sqrt();
+                                Value::Number(
+                                    serde_json::Number::from_f64(std_dev)
+                                        .unwrap_or(serde_json::Number::from(0)),
+                                )
                             }
                         }
                         Aggregation::StDevP { column, .. } => {
-                            let col_idx =
-                                self.get_column_index(column, &context.result_set.columns);
-                            if let Some(idx) = col_idx {
-                                let values: Vec<f64> = group_rows
-                                    .iter()
-                                    .filter_map(|row| {
-                                        if idx < row.values.len() {
-                                            self.value_to_number(&row.values[idx]).ok()
-                                        } else {
-                                            None
-                                        }
-                                    })
-                                    .collect();
+                            // See PercentileDisc above for why this uses
+                            // extract_value_from_row instead of get_column_index.
+                            let values: Vec<f64> = group_rows
+                                .iter()
+                                .filter_map(|row| {
+                                    self.extract_value_from_row(row, column, columns_for_lookup)
+                                        .and_then(|v| self.value_to_number(&v).ok())
+                                })
+                                .collect();
 
-                                if values.is_empty() {
-                                    Value::Null
-                                } else {
-                                    // Population standard deviation (divide by n)
-                                    let mean = values.iter().sum::<f64>() / values.len() as f64;
-                                    let variance = values
-                                        .iter()
-                                        .map(|v| {
-                                            let diff = v - mean;
-                                            diff * diff
-                                        })
-                                        .sum::<f64>()
-                                        / values.len() as f64;
-                                    let std_dev = variance.sqrt();
-                                    Value::Number(
-                                        serde_json::Number::from_f64(std_dev)
-                                            .unwrap_or(serde_json::Number::from(0)),
-                                    )
-                                }
-                            } else {
+                            if values.is_empty() {
                                 Value::Null
+                            } else {
+                                // Population standard deviation (divide by n)
+                                let mean = values.iter().sum::<f64>() / values.len() as f64;
+                                let variance = values
+                                    .iter()
+                                    .map(|v| {
+                                        let diff = v - mean;
+                                        diff * diff
+                                    })
+                                    .sum::<f64>()
+                                    / values.len() as f64;
+                                let std_dev = variance.sqrt();
+                                Value::Number(
+                                    serde_json::Number::from_f64(std_dev)
+                                        .unwrap_or(serde_json::Number::from(0)),
+                                )
                             }
                         }
                     }
@@ -1385,10 +1387,58 @@ impl Executor {
         let mut columns = group_by.to_vec();
         columns.extend(aggregations.iter().map(|agg| self.aggregation_alias(agg)));
         context.result_set.columns = columns;
+        reorder_aggregate_output(context, output_order);
 
         let row_maps = self.result_set_as_rows(context);
         self.update_variables_from_rows(context, &row_maps);
 
         Ok(())
+    }
+}
+
+/// Restore the RETURN/WITH-clause column order after aggregation.
+///
+/// The aggregate operator assembles its output as `[group-by keys...,
+/// aggregation aliases...]`, which diverges from the order the user wrote
+/// whenever an aggregate precedes a grouping key — `RETURN count(r) AS c,
+/// r.w AS w` came back as `[w, c]`. Neo4j preserves clause order and SDK
+/// clients consume rows positionally, so the divergence is client-visible
+/// (write-path unification, divergence G4). When the requested order maps
+/// 1:1 onto the assembled columns, permute columns + row values into that
+/// order; otherwise leave the result untouched (safe fallback for internal
+/// callers that pass no order, and for plans whose assembled names diverge
+/// from the clause aliases).
+fn reorder_aggregate_output(context: &mut ExecutionContext, output_order: Option<&[String]>) {
+    let Some(wanted) = output_order else {
+        return;
+    };
+    let current = context.result_set.columns.clone();
+    if wanted.len() != current.len() {
+        return;
+    }
+    let Some(perm) = wanted
+        .iter()
+        .map(|name| current.iter().position(|c| c == name))
+        .collect::<Option<Vec<usize>>>()
+    else {
+        return;
+    };
+    // Require a genuine permutation (duplicate names would alias the
+    // same source index) and skip the no-op identity case.
+    let mut seen = vec![false; perm.len()];
+    for &p in &perm {
+        if seen[p] {
+            return;
+        }
+        seen[p] = true;
+    }
+    if perm.iter().enumerate().all(|(i, &p)| i == p) {
+        return;
+    }
+    context.result_set.columns = perm.iter().map(|&p| current[p].clone()).collect();
+    for row in &mut context.result_set.rows {
+        if row.values.len() == perm.len() {
+            row.values = perm.iter().map(|&p| row.values[p].clone()).collect();
+        }
     }
 }

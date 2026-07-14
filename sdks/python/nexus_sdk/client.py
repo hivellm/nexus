@@ -152,7 +152,7 @@ class NexusClient:
             # equivalents. Core methods route through ``self._transport``.
             self._client = httpx.AsyncClient(
                 timeout=httpx.Timeout(timeout),
-                headers={"User-Agent": "nexus-sdk/1.0.0"},
+                headers={"User-Agent": "nexus-sdk/2.5.0"},
             )
         except (ValueError, TypeError) as e:
             raise ConfigurationError(f"Invalid configuration: {e}") from e

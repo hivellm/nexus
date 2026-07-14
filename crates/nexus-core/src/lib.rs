@@ -61,6 +61,7 @@ pub mod memory;
 pub mod memory_management;
 pub mod monitoring;
 pub mod page_cache;
+pub mod perf_probe;
 pub mod performance;
 pub mod plugin;
 pub mod query_cache;

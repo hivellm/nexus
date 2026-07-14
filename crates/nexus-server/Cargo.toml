@@ -88,6 +88,15 @@ clap = { version = "4.5", features = ["derive"] }
 # System monitoring
 sysinfo = "0.38"
 
+# Global allocator. phase9 profiling proved the 64-worker concurrency
+# ceiling is NOT lock contention but per-query heap-allocation churn on
+# the default system allocator (Windows CRT malloc / musl malloc), which
+# serializes badly under many threads. mimalloc is cross-platform (glibc,
+# musl, AND msvc — unlike jemalloc) and scales cleanly under contention.
+# Compiled in by default and wired as `#[global_allocator]` unless the
+# `memory-profiling` feature swaps in jemalloc for heap profiling.
+mimalloc = { version = "0.1", default-features = false }
+
 # Memory profiling (opt-in). Enables jemalloc as the global allocator with
 # heap profiling hooks so ops can dump pprof-compatible profiles on demand.
 # Only activated via `--features memory-profiling` — default builds pay no
@@ -96,6 +105,15 @@ sysinfo = "0.38"
 tikv-jemallocator = { version = "0.6", features = ["profiling", "unprefixed_malloc_on_supported_platforms"], optional = true }
 # `stats` enables the mallctl stats::* accessors used by /debug/memory.
 tikv-jemalloc-ctl = { version = "0.6", features = ["use_std", "stats"], optional = true }
+
+# musl requires `disable_initial_exec_tls` or jemalloc fails at runtime
+# (static TLS model assumptions don't hold on musl). This table is
+# additive on top of the `not(msvc)` table above — Cargo unions the
+# `features` lists for targets where both cfgs match (musl is never
+# msvc), so static-musl builds (e.g. the `FROM scratch` Docker image)
+# get the extra feature while glibc/msvc builds are unaffected.
+[target.'cfg(target_env = "musl")'.dependencies]
+tikv-jemallocator = { version = "0.6", features = ["disable_initial_exec_tls"], optional = true }
 
 [features]
 default = []

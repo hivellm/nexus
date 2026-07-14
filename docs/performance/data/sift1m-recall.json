@@ -1,0 +1,1671 @@
+{
+  "generated_at": "2026-07-13T16:20:43Z",
+  "host": "BOLADO",
+  "corpus_kind": "Sift",
+  "cells": [
+    {
+      "m": 8,
+      "ef_construction": 100,
+      "ef_search": 50,
+      "k": 100,
+      "corpus_kind": "Sift",
+      "base_count": 1000000,
+      "query_count": 10000,
+      "dim": 128,
+      "build_time_seconds": 467.818272,
+      "recall": {
+        "recall_at_1": 0.8523,
+        "recall_at_10": 0.8476999999999636,
+        "recall_at_100": 0.7678140000000007,
+        "query_count": 10000
+      },
+      "latency": {
+        "mean_us": 526.5697400000017,
+        "p50_us": 529.7,
+        "p95_us": 636.0,
+        "p99_us": 692.6999999999999,
+        "min_us": 117.6,
+        "max_us": 100690.8,
+        "samples": 10000
+      }
+    },
+    {
+      "m": 8,
+      "ef_construction": 100,
+      "ef_search": 100,
+      "k": 100,
+      "corpus_kind": "Sift",
+      "base_count": 1000000,
+      "query_count": 10000,
+      "dim": 128,
+      "build_time_seconds": 467.818272,
+      "recall": {
+        "recall_at_1": 0.8523,
+        "recall_at_10": 0.8476999999999636,
+        "recall_at_100": 0.7678140000000007,
+        "query_count": 10000
+      },
+      "latency": {
+        "mean_us": 520.3034099999973,
+        "p50_us": 533.9,
+        "p95_us": 643.0,
+        "p99_us": 702.4000000000001,
+        "min_us": 137.70000000000002,
+        "max_us": 986.6,
+        "samples": 10000
+      }
+    },
+    {
+      "m": 8,
+      "ef_construction": 100,
+      "ef_search": 200,
+      "k": 100,
+      "corpus_kind": "Sift",
+      "base_count": 1000000,
+      "query_count": 10000,
+      "dim": 128,
+      "build_time_seconds": 467.818272,
+      "recall": {
+        "recall_at_1": 0.8848,
+        "recall_at_10": 0.8858799999999568,
+        "recall_at_100": 0.8416499999999926,
+        "query_count": 10000
+      },
+      "latency": {
+        "mean_us": 903.6175399999978,
+        "p50_us": 933.2,
+        "p95_us": 1117.5,
+        "p99_us": 1205.3999999999999,
+        "min_us": 230.0,
+        "max_us": 1913.3,
+        "samples": 10000
+      }
+    },
+    {
+      "m": 8,
+      "ef_construction": 100,
+      "ef_search": 400,
+      "k": 100,
+      "corpus_kind": "Sift",
+      "base_count": 1000000,
+      "query_count": 10000,
+      "dim": 128,
+      "build_time_seconds": 467.818272,
+      "recall": {
+        "recall_at_1": 0.9013,
+        "recall_at_10": 0.9069099999999495,
+        "recall_at_100": 0.8851509999999883,
+        "query_count": 10000
+      },
+      "latency": {
+        "mean_us": 1622.6026100000047,
+        "p50_us": 1657.3,
+        "p95_us": 2066.2,
+        "p99_us": 2223.7,
+        "min_us": 396.7,
+        "max_us": 3078.9,
+        "samples": 10000
+      }
+    },
+    {
+      "m": 8,
+      "ef_construction": 200,
+      "ef_search": 50,
+      "k": 100,
+      "corpus_kind": "Sift",
+      "base_count": 1000000,
+      "query_count": 10000,
+      "dim": 128,
+      "build_time_seconds": 882.2478485,
+      "recall": {
+        "recall_at_1": 0.8712,
+        "recall_at_10": 0.8638499999999636,
+        "recall_at_100": 0.7864009999999962,
+        "query_count": 10000
+      },
+      "latency": {
+        "mean_us": 542.8244199999993,
+        "p50_us": 555.4,
+        "p95_us": 670.1,
+        "p99_us": 733.7,
+        "min_us": 153.7,
+        "max_us": 1376.1,
+        "samples": 10000
+      }
+    },
+    {
+      "m": 8,
+      "ef_construction": 200,
+      "ef_search": 100,
+      "k": 100,
+      "corpus_kind": "Sift",
+      "base_count": 1000000,
+      "query_count": 10000,
+      "dim": 128,
+      "build_time_seconds": 882.2478485,
+      "recall": {
+        "recall_at_1": 0.8712,
+        "recall_at_10": 0.8638499999999636,
+        "recall_at_100": 0.7864009999999962,
+        "query_count": 10000
+      },
+      "latency": {
+        "mean_us": 541.9311899999983,
+        "p50_us": 554.4,
+        "p95_us": 670.8000000000001,
+        "p99_us": 738.7,
+        "min_us": 151.4,
+        "max_us": 1367.9,
+        "samples": 10000
+      }
+    },
+    {
+      "m": 8,
+      "ef_construction": 200,
+      "ef_search": 200,
+      "k": 100,
+      "corpus_kind": "Sift",
+      "base_count": 1000000,
+      "query_count": 10000,
+      "dim": 128,
+      "build_time_seconds": 882.2478485,
+      "recall": {
+        "recall_at_1": 0.8974,
+        "recall_at_10": 0.8991499999999493,
+        "recall_at_100": 0.8581709999999914,
+        "query_count": 10000
+      },
+      "latency": {
+        "mean_us": 947.3374599999988,
+        "p50_us": 979.5999999999999,
+        "p95_us": 1172.8000000000002,
+        "p99_us": 1269.3999999999999,
+        "min_us": 261.5,
+        "max_us": 1724.5,
+        "samples": 10000
+      }
+    },
+    {
+      "m": 8,
+      "ef_construction": 200,
+      "ef_search": 400,
+      "k": 100,
+      "corpus_kind": "Sift",
+      "base_count": 1000000,
+      "query_count": 10000,
+      "dim": 128,
+      "build_time_seconds": 882.2478485,
+      "recall": {
+        "recall_at_1": 0.9101,
+        "recall_at_10": 0.9167199999999479,
+        "recall_at_100": 0.8972689999999797,
+        "query_count": 10000
+      },
+      "latency": {
+        "mean_us": 1688.7412499999941,
+        "p50_us": 1721.6,
+        "p95_us": 2143.5,
+        "p99_us": 2276.5,
+        "min_us": 414.8,
+        "max_us": 3206.2000000000003,
+        "samples": 10000
+      }
+    },
+    {
+      "m": 8,
+      "ef_construction": 400,
+      "ef_search": 50,
+      "k": 100,
+      "corpus_kind": "Sift",
+      "base_count": 1000000,
+      "query_count": 10000,
+      "dim": 128,
+      "build_time_seconds": 1626.1864478,
+      "recall": {
+        "recall_at_1": 0.8779,
+        "recall_at_10": 0.8710299999999596,
+        "recall_at_100": 0.7961510000000019,
+        "query_count": 10000
+      },
+      "latency": {
+        "mean_us": 540.648740000001,
+        "p50_us": 553.5,
+        "p95_us": 666.5,
+        "p99_us": 730.5,
+        "min_us": 141.4,
+        "max_us": 1168.9,
+        "samples": 10000
+      }
+    },
+    {
+      "m": 8,
+      "ef_construction": 400,
+      "ef_search": 100,
+      "k": 100,
+      "corpus_kind": "Sift",
+      "base_count": 1000000,
+      "query_count": 10000,
+      "dim": 128,
+      "build_time_seconds": 1626.1864478,
+      "recall": {
+        "recall_at_1": 0.8779,
+        "recall_at_10": 0.8710299999999596,
+        "recall_at_100": 0.7961510000000019,
+        "query_count": 10000
+      },
+      "latency": {
+        "mean_us": 537.6159800000006,
+        "p50_us": 550.6,
+        "p95_us": 656.9,
+        "p99_us": 726.6,
+        "min_us": 141.5,
+        "max_us": 1027.3000000000002,
+        "samples": 10000
+      }
+    },
+    {
+      "m": 8,
+      "ef_construction": 400,
+      "ef_search": 200,
+      "k": 100,
+      "corpus_kind": "Sift",
+      "base_count": 1000000,
+      "query_count": 10000,
+      "dim": 128,
+      "build_time_seconds": 1626.1864478,
+      "recall": {
+        "recall_at_1": 0.901,
+        "recall_at_10": 0.9042799999999459,
+        "recall_at_100": 0.8667399999999907,
+        "query_count": 10000
+      },
+      "latency": {
+        "mean_us": 988.183469999999,
+        "p50_us": 1028.1000000000001,
+        "p95_us": 1221.8000000000002,
+        "p99_us": 1290.7,
+        "min_us": 259.1,
+        "max_us": 1883.3000000000002,
+        "samples": 10000
+      }
+    },
+    {
+      "m": 8,
+      "ef_construction": 400,
+      "ef_search": 400,
+      "k": 100,
+      "corpus_kind": "Sift",
+      "base_count": 1000000,
+      "query_count": 10000,
+      "dim": 128,
+      "build_time_seconds": 1626.1864478,
+      "recall": {
+        "recall_at_1": 0.9165,
+        "recall_at_10": 0.9208699999999413,
+        "recall_at_100": 0.9044129999999796,
+        "query_count": 10000
+      },
+      "latency": {
+        "mean_us": 1777.7298899999987,
+        "p50_us": 1813.6000000000001,
+        "p95_us": 2244.6,
+        "p99_us": 2398.2000000000003,
+        "min_us": 469.1,
+        "max_us": 3184.6,
+        "samples": 10000
+      }
+    },
+    {
+      "m": 8,
+      "ef_construction": 800,
+      "ef_search": 50,
+      "k": 100,
+      "corpus_kind": "Sift",
+      "base_count": 1000000,
+      "query_count": 10000,
+      "dim": 128,
+      "build_time_seconds": 3020.4115417,
+      "recall": {
+        "recall_at_1": 0.8791,
+        "recall_at_10": 0.8750299999999618,
+        "recall_at_100": 0.7993299999999985,
+        "query_count": 10000
+      },
+      "latency": {
+        "mean_us": 568.8812400000005,
+        "p50_us": 576.0999999999999,
+        "p95_us": 711.4000000000001,
+        "p99_us": 811.6,
+        "min_us": 150.1,
+        "max_us": 1898.1,
+        "samples": 10000
+      }
+    },
+    {
+      "m": 8,
+      "ef_construction": 800,
+      "ef_search": 100,
+      "k": 100,
+      "corpus_kind": "Sift",
+      "base_count": 1000000,
+      "query_count": 10000,
+      "dim": 128,
+      "build_time_seconds": 3020.4115417,
+      "recall": {
+        "recall_at_1": 0.8791,
+        "recall_at_10": 0.8750299999999618,
+        "recall_at_100": 0.7993299999999985,
+        "query_count": 10000
+      },
+      "latency": {
+        "mean_us": 562.3667900000005,
+        "p50_us": 572.1,
+        "p95_us": 690.7,
+        "p99_us": 770.6,
+        "min_us": 136.3,
+        "max_us": 1801.8000000000002,
+        "samples": 10000
+      }
+    },
+    {
+      "m": 8,
+      "ef_construction": 800,
+      "ef_search": 200,
+      "k": 100,
+      "corpus_kind": "Sift",
+      "base_count": 1000000,
+      "query_count": 10000,
+      "dim": 128,
+      "build_time_seconds": 3020.4115417,
+      "recall": {
+        "recall_at_1": 0.906,
+        "recall_at_10": 0.907179999999951,
+        "recall_at_100": 0.8699439999999875,
+        "query_count": 10000
+      },
+      "latency": {
+        "mean_us": 1114.4310300000018,
+        "p50_us": 1177.2,
+        "p95_us": 1397.1999999999998,
+        "p99_us": 1517.2,
+        "min_us": 291.9,
+        "max_us": 2060.1,
+        "samples": 10000
+      }
+    },
+    {
+      "m": 8,
+      "ef_construction": 800,
+      "ef_search": 400,
+      "k": 100,
+      "corpus_kind": "Sift",
+      "base_count": 1000000,
+      "query_count": 10000,
+      "dim": 128,
+      "build_time_seconds": 3020.4115417,
+      "recall": {
+        "recall_at_1": 0.9169,
+        "recall_at_10": 0.9230699999999453,
+        "recall_at_100": 0.9073009999999736,
+        "query_count": 10000
+      },
+      "latency": {
+        "mean_us": 1974.827840000001,
+        "p50_us": 2054.5,
+        "p95_us": 2485.5,
+        "p99_us": 2639.4,
+        "min_us": 617.0,
+        "max_us": 3325.7,
+        "samples": 10000
+      }
+    },
+    {
+      "m": 16,
+      "ef_construction": 100,
+      "ef_search": 50,
+      "k": 100,
+      "corpus_kind": "Sift",
+      "base_count": 1000000,
+      "query_count": 10000,
+      "dim": 128,
+      "build_time_seconds": 648.9850449,
+      "recall": {
+        "recall_at_1": 0.9495,
+        "recall_at_10": 0.9480599999999578,
+        "recall_at_100": 0.8916879999999754,
+        "query_count": 10000
+      },
+      "latency": {
+        "mean_us": 781.5734899999964,
+        "p50_us": 787.0,
+        "p95_us": 1024.3999999999999,
+        "p99_us": 1099.3000000000002,
+        "min_us": 152.29999999999998,
+        "max_us": 1552.6,
+        "samples": 10000
+      }
+    },
+    {
+      "m": 16,
+      "ef_construction": 100,
+      "ef_search": 100,
+      "k": 100,
+      "corpus_kind": "Sift",
+      "base_count": 1000000,
+      "query_count": 10000,
+      "dim": 128,
+      "build_time_seconds": 648.9850449,
+      "recall": {
+        "recall_at_1": 0.9495,
+        "recall_at_10": 0.9480599999999578,
+        "recall_at_100": 0.8916879999999754,
+        "query_count": 10000
+      },
+      "latency": {
+        "mean_us": 777.5780099999992,
+        "p50_us": 781.6,
+        "p95_us": 1014.1,
+        "p99_us": 1084.6,
+        "min_us": 151.29999999999998,
+        "max_us": 1856.6,
+        "samples": 10000
+      }
+    },
+    {
+      "m": 16,
+      "ef_construction": 100,
+      "ef_search": 200,
+      "k": 100,
+      "corpus_kind": "Sift",
+      "base_count": 1000000,
+      "query_count": 10000,
+      "dim": 128,
+      "build_time_seconds": 648.9850449,
+      "recall": {
+        "recall_at_1": 0.9594,
+        "recall_at_10": 0.9655399999999601,
+        "recall_at_100": 0.9428729999999385,
+        "query_count": 10000
+      },
+      "latency": {
+        "mean_us": 1346.2578599999983,
+        "p50_us": 1391.6,
+        "p95_us": 1752.0,
+        "p99_us": 1871.0,
+        "min_us": 282.9,
+        "max_us": 2539.9,
+        "samples": 10000
+      }
+    },
+    {
+      "m": 16,
+      "ef_construction": 100,
+      "ef_search": 400,
+      "k": 100,
+      "corpus_kind": "Sift",
+      "base_count": 1000000,
+      "query_count": 10000,
+      "dim": 128,
+      "build_time_seconds": 648.9850449,
+      "recall": {
+        "recall_at_1": 0.9654,
+        "recall_at_10": 0.9735299999999636,
+        "recall_at_100": 0.9650129999999028,
+        "query_count": 10000
+      },
+      "latency": {
+        "mean_us": 2328.61845999999,
+        "p50_us": 2392.6,
+        "p95_us": 3027.5,
+        "p99_us": 3298.3,
+        "min_us": 537.2,
+        "max_us": 4156.2,
+        "samples": 10000
+      }
+    },
+    {
+      "m": 16,
+      "ef_construction": 200,
+      "ef_search": 50,
+      "k": 100,
+      "corpus_kind": "Sift",
+      "base_count": 1000000,
+      "query_count": 10000,
+      "dim": 128,
+      "build_time_seconds": 1256.7317674,
+      "recall": {
+        "recall_at_1": 0.9565,
+        "recall_at_10": 0.958399999999958,
+        "recall_at_100": 0.9118259999999629,
+        "query_count": 10000
+      },
+      "latency": {
+        "mean_us": 842.1147699999984,
+        "p50_us": 892.6999999999999,
+        "p95_us": 1076.2,
+        "p99_us": 1150.4,
+        "min_us": 170.9,
+        "max_us": 2299.0,
+        "samples": 10000
+      }
+    },
+    {
+      "m": 16,
+      "ef_construction": 200,
+      "ef_search": 100,
+      "k": 100,
+      "corpus_kind": "Sift",
+      "base_count": 1000000,
+      "query_count": 10000,
+      "dim": 128,
+      "build_time_seconds": 1256.7317674,
+      "recall": {
+        "recall_at_1": 0.9565,
+        "recall_at_10": 0.958399999999958,
+        "recall_at_100": 0.9118259999999629,
+        "query_count": 10000
+      },
+      "latency": {
+        "mean_us": 846.6135699999988,
+        "p50_us": 897.9,
+        "p95_us": 1081.3999999999999,
+        "p99_us": 1168.0,
+        "min_us": 168.8,
+        "max_us": 1880.1,
+        "samples": 10000
+      }
+    },
+    {
+      "m": 16,
+      "ef_construction": 200,
+      "ef_search": 200,
+      "k": 100,
+      "corpus_kind": "Sift",
+      "base_count": 1000000,
+      "query_count": 10000,
+      "dim": 128,
+      "build_time_seconds": 1256.7317674,
+      "recall": {
+        "recall_at_1": 0.9653,
+        "recall_at_10": 0.9711099999999627,
+        "recall_at_100": 0.9542059999999248,
+        "query_count": 10000
+      },
+      "latency": {
+        "mean_us": 1482.618659999999,
+        "p50_us": 1512.3999999999999,
+        "p95_us": 1931.9,
+        "p99_us": 2087.2,
+        "min_us": 314.6,
+        "max_us": 3768.3,
+        "samples": 10000
+      }
+    },
+    {
+      "m": 16,
+      "ef_construction": 200,
+      "ef_search": 400,
+      "k": 100,
+      "corpus_kind": "Sift",
+      "base_count": 1000000,
+      "query_count": 10000,
+      "dim": 128,
+      "build_time_seconds": 1256.7317674,
+      "recall": {
+        "recall_at_1": 0.9686,
+        "recall_at_10": 0.976819999999966,
+        "recall_at_100": 0.9705629999998951,
+        "query_count": 10000
+      },
+      "latency": {
+        "mean_us": 2534.272230000011,
+        "p50_us": 2573.4,
+        "p95_us": 3424.2999999999997,
+        "p99_us": 3675.2999999999997,
+        "min_us": 612.3,
+        "max_us": 4571.8,
+        "samples": 10000
+      }
+    },
+    {
+      "m": 16,
+      "ef_construction": 400,
+      "ef_search": 50,
+      "k": 100,
+      "corpus_kind": "Sift",
+      "base_count": 1000000,
+      "query_count": 10000,
+      "dim": 128,
+      "build_time_seconds": 2350.4890179,
+      "recall": {
+        "recall_at_1": 0.9571,
+        "recall_at_10": 0.9624499999999596,
+        "recall_at_100": 0.9213139999999559,
+        "query_count": 10000
+      },
+      "latency": {
+        "mean_us": 928.1171199999986,
+        "p50_us": 986.9,
+        "p95_us": 1171.2,
+        "p99_us": 1266.0,
+        "min_us": 176.4,
+        "max_us": 2062.8,
+        "samples": 10000
+      }
+    },
+    {
+      "m": 16,
+      "ef_construction": 400,
+      "ef_search": 100,
+      "k": 100,
+      "corpus_kind": "Sift",
+      "base_count": 1000000,
+      "query_count": 10000,
+      "dim": 128,
+      "build_time_seconds": 2350.4890179,
+      "recall": {
+        "recall_at_1": 0.9571,
+        "recall_at_10": 0.9624499999999596,
+        "recall_at_100": 0.9213139999999559,
+        "query_count": 10000
+      },
+      "latency": {
+        "mean_us": 937.2523300000062,
+        "p50_us": 991.5,
+        "p95_us": 1191.3,
+        "p99_us": 1311.7,
+        "min_us": 178.0,
+        "max_us": 2667.7,
+        "samples": 10000
+      }
+    },
+    {
+      "m": 16,
+      "ef_construction": 400,
+      "ef_search": 200,
+      "k": 100,
+      "corpus_kind": "Sift",
+      "base_count": 1000000,
+      "query_count": 10000,
+      "dim": 128,
+      "build_time_seconds": 2350.4890179,
+      "recall": {
+        "recall_at_1": 0.9645,
+        "recall_at_10": 0.9736499999999653,
+        "recall_at_100": 0.9595809999999166,
+        "query_count": 10000
+      },
+      "latency": {
+        "mean_us": 1583.230630000001,
+        "p50_us": 1643.3000000000002,
+        "p95_us": 2042.3,
+        "p99_us": 2168.7,
+        "min_us": 339.3,
+        "max_us": 2928.3,
+        "samples": 10000
+      }
+    },
+    {
+      "m": 16,
+      "ef_construction": 400,
+      "ef_search": 400,
+      "k": 100,
+      "corpus_kind": "Sift",
+      "base_count": 1000000,
+      "query_count": 10000,
+      "dim": 128,
+      "build_time_seconds": 2350.4890179,
+      "recall": {
+        "recall_at_1": 0.9684,
+        "recall_at_10": 0.9783199999999687,
+        "recall_at_100": 0.9733709999998922,
+        "query_count": 10000
+      },
+      "latency": {
+        "mean_us": 2688.1250500000046,
+        "p50_us": 2710.5,
+        "p95_us": 3595.4,
+        "p99_us": 3842.1000000000004,
+        "min_us": 702.8,
+        "max_us": 5736.5,
+        "samples": 10000
+      }
+    },
+    {
+      "m": 16,
+      "ef_construction": 800,
+      "ef_search": 50,
+      "k": 100,
+      "corpus_kind": "Sift",
+      "base_count": 1000000,
+      "query_count": 10000,
+      "dim": 128,
+      "build_time_seconds": 4606.7946861,
+      "recall": {
+        "recall_at_1": 0.9617,
+        "recall_at_10": 0.9646299999999611,
+        "recall_at_100": 0.9256239999999556,
+        "query_count": 10000
+      },
+      "latency": {
+        "mean_us": 1169.7209700000026,
+        "p50_us": 1279.3,
+        "p95_us": 1463.5,
+        "p99_us": 1558.9,
+        "min_us": 211.9,
+        "max_us": 2428.9,
+        "samples": 10000
+      }
+    },
+    {
+      "m": 16,
+      "ef_construction": 800,
+      "ef_search": 100,
+      "k": 100,
+      "corpus_kind": "Sift",
+      "base_count": 1000000,
+      "query_count": 10000,
+      "dim": 128,
+      "build_time_seconds": 4606.7946861,
+      "recall": {
+        "recall_at_1": 0.9617,
+        "recall_at_10": 0.9646299999999611,
+        "recall_at_100": 0.9256239999999556,
+        "query_count": 10000
+      },
+      "latency": {
+        "mean_us": 1150.0812300000061,
+        "p50_us": 1256.8,
+        "p95_us": 1437.3000000000002,
+        "p99_us": 1525.8,
+        "min_us": 219.9,
+        "max_us": 2574.4,
+        "samples": 10000
+      }
+    },
+    {
+      "m": 16,
+      "ef_construction": 800,
+      "ef_search": 200,
+      "k": 100,
+      "corpus_kind": "Sift",
+      "base_count": 1000000,
+      "query_count": 10000,
+      "dim": 128,
+      "build_time_seconds": 4606.7946861,
+      "recall": {
+        "recall_at_1": 0.9678,
+        "recall_at_10": 0.9747799999999659,
+        "recall_at_100": 0.9618029999999075,
+        "query_count": 10000
+      },
+      "latency": {
+        "mean_us": 1993.6106999999947,
+        "p50_us": 2112.7,
+        "p95_us": 2522.8,
+        "p99_us": 2677.5,
+        "min_us": 386.90000000000003,
+        "max_us": 4657.4,
+        "samples": 10000
+      }
+    },
+    {
+      "m": 16,
+      "ef_construction": 800,
+      "ef_search": 400,
+      "k": 100,
+      "corpus_kind": "Sift",
+      "base_count": 1000000,
+      "query_count": 10000,
+      "dim": 128,
+      "build_time_seconds": 4606.7946861,
+      "recall": {
+        "recall_at_1": 0.9717,
+        "recall_at_10": 0.9791799999999681,
+        "recall_at_100": 0.9749039999998882,
+        "query_count": 10000
+      },
+      "latency": {
+        "mean_us": 3243.2077800000106,
+        "p50_us": 3218.8,
+        "p95_us": 4278.7,
+        "p99_us": 4580.8,
+        "min_us": 1087.8000000000002,
+        "max_us": 6643.099999999999,
+        "samples": 10000
+      }
+    },
+    {
+      "m": 32,
+      "ef_construction": 100,
+      "ef_search": 50,
+      "k": 100,
+      "corpus_kind": "Sift",
+      "base_count": 1000000,
+      "query_count": 10000,
+      "dim": 128,
+      "build_time_seconds": 752.4011767,
+      "recall": {
+        "recall_at_1": 0.9747,
+        "recall_at_10": 0.9748599999999725,
+        "recall_at_100": 0.9277629999999466,
+        "query_count": 10000
+      },
+      "latency": {
+        "mean_us": 921.6356199999966,
+        "p50_us": 966.8,
+        "p95_us": 1232.9,
+        "p99_us": 1338.4,
+        "min_us": 157.0,
+        "max_us": 1627.1000000000001,
+        "samples": 10000
+      }
+    },
+    {
+      "m": 32,
+      "ef_construction": 100,
+      "ef_search": 100,
+      "k": 100,
+      "corpus_kind": "Sift",
+      "base_count": 1000000,
+      "query_count": 10000,
+      "dim": 128,
+      "build_time_seconds": 752.4011767,
+      "recall": {
+        "recall_at_1": 0.9747,
+        "recall_at_10": 0.9748599999999725,
+        "recall_at_100": 0.9277629999999466,
+        "query_count": 10000
+      },
+      "latency": {
+        "mean_us": 934.6710599999998,
+        "p50_us": 980.0,
+        "p95_us": 1253.0,
+        "p99_us": 1367.1,
+        "min_us": 159.8,
+        "max_us": 1842.3999999999999,
+        "samples": 10000
+      }
+    },
+    {
+      "m": 32,
+      "ef_construction": 100,
+      "ef_search": 200,
+      "k": 100,
+      "corpus_kind": "Sift",
+      "base_count": 1000000,
+      "query_count": 10000,
+      "dim": 128,
+      "build_time_seconds": 752.4011767,
+      "recall": {
+        "recall_at_1": 0.9812,
+        "recall_at_10": 0.9863499999999811,
+        "recall_at_100": 0.9704319999999057,
+        "query_count": 10000
+      },
+      "latency": {
+        "mean_us": 1627.7544399999952,
+        "p50_us": 1700.6000000000001,
+        "p95_us": 2232.6,
+        "p99_us": 2447.1,
+        "min_us": 319.6,
+        "max_us": 3516.2000000000003,
+        "samples": 10000
+      }
+    },
+    {
+      "m": 32,
+      "ef_construction": 100,
+      "ef_search": 400,
+      "k": 100,
+      "corpus_kind": "Sift",
+      "base_count": 1000000,
+      "query_count": 10000,
+      "dim": 128,
+      "build_time_seconds": 752.4011767,
+      "recall": {
+        "recall_at_1": 0.9838,
+        "recall_at_10": 0.9905199999999843,
+        "recall_at_100": 0.9859169999998939,
+        "query_count": 10000
+      },
+      "latency": {
+        "mean_us": 2847.900610000002,
+        "p50_us": 2874.7999999999997,
+        "p95_us": 3956.1,
+        "p99_us": 4445.5,
+        "min_us": 585.0999999999999,
+        "max_us": 7694.8,
+        "samples": 10000
+      }
+    },
+    {
+      "m": 32,
+      "ef_construction": 200,
+      "ef_search": 50,
+      "k": 100,
+      "corpus_kind": "Sift",
+      "base_count": 1000000,
+      "query_count": 10000,
+      "dim": 128,
+      "build_time_seconds": 1500.8246834,
+      "recall": {
+        "recall_at_1": 0.9803,
+        "recall_at_10": 0.982349999999976,
+        "recall_at_100": 0.9489439999999307,
+        "query_count": 10000
+      },
+      "latency": {
+        "mean_us": 1068.6429900000035,
+        "p50_us": 1119.4,
+        "p95_us": 1440.3,
+        "p99_us": 1608.7,
+        "min_us": 179.2,
+        "max_us": 2128.5,
+        "samples": 10000
+      }
+    },
+    {
+      "m": 32,
+      "ef_construction": 200,
+      "ef_search": 100,
+      "k": 100,
+      "corpus_kind": "Sift",
+      "base_count": 1000000,
+      "query_count": 10000,
+      "dim": 128,
+      "build_time_seconds": 1500.8246834,
+      "recall": {
+        "recall_at_1": 0.9803,
+        "recall_at_10": 0.982349999999976,
+        "recall_at_100": 0.9489439999999307,
+        "query_count": 10000
+      },
+      "latency": {
+        "mean_us": 1077.8870399999953,
+        "p50_us": 1128.7,
+        "p95_us": 1453.3,
+        "p99_us": 1620.0,
+        "min_us": 168.70000000000002,
+        "max_us": 2060.6,
+        "samples": 10000
+      }
+    },
+    {
+      "m": 32,
+      "ef_construction": 200,
+      "ef_search": 200,
+      "k": 100,
+      "corpus_kind": "Sift",
+      "base_count": 1000000,
+      "query_count": 10000,
+      "dim": 128,
+      "build_time_seconds": 1500.8246834,
+      "recall": {
+        "recall_at_1": 0.9849,
+        "recall_at_10": 0.9893999999999813,
+        "recall_at_100": 0.9799779999998928,
+        "query_count": 10000
+      },
+      "latency": {
+        "mean_us": 1860.7106699999988,
+        "p50_us": 1931.3,
+        "p95_us": 2562.6,
+        "p99_us": 2784.0,
+        "min_us": 373.3,
+        "max_us": 3524.3,
+        "samples": 10000
+      }
+    },
+    {
+      "m": 32,
+      "ef_construction": 200,
+      "ef_search": 400,
+      "k": 100,
+      "corpus_kind": "Sift",
+      "base_count": 1000000,
+      "query_count": 10000,
+      "dim": 128,
+      "build_time_seconds": 1500.8246834,
+      "recall": {
+        "recall_at_1": 0.9854,
+        "recall_at_10": 0.991629999999985,
+        "recall_at_100": 0.9893699999998926,
+        "query_count": 10000
+      },
+      "latency": {
+        "mean_us": 3193.5325000000107,
+        "p50_us": 3302.9,
+        "p95_us": 4473.5,
+        "p99_us": 4892.2,
+        "min_us": 690.9000000000001,
+        "max_us": 6077.1,
+        "samples": 10000
+      }
+    },
+    {
+      "m": 32,
+      "ef_construction": 400,
+      "ef_search": 50,
+      "k": 100,
+      "corpus_kind": "Sift",
+      "base_count": 1000000,
+      "query_count": 10000,
+      "dim": 128,
+      "build_time_seconds": 2968.0835474,
+      "recall": {
+        "recall_at_1": 0.9819,
+        "recall_at_10": 0.9855099999999786,
+        "recall_at_100": 0.960505999999917,
+        "query_count": 10000
+      },
+      "latency": {
+        "mean_us": 1316.4839199999956,
+        "p50_us": 1365.7,
+        "p95_us": 1845.0,
+        "p99_us": 1974.3,
+        "min_us": 212.6,
+        "max_us": 2548.4,
+        "samples": 10000
+      }
+    },
+    {
+      "m": 32,
+      "ef_construction": 400,
+      "ef_search": 100,
+      "k": 100,
+      "corpus_kind": "Sift",
+      "base_count": 1000000,
+      "query_count": 10000,
+      "dim": 128,
+      "build_time_seconds": 2968.0835474,
+      "recall": {
+        "recall_at_1": 0.9819,
+        "recall_at_10": 0.9855099999999786,
+        "recall_at_100": 0.960505999999917,
+        "query_count": 10000
+      },
+      "latency": {
+        "mean_us": 1304.569480000006,
+        "p50_us": 1357.0,
+        "p95_us": 1821.8,
+        "p99_us": 1937.8,
+        "min_us": 207.6,
+        "max_us": 2360.7,
+        "samples": 10000
+      }
+    },
+    {
+      "m": 32,
+      "ef_construction": 400,
+      "ef_search": 200,
+      "k": 100,
+      "corpus_kind": "Sift",
+      "base_count": 1000000,
+      "query_count": 10000,
+      "dim": 128,
+      "build_time_seconds": 2968.0835474,
+      "recall": {
+        "recall_at_1": 0.9845,
+        "recall_at_10": 0.9904599999999842,
+        "recall_at_100": 0.9843609999998887,
+        "query_count": 10000
+      },
+      "latency": {
+        "mean_us": 2217.812579999991,
+        "p50_us": 2294.6,
+        "p95_us": 3030.7,
+        "p99_us": 3402.7,
+        "min_us": 418.7,
+        "max_us": 4322.7,
+        "samples": 10000
+      }
+    },
+    {
+      "m": 32,
+      "ef_construction": 400,
+      "ef_search": 400,
+      "k": 100,
+      "corpus_kind": "Sift",
+      "base_count": 1000000,
+      "query_count": 10000,
+      "dim": 128,
+      "build_time_seconds": 2968.0835474,
+      "recall": {
+        "recall_at_1": 0.9849,
+        "recall_at_10": 0.991899999999986,
+        "recall_at_100": 0.9907629999998977,
+        "query_count": 10000
+      },
+      "latency": {
+        "mean_us": 3770.0403100000194,
+        "p50_us": 3896.8,
+        "p95_us": 5242.1,
+        "p99_us": 5755.900000000001,
+        "min_us": 876.4000000000001,
+        "max_us": 8964.800000000001,
+        "samples": 10000
+      }
+    },
+    {
+      "m": 32,
+      "ef_construction": 800,
+      "ef_search": 50,
+      "k": 100,
+      "corpus_kind": "Sift",
+      "base_count": 1000000,
+      "query_count": 10000,
+      "dim": 128,
+      "build_time_seconds": 6364.9567478,
+      "recall": {
+        "recall_at_1": 0.9829,
+        "recall_at_10": 0.9867899999999792,
+        "recall_at_100": 0.966766999999909,
+        "query_count": 10000
+      },
+      "latency": {
+        "mean_us": 1872.5146699999991,
+        "p50_us": 1862.3999999999999,
+        "p95_us": 2628.4,
+        "p99_us": 2875.7000000000003,
+        "min_us": 226.0,
+        "max_us": 5333.1,
+        "samples": 10000
+      }
+    },
+    {
+      "m": 32,
+      "ef_construction": 800,
+      "ef_search": 100,
+      "k": 100,
+      "corpus_kind": "Sift",
+      "base_count": 1000000,
+      "query_count": 10000,
+      "dim": 128,
+      "build_time_seconds": 6364.9567478,
+      "recall": {
+        "recall_at_1": 0.9829,
+        "recall_at_10": 0.9867899999999792,
+        "recall_at_100": 0.966766999999909,
+        "query_count": 10000
+      },
+      "latency": {
+        "mean_us": 1879.0436900000066,
+        "p50_us": 1877.5,
+        "p95_us": 2599.2,
+        "p99_us": 2742.1,
+        "min_us": 256.90000000000003,
+        "max_us": 3958.8999999999996,
+        "samples": 10000
+      }
+    },
+    {
+      "m": 32,
+      "ef_construction": 800,
+      "ef_search": 200,
+      "k": 100,
+      "corpus_kind": "Sift",
+      "base_count": 1000000,
+      "query_count": 10000,
+      "dim": 128,
+      "build_time_seconds": 6364.9567478,
+      "recall": {
+        "recall_at_1": 0.9851,
+        "recall_at_10": 0.9912999999999845,
+        "recall_at_100": 0.9869779999998923,
+        "query_count": 10000
+      },
+      "latency": {
+        "mean_us": 3399.122359999997,
+        "p50_us": 3577.5,
+        "p95_us": 4458.3,
+        "p99_us": 4789.0,
+        "min_us": 510.5,
+        "max_us": 7069.8,
+        "samples": 10000
+      }
+    },
+    {
+      "m": 32,
+      "ef_construction": 800,
+      "ef_search": 400,
+      "k": 100,
+      "corpus_kind": "Sift",
+      "base_count": 1000000,
+      "query_count": 10000,
+      "dim": 128,
+      "build_time_seconds": 6364.9567478,
+      "recall": {
+        "recall_at_1": 0.9865,
+        "recall_at_10": 0.9924799999999866,
+        "recall_at_100": 0.9919199999999034,
+        "query_count": 10000
+      },
+      "latency": {
+        "mean_us": 5175.530560000004,
+        "p50_us": 5372.2,
+        "p95_us": 6981.6,
+        "p99_us": 8044.900000000001,
+        "min_us": 1526.9,
+        "max_us": 14172.7,
+        "samples": 10000
+      }
+    },
+    {
+      "m": 64,
+      "ef_construction": 100,
+      "ef_search": 50,
+      "k": 100,
+      "corpus_kind": "Sift",
+      "base_count": 1000000,
+      "query_count": 10000,
+      "dim": 128,
+      "build_time_seconds": 1737.2855916,
+      "recall": {
+        "recall_at_1": 0.9856,
+        "recall_at_10": 0.9927999999999904,
+        "recall_at_100": 0.9835409999999232,
+        "query_count": 10000
+      },
+      "latency": {
+        "mean_us": 1988.3580500000012,
+        "p50_us": 2022.4,
+        "p95_us": 2715.1,
+        "p99_us": 2971.1,
+        "min_us": 504.0,
+        "max_us": 4293.599999999999,
+        "samples": 10000
+      }
+    },
+    {
+      "m": 64,
+      "ef_construction": 100,
+      "ef_search": 100,
+      "k": 100,
+      "corpus_kind": "Sift",
+      "base_count": 1000000,
+      "query_count": 10000,
+      "dim": 128,
+      "build_time_seconds": 1737.2855916,
+      "recall": {
+        "recall_at_1": 0.9856,
+        "recall_at_10": 0.9927999999999904,
+        "recall_at_100": 0.9835409999999232,
+        "query_count": 10000
+      },
+      "latency": {
+        "mean_us": 1966.9203400000022,
+        "p50_us": 1999.1000000000001,
+        "p95_us": 2693.8,
+        "p99_us": 2987.7,
+        "min_us": 484.8,
+        "max_us": 4351.0,
+        "samples": 10000
+      }
+    },
+    {
+      "m": 64,
+      "ef_construction": 100,
+      "ef_search": 200,
+      "k": 100,
+      "corpus_kind": "Sift",
+      "base_count": 1000000,
+      "query_count": 10000,
+      "dim": 128,
+      "build_time_seconds": 1737.2855916,
+      "recall": {
+        "recall_at_1": 0.9877,
+        "recall_at_10": 0.9956399999999936,
+        "recall_at_100": 0.993212999999941,
+        "query_count": 10000
+      },
+      "latency": {
+        "mean_us": 3328.775429999996,
+        "p50_us": 3416.7,
+        "p95_us": 4448.8,
+        "p99_us": 4898.4,
+        "min_us": 946.4,
+        "max_us": 6903.099999999999,
+        "samples": 10000
+      }
+    },
+    {
+      "m": 64,
+      "ef_construction": 100,
+      "ef_search": 400,
+      "k": 100,
+      "corpus_kind": "Sift",
+      "base_count": 1000000,
+      "query_count": 10000,
+      "dim": 128,
+      "build_time_seconds": 1737.2855916,
+      "recall": {
+        "recall_at_1": 0.9885,
+        "recall_at_10": 0.9967499999999953,
+        "recall_at_100": 0.996387999999961,
+        "query_count": 10000
+      },
+      "latency": {
+        "mean_us": 5639.668370000018,
+        "p50_us": 5687.4,
+        "p95_us": 7543.2,
+        "p99_us": 8246.800000000001,
+        "min_us": 1964.2,
+        "max_us": 12144.800000000001,
+        "samples": 10000
+      }
+    },
+    {
+      "m": 64,
+      "ef_construction": 200,
+      "ef_search": 50,
+      "k": 100,
+      "corpus_kind": "Sift",
+      "base_count": 1000000,
+      "query_count": 10000,
+      "dim": 128,
+      "build_time_seconds": 1686.3835144,
+      "recall": {
+        "recall_at_1": 0.9862,
+        "recall_at_10": 0.9892299999999846,
+        "recall_at_100": 0.9580699999999238,
+        "query_count": 10000
+      },
+      "latency": {
+        "mean_us": 1318.307140000004,
+        "p50_us": 1357.1,
+        "p95_us": 1865.1,
+        "p99_us": 2057.6000000000004,
+        "min_us": 219.4,
+        "max_us": 3078.9,
+        "samples": 10000
+      }
+    },
+    {
+      "m": 64,
+      "ef_construction": 200,
+      "ef_search": 100,
+      "k": 100,
+      "corpus_kind": "Sift",
+      "base_count": 1000000,
+      "query_count": 10000,
+      "dim": 128,
+      "build_time_seconds": 1686.3835144,
+      "recall": {
+        "recall_at_1": 0.9862,
+        "recall_at_10": 0.9892299999999846,
+        "recall_at_100": 0.9580699999999238,
+        "query_count": 10000
+      },
+      "latency": {
+        "mean_us": 1298.8931099999986,
+        "p50_us": 1340.3,
+        "p95_us": 1837.1,
+        "p99_us": 2010.1,
+        "min_us": 221.8,
+        "max_us": 2620.8999999999996,
+        "samples": 10000
+      }
+    },
+    {
+      "m": 64,
+      "ef_construction": 200,
+      "ef_search": 200,
+      "k": 100,
+      "corpus_kind": "Sift",
+      "base_count": 1000000,
+      "query_count": 10000,
+      "dim": 128,
+      "build_time_seconds": 1686.3835144,
+      "recall": {
+        "recall_at_1": 0.9888,
+        "recall_at_10": 0.9950199999999911,
+        "recall_at_100": 0.9868939999999109,
+        "query_count": 10000
+      },
+      "latency": {
+        "mean_us": 2205.491669999999,
+        "p50_us": 2280.4,
+        "p95_us": 3089.2,
+        "p99_us": 3434.5,
+        "min_us": 461.4,
+        "max_us": 4141.1,
+        "samples": 10000
+      }
+    },
+    {
+      "m": 64,
+      "ef_construction": 200,
+      "ef_search": 400,
+      "k": 100,
+      "corpus_kind": "Sift",
+      "base_count": 1000000,
+      "query_count": 10000,
+      "dim": 128,
+      "build_time_seconds": 1686.3835144,
+      "recall": {
+        "recall_at_1": 0.9886,
+        "recall_at_10": 0.9964099999999931,
+        "recall_at_100": 0.9947939999999335,
+        "query_count": 10000
+      },
+      "latency": {
+        "mean_us": 3671.502540000006,
+        "p50_us": 3759.7,
+        "p95_us": 5192.0,
+        "p99_us": 5765.400000000001,
+        "min_us": 838.6999999999999,
+        "max_us": 8927.0,
+        "samples": 10000
+      }
+    },
+    {
+      "m": 64,
+      "ef_construction": 400,
+      "ef_search": 50,
+      "k": 100,
+      "corpus_kind": "Sift",
+      "base_count": 1000000,
+      "query_count": 10000,
+      "dim": 128,
+      "build_time_seconds": 3441.8799574,
+      "recall": {
+        "recall_at_1": 0.9874,
+        "recall_at_10": 0.9917399999999874,
+        "recall_at_100": 0.969457999999912,
+        "query_count": 10000
+      },
+      "latency": {
+        "mean_us": 1713.1816900000035,
+        "p50_us": 1716.5,
+        "p95_us": 2464.9,
+        "p99_us": 2669.5,
+        "min_us": 253.10000000000002,
+        "max_us": 3428.5,
+        "samples": 10000
+      }
+    },
+    {
+      "m": 64,
+      "ef_construction": 400,
+      "ef_search": 100,
+      "k": 100,
+      "corpus_kind": "Sift",
+      "base_count": 1000000,
+      "query_count": 10000,
+      "dim": 128,
+      "build_time_seconds": 3441.8799574,
+      "recall": {
+        "recall_at_1": 0.9874,
+        "recall_at_10": 0.9917399999999874,
+        "recall_at_100": 0.969457999999912,
+        "query_count": 10000
+      },
+      "latency": {
+        "mean_us": 1721.4136199999948,
+        "p50_us": 1717.8,
+        "p95_us": 2482.5,
+        "p99_us": 2723.5,
+        "min_us": 260.2,
+        "max_us": 12941.4,
+        "samples": 10000
+      }
+    },
+    {
+      "m": 64,
+      "ef_construction": 400,
+      "ef_search": 200,
+      "k": 100,
+      "corpus_kind": "Sift",
+      "base_count": 1000000,
+      "query_count": 10000,
+      "dim": 128,
+      "build_time_seconds": 3441.8799574,
+      "recall": {
+        "recall_at_1": 0.9899,
+        "recall_at_10": 0.9954699999999921,
+        "recall_at_100": 0.9909649999999165,
+        "query_count": 10000
+      },
+      "latency": {
+        "mean_us": 3013.415709999998,
+        "p50_us": 3146.8999999999996,
+        "p95_us": 4206.5,
+        "p99_us": 4616.6,
+        "min_us": 427.4,
+        "max_us": 16482.8,
+        "samples": 10000
+      }
+    },
+    {
+      "m": 64,
+      "ef_construction": 400,
+      "ef_search": 400,
+      "k": 100,
+      "corpus_kind": "Sift",
+      "base_count": 1000000,
+      "query_count": 10000,
+      "dim": 128,
+      "build_time_seconds": 3441.8799574,
+      "recall": {
+        "recall_at_1": 0.9911,
+        "recall_at_10": 0.9963099999999931,
+        "recall_at_100": 0.9958329999999403,
+        "query_count": 10000
+      },
+      "latency": {
+        "mean_us": 4809.249150000024,
+        "p50_us": 4925.0,
+        "p95_us": 6698.7,
+        "p99_us": 7702.2,
+        "min_us": 1033.0,
+        "max_us": 13339.1,
+        "samples": 10000
+      }
+    },
+    {
+      "m": 64,
+      "ef_construction": 800,
+      "ef_search": 50,
+      "k": 100,
+      "corpus_kind": "Sift",
+      "base_count": 1000000,
+      "query_count": 10000,
+      "dim": 128,
+      "build_time_seconds": 8346.8940155,
+      "recall": {
+        "recall_at_1": 0.9881,
+        "recall_at_10": 0.9933899999999887,
+        "recall_at_100": 0.9759709999999031,
+        "query_count": 10000
+      },
+      "latency": {
+        "mean_us": 2931.8458600000044,
+        "p50_us": 3011.5,
+        "p95_us": 4716.8,
+        "p99_us": 6481.200000000001,
+        "min_us": 304.79999999999995,
+        "max_us": 12583.0,
+        "samples": 10000
+      }
+    },
+    {
+      "m": 64,
+      "ef_construction": 800,
+      "ef_search": 100,
+      "k": 100,
+      "corpus_kind": "Sift",
+      "base_count": 1000000,
+      "query_count": 10000,
+      "dim": 128,
+      "build_time_seconds": 8346.8940155,
+      "recall": {
+        "recall_at_1": 0.9881,
+        "recall_at_10": 0.9933899999999887,
+        "recall_at_100": 0.9759709999999031,
+        "query_count": 10000
+      },
+      "latency": {
+        "mean_us": 2835.268900000001,
+        "p50_us": 2957.1,
+        "p95_us": 4457.3,
+        "p99_us": 5801.7,
+        "min_us": 300.5,
+        "max_us": 13589.800000000001,
+        "samples": 10000
+      }
+    },
+    {
+      "m": 64,
+      "ef_construction": 800,
+      "ef_search": 200,
+      "k": 100,
+      "corpus_kind": "Sift",
+      "base_count": 1000000,
+      "query_count": 10000,
+      "dim": 128,
+      "build_time_seconds": 8346.8940155,
+      "recall": {
+        "recall_at_1": 0.9878,
+        "recall_at_10": 0.9962499999999929,
+        "recall_at_100": 0.9930279999999224,
+        "query_count": 10000
+      },
+      "latency": {
+        "mean_us": 5110.527570000012,
+        "p50_us": 5007.5,
+        "p95_us": 8171.9,
+        "p99_us": 11371.199999999999,
+        "min_us": 606.4,
+        "max_us": 20153.7,
+        "samples": 10000
+      }
+    },
+    {
+      "m": 64,
+      "ef_construction": 800,
+      "ef_search": 400,
+      "k": 100,
+      "corpus_kind": "Sift",
+      "base_count": 1000000,
+      "query_count": 10000,
+      "dim": 128,
+      "build_time_seconds": 8346.8940155,
+      "recall": {
+        "recall_at_1": 0.9884,
+        "recall_at_10": 0.9967299999999936,
+        "recall_at_100": 0.9964099999999475,
+        "query_count": 10000
+      },
+      "latency": {
+        "mean_us": 8954.767460000015,
+        "p50_us": 8397.800000000001,
+        "p95_us": 14930.4,
+        "p99_us": 20287.9,
+        "min_us": 1946.9,
+        "max_us": 37157.6,
+        "samples": 10000
+      }
+    }
+  ]
+}

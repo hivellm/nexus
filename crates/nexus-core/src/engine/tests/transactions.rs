@@ -659,6 +659,133 @@ fn unwind_match_merge_edge_upsert_every_row() {
     }
 }
 
+// ─── phase1_http-merge-rel-and-set-rel-parity (B6, 17b) ───────────────────
+
+/// B6: `UNWIND $rows AS row MERGE (...)` must resolve the `$rows` parameter
+/// to a JSON array and iterate it — previously `eval_write_value` had no
+/// `Expression::Parameter` arm and fell through to
+/// `expression_to_json_value`'s catch-all, erroring with "Complex
+/// expressions not supported in CREATE properties" before any MERGE ran.
+#[test]
+#[serial_test::serial]
+fn unwind_parameter_list_merges_every_row() {
+    let ctx = crate::testing::TestContext::new();
+    let mut engine = Engine::with_isolated_catalog(ctx.path()).unwrap();
+
+    let mut params = std::collections::HashMap::new();
+    params.insert(
+        "rows".to_string(),
+        serde_json::json!([{"id": 1}, {"id": 2}, {"id": 3}]),
+    );
+    engine
+        .execute_cypher_with_params(
+            "UNWIND $rows AS row MERGE (n:B6Unwind {id: row.id})",
+            params.clone(),
+        )
+        .expect("UNWIND $param + MERGE must succeed");
+
+    let count = engine
+        .execute_cypher("MATCH (n:B6Unwind) RETURN count(n) AS c")
+        .expect("count after UNWIND $param batch");
+    assert_eq!(
+        count.rows[0].values[0].as_i64(),
+        Some(3),
+        "UNWIND $rows must persist all 3 distinct rows"
+    );
+
+    // Re-running the same batch stays idempotent (MERGE semantics).
+    engine
+        .execute_cypher_with_params(
+            "UNWIND $rows AS row MERGE (n:B6Unwind {id: row.id})",
+            params,
+        )
+        .expect("re-run UNWIND $param + MERGE must succeed");
+    let count2 = engine
+        .execute_cypher("MATCH (n:B6Unwind) RETURN count(n) AS c")
+        .expect("count after re-run");
+    assert_eq!(
+        count2.rows[0].values[0].as_i64(),
+        Some(3),
+        "re-running the UNWIND $param batch must not duplicate rows"
+    );
+}
+
+/// B6: `UNWIND $missing AS row` — a parameter that was never bound — must
+/// error cleanly (client-facing message naming the parameter), not silently
+/// degrade to an empty UNWIND that reports success with zero rows written.
+#[test]
+#[serial_test::serial]
+fn unwind_missing_parameter_errors_cleanly() {
+    let ctx = crate::testing::TestContext::new();
+    let mut engine = Engine::with_isolated_catalog(ctx.path()).unwrap();
+
+    let err = engine
+        .execute_cypher_with_params(
+            "UNWIND $missing AS row MERGE (n:B6Missing {id: row.id})",
+            std::collections::HashMap::new(),
+        )
+        .expect_err("an unbound UNWIND parameter must error, not silently no-op");
+    assert!(
+        err.to_string().contains("missing"),
+        "error must name the missing parameter, got: {err}"
+    );
+}
+
+/// 17b: `BEGIN TRANSACTION → CREATE (no RETURN) → ROLLBACK TRANSACTION` via
+/// `Engine::execute_cypher_with_params` — the exact API the HTTP write-path
+/// unification (Step 2) reroutes onto — must actually revert the CREATE.
+/// Investigation for checklist item 2.0e: the watermark-based rollback fix
+/// (`rollback_undoes_executor_created_nodes` above) already covers this
+/// scenario via the parameterless `execute_cypher`; this variant locks the
+/// parameterized entry point too, since `current_params` bookkeeping
+/// (installed/cleared around the call) is exactly what a Step-2 reroute
+/// would exercise on every write.
+#[test]
+#[serial_test::serial]
+fn rollback_undoes_executor_created_nodes_via_params_entrypoint() {
+    let ctx = crate::testing::TestContext::new();
+    let mut engine = Engine::with_isolated_catalog(ctx.path()).unwrap();
+
+    engine
+        .execute_cypher_with_params(
+            "CREATE (:B17bKeep {id: 'keep'})",
+            std::collections::HashMap::new(),
+        )
+        .expect("pre-tx CREATE");
+
+    engine
+        .execute_cypher_with_params("BEGIN TRANSACTION", std::collections::HashMap::new())
+        .expect("BEGIN");
+    engine
+        .execute_cypher_with_params(
+            "CREATE (n:B17bGone {x: 1})",
+            std::collections::HashMap::new(),
+        )
+        .expect("CREATE inside open transaction (no RETURN, matches the harness case)");
+    engine
+        .execute_cypher_with_params("ROLLBACK TRANSACTION", std::collections::HashMap::new())
+        .expect("ROLLBACK");
+
+    let gone = engine
+        .execute_cypher("MATCH (n:B17bGone) RETURN count(n) AS c")
+        .expect("read after ROLLBACK");
+    assert_eq!(
+        gone.rows[0].values[0].as_i64(),
+        Some(0),
+        "a CREATE rolled back inside BEGIN/ROLLBACK must not be visible afterwards, got {:?}",
+        gone.rows[0].values[0]
+    );
+
+    let kept = engine
+        .execute_cypher("MATCH (n:B17bKeep) RETURN count(n) AS c")
+        .expect("read kept");
+    assert_eq!(
+        kept.rows[0].values[0].as_i64(),
+        Some(1),
+        "pre-transaction data must survive the rollback"
+    );
+}
+
 /// The legacy engine CALL-subquery path must execute an inner read
 /// subquery. It previously failed on every inner MATCH ... RETURN: the
 /// read fallback re-parsed `query_to_string`'s Debug output instead of

@@ -163,4 +163,66 @@ mod tests {
 
         tracing::info!("=== Benchmark Complete ===");
     }
+
+    /// phase6_traversal-aggregation-perf §2 — before/after for the
+    /// `find_relationships` store-lock hoist: a single node with 1000
+    /// outgoing relationships, only 10% (`MatchType`) matching the
+    /// query's relationship-type filter, the rest split across 9 other
+    /// types. Every hop in the linked-list walk previously re-acquired
+    /// `parking_lot::RwLock::read()` via `self.store()`; the fix
+    /// acquires it once for the whole walk. This test measures the
+    /// query end-to-end (not the isolated function) so it captures the
+    /// full effect a caller would see.
+    #[test]
+    #[ignore = "Slow benchmark test - run explicitly with cargo test -- --ignored"]
+    fn benchmark_typed_traversal_mixed_types_10_percent_match() {
+        let (mut engine, _ctx) = setup_test_engine().unwrap();
+
+        let result = engine
+            .execute_cypher("CREATE (n:Hub {name: 'hub'}) RETURN id(n) as id")
+            .unwrap();
+        let hub_id = result.rows[0].values[0].as_u64().unwrap();
+
+        let total_rels = 1000;
+        for i in 0..total_rels {
+            let type_name = if i % 10 == 0 {
+                "MatchType".to_string()
+            } else {
+                format!("OtherType{}", i % 9)
+            };
+            let leaf = engine
+                .execute_cypher(&format!("CREATE (m:Leaf {{i: {}}}) RETURN id(m) as id", i))
+                .unwrap();
+            let leaf_id = leaf.rows[0].values[0].as_u64().unwrap();
+            let query = format!(
+                "MATCH (a), (b) WHERE id(a) = {} AND id(b) = {} CREATE (a)-[r:{}]->(b)",
+                hub_id, leaf_id, type_name
+            );
+            engine.execute_cypher(&query).unwrap();
+        }
+
+        let iterations = 50;
+        let query = format!(
+            "MATCH (n)-[r:MatchType]->(m) WHERE id(n) = {} RETURN count(r) as total",
+            hub_id
+        );
+
+        let start = Instant::now();
+        for _ in 0..iterations {
+            engine.execute_cypher(&query).unwrap();
+        }
+        let elapsed = start.elapsed();
+        let avg_ms = elapsed.as_secs_f64() * 1000.0 / iterations as f64;
+
+        eprintln!(
+            "Typed traversal (1000 rels, 10% match, store-lock hoist) benchmark: {avg_ms:.3}ms avg over {iterations} iterations"
+        );
+
+        let result = engine.execute_cypher(&query).unwrap();
+        assert_eq!(
+            result.rows[0].values[0].as_u64(),
+            Some((total_rels / 10) as u64),
+            "must find exactly the 10% of relationships carrying MatchType"
+        );
+    }
 }

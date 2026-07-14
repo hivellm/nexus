@@ -1,3 +1,20 @@
+# .NET build outputs
+bin/
+obj/
+artifacts/*.nupkg
+artifacts/*.snupkg
+
+# NuGet
+*.nupkg
+*.snupkg
+nuget.config
+
+# User-specific files
+*.user
+*.userosscache
+*.suo
+*.userprefs
+
 # Build results
 [Dd]ebug/
 [Rr]elease/
@@ -9,39 +26,27 @@ bld/
 [Bb]in/
 [Oo]bj/
 [Ll]og/
-[Ll]ogs/
 
 # Visual Studio
 .vs/
-*.user
-*.suo
-*.userosscache
-*.sln.docstates
-
-# NuGet
-*.nupkg
-*.snupkg
-.nuget/
-packages/
-
-# Build artifacts
-project.lock.json
-project.fragment.lock.json
-artifacts/
-
-# IDE
-.idea/
 .vscode/
-*.swp
-*.swo
-*~
+*.rsuser
 
-# OS
-.DS_Store
-Thumbs.db
-
-# Test results
-TestResults/
-coverage/
+# Test Results
+[Tt]est[Rr]esult*/
+[Bb]uild[Ll]og.*
+*.trx
 *.coverage
 *.coveragexml
+
+# Rider
+.idea/
+*.sln.iml
+
+# macOS
+.DS_Store
+
+# Windows
+Thumbs.db
+Desktop.ini
+nuget.config

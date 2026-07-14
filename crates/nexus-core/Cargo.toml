@@ -77,6 +77,10 @@ crossbeam-channel = "0.5"
 rand.workspace = true
 regex = "1.11"
 strsim = "0.11"  # phase6 apoc.text.* similarity metrics (Levenshtein, Jaro, Sorensen-Dice)
+# phase4_cypher-parity-quick-wins — `normalize()` Cypher scalar (NFC/NFD/NFKC/NFKD).
+# Tiny, no_std-capable, no transitive deps of note; not already pulled in by
+# anything else in the tree (verified against Cargo.lock before adding).
+unicode-normalization = "0.1"
 tracing = "0.1"
 dashmap = "6.1"
 rayon = "1.8"

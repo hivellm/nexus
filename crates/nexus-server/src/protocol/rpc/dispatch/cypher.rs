@@ -30,6 +30,7 @@ use std::time::Instant;
 use nexus_core::executor::Query;
 use nexus_core::executor::parser::{Clause, CypherParser, CypherQuery};
 
+use crate::api::cypher::routing::needs_engine_interception;
 use crate::api::cypher::{
     CypherResponse, execute_api_key_commands, execute_database_commands,
     execute_query_management_commands, execute_user_commands,
@@ -252,25 +253,96 @@ async fn execute_query(
         return admin_result;
     }
 
-    // Route mutating and MATCH queries through `engine.execute_cypher`
-    // — the only path that intercepts DELETE / DETACH DELETE / CREATE /
-    // MERGE / SET / REMOVE / FOREACH before they hit the executor's
-    // operator pipeline. The executor's `Operator::Delete` / `DetachDelete`
-    // handler is a no-op that relies on this upstream interception;
-    // calling `executor.execute` directly for a query with `DELETE`
-    // silently succeeds with zero rows and leaves the database
-    // untouched (see phase6_nexus-delete-executor-bug).
+    // Route mutating and MATCH queries through
+    // `engine.execute_cypher_with_params` — the only path that
+    // intercepts DELETE / DETACH DELETE / CREATE / MERGE / SET / REMOVE
+    // / FOREACH before they hit the executor's operator pipeline. The
+    // executor's `Operator::Delete` / `DetachDelete` handler is a no-op
+    // that relies on this upstream interception; calling
+    // `executor.execute` directly for a query with `DELETE` silently
+    // succeeds with zero rows and leaves the database untouched (see
+    // phase6_nexus-delete-executor-bug). Threading `params` through here
+    // (instead of the params-dropping `execute_cypher(&str)`) fixes
+    // silent `$params` data loss on the RPC transport (bug B6).
     //
-    // Read-only queries (no MATCH, no mutation) keep using the
-    // parallel executor path because it supports params — MATCH-path
-    // already drops params today via `engine.execute_cypher(&str)`, so
-    // this split preserves the one capability the executor path has
-    // that engine.execute_cypher does not.
+    // `needs_engine_interception` now lives in `api::cypher::routing`
+    // (write-path unification Step 3) so the HTTP `/cypher` handler and
+    // this RPC dispatcher share one definition of "needs the engine"
+    // instead of keeping independently-drifting copies.
     if needs_engine_interception(&ast) {
+        // phase5_lock-free-read-path: mirrors the HTTP `/cypher` handler's
+        // carve-out (`api::cypher::execute::handler`) — a pure autocommit
+        // read (`routing::is_read_only`) with no open explicit transaction
+        // on the "default" session runs through a cloned `Engine::executor`
+        // snapshot in `spawn_blocking` instead of the exclusive
+        // `engine.write().await` every other clause here still needs. See
+        // that handler's inline comments for the freshness argument
+        // (`Engine::refresh_executor` keeps `Engine::executor` current
+        // after every commit/rollback/write) and the read-your-own-writes
+        // argument for staying on the engine inside an explicit
+        // transaction.
+        if crate::api::cypher::routing::is_read_only(&ast) {
+            // phase9_store-lock-read-concurrency §1 — instrument the
+            // tokio `engine` RwLock read-guard wait (no-op unless
+            // `NEXUS_PERF_PROBE=1`; see `nexus_core::perf_probe`).
+            let engine_read_start = std::time::Instant::now();
+            let (lock_free_executor, in_explicit_tx) = {
+                let engine_guard = state.server.engine.read().await;
+                if nexus_core::perf_probe::enabled() {
+                    nexus_core::perf_probe::ENGINE_TOKIO_READ.record(engine_read_start.elapsed());
+                }
+                let in_tx = engine_guard
+                    .session_manager
+                    .get_session(&"default".to_string())
+                    .map(|session| session.has_active_transaction())
+                    .unwrap_or(false);
+                (engine_guard.executor.clone(), in_tx)
+            };
+
+            if !in_explicit_tx {
+                let q = Query {
+                    cypher: query.clone(),
+                    params: params.clone(),
+                };
+                // phase9_store-lock-read-concurrency §1 — measure the
+                // `spawn_blocking` queue wait (time from scheduling to
+                // the closure's first instruction) and the executor's
+                // own wall time separately, so a busy blocking-thread
+                // pool shows up distinctly from slow query execution.
+                let scheduled_at = std::time::Instant::now();
+                let out = tokio::task::spawn_blocking(move || {
+                    if nexus_core::perf_probe::enabled() {
+                        nexus_core::perf_probe::SPAWN_BLOCKING_QUEUE.record(scheduled_at.elapsed());
+                    }
+                    let exec_start = std::time::Instant::now();
+                    let result = lock_free_executor.execute(&q);
+                    if nexus_core::perf_probe::enabled() {
+                        nexus_core::perf_probe::EXECUTOR_EXECUTE.record(exec_start.elapsed());
+                    }
+                    result
+                })
+                .await;
+                let elapsed_ms = started.elapsed().as_millis() as i64;
+                return match out {
+                    Ok(Ok(rs)) => Ok(result_set_to_nexus(rs, elapsed_ms)),
+                    Ok(Err(e)) => Err(format!("Cypher error: {e}")),
+                    Err(join_err) => Err(format!("ERR internal join error: {join_err}")),
+                };
+            }
+            // Else: an explicit transaction is open on the "default"
+            // session — fall through to the engine-locked path below.
+        }
+
+        // phase8_neo4j-concurrency-gaps §3 — `ast` was already parsed
+        // above (outside this write lock) to decide routing; use the
+        // pre-parsed-AST entry point so the exclusive lock's critical
+        // section no longer pays for a second parse of the same query
+        // text. See `Engine::execute_cypher_ast_with_params`'s doc
+        // comment.
         let engine_arc = state.server.engine.clone();
         let result = {
             let mut engine = engine_arc.write().await;
-            engine.execute_cypher(&query)
+            engine.execute_cypher_ast_with_params(&ast, &query, params)
         };
         let elapsed_ms = started.elapsed().as_millis() as i64;
         return match result {
@@ -293,27 +365,6 @@ async fn execute_query(
         Ok(Err(e)) => Err(format!("Cypher error: {e}")),
         Err(join_err) => Err(format!("ERR internal join error: {join_err}")),
     }
-}
-
-/// True when a query must go through `engine.execute_cypher` instead
-/// of the direct executor path. Mirrors the REST handler's
-/// `is_match_query || is_create_query || is_merge_query` routing —
-/// any clause the engine intercepts before running the executor must
-/// go through the engine, or the interception is skipped and
-/// mutations silently no-op.
-fn needs_engine_interception(ast: &CypherQuery) -> bool {
-    ast.clauses.iter().any(|c| {
-        matches!(
-            c,
-            Clause::Match(_)
-                | Clause::Create(_)
-                | Clause::Delete(_)
-                | Clause::Merge(_)
-                | Clause::Set(_)
-                | Clause::Remove(_)
-                | Clause::Foreach(_)
-        )
-    })
 }
 
 /// Convert a `ResultSet` into the canonical NexusValue envelope described
@@ -503,6 +554,60 @@ mod tests {
                 match &rows[0] {
                     NexusValue::Array(cols) => {
                         assert_eq!(cols[0].as_int(), Some(42));
+                    }
+                    other => panic!("expected row Array, got {other:?}"),
+                }
+            }
+            other => panic!("expected rows Array, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn cypher_parameterized_write_persists_value() {
+        // Regression test for bug B6: RPC's write-path branch
+        // (`needs_engine_interception`) used to call the params-dropping
+        // `engine.execute_cypher(&query)`, so a write query referencing
+        // `$param` could never resolve it — `self.current_params` is only
+        // populated by `execute_cypher_with_params`. Dynamic labels
+        // (`CREATE (n:$lbl)`) resolve strictly against `current_params`
+        // (see `dynamic_labels::resolve_labels`), so an unresolved `$lbl`
+        // fails fast with `ERR_INVALID_LABEL` instead of silently
+        // no-oping — a deterministic way to prove params actually reach
+        // the engine over this transport.
+        let s = session();
+        let params = NexusValue::Map(vec![(
+            NexusValue::Str("lbl".into()),
+            NexusValue::Str("RpcParamLabel".into()),
+        )]);
+        run(
+            &s,
+            "CYPHER",
+            &[NexusValue::Str("CREATE (n:$lbl)".into()), params],
+        )
+        .await
+        .unwrap();
+
+        let out = run(
+            &s,
+            "CYPHER",
+            &[NexusValue::Str(
+                "MATCH (n:RpcParamLabel) RETURN count(n) AS c".into(),
+            )],
+        )
+        .await
+        .unwrap();
+        let pairs = expect_map(out);
+        match lookup(&pairs, "rows") {
+            NexusValue::Array(rows) => {
+                assert_eq!(rows.len(), 1);
+                match &rows[0] {
+                    NexusValue::Array(cols) => {
+                        assert_eq!(
+                            cols[0].as_int(),
+                            Some(1),
+                            "expected exactly one node created under the parameterized label, got {:?}",
+                            cols[0]
+                        );
                     }
                     other => panic!("expected row Array, got {other:?}"),
                 }

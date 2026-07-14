@@ -29,7 +29,7 @@ fn aggregate_with_threshold(nodes: &[Value], agg: Aggregation, columnar_threshol
     let mut context = ExecutionContext::new(HashMap::new(), None);
     context.set_variable("n", Value::Array(nodes.to_vec()));
     executor
-        .execute_aggregate(&mut context, &[], std::slice::from_ref(&agg))
+        .execute_aggregate(&mut context, &[], std::slice::from_ref(&agg), None)
         .expect("aggregate should succeed");
     context
         .result_set
@@ -175,7 +175,7 @@ fn prefer_columnar_hint_forces_aggregate_fast_path_below_threshold() {
         alias: agg_alias("sum", "n.age"),
     };
     executor
-        .execute_aggregate(&mut context, &[], std::slice::from_ref(&agg))
+        .execute_aggregate(&mut context, &[], std::slice::from_ref(&agg), None)
         .expect("aggregate should succeed");
     let hinted = context
         .result_set
@@ -209,7 +209,7 @@ fn disable_columnar_hint_forces_aggregate_row_path_above_threshold() {
         alias: agg_alias("max", "n.age"),
     };
     executor
-        .execute_aggregate(&mut context, &[], std::slice::from_ref(&agg))
+        .execute_aggregate(&mut context, &[], std::slice::from_ref(&agg), None)
         .expect("aggregate should succeed");
     let hinted = context
         .result_set

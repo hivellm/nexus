@@ -18,19 +18,18 @@ Every SDK shares the same wire contract documented in
 
 | SDK        | Path                              | Package                             | Status    | Tests folder |
 |------------|-----------------------------------|-------------------------------------|-----------|--------------|
-| Rust       | [`rust/`](rust/)                  | `nexus-sdk` on crates.io            | 1.0.0 — RPC default shipped | `rust/tests/` |
-| Python     | [`python/`](python/)              | `hivehub-nexus-sdk` on PyPI         | 1.0.0 — RPC default queued  | `python/tests/` |
-| TypeScript | [`typescript/`](typescript/)      | `@hivehub/nexus-sdk` on npm         | 1.0.0 — RPC default queued  | `typescript/tests/` |
-| Go         | [`go/`](go/)                      | `github.com/hivellm/nexus-go`       | 1.0.0 — RPC default queued  | `go/*_test.go` |
-| C#         | [`csharp/`](csharp/)              | `Nexus.SDK` on nuget.org            | 1.0.0 — RPC default queued  | `csharp/Tests/` |
-| PHP        | [`php/`](php/)                    | `hivellm/nexus-php` on packagist    | 1.0.0 — RPC default queued  | `php/tests/` |
+| Rust       | [`rust/`](rust/)                  | `nexus-sdk` on crates.io            | 2.5.0 — RPC default shipped | `rust/tests/` |
+| Python     | [`python/`](python/)              | `hivehub-nexus-sdk` on PyPI         | 2.5.0 — RPC default shipped | `python/tests/` |
+| TypeScript | [`typescript/`](typescript/)      | `@hivehub/nexus-sdk` on npm         | 2.5.0 — RPC default shipped | `typescript/tests/` |
+| Go         | [`go/`](go/)                      | `github.com/hivellm/nexus-go`       | 2.5.0 — RPC default shipped | `go/*_test.go` |
+| C#         | [`csharp/`](csharp/)              | `Nexus.SDK` on nuget.org            | 2.5.0 — RPC default shipped | `csharp/Tests/` |
+| PHP        | [`php/`](php/)                    | `hivellm/nexus-php` on packagist    | 2.5.0 — RPC default shipped | `php/tests/` |
 
-RPC transport roll-out is tracked by
-[`phase2_sdk-rpc-transport-default`](../.rulebook/tasks/phase2_sdk-rpc-transport-default/);
-the Rust SDK is the reference implementation (sections 1 + 2 of the
-task). Other SDKs follow the same shape — endpoint parser + Transport
-trait + RPC impl + HTTP fallback + command map — using the Rust SDK
-and the spec as the source of truth.
+All six SDKs ship binary RPC as the default transport (the
+[`phase2_sdk-rpc-transport-default`](../.rulebook/tasks/phase2_sdk-rpc-transport-default/)
+roll-out is complete). The Rust SDK was the reference implementation;
+every SDK now shares the same shape — endpoint parser + Transport
+trait + RPC impl + HTTP fallback + command map — per the spec.
 
 ## Quick start
 

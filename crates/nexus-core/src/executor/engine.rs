@@ -46,7 +46,24 @@ impl Clone for Executor {
             query_count: std::sync::atomic::AtomicUsize::new(
                 self.query_count.load(std::sync::atomic::Ordering::Relaxed),
             ),
-            property_access_stats: self.property_access_stats.clone(),
+            // phase8_neo4j-concurrency-gaps §2 — this used to be
+            // `self.property_access_stats.clone()`, an `Arc::clone` that
+            // handed every concurrent clone a handle to the SAME shared
+            // `RwLock<HashMap<..>>`, directly contradicting this struct's
+            // own doc comment ("per-clone state ... kept distinct per
+            // clone"). The read-only HTTP/RPC path
+            // (phase5_lock-free-read-path) clones a fresh `Executor` on
+            // EVERY request, and any query with an unindexed equality
+            // filter (`try_index_based_filter` in
+            // `operators/scan.rs`) takes a `.write()` on this map —
+            // an exclusive lock every concurrent reader serialized on,
+            // once per request, for a purely observational auto-
+            // indexing hint counter that has no correctness
+            // requirement to be globally consistent. Allocating a
+            // fresh, independent map per clone (matching the doc
+            // comment's original intent) removes that shared exclusive
+            // lock from the read hot path entirely.
+            property_access_stats: Arc::new(RwLock::new(HashMap::new())),
             config: self.config.clone(),
             enable_relationship_optimizations: self.enable_relationship_optimizations,
         }
@@ -173,7 +190,7 @@ impl Executor {
         use super::context::ExecutionContext;
         let mut context = ExecutionContext::new(HashMap::new(), None);
         context.set_variable(variable, serde_json::Value::Array(rows));
-        self.execute_aggregate(&mut context, &[], std::slice::from_ref(aggregation))?;
+        self.execute_aggregate(&mut context, &[], std::slice::from_ref(aggregation), None)?;
         Ok(context.result_set.rows.len())
     }
 
@@ -309,13 +326,20 @@ impl Executor {
     }
 
     /// Read lock on store (guard derefs to `&RecordStore`).
+    ///
+    /// phase9_store-lock-read-concurrency §1 — wrapped with
+    /// `perf_probe::timed` (a no-op unless `NEXUS_PERF_PROBE=1`) so the
+    /// read-ceiling profiling pass has direct wait-time evidence for
+    /// this specific lock instead of an assumption.
     pub(super) fn store(&self) -> parking_lot::RwLockReadGuard<'_, RecordStore> {
-        self.shared.store.read()
+        crate::perf_probe::timed(&crate::perf_probe::STORE_READ, || self.shared.store.read())
     }
 
     /// Write lock on store.
     pub(super) fn store_mut(&self) -> parking_lot::RwLockWriteGuard<'_, RecordStore> {
-        self.shared.store.write()
+        crate::perf_probe::timed(&crate::perf_probe::STORE_WRITE, || {
+            self.shared.store.write()
+        })
     }
 
     /// Public handle on the shared R-tree registry. Used by the
@@ -327,8 +351,13 @@ impl Executor {
     }
 
     /// Read lock on label_index (guard derefs to `&LabelIndex`).
+    ///
+    /// phase9_store-lock-read-concurrency §1 — instrumented like
+    /// `Executor::store()`; see that method's doc comment.
     pub(super) fn label_index(&self) -> parking_lot::RwLockReadGuard<'_, LabelIndex> {
-        self.shared.label_index.read()
+        crate::perf_probe::timed(&crate::perf_probe::LABEL_INDEX_READ, || {
+            self.shared.label_index.read()
+        })
     }
 
     /// Crate-visible label-index read for outside-of-executor

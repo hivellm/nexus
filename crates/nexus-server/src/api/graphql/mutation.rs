@@ -3,12 +3,31 @@
 use crate::NexusServer;
 use crate::api::graphql::types::*;
 use async_graphql::{Context, ID, Object, Result as GQLResult};
-use nexus_core::executor::Query;
 use std::collections::HashMap;
 use std::sync::Arc;
 
 /// Root mutation type for GraphQL
 pub struct MutationRoot;
+
+/// Execute Cypher through the engine's single write entry point
+/// (`Engine::execute_cypher_with_params`) instead of the raw, lock-free
+/// [`nexus_core::executor::Executor`].
+///
+/// Every `MutationRoot` field is only reachable from a GraphQL
+/// `mutation { ... }` operation, so routing unconditionally here is
+/// correct — there is no read-only path through this type. Without
+/// this, `Executor::execute` silently mis-executes writes: the planner
+/// stubs `Clause::Merge` as a plain MATCH and has no Set/Remove/Foreach
+/// operators, so MERGE degrades to a match-only lookup and SET/REMOVE
+/// are dropped entirely (bug B5, `docs/nexus/02-bug-inventory.md`;
+/// `docs/nexus/04-write-path-unification.md` Step 5).
+async fn execute_write(
+    server: &NexusServer,
+    cypher: &str,
+) -> nexus_core::Result<nexus_core::executor::ResultSet> {
+    let mut engine = server.engine.write().await;
+    engine.execute_cypher_with_params(cypher, HashMap::new())
+}
 
 #[Object]
 impl MutationRoot {
@@ -48,11 +67,7 @@ impl MutationRoot {
         );
 
         // Execute query
-        let query = Query {
-            cypher: query_str,
-            params: HashMap::new(),
-        };
-        let result = server.executor.execute(&query)?;
+        let result = execute_write(server, &query_str).await?;
 
         if result.rows.is_empty() {
             return Err("Failed to create node".into());
@@ -105,11 +120,7 @@ impl MutationRoot {
         );
 
         // Execute query
-        let query = Query {
-            cypher: query_str,
-            params: HashMap::new(),
-        };
-        let result = server.executor.execute(&query)?;
+        let result = execute_write(server, &query_str).await?;
 
         if result.rows.is_empty() {
             return Err("Node not found".into());
@@ -152,11 +163,7 @@ impl MutationRoot {
         };
 
         // Execute query
-        let query = Query {
-            cypher: query_str,
-            params: HashMap::new(),
-        };
-        server.executor.execute(&query)?;
+        execute_write(server, &query_str).await?;
         Ok(true)
     }
 
@@ -202,11 +209,7 @@ impl MutationRoot {
         );
 
         // Execute query
-        let query = Query {
-            cypher: query_str,
-            params: HashMap::new(),
-        };
-        let result = server.executor.execute(&query)?;
+        let result = execute_write(server, &query_str).await?;
 
         if result.rows.is_empty() {
             return Err("Failed to create relationship (nodes may not exist)".into());
@@ -244,11 +247,7 @@ impl MutationRoot {
         let query_str = format!("MATCH ()-[r]->() WHERE id(r) = {} DELETE r", rel_id);
 
         // Execute query
-        let query = Query {
-            cypher: query_str,
-            params: HashMap::new(),
-        };
-        server.executor.execute(&query)?;
+        execute_write(server, &query_str).await?;
         Ok(true)
     }
 
@@ -263,11 +262,7 @@ impl MutationRoot {
         let start = std::time::Instant::now();
 
         // Execute query
-        let query = Query {
-            cypher: query_str,
-            params: HashMap::new(),
-        };
-        let result = server.executor.execute(&query)?;
+        let result = execute_write(server, &query_str).await?;
 
         let elapsed = start.elapsed().as_millis() as i64;
 

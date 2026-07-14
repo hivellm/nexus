@@ -38,7 +38,7 @@ class HttpTransport(Transport):
         self._base_url = endpoint.as_http_url()
         self._client = httpx.AsyncClient(
             timeout=httpx.Timeout(timeout_s),
-            headers={"User-Agent": "nexus-sdk/1.0.0"},
+            headers={"User-Agent": "nexus-sdk/2.5.0"},
         )
 
     async def execute(self, req: TransportRequest) -> TransportResponse:

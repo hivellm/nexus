@@ -1018,6 +1018,20 @@ impl<'a> QueryPlanner<'a> {
                 }
 
                 let aggregations_clone = aggregations.clone();
+                // Preserve the written RETURN order: the aggregate emits
+                // `[group-by keys..., agg aliases...]`, which diverges from
+                // the clause order whenever an aggregate precedes a grouping
+                // key. Same alias derivation as the non-aggregate Project
+                // branch below (G4).
+                let output_order: Vec<String> = return_items
+                    .iter()
+                    .map(|item| {
+                        item.alias.clone().unwrap_or_else(|| {
+                            self.expression_to_string(&item.expression)
+                                .unwrap_or_default()
+                        })
+                    })
+                    .collect();
                 operators.push(Operator::Aggregate {
                     group_by: group_by_columns,
                     aggregations,
@@ -1026,6 +1040,7 @@ impl<'a> QueryPlanner<'a> {
                     } else {
                         Some(projection_items)
                     },
+                    output_order: Some(output_order),
                     source: None,
                     streaming_optimized: false,
                     push_down_optimized: false,

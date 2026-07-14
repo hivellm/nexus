@@ -11,6 +11,7 @@ use super::super::parser;
 use super::super::push_with_row_cap;
 use super::super::types::Direction;
 use crate::relationship::{TraversalAction, TraversalError, TraversalVisitor};
+use crate::storage::RecordStore;
 use crate::{Error, Result};
 use serde_json::{Map, Value};
 use std::collections::HashMap;
@@ -209,8 +210,21 @@ impl Executor {
         // This ensures we're using the most reliable method that should find all relationships
         let mut relationships = Vec::new();
 
+        // phase6_traversal-aggregation-perf §2 — acquire the store read
+        // lock ONCE for the whole node-relationship walk instead of once
+        // per candidate relationship. The scan fallbacks below probe up
+        // to 100,000 candidate ids and the linked-list walk re-reads on
+        // every hop; re-acquiring `parking_lot::RwLock::read()` per
+        // candidate was pure overhead on top of the (already cheap)
+        // fixed-size record read, and it's the actual "materialise before
+        // filtering" cost in this hot path — the record layout has no
+        // narrower unit than one `RelationshipRecord` to read type_id
+        // from, so the only lever available is cutting redundant lock
+        // acquisitions around that read.
+        let store = self.store();
+
         // Read the node record to get the first relationship pointer
-        if let Ok(node_record) = self.store().read_node(node_id) {
+        if let Ok(node_record) = store.read_node(node_id) {
             let mut rel_ptr = node_record.first_rel_ptr;
 
             // CRITICAL DEBUG: Log node reading and first_rel_ptr
@@ -251,7 +265,7 @@ impl Executor {
                 // for genuine sync failures while making it
                 // structurally impossible to fabricate a zero-record
                 // ghost.
-                let total_rels = self.store().relationship_count();
+                let total_rels = store.relationship_count();
                 if total_rels == 0 {
                     tracing::trace!(
                         "[find_relationships] Node {}: relationship store is empty, returning no relationships",
@@ -285,7 +299,7 @@ impl Executor {
                         break;
                     }
                     scanned_count += 1;
-                    if let Ok(rel_record) = self.store().read_rel(check_rel_id) {
+                    if let Ok(rel_record) = store.read_rel(check_rel_id) {
                         if !rel_record.is_deleted() {
                             let check_src_id = rel_record.src_id;
                             let check_dst_id = rel_record.dst_id;
@@ -348,7 +362,7 @@ impl Executor {
                     );
 
                     for rel_id in scanned_rel_ids {
-                        if let Ok(rel_record) = self.store().read_rel(rel_id) {
+                        if let Ok(rel_record) = store.read_rel(rel_id) {
                             if !rel_record.is_deleted() {
                                 relationships.push(RelationshipInfo {
                                     id: rel_id,
@@ -384,7 +398,7 @@ impl Executor {
             let mut should_use_scan = rel_ptr == 0;
             if rel_ptr != 0 && !should_use_scan_for_both {
                 let verify_rel_id = rel_ptr.saturating_sub(1);
-                if let Ok(verify_rel) = self.store().read_rel(verify_rel_id) {
+                if let Ok(verify_rel) = store.read_rel(verify_rel_id) {
                     if !verify_rel.is_deleted() {
                         let verify_src_id = verify_rel.src_id;
                         let verify_dst_id = verify_rel.dst_id;
@@ -446,7 +460,7 @@ impl Executor {
                         break;
                     }
 
-                    if let Ok(rel_record) = self.store().read_rel(check_rel_id) {
+                    if let Ok(rel_record) = store.read_rel(check_rel_id) {
                         if !rel_record.is_deleted() {
                             scanned_count += 1;
                             let check_src_id = rel_record.src_id;
@@ -491,7 +505,7 @@ impl Executor {
                     );
 
                     for rel_id in scanned_rel_ids {
-                        if let Ok(rel_record) = self.store().read_rel(rel_id) {
+                        if let Ok(rel_record) = store.read_rel(rel_id) {
                             if !rel_record.is_deleted() {
                                 relationships.push(RelationshipInfo {
                                     id: rel_id,
@@ -552,7 +566,7 @@ impl Executor {
                     current_rel_id
                 );
 
-                if let Ok(rel_record) = self.store().read_rel(current_rel_id) {
+                if let Ok(rel_record) = store.read_rel(current_rel_id) {
                     // Copy fields to local variables to avoid packed struct reference issues
                     let src_id = rel_record.src_id;
                     let dst_id = rel_record.dst_id;
@@ -1017,11 +1031,25 @@ impl Executor {
                     }
 
                     // Add path variable if specified
+                    //
+                    // phase8_neo4j-concurrency-gaps §2 — acquire the store
+                    // guard ONCE for the whole path (instead of once per
+                    // node in it) before mapping every node id through
+                    // `read_node_as_value_with_store`; see that method's
+                    // doc comment for the acquire-once rationale. Neither
+                    // this closure nor anything it calls touches
+                    // `self.store()` again, so holding the guard across
+                    // the whole `filter_map` is safe.
                     if !path_var.is_empty() {
+                        let path_store = self.store();
                         let path_nodes_values: Vec<Value> = path_nodes
                             .iter()
-                            .filter_map(|node_id| self.read_node_as_value(*node_id).ok())
+                            .filter_map(|node_id| {
+                                self.read_node_as_value_with_store(&path_store, *node_id)
+                                    .ok()
+                            })
                             .collect();
+                        drop(path_store);
                         new_row.insert(path_var.to_string(), Value::Array(path_nodes_values));
                     }
 
@@ -1349,9 +1377,53 @@ impl Executor {
         Value::Object(path_obj)
     }
 
-    /// Read a node as a JSON value
+    /// Read a node as a JSON value.
+    ///
+    /// Acquires its own `store()` read guard. This is the right choice
+    /// for one-off reads, but bulk scanners that materialise many nodes
+    /// in a loop should acquire the guard ONCE and call
+    /// [`Self::read_node_as_value_with_store`] per element instead — see
+    /// that method's doc comment for the concurrency rationale.
     pub(in crate::executor) fn read_node_as_value(&self, node_id: u64) -> Result<Value> {
-        let node_record = self.store().read_node(node_id)?;
+        let store = self.store();
+        self.read_node_as_value_with_store(&store, node_id)
+    }
+
+    /// Same as [`Self::read_node_as_value`], but for callers that
+    /// already hold a `store()` read guard (e.g. a scan/expand loop
+    /// materialising many nodes in a row).
+    ///
+    /// phase8_neo4j-concurrency-gaps §2 — `read_node_as_value` is the
+    /// single most-called node materialiser in the executor (every
+    /// scan, expand hop, and index seek routes through it), and its
+    /// own `self.store()` acquisition was already halved to one call in
+    /// the §2.2 pass. The remaining cost is the OUTER acquisition
+    /// itself: bulk scanners (`execute_node_by_label`,
+    /// `execute_all_nodes_scan`, `execute_node_index_seek`, the
+    /// `Expand` target loop, ...) call this once PER CANDIDATE NODE,
+    /// each call independently re-acquiring the single
+    /// `ExecutorShared.store` `parking_lot::RwLock` — the exact
+    /// per-iteration-lock-acquisition-in-a-loop pattern documented in
+    /// the `per-iteration-rwlock-re-acquisition-in-scan-loops-collapses-
+    /// under-thread-count` knowledge entry (same family as §1's
+    /// `read_all_node_headers` fix for `count_live_nodes_*`). Threading
+    /// an already-held `&RecordStore` through this method lets those
+    /// loops acquire the guard once for the whole scan instead of once
+    /// per node.
+    ///
+    /// SAFETY (non-reentrancy): `parking_lot::RwLock` does not allow a
+    /// thread to recursively re-acquire a lock it already holds (see the
+    /// `parking-lot-rwlock-does-not-allow-recursive-acquire` anti-pattern
+    /// entry) — a caller passing `store` in here MUST NOT be in the
+    /// middle of a call chain that would try to acquire `self.store()`
+    /// again before this method returns. This method itself never calls
+    /// `self.store()`; `self.catalog()` is a distinct lock (LMDB-backed).
+    pub(in crate::executor) fn read_node_as_value_with_store(
+        &self,
+        store: &RecordStore,
+        node_id: u64,
+    ) -> Result<Value> {
+        let node_record = store.read_node(node_id)?;
 
         if node_record.is_deleted() {
             return Ok(Value::Null);
@@ -1362,7 +1434,15 @@ impl Executor {
             .get_labels_from_bitmap(node_record.label_bits)?;
         let _labels: Vec<Value> = label_names.into_iter().map(Value::String).collect();
 
-        let properties_value = self.store().load_node_properties(node_id)?;
+        // phase8_neo4j-concurrency-gaps §2 — pass the `prop_ptr` this
+        // function already read above instead of calling
+        // `load_node_properties(node_id)`, which internally re-reads
+        // the node record (a second `nodes_mmap` lock acquisition, plus
+        // a second `property_store` corruption cross-check) purely to
+        // re-derive the same `prop_ptr` we already have. See
+        // `RecordStore::load_node_properties_with_ptr`'s doc comment.
+        let properties_value =
+            store.load_node_properties_with_ptr(node_id, node_record.prop_ptr)?;
 
         tracing::trace!(
             "read_node_as_value: node_id={}, properties_value={:?}",

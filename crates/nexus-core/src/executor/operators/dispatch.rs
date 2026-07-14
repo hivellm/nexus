@@ -105,6 +105,7 @@ impl Executor {
                 group_by,
                 aggregations,
                 projection_items,
+                output_order,
                 source: _,
                 streaming_optimized: _,
                 push_down_optimized: _,
@@ -116,9 +117,15 @@ impl Executor {
                         group_by,
                         aggregations,
                         Some(items.as_slice()),
+                        output_order.as_deref(),
                     )?;
                 } else {
-                    self.execute_aggregate(context, group_by, aggregations)?;
+                    self.execute_aggregate(
+                        context,
+                        group_by,
+                        aggregations,
+                        output_order.as_deref(),
+                    )?;
                 }
             }
             Operator::Union {
@@ -209,6 +216,7 @@ impl Executor {
                             pattern,
                             resolved_external_id,
                             policy,
+                            &context.params,
                         )?;
                     // Register inverse ops on the compensating-undo
                     // buffer (no-op outside a `CALL { … } IN

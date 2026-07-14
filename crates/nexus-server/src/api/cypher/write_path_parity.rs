@@ -1,0 +1,1174 @@
+//! Write-path parity harness (rulebook task
+//! `.rulebook/tasks/phase1_http-merge-rel-and-set-rel-parity/`, checklist
+//! item 1.1–1.3). Exercises the PUBLIC `/cypher` HTTP handler
+//! (`execute_cypher`, the same function `axum` dispatches requests to)
+//! with a battery of write queries and asserts the ENGINE-correct
+//! (Neo4j-correct) outcome. Every case re-reads the data via a *fresh*
+//! `MATCH` after the write — the write response alone is not sufficient
+//! evidence, since a query can report `error: None` while silently
+//! persisting nothing (or the wrong thing).
+//!
+//! # Status: fork deleted, engine-path-only (checklist section 5, item 4.2)
+//!
+//! This harness started as the Step 0 safety net for
+//! `docs/nexus/04-write-path-unification.md`, run against BOTH the
+//! now-deleted `execute/write_ops.rs` fork and the engine's
+//! `write_exec.rs` interpreter, to catalogue every divergence before
+//! anything was deleted. Steps 2-4 have since landed: `handler.rs` routes
+//! every write clause through `Engine::execute_cypher_with_params` using
+//! AST-typed routing (`api::cypher::routing`), and `write_ops.rs` itself
+//! is gone. Every case in this file now exercises that single engine
+//! path and is expected to be GREEN — there is no second implementation
+//! left to diverge from.
+//!
+//! # Bug catalogue (historical — root causes lived in the deleted
+//! # `write_ops.rs` fork unless noted otherwise)
+//!
+//! The original `handler.rs` routed a query to
+//! `execute/write_ops.rs::execute_create_or_merge` whenever the
+//! (uppercased) query text started with `CREATE` or `MERGE`; every other
+//! write form (`MATCH ... SET`, `MATCH ... MERGE`, UNWIND-driven writes,
+//! transaction commands) was routed to `Engine::execute_cypher_with_params`,
+//! which drives the `write_exec.rs` interpreter. `write_ops.rs`
+//! reimplemented CREATE/MERGE/SET/REMOVE/DELETE against a node-only
+//! `variable_context: HashMap<String, Vec<u64>>` and never learned
+//! relationship semantics:
+//!
+//! - **B1 (FIXED by deleting the fork)** — a `MERGE` pattern containing a
+//!   relationship element (`MERGE (a:L1 {..})-[r:T]->(b:L2 {..})`) never
+//!   created the edge: `execute_create_or_merge`'s MERGE loop only
+//!   matched `PatternElement::Node(_)`; `PatternElement::Relationship(_)`
+//!   had no arm and was silently skipped (cases 10, 11).
+//! - **B2 (FIXED by deleting the fork)** — `SET r.k = v` / `SET r += {..}`
+//!   on a relationship variable was dropped whenever the enclosing query
+//!   was routed to `write_ops.rs` (i.e. it started with `CREATE`/`MERGE`):
+//!   the SET handler looked up `target` in `variable_context`, which
+//!   relationship patterns never populated, logging `WARN Variable r not
+//!   found in context` and doing nothing (cases 12/13).
+//! - **B3 (FIXED by deleting the fork)** — `CREATE (a)-[r:T {w:5}]->(b)
+//!   RETURN r.w` (same-statement projection) returned `null`: the RETURN
+//!   projection's `PropertyAccess` branch resolved `variable` against the
+//!   same node-only `variable_context`, so a relationship-variable
+//!   property access always missed (case 8). The value was nonetheless
+//!   stored correctly — a separate `MATCH` reads it back (case 9 keeps
+//!   that as a green guard).
+//!
+//! While building this harness, four ADDITIONAL divergences were found
+//! empirically that proposal.md did not anticipate — all in the ENGINE
+//! (`nexus-core`), not `write_ops.rs`. They have since been FIXED
+//! (checklist section 2, items 2.0a-2.0d):
+//!
+//! - **B4 (FIXED)** — `SET target.prop = $param` via the `MATCH ... SET`
+//!   engine path (`Engine::evaluate_set_expression` in
+//!   `engine/match_exec.rs`) had no arm for `Expression::Parameter` and
+//!   hard-coded it to `Value::Null` (case 5b). Fixed by resolving the
+//!   parameter against `self.current_params` (the map
+//!   `execute_cypher_with_params` installs for the duration of the call),
+//!   mirroring the existing `dynamic_labels::resolve_labels` convention. A
+//!   missing parameter still resolves to `Value::Null` (safe no-op),
+//!   preserving the pre-existing `SET n += $missing` contract.
+//! - **B6 (FIXED)** — `UNWIND $rows AS row` (a `$param`-bound list) errored
+//!   out of `Engine::eval_write_value` / `expression_to_json_value`
+//!   ("Complex expressions not supported in CREATE properties" — a
+//!   misleading message since this fails before any CREATE/MERGE clause
+//!   runs). Only a literal UNWIND list (`UNWIND [{...}] AS row`) was
+//!   supported (case 7). Fixed by adding an `Expression::Parameter` arm to
+//!   `eval_write_value` (`engine/write_exec.rs`) that resolves against
+//!   `self.current_params` and errors cleanly (naming the parameter) when
+//!   it is not bound, rather than silently degrading to an empty UNWIND.
+//! - **B7 (FIXED by deleting the fork)** — `CREATE (n {p:1}) REMOVE n.p`
+//!   in ONE `write_ops.rs`-routed statement did not persist the removal;
+//!   the equivalent two-statement form (`CREATE` then a separate
+//!   `MATCH ... REMOVE`, which already routed to the engine) removed the
+//!   key correctly (case 6c). Not an engine-core gap — closed once HTTP
+//!   write-path rerouting sent the combined statement through the same
+//!   engine AST interpreter as everything else.
+//! - **B8 (FIXED)** — `SET n.p = null` via the `MATCH ... SET` engine path
+//!   stored a literal JSON `null` instead of removing the key
+//!   (`write_exec.rs::apply_set_clause` had no null-removal special case),
+//!   diverging from Neo4j semantics (case 5d). Fixed: the `SetItem::Property`
+//!   arm now removes the key when the evaluated value is `Value::Null`
+//!   instead of inserting it (the map-merge `SetItem::MapMerge` arm and the
+//!   relationship-property paths already had this null-removal behaviour;
+//!   only the direct node-property `SET` path was missing it).
+//! - **B9 (FIXED)** — a query whose first non-blank line is a `//` comment
+//!   failed to PARSE at all (`Cypher syntax error: Query must contain at
+//!   least one clause`, `executor/planner/queries/planner_core.rs:98`)
+//!   before `handler.rs`'s routing heuristic was ever reached. Root cause:
+//!   `CypherParser::skip_whitespace` (`executor/parser/tokens.rs`) only
+//!   skipped literal whitespace — Cypher `//` line comments and `/* */`
+//!   block comments were unhandled anywhere in the tokenizer. Fixed by
+//!   teaching `skip_whitespace` to also skip both comment forms, so they
+//!   are transparent everywhere whitespace already was (case 15).
+//!
+//! One more finding was flagged even though its case was GREEN at the
+//! time: **case 17b** (`BEGIN`/`CREATE`/`ROLLBACK`) passed because
+//! `write_ops.rs`'s CREATE called the low-level `Engine::create_node`
+//! directly, while `nexus-core` had its own `#[ignore]`d
+//! `test_transaction_rollback_persists_across_queries` suggesting the SAME
+//! sequence via `Engine::execute_cypher` (the executor-driven CREATE path
+//! HTTP now uses for every write) did NOT roll back correctly. Investigated
+//! for checklist item 2.0e: that `#[ignore]` was STALE — the rollback path
+//! already has a watermark-based fix (`engine/transactions.rs`'s
+//! `RollbackTransaction` arm unions the session's storage-id watermark
+//! range with `created_nodes`/`created_relationships`, specifically to
+//! catch executor-routed writes that never call back into
+//! `session.created_nodes`). Confirmed via
+//! `engine::tests::transactions::rollback_undoes_executor_created_nodes`
+//! (pre-existing, passes) plus
+//! `rollback_undoes_executor_created_nodes_via_params_entrypoint`, which
+//! exercises the exact `execute_cypher_with_params` entry point HTTP now
+//! uses for every write. The stale `#[ignore]`s on
+//! `test_transaction_rollback_persists_across_queries`,
+//! `test_multiple_operations_in_transaction`, and
+//! `test_rollback_multiple_operations` in
+//! `crates/nexus-core/tests/transaction_session_test.rs` were removed —
+//! no engine fix was needed for 17b.
+//!
+//! One last divergence closed the set: **L1** — `handler.rs`'s
+//! `query_upper.starts_with("CREATE")`/`.contains(" MATCH ")` string-prefix
+//! routing missed any write clause that wasn't the first token (a leading
+//! `//` comment, a lowercase `create`, `MATCH (a),(b) CREATE (a)-[r]->(b)`)
+//! and silently fell through to the read-only executor — HTTP 200,
+//! nothing persisted (case 15, `docs/nexus/02-bug-inventory.md`). Fixed
+//! by switching `handler.rs` to the AST-predicate routing in
+//! `api::cypher::routing` (checklist section 4), which finds write
+//! clauses anywhere in the parsed AST regardless of surrounding text.
+//!
+//! With B1-B9 and L1 all fixed and `write_ops.rs` deleted, every case
+//! below runs unignored against the single engine write path.
+
+#![allow(unused_imports)]
+use super::*;
+use crate::NexusServer;
+use nexus_core::auth::RoleBasedAccessControl;
+use nexus_core::database::DatabaseManager;
+use nexus_core::testing::TestContext;
+use parking_lot::RwLock as PlRwLock;
+use std::sync::Arc;
+use tokio::sync::RwLock;
+
+/// Build a fresh, isolated `NexusServer` backed by a temp data dir.
+/// Mirrors the construction pattern shared by every test in
+/// `api/cypher/tests.rs` (e.g. `create_with_parameterized_node_property_persists`).
+fn build_test_server(ctx: &TestContext) -> Arc<NexusServer> {
+    let engine = nexus_core::Engine::with_data_dir(ctx.path()).unwrap();
+    let engine_arc = Arc::new(RwLock::new(engine));
+    let executor = nexus_core::executor::Executor::default();
+    let executor_arc = Arc::new(executor);
+    let database_manager = DatabaseManager::new(ctx.path().join("databases")).unwrap();
+    let database_manager_arc = Arc::new(PlRwLock::new(database_manager));
+    let rbac = RoleBasedAccessControl::new();
+    let rbac_arc = Arc::new(RwLock::new(rbac));
+    let auth_config = nexus_core::auth::AuthConfig::default();
+    let auth_manager = Arc::new(nexus_core::auth::AuthManager::new(auth_config));
+    let jwt_config = nexus_core::auth::JwtConfig::default();
+    let jwt_manager = Arc::new(nexus_core::auth::JwtManager::new(jwt_config));
+    let audit_logger = Arc::new(
+        nexus_core::auth::AuditLogger::new(nexus_core::auth::AuditConfig {
+            enabled: false,
+            log_dir: std::path::PathBuf::from("./logs"),
+            retention_days: 30,
+            compress_logs: false,
+        })
+        .unwrap(),
+    );
+    Arc::new(NexusServer::new(
+        executor_arc,
+        engine_arc,
+        database_manager_arc,
+        rbac_arc,
+        auth_manager,
+        jwt_manager,
+        audit_logger,
+        crate::config::RootUserConfig::default(),
+    ))
+}
+
+/// Run a query through the PUBLIC `/cypher` HTTP handler (`execute_cypher`)
+/// and return the deserialized response. Shared by every case in this
+/// harness so each stays compact — no direct engine calls, no `write_ops`
+/// internals.
+async fn run_query(
+    server: &Arc<NexusServer>,
+    query: &str,
+    params: HashMap<String, serde_json::Value>,
+) -> CypherResponse {
+    execute_cypher(
+        State(server.clone()),
+        None,
+        Json(CypherRequest {
+            query: query.to_string(),
+            params,
+            database: None,
+        }),
+    )
+    .await
+    .0
+}
+
+fn no_params() -> HashMap<String, serde_json::Value> {
+    HashMap::new()
+}
+
+fn params(pairs: &[(&str, serde_json::Value)]) -> HashMap<String, serde_json::Value> {
+    pairs
+        .iter()
+        .map(|(k, v)| (k.to_string(), v.clone()))
+        .collect()
+}
+
+fn assert_no_error(resp: &CypherResponse, context: &str) {
+    assert!(
+        resp.error.is_none(),
+        "{}: unexpected error: {:?}",
+        context,
+        resp.error
+    );
+}
+
+/// Extract `row[0]` of `rows[0]` as an `i64`, panicking with useful context
+/// on shape mismatches (empty rows, non-array row, non-numeric value).
+fn first_i64(resp: &CypherResponse, context: &str) -> i64 {
+    resp.rows
+        .first()
+        .unwrap_or_else(|| panic!("{}: no rows returned", context))
+        .as_array()
+        .unwrap_or_else(|| panic!("{}: row is not an array", context))
+        .first()
+        .unwrap_or_else(|| panic!("{}: row is empty", context))
+        .as_i64()
+        .unwrap_or_else(|| panic!("{}: value is not an integer", context))
+}
+
+// ---------------------------------------------------------------------
+// 1. Node writes (expected GREEN today)
+// ---------------------------------------------------------------------
+
+#[tokio::test]
+async fn case_01_create_node_literal_props_return() {
+    let ctx = TestContext::new();
+    let server = build_test_server(&ctx);
+
+    let resp = run_query(
+        &server,
+        "CREATE (n:Case1 {name: \"Alice\", age: 30}) RETURN n.name AS name, n.age AS age",
+        no_params(),
+    )
+    .await;
+    assert_no_error(&resp, "CREATE literal props");
+    assert_eq!(resp.columns, vec!["name".to_string(), "age".to_string()]);
+    let row = resp.rows[0].as_array().expect("row is array");
+    assert_eq!(row[0].as_str(), Some("Alice"));
+    assert_eq!(row[1].as_i64(), Some(30));
+
+    // Fresh re-read — the response alone is not sufficient evidence.
+    let read = run_query(
+        &server,
+        "MATCH (n:Case1) RETURN n.name AS name, n.age AS age",
+        no_params(),
+    )
+    .await;
+    assert_no_error(&read, "MATCH after CREATE literal props");
+    let row = read.rows[0].as_array().expect("row is array");
+    assert_eq!(row[0].as_str(), Some("Alice"));
+    assert_eq!(row[1].as_i64(), Some(30));
+}
+
+#[tokio::test]
+async fn case_02_create_node_param_props_return_and_reread() {
+    let ctx = TestContext::new();
+    let server = build_test_server(&ctx);
+
+    let resp = run_query(
+        &server,
+        "CREATE (n:Case2 {x: $v}) RETURN n.x AS x",
+        params(&[("v", serde_json::json!(9))]),
+    )
+    .await;
+    assert_no_error(&resp, "CREATE $param props");
+    assert_eq!(
+        resp.rows[0].as_array().expect("row is array")[0].as_i64(),
+        Some(9),
+        "parameterized property must be 9 in the CREATE...RETURN response, not null"
+    );
+
+    let read = run_query(&server, "MATCH (n:Case2) RETURN n.x AS x", no_params()).await;
+    assert_no_error(&read, "MATCH after $param CREATE");
+    assert_eq!(
+        read.rows[0].as_array().expect("row is array")[0].as_i64(),
+        Some(9),
+        "parameterized property must persist as 9 across a fresh MATCH"
+    );
+}
+
+// Found while validating case_06d: a statement with CONSECUTIVE CREATE
+// clauses (`CREATE (a) CREATE (b)` — standard openCypher, distinct from
+// the comma form) silently executed only the FIRST clause. HTTP returned
+// 200 with only column `a`; node `b` never existed. Pre-existing on the
+// published builds; standard shape in tutorials and our own smoke tests,
+// where a following MERGE masked it by re-creating the missing endpoint.
+#[tokio::test]
+async fn case_02c_consecutive_create_clauses_all_execute() {
+    let ctx = TestContext::new();
+    let server = build_test_server(&ctx);
+
+    let resp = run_query(
+        &server,
+        "CREATE (a:Case2c {id: 1}) CREATE (b:Case2c {id: 2}) CREATE (c:Case2c {id: 3})",
+        no_params(),
+    )
+    .await;
+    assert_no_error(&resp, "three consecutive CREATE clauses");
+
+    let count = run_query(
+        &server,
+        "MATCH (n:Case2c) RETURN count(n) AS c",
+        no_params(),
+    )
+    .await;
+    assert_eq!(
+        first_i64(&count, "Case2c count"),
+        3,
+        "every CREATE clause in the statement must execute (got fewer nodes)"
+    );
+}
+
+#[tokio::test]
+async fn case_03_merge_node_creates_then_idempotent() {
+    let ctx = TestContext::new();
+    let server = build_test_server(&ctx);
+
+    let merge = "MERGE (n:Case3 {id: 1})";
+    let first = run_query(&server, merge, no_params()).await;
+    assert_no_error(&first, "first MERGE");
+    let second = run_query(&server, merge, no_params()).await;
+    assert_no_error(&second, "second (idempotent) MERGE");
+
+    let count = run_query(&server, "MATCH (n:Case3) RETURN count(n) AS c", no_params()).await;
+    assert_no_error(&count, "MATCH count after repeated MERGE");
+    assert_eq!(
+        first_i64(&count, "MERGE idempotency count"),
+        1,
+        "repeated MERGE on the same key must not duplicate the node"
+    );
+}
+
+#[tokio::test]
+async fn case_04_merge_node_on_create_and_on_match() {
+    let ctx = TestContext::new();
+    let server = build_test_server(&ctx);
+
+    let merge =
+        "MERGE (n:Case4 {id: 1}) ON CREATE SET n.created = true ON MATCH SET n.matched = true";
+
+    // First run: node is absent, so ON CREATE fires.
+    let first = run_query(&server, merge, no_params()).await;
+    assert_no_error(&first, "MERGE ON CREATE branch");
+    let after_create = run_query(
+        &server,
+        "MATCH (n:Case4 {id: 1}) RETURN n.created AS created, n.matched AS matched",
+        no_params(),
+    )
+    .await;
+    assert_no_error(&after_create, "MATCH after ON CREATE branch");
+    let row = after_create.rows[0].as_array().expect("row is array");
+    assert_eq!(
+        row[0].as_bool(),
+        Some(true),
+        "ON CREATE SET must persist n.created = true"
+    );
+    assert!(
+        row[1].is_null(),
+        "ON MATCH SET must not have fired on the first (creating) run"
+    );
+
+    // Second run: node now exists, so ON MATCH fires instead.
+    let second = run_query(&server, merge, no_params()).await;
+    assert_no_error(&second, "MERGE ON MATCH branch");
+    let after_match = run_query(
+        &server,
+        "MATCH (n:Case4 {id: 1}) RETURN n.created AS created, n.matched AS matched",
+        no_params(),
+    )
+    .await;
+    assert_no_error(&after_match, "MATCH after ON MATCH branch");
+    let row = after_match.rows[0].as_array().expect("row is array");
+    assert_eq!(
+        row[0].as_bool(),
+        Some(true),
+        "n.created must remain true from the first run"
+    );
+    assert_eq!(
+        row[1].as_bool(),
+        Some(true),
+        "ON MATCH SET must persist n.matched = true on the second run"
+    );
+
+    let count = run_query(&server, "MATCH (n:Case4) RETURN count(n) AS c", no_params()).await;
+    assert_eq!(
+        first_i64(&count, "Case4 node count"),
+        1,
+        "ON MATCH run must not create a second node"
+    );
+}
+
+// Case 5 is split into one function per SET form: literal / map-merge /
+// null-removal all go through the same `MATCH ... SET` engine path and are
+// GREEN; the `$param` form is its own function because it hits **B4**
+// (see the module doc comment) and is `#[ignore]`d on its own so it
+// doesn't hide the other three green forms behind one failing test.
+
+#[tokio::test]
+async fn case_05a_set_literal_value_persists() {
+    let ctx = TestContext::new();
+    let server = build_test_server(&ctx);
+
+    let create = run_query(&server, "CREATE (n:Case5a {id: 1})", no_params()).await;
+    assert_no_error(&create, "baseline CREATE for Case5a");
+
+    let set_literal = run_query(
+        &server,
+        "MATCH (n:Case5a {id: 1}) SET n.p = 'x'",
+        no_params(),
+    )
+    .await;
+    assert_no_error(&set_literal, "SET n.p = literal");
+    let read = run_query(
+        &server,
+        "MATCH (n:Case5a {id: 1}) RETURN n.p AS p",
+        no_params(),
+    )
+    .await;
+    assert_no_error(&read, "MATCH after SET n.p = literal");
+    assert_eq!(
+        read.rows[0].as_array().expect("row is array")[0].as_str(),
+        Some("x"),
+        "SET n.p = 'x' must persist"
+    );
+}
+
+// **B4 (FIXED, checklist 2.0a)** — `SET target.prop = $param` via the
+// `MATCH ... SET` engine path used to never resolve the parameter:
+// `Engine::evaluate_set_expression` (`crates/nexus-core/src/engine/match_exec.rs`)
+// had no arm for `Expression::Parameter` and deliberately mapped every
+// parameter to `Value::Null`. Fixed by resolving against
+// `self.current_params` (the map `execute_cypher_with_params` installs for
+// the duration of the call), matching the convention already used by
+// `dynamic_labels::resolve_labels`.
+#[tokio::test]
+async fn case_05b_set_param_value_persists() {
+    let ctx = TestContext::new();
+    let server = build_test_server(&ctx);
+
+    let create = run_query(&server, "CREATE (n:Case5b {id: 1})", no_params()).await;
+    assert_no_error(&create, "baseline CREATE for Case5b");
+
+    let set_param = run_query(
+        &server,
+        "MATCH (n:Case5b {id: 1}) SET n.p2 = $v",
+        params(&[("v", serde_json::json!(42))]),
+    )
+    .await;
+    assert_no_error(&set_param, "SET n.p2 = $param");
+    let read = run_query(
+        &server,
+        "MATCH (n:Case5b {id: 1}) RETURN n.p2 AS p2",
+        no_params(),
+    )
+    .await;
+    assert_no_error(&read, "MATCH after SET n.p2 = $param");
+    assert_eq!(
+        read.rows[0].as_array().expect("row is array")[0].as_i64(),
+        Some(42),
+        "SET n.p2 = $param must persist the parameterized value"
+    );
+}
+
+#[tokio::test]
+async fn case_05c_set_map_merge_persists_both_keys() {
+    let ctx = TestContext::new();
+    let server = build_test_server(&ctx);
+
+    let create = run_query(&server, "CREATE (n:Case5c {id: 1})", no_params()).await;
+    assert_no_error(&create, "baseline CREATE for Case5c");
+
+    let set_merge = run_query(
+        &server,
+        "MATCH (n:Case5c {id: 1}) SET n += {a: 1, b: 2}",
+        no_params(),
+    )
+    .await;
+    assert_no_error(&set_merge, "SET n += {map}");
+    let read = run_query(
+        &server,
+        "MATCH (n:Case5c {id: 1}) RETURN n.a AS a, n.b AS b",
+        no_params(),
+    )
+    .await;
+    assert_no_error(&read, "MATCH after SET n += {map}");
+    let row = read.rows[0].as_array().expect("row is array");
+    assert_eq!(row[0].as_i64(), Some(1), "SET n += {{..}} must persist a");
+    assert_eq!(row[1].as_i64(), Some(2), "SET n += {{..}} must persist b");
+}
+
+// **B8 (FIXED, checklist 2.0b)** — `SET n.p = null` via the `MATCH ...
+// SET` engine path used to store a literal JSON `null`
+// (`write_exec.rs::apply_set_clause` had no null-removal special case)
+// instead of removing the key, diverging from Neo4j semantics. Fixed: the
+// `SetItem::Property` arm now removes the key when the evaluated value is
+// `Value::Null` instead of inserting it.
+#[tokio::test]
+async fn case_05d_set_null_removes_key() {
+    let ctx = TestContext::new();
+    let server = build_test_server(&ctx);
+
+    let create = run_query(
+        &server,
+        "CREATE (n:Case5d {id: 1, p: 'to-remove'})",
+        no_params(),
+    )
+    .await;
+    assert_no_error(&create, "baseline CREATE for Case5d");
+
+    let set_null = run_query(
+        &server,
+        "MATCH (n:Case5d {id: 1}) SET n.p = null",
+        no_params(),
+    )
+    .await;
+    assert_no_error(&set_null, "SET n.p = null");
+    let read = run_query(&server, "MATCH (n:Case5d {id: 1}) RETURN n", no_params()).await;
+    assert_no_error(&read, "MATCH n after SET n.p = null");
+    let node = read.rows[0].as_array().expect("row is array")[0]
+        .as_object()
+        .expect("RETURN n is a node object");
+    assert!(
+        !node.contains_key("p"),
+        "SET n.p = null must remove the key p, not store a null value; node = {:?}",
+        node
+    );
+}
+
+#[tokio::test]
+async fn case_06a_delete_node() {
+    let ctx = TestContext::new();
+    let server = build_test_server(&ctx);
+
+    let delete = run_query(
+        &server,
+        "CREATE (n:Case6Delete {name: \"Bob\"}) DELETE n",
+        no_params(),
+    )
+    .await;
+    assert_no_error(&delete, "CREATE + DELETE n");
+    let count_deleted = run_query(
+        &server,
+        "MATCH (n:Case6Delete) RETURN count(n) AS c",
+        no_params(),
+    )
+    .await;
+    assert_eq!(
+        first_i64(&count_deleted, "Case6Delete count"),
+        0,
+        "DELETE n must remove the node"
+    );
+}
+
+#[tokio::test]
+async fn case_06b_detach_delete_with_relationship() {
+    let ctx = TestContext::new();
+    let server = build_test_server(&ctx);
+
+    let seed = run_query(
+        &server,
+        "CREATE (a:Case6DetachA {x: 1})-[:Case6DetachRel]->(b:Case6DetachB {x: 2})",
+        no_params(),
+    )
+    .await;
+    assert_no_error(&seed, "seed a-[:REL]->b for DETACH DELETE");
+    let detach = run_query(
+        &server,
+        "MATCH (a:Case6DetachA {x: 1}) DETACH DELETE a",
+        no_params(),
+    )
+    .await;
+    assert_no_error(&detach, "MATCH ... DETACH DELETE a");
+
+    let a_count = run_query(
+        &server,
+        "MATCH (a:Case6DetachA) RETURN count(a) AS c",
+        no_params(),
+    )
+    .await;
+    assert_eq!(
+        first_i64(&a_count, "Case6DetachA count"),
+        0,
+        "DETACH DELETE must remove node a"
+    );
+    let rel_count = run_query(
+        &server,
+        "MATCH ()-[r:Case6DetachRel]->() RETURN count(r) AS c",
+        no_params(),
+    )
+    .await;
+    assert_eq!(
+        first_i64(&rel_count, "Case6DetachRel count"),
+        0,
+        "DETACH DELETE must remove the relationship attached to the deleted node"
+    );
+    let b_count = run_query(
+        &server,
+        "MATCH (b:Case6DetachB) RETURN count(b) AS c",
+        no_params(),
+    )
+    .await;
+    assert_eq!(
+        first_i64(&b_count, "Case6DetachB count"),
+        1,
+        "DETACH DELETE on a must not remove the unrelated endpoint b"
+    );
+}
+
+// Found live by the per-transport parity runner (phase7): a `$param`
+// inside a MATCH inline-property filter on the DELETE path did not bind —
+// HTTP silently deleted NOTHING (200 OK) while RPC raised
+// ERR_MISSING_PARAMETER. Same param-resolution family as B4/G1.
+#[tokio::test]
+async fn case_06d_delete_with_param_inline_property_filter() {
+    let ctx = TestContext::new();
+    let server = build_test_server(&ctx);
+
+    // Comma-form seed on purpose: consecutive CREATE clauses in one
+    // statement hit a separate pre-existing bug (second clause dropped —
+    // see case_02c) that would mask what this case is about.
+    let seed = run_query(
+        &server,
+        "CREATE (a:Case6dP {id: 1}), (b:Case6dP {id: 2})",
+        no_params(),
+    )
+    .await;
+    assert_no_error(&seed, "seed two Case6dP nodes");
+
+    let del = run_query(
+        &server,
+        "MATCH (n:Case6dP {id: $target}) DELETE n",
+        params(&[("target", serde_json::json!(1))]),
+    )
+    .await;
+    assert_no_error(&del, "MATCH inline $param filter + DELETE");
+
+    let count = run_query(
+        &server,
+        "MATCH (n:Case6dP) RETURN count(n) AS c",
+        no_params(),
+    )
+    .await;
+    assert_eq!(
+        first_i64(&count, "Case6dP count after param DELETE"),
+        1,
+        "MATCH (n {{id: $target}}) DELETE n must delete exactly the matching node"
+    );
+}
+
+// **B7 (new, not in proposal.md)** — `CREATE (n {p:1}) REMOVE n.p` in ONE
+// write_ops-routed statement does not persist the removal (empirically
+// confirmed: a fresh `MATCH ... RETURN n` still shows `p: 1`). The
+// equivalent two-statement form (separate `CREATE`, then a `MATCH ...
+// REMOVE` that routes to the engine) removes the key correctly — proving
+// this is specific to `write_ops.rs`'s combined-statement REMOVE handling,
+// not a general engine defect. Will self-heal once Step 2/4 reroute HTTP
+// writes through the engine.
+#[tokio::test]
+async fn case_06c_remove_property_combined_with_create() {
+    let ctx = TestContext::new();
+    let server = build_test_server(&ctx);
+
+    let remove = run_query(
+        &server,
+        "CREATE (n:Case6Remove {p: 1}) REMOVE n.p",
+        no_params(),
+    )
+    .await;
+    assert_no_error(&remove, "CREATE + REMOVE n.p");
+    let read = run_query(&server, "MATCH (n:Case6Remove) RETURN n", no_params()).await;
+    assert_no_error(&read, "MATCH after CREATE + REMOVE n.p");
+    let node = read.rows[0].as_array().expect("row is array")[0]
+        .as_object()
+        .expect("RETURN n is a node object");
+    assert!(
+        !node.contains_key("p"),
+        "REMOVE n.p must remove the key; node = {:?}",
+        node
+    );
+}
+
+// **B6 (FIXED, checklist 2.0c)** — `UNWIND $rows AS row` (a
+// `$param`-bound list) used to be entirely unsupported by the engine's
+// UNWIND-write path: `Engine::eval_write_value` fell through to
+// `expression_to_json_value`, which had no `Expression::Parameter` arm and
+// errored with "Complex expressions not supported in CREATE properties".
+// Fixed by adding an `Expression::Parameter` arm directly to
+// `eval_write_value` (`engine/write_exec.rs`) that resolves against
+// `self.current_params` and errors cleanly (naming the parameter) if it is
+// not bound, rather than silently degrading to an empty UNWIND.
+#[tokio::test]
+async fn case_07_unwind_merge_batch_upsert() {
+    let ctx = TestContext::new();
+    let server = build_test_server(&ctx);
+
+    let resp = run_query(
+        &server,
+        "UNWIND $rows AS row MERGE (n:Case7 {id: row.id})",
+        params(&[("rows", serde_json::json!([{"id": 1}, {"id": 2}, {"id": 3}]))]),
+    )
+    .await;
+    assert_no_error(&resp, "UNWIND + MERGE batch upsert");
+
+    let count = run_query(&server, "MATCH (n:Case7) RETURN count(n) AS c", no_params()).await;
+    assert_no_error(&count, "MATCH count after UNWIND + MERGE");
+    assert_eq!(
+        first_i64(&count, "Case7 batch upsert count"),
+        3,
+        "UNWIND + MERGE must persist all 3 distinct rows"
+    );
+
+    // Re-running the same batch must stay idempotent (MERGE semantics).
+    let rerun = run_query(
+        &server,
+        "UNWIND $rows AS row MERGE (n:Case7 {id: row.id})",
+        params(&[("rows", serde_json::json!([{"id": 1}, {"id": 2}, {"id": 3}]))]),
+    )
+    .await;
+    assert_no_error(&rerun, "re-run UNWIND + MERGE batch upsert");
+    let count2 = run_query(&server, "MATCH (n:Case7) RETURN count(n) AS c", no_params()).await;
+    assert_eq!(
+        first_i64(&count2, "Case7 batch upsert re-run count"),
+        3,
+        "re-running the UNWIND + MERGE batch must not duplicate rows"
+    );
+}
+
+// ---------------------------------------------------------------------
+// 2. Relationship writes (several expected RED today — see B1/B2/B3
+//    above for the specific bug each `#[ignore]` references)
+// ---------------------------------------------------------------------
+
+#[tokio::test]
+async fn case_08_create_rel_return_property_same_statement() {
+    let ctx = TestContext::new();
+    let server = build_test_server(&ctx);
+
+    let resp = run_query(
+        &server,
+        "CREATE (a:Case8A)-[r:Case8T {w: 5}]->(b:Case8B) RETURN r.w AS w",
+        no_params(),
+    )
+    .await;
+    assert_no_error(&resp, "CREATE rel + same-statement RETURN r.w");
+    assert_eq!(
+        resp.rows[0].as_array().expect("row is array")[0].as_i64(),
+        Some(5),
+        "CREATE ... RETURN r.w must project the relationship property in the same statement"
+    );
+
+    // The value is stored correctly regardless — confirm via a fresh MATCH.
+    let read = run_query(
+        &server,
+        "MATCH (:Case8A)-[r:Case8T]->(:Case8B) RETURN r.w AS w",
+        no_params(),
+    )
+    .await;
+    assert_no_error(&read, "MATCH after CREATE rel with literal prop");
+    assert_eq!(
+        read.rows[0].as_array().expect("row is array")[0].as_i64(),
+        Some(5),
+        "relationship property must persist as 5 regardless of the same-statement RETURN bug"
+    );
+}
+
+#[tokio::test]
+async fn case_09_create_rel_param_props_persist() {
+    let ctx = TestContext::new();
+    let server = build_test_server(&ctx);
+
+    let resp = run_query(
+        &server,
+        "CREATE (a:Case9A)-[r:Case9T {w: $w}]->(b:Case9B)",
+        params(&[("w", serde_json::json!(8))]),
+    )
+    .await;
+    assert_no_error(&resp, "CREATE rel with $param prop");
+
+    let read = run_query(
+        &server,
+        "MATCH (:Case9A)-[r:Case9T]->(:Case9B) RETURN r.w AS w",
+        no_params(),
+    )
+    .await;
+    assert_no_error(&read, "MATCH after CREATE rel with $param prop");
+    assert_eq!(
+        read.rows[0].as_array().expect("row is array")[0].as_i64(),
+        Some(8),
+        "parameterized relationship property must persist as 8, not null"
+    );
+}
+
+// **B1** — the MERGE loop in `write_ops.rs::execute_create_or_merge` only
+// matches `PatternElement::Node(_)`; the `PatternElement::Relationship(_)`
+// in a `MERGE (a:L {..})-[r:T]->(b:L2 {..})` path pattern is silently
+// skipped, so no edge is ever created.
+#[tokio::test]
+async fn case_10_merge_rel_creates_edge_idempotently() {
+    let ctx = TestContext::new();
+    let server = build_test_server(&ctx);
+
+    let merge = "MERGE (a:Case10A {id: 1})-[r:Case10T]->(b:Case10B {id: 2})";
+    let first = run_query(&server, merge, no_params()).await;
+    assert_no_error(&first, "first MERGE rel");
+    let count1 = run_query(
+        &server,
+        "MATCH ()-[r:Case10T]->() RETURN count(r) AS c",
+        no_params(),
+    )
+    .await;
+    assert_eq!(
+        first_i64(&count1, "Case10T count after first MERGE"),
+        1,
+        "MERGE (a)-[r:T]->(b) must create exactly one edge"
+    );
+
+    let second = run_query(&server, merge, no_params()).await;
+    assert_no_error(&second, "second (idempotent) MERGE rel");
+    let count2 = run_query(
+        &server,
+        "MATCH ()-[r:Case10T]->() RETURN count(r) AS c",
+        no_params(),
+    )
+    .await;
+    assert_eq!(
+        first_i64(&count2, "Case10T count after second MERGE"),
+        1,
+        "repeated MERGE on the same edge must not duplicate it"
+    );
+}
+
+#[tokio::test]
+async fn case_11_merge_rel_inline_props_persist() {
+    let ctx = TestContext::new();
+    let server = build_test_server(&ctx);
+
+    let merge = "MERGE (a:Case11A {id: 1})-[r:Case11T {w: 5}]->(b:Case11B {id: 2})";
+    let resp = run_query(&server, merge, no_params()).await;
+    assert_no_error(&resp, "MERGE rel with inline props");
+
+    let read = run_query(
+        &server,
+        "MATCH ()-[r:Case11T]->() RETURN count(r) AS c, r.w AS w",
+        no_params(),
+    )
+    .await;
+    assert_no_error(&read, "MATCH after MERGE rel with inline props");
+    let row = read.rows[0].as_array().expect("row is array");
+    assert_eq!(
+        row[0].as_i64(),
+        Some(1),
+        "MERGE must create exactly one edge"
+    );
+    assert_eq!(
+        row[1].as_i64(),
+        Some(5),
+        "MERGE (a)-[r:T {{w:5}}]->(b) must persist the inline property w=5"
+    );
+}
+
+// Same-statement projection of a relationship-variable property after
+// MERGE — the MERGE sibling of case 8 (which covers CREATE...RETURN r.w).
+// Found live on the 2.5.0-dev image: the value persists (case 11 proves
+// it) but `MERGE ... RETURN r.w` projected null in the same statement.
+#[tokio::test]
+async fn case_11b_merge_rel_return_property_same_statement() {
+    let ctx = TestContext::new();
+    let server = build_test_server(&ctx);
+
+    let resp = run_query(
+        &server,
+        "MERGE (a:Case11bA {id: 1})-[r:Case11bT {v: 9}]->(b:Case11bB {id: 2}) RETURN r.v AS v",
+        no_params(),
+    )
+    .await;
+    assert_no_error(&resp, "MERGE rel RETURN r.v same statement");
+    assert!(!resp.rows.is_empty(), "MERGE ... RETURN must produce a row");
+    let row = resp.rows[0].as_array().expect("row is array");
+    assert_eq!(
+        row[0].as_i64(),
+        Some(9),
+        "MERGE (a)-[r:T {{v:9}}]->(b) RETURN r.v must project 9 in the same statement"
+    );
+}
+
+#[tokio::test]
+async fn case_12_match_set_rel_property_forms() {
+    let ctx = TestContext::new();
+    let server = build_test_server(&ctx);
+
+    let seed = run_query(
+        &server,
+        "CREATE (a:Case12A {id: 1})-[r:Case12T {k: 1}]->(b:Case12B {id: 1})",
+        no_params(),
+    )
+    .await;
+    assert_no_error(&seed, "seed a-[r:Case12T]->b");
+
+    // SET r.k = <literal>
+    let set_k = run_query(
+        &server,
+        "MATCH (a:Case12A)-[r:Case12T]->(b:Case12B) SET r.k = 9",
+        no_params(),
+    )
+    .await;
+    assert_no_error(&set_k, "MATCH ... SET r.k = 9");
+    let read_k = run_query(
+        &server,
+        "MATCH ()-[r:Case12T]->() RETURN r.k AS k",
+        no_params(),
+    )
+    .await;
+    assert_no_error(&read_k, "MATCH after SET r.k = 9");
+    assert_eq!(
+        read_k.rows[0].as_array().expect("row is array")[0].as_i64(),
+        Some(9),
+        "MATCH ... SET r.k = 9 must persist on the relationship"
+    );
+
+    // SET r += {map}
+    let set_merge = run_query(
+        &server,
+        "MATCH ()-[r:Case12T]->() SET r += {m: 1, n: 2}",
+        no_params(),
+    )
+    .await;
+    assert_no_error(&set_merge, "SET r += {map}");
+    let read_merge = run_query(
+        &server,
+        "MATCH ()-[r:Case12T]->() RETURN r.m AS m, r.n AS n",
+        no_params(),
+    )
+    .await;
+    assert_no_error(&read_merge, "MATCH after SET r += {map}");
+    let row = read_merge.rows[0].as_array().expect("row is array");
+    assert_eq!(row[0].as_i64(), Some(1), "SET r += {{..}} must persist m");
+    assert_eq!(row[1].as_i64(), Some(2), "SET r += {{..}} must persist n");
+
+    // SET r.k = null removes the key.
+    let set_null = run_query(
+        &server,
+        "MATCH ()-[r:Case12T]->() SET r.k = null",
+        no_params(),
+    )
+    .await;
+    assert_no_error(&set_null, "SET r.k = null");
+    let read_null = run_query(&server, "MATCH ()-[r:Case12T]->() RETURN r", no_params()).await;
+    assert_no_error(&read_null, "MATCH after SET r.k = null");
+    let rel = read_null.rows[0].as_array().expect("row is array")[0]
+        .as_object()
+        .expect("RETURN r is a relationship object");
+    assert!(
+        !rel.contains_key("k"),
+        "SET r.k = null must remove the key k, not store a null value; rel = {:?}",
+        rel
+    );
+}
+
+#[tokio::test]
+async fn case_13_set_rel_via_anonymous_endpoints() {
+    let ctx = TestContext::new();
+    let server = build_test_server(&ctx);
+
+    let seed = run_query(
+        &server,
+        "CREATE (:Case13A)-[r:Case13T {k: 0}]->(:Case13B)",
+        no_params(),
+    )
+    .await;
+    assert_no_error(&seed, "seed anonymous-endpoint relationship");
+
+    let set_resp = run_query(&server, "MATCH ()-[r:Case13T]->() SET r.k = 1", no_params()).await;
+    assert_no_error(&set_resp, "MATCH ()-[r]->() SET r.k = 1");
+
+    let read = run_query(
+        &server,
+        "MATCH ()-[r:Case13T]->() RETURN r.k AS k",
+        no_params(),
+    )
+    .await;
+    assert_no_error(&read, "MATCH after SET on anonymous-endpoint relationship");
+    assert_eq!(
+        read.rows[0].as_array().expect("row is array")[0].as_i64(),
+        Some(1),
+        "SET r.k = 1 on an anonymous-endpoint relationship match must persist"
+    );
+}
+
+// ---------------------------------------------------------------------
+// 3. Mixed / routing-sensitive queries (handler.rs's uppercased
+//    string-prefix heuristic decides write_ops.rs vs. engine routing;
+//    these cases probe where that heuristic breaks down)
+// ---------------------------------------------------------------------
+
+#[tokio::test]
+async fn case_14_match_then_create_relationship() {
+    let ctx = TestContext::new();
+    let server = build_test_server(&ctx);
+
+    let seed_a = run_query(&server, "CREATE (a:Case14A {id: 1})", no_params()).await;
+    assert_no_error(&seed_a, "seed node a");
+    let seed_b = run_query(&server, "CREATE (b:Case14B {id: 1})", no_params()).await;
+    assert_no_error(&seed_b, "seed node b");
+
+    let resp = run_query(
+        &server,
+        "MATCH (a:Case14A {id: 1}), (b:Case14B {id: 1}) CREATE (a)-[r:Case14T]->(b)",
+        no_params(),
+    )
+    .await;
+    assert_no_error(&resp, "MATCH (a),(b) CREATE (a)-[r]->(b)");
+
+    let count = run_query(
+        &server,
+        "MATCH ()-[r:Case14T]->() RETURN count(r) AS c",
+        no_params(),
+    )
+    .await;
+    assert_no_error(&count, "MATCH count after MATCH-then-CREATE");
+    assert_eq!(
+        first_i64(&count, "Case14T count"),
+        1,
+        "MATCH (a),(b) CREATE (a)-[r]->(b) must create exactly one edge between the matched nodes"
+    );
+}
+
+// **B9 (parser half, checklist 2.0d) + L1 (routing half, tasks.md
+// section 4) — BOTH FIXED.** A query whose first non-blank line is a
+// `//` comment used to fail to parse at all (`Query must contain at
+// least one clause`): fixed by teaching `CypherParser::skip_whitespace`
+// (`executor/parser/tokens.rs`) to skip `//` line comments and `/* */`
+// block comments. That exposed a second layer: `handler.rs`'s
+// string-prefix routing (`query_upper.starts_with("CREATE")`) didn't see
+// the CREATE behind the comment and misrouted the query to the
+// read-only executor path — HTTP 200, nothing persisted (bug L1,
+// docs/nexus/02-bug-inventory.md). Fixed by switching `handler.rs` to
+// the AST-predicate routing in `api::cypher::routing`
+// (`routing::first_write_kind` / `routing::needs_engine_interception`),
+// which finds the `CREATE` clause anywhere in the parsed AST regardless
+// of what text precedes it.
+#[tokio::test]
+async fn case_15_leading_comment_then_create() {
+    let ctx = TestContext::new();
+    let server = build_test_server(&ctx);
+
+    // The uppercased query text starts with "// C", not "CREATE" — probes
+    // whether the leading-comment case still reaches a write path at all.
+    let resp = run_query(
+        &server,
+        "// a leading comment\nCREATE (n:Case15 {x: 1})",
+        no_params(),
+    )
+    .await;
+    assert_no_error(&resp, "CREATE preceded by a leading comment line");
+
+    let read = run_query(&server, "MATCH (n:Case15) RETURN n.x AS x", no_params()).await;
+    assert_no_error(&read, "MATCH after comment-prefixed CREATE");
+    assert_eq!(
+        read.rows[0].as_array().expect("row is array")[0].as_i64(),
+        Some(1),
+        "a leading comment before CREATE must not prevent the write from persisting"
+    );
+}
+
+#[tokio::test]
+async fn case_16_lowercase_create_keyword() {
+    let ctx = TestContext::new();
+    let server = build_test_server(&ctx);
+
+    let resp = run_query(&server, "create (n:Case16 {x: 1})", no_params()).await;
+    assert_no_error(&resp, "lowercase create keyword");
+
+    let read = run_query(&server, "MATCH (n:Case16) RETURN n.x AS x", no_params()).await;
+    assert_no_error(&read, "MATCH after lowercase-keyword CREATE");
+    assert_eq!(
+        read.rows[0].as_array().expect("row is array")[0].as_i64(),
+        Some(1),
+        "a lowercase `create` keyword must route and persist exactly like `CREATE`"
+    );
+}
+
+// ---------------------------------------------------------------------
+// 4. Transactions
+// ---------------------------------------------------------------------
+
+#[tokio::test]
+async fn case_17a_begin_create_commit_is_visible() {
+    let ctx = TestContext::new();
+    let server = build_test_server(&ctx);
+
+    let begin = run_query(&server, "BEGIN TRANSACTION", no_params()).await;
+    assert_no_error(&begin, "BEGIN TRANSACTION");
+    let create = run_query(&server, "CREATE (n:Case17Commit {x: 1})", no_params()).await;
+    assert_no_error(&create, "CREATE inside open transaction");
+    let commit = run_query(&server, "COMMIT TRANSACTION", no_params()).await;
+    assert_no_error(&commit, "COMMIT TRANSACTION");
+
+    let read = run_query(
+        &server,
+        "MATCH (n:Case17Commit) RETURN count(n) AS c",
+        no_params(),
+    )
+    .await;
+    assert_no_error(&read, "MATCH after COMMIT");
+    assert_eq!(
+        first_i64(&read, "Case17Commit count after COMMIT"),
+        1,
+        "a CREATE committed inside BEGIN/COMMIT must be visible afterwards"
+    );
+}
+
+// GREEN today, but for a subtle and important reason worth documenting:
+// `nexus-core` has its own `#[ignore]`d test
+// (`crates/nexus-core/tests/transaction_session_test.rs
+// test_transaction_rollback_persists_across_queries`, "TODO: Fix rollback
+// - nodes not being removed from index/storage") that reproduces exactly
+// this BEGIN/CREATE/ROLLBACK sequence via `Engine::execute_cypher`
+// (the executor-driven CREATE path) and finds the node NOT removed by
+// ROLLBACK. This case passes here because `write_ops.rs`'s CREATE calls
+// the low-level `Engine::create_node` directly — a different code path
+// that happens to participate correctly in the storage-level rollback.
+// **Regression risk for write-path unification Step 2**: once HTTP CREATE
+// is rerouted through `Engine::execute_cypher_with_params` (the same
+// executor-driven path the core-engine test already shows to be buggy),
+// this case may start failing. Re-run it immediately after Step 2 lands.
+#[tokio::test]
+async fn case_17b_begin_create_rollback_is_not_visible() {
+    let ctx = TestContext::new();
+    let server = build_test_server(&ctx);
+
+    let begin = run_query(&server, "BEGIN TRANSACTION", no_params()).await;
+    assert_no_error(&begin, "BEGIN TRANSACTION");
+    let create = run_query(&server, "CREATE (n:Case17Rollback {x: 1})", no_params()).await;
+    assert_no_error(&create, "CREATE inside open transaction");
+    let rollback = run_query(&server, "ROLLBACK TRANSACTION", no_params()).await;
+    assert_no_error(&rollback, "ROLLBACK TRANSACTION");
+
+    let read = run_query(
+        &server,
+        "MATCH (n:Case17Rollback) RETURN count(n) AS c",
+        no_params(),
+    )
+    .await;
+    assert_no_error(&read, "MATCH after ROLLBACK");
+    assert_eq!(
+        first_i64(&read, "Case17Rollback count after ROLLBACK"),
+        0,
+        "a CREATE rolled back inside BEGIN/ROLLBACK must not be visible afterwards"
+    );
+}
