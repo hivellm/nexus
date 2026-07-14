@@ -39,31 +39,26 @@ fn test_concurrent_writes_to_different_nodes() {
 fn test_concurrent_writes_to_same_node_blocks() {
     let manager = Arc::new(RowLockManager::default());
 
-    let manager1 = manager.clone();
+    // Hold the write lock synchronously on this thread so it is
+    // guaranteed to be held before the contender attempts to acquire.
+    // (The previous version spawned the holder and relied on
+    // `thread::sleep` offsets to sequence the two threads, which
+    // starved the holder on oversubscribed CI runners and let the
+    // contender acquire immediately — a test-only race, not a lock bug.)
+    let write_guard = manager.acquire_write(1, ResourceId::node(1)).unwrap();
+
+    // A contender on another thread must time out while the write lock is held.
     let manager2 = manager.clone();
-
-    // Thread 1: Write to node 1
-    let handle1 = thread::spawn(move || {
-        let guard = manager1.acquire_write(1, ResourceId::node(1)).unwrap();
-        thread::sleep(Duration::from_millis(100));
-        drop(guard);
-        true
-    });
-
-    // Thread 2: Write to same node 1 (should timeout/block)
     let handle2 = thread::spawn(move || {
-        // Wait a bit to ensure thread 1 has the lock
-        thread::sleep(Duration::from_millis(10));
         let result =
             manager2.acquire_write_with_timeout(2, ResourceId::node(1), Duration::from_millis(50));
         result.is_err() // Should fail due to timeout
     });
 
-    let result1 = handle1.join().unwrap();
     let result2 = handle2.join().unwrap();
-
-    assert!(result1);
     assert!(result2); // Should timeout because node 1 is locked
+
+    drop(write_guard);
 }
 
 #[test]
@@ -180,30 +175,26 @@ fn test_read_locks_allow_concurrent_reads() {
 fn test_read_write_conflict() {
     let manager = Arc::new(RowLockManager::default());
 
-    let manager1 = manager.clone();
+    // Hold the read lock synchronously on this thread so it is
+    // guaranteed to be held before the writer attempts to acquire.
+    // (The previous version spawned the reader and relied on
+    // `thread::sleep` offsets to sequence the two threads, which
+    // starved the reader on oversubscribed CI runners and let the
+    // writer acquire immediately — a test-only race, not a lock bug.)
+    let read_guard = manager.acquire_read(1, ResourceId::node(1)).unwrap();
+
+    // A writer on another thread must time out while the read lock is held.
     let manager2 = manager.clone();
-
-    // Thread 1: Read lock on node 1
-    let handle1 = thread::spawn(move || {
-        let guard = manager1.acquire_read(1, ResourceId::node(1)).unwrap();
-        thread::sleep(Duration::from_millis(100));
-        drop(guard);
-        true
-    });
-
-    // Thread 2: Write lock on same node 1 (should timeout)
     let handle2 = thread::spawn(move || {
-        thread::sleep(Duration::from_millis(10));
         let result =
             manager2.acquire_write_with_timeout(2, ResourceId::node(1), Duration::from_millis(50));
         result.is_err() // Should fail due to timeout
     });
 
-    let result1 = handle1.join().unwrap();
     let result2 = handle2.join().unwrap();
-
-    assert!(result1);
     assert!(result2); // Should timeout because read lock is held
+
+    drop(read_guard);
 }
 
 #[test]
@@ -426,70 +417,62 @@ fn test_different_resource_types() {
 fn test_read_lock_upgrade_attempt() {
     let manager = Arc::new(RowLockManager::default());
 
-    let manager1 = manager.clone();
+    // Hold the read lock synchronously on this thread so it is
+    // guaranteed to be held before the writer attempts to acquire.
+    // (The previous version spawned the reader and relied on
+    // `thread::sleep` offsets to sequence the two threads, which
+    // starved the reader on oversubscribed CI runners and let the
+    // writer acquire immediately — a test-only race, not a lock bug.)
+    let read_guard = manager.acquire_read(1, ResourceId::node(1)).unwrap();
+
+    // A writer on another thread must time out while the read lock is held.
     let manager2 = manager.clone();
-
-    // Thread 1: Acquire read lock
-    let handle1 = thread::spawn(move || {
-        let _guard = manager1.acquire_read(1, ResourceId::node(1)).unwrap();
-        thread::sleep(Duration::from_millis(100));
+    let handle = thread::spawn(move || {
+        manager2
+            .acquire_write_with_timeout(2, ResourceId::node(1), Duration::from_millis(50))
+            .is_err()
     });
 
-    // Thread 2: Try to acquire write lock (should timeout)
-    let handle2 = thread::spawn(move || {
-        thread::sleep(Duration::from_millis(10));
-        let result =
-            manager2.acquire_write_with_timeout(2, ResourceId::node(1), Duration::from_millis(50));
-        result.is_err()
-    });
+    let result2 = handle.join().unwrap();
+    assert!(result2); // Should timeout while the read lock is held
 
-    handle1.join().unwrap();
-    let result2 = handle2.join().unwrap();
-
-    assert!(result2); // Should timeout
+    drop(read_guard);
 }
 
 #[test]
 fn test_concurrent_reads_during_write() {
     let manager = Arc::new(RowLockManager::default());
 
-    let manager1 = manager.clone();
-    let _manager2 = manager.clone();
+    // Hold the write lock synchronously on this thread so it is
+    // guaranteed to be held before the readers attempt to acquire.
+    // (The previous version spawned the holder and relied on
+    // `thread::sleep` offsets to sequence the threads, which starved
+    // the holder on oversubscribed CI runners and let a reader acquire
+    // immediately — a test-only race, not a lock bug.)
+    let write_guard = manager.acquire_write(1, ResourceId::node(1)).unwrap();
+
+    // Threads 2 & 3: Try to read (should timeout while the write lock is held)
+    let manager2 = manager.clone();
+    let handle2 = thread::spawn(move || {
+        let result =
+            manager2.acquire_read_with_timeout(2, ResourceId::node(1), Duration::from_millis(50));
+        result.is_err()
+    });
+
     let manager3 = manager.clone();
-
-    // Thread 1: Write lock
-    let handle1 = thread::spawn(move || {
-        let _guard = manager1.acquire_write(1, ResourceId::node(1)).unwrap();
-        thread::sleep(Duration::from_millis(100));
-    });
-
-    // Thread 2 & 3: Try to read (should timeout)
-    let handle2 = thread::spawn({
-        let manager = manager.clone();
-        move || {
-            thread::sleep(Duration::from_millis(10));
-            let result = manager.acquire_read_with_timeout(
-                2,
-                ResourceId::node(1),
-                Duration::from_millis(50),
-            );
-            result.is_err()
-        }
-    });
-
     let handle3 = thread::spawn(move || {
-        thread::sleep(Duration::from_millis(10));
         let result =
             manager3.acquire_read_with_timeout(3, ResourceId::node(1), Duration::from_millis(50));
         result.is_err()
     });
 
-    handle1.join().unwrap();
     let result2 = handle2.join().unwrap();
     let result3 = handle3.join().unwrap();
 
     assert!(result2); // Should timeout
     assert!(result3); // Should timeout
+
+    drop(write_guard);
 }
 
 #[test]
@@ -721,19 +704,16 @@ fn test_lock_release_order_independence() {
 fn test_multiple_readers_one_writer() {
     let manager = Arc::new(RowLockManager::default());
 
-    let manager1 = manager.clone();
+    // Hold one read lock synchronously on this thread so a conflicting
+    // writer is guaranteed to observe contention regardless of scheduling.
+    // (The previous version spawned all readers and relied on
+    // `thread::sleep` offsets to sequence them ahead of the writer,
+    // which starved the readers on oversubscribed CI runners and let
+    // the writer acquire immediately — a test-only race, not a lock bug.)
+    let read_guard1 = manager.acquire_read(1, ResourceId::node(1)).unwrap();
+
+    // Threads 2-3: Additional read locks (compatible with the held read lock)
     let manager2 = manager.clone();
-    let manager3 = manager.clone();
-    let manager4 = manager.clone();
-
-    // Threads 1-3: Read locks (should all succeed)
-    let handle1 = thread::spawn(move || {
-        let guard = manager1.acquire_read(1, ResourceId::node(1)).unwrap();
-        thread::sleep(Duration::from_millis(50));
-        drop(guard);
-        true
-    });
-
     let handle2 = thread::spawn(move || {
         let guard = manager2.acquire_read(2, ResourceId::node(1)).unwrap();
         thread::sleep(Duration::from_millis(50));
@@ -741,6 +721,7 @@ fn test_multiple_readers_one_writer() {
         true
     });
 
+    let manager3 = manager.clone();
     let handle3 = thread::spawn(move || {
         let guard = manager3.acquire_read(3, ResourceId::node(1)).unwrap();
         thread::sleep(Duration::from_millis(50));
@@ -749,22 +730,22 @@ fn test_multiple_readers_one_writer() {
     });
 
     // Thread 4: Write lock (should timeout while reads are held)
+    let manager4 = manager.clone();
     let handle4 = thread::spawn(move || {
-        thread::sleep(Duration::from_millis(10));
         let result =
             manager4.acquire_write_with_timeout(4, ResourceId::node(1), Duration::from_millis(30));
         result.is_err()
     });
 
-    let result1 = handle1.join().unwrap();
     let result2 = handle2.join().unwrap();
     let result3 = handle3.join().unwrap();
     let result4 = handle4.join().unwrap();
 
-    assert!(result1);
     assert!(result2);
     assert!(result3);
     assert!(result4); // Should timeout
+
+    drop(read_guard1);
 }
 
 #[test]
