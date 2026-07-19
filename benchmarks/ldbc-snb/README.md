@@ -124,7 +124,7 @@ is two implementations of the same probe logic that must be kept in lockstep.
 **The harness deliberately has no `--database` flag.** Nexus currently ignores
 the `database` field on `POST /cypher` and `PUT /session/database` reports
 success without switching, so every query lands in the same store regardless of
-what was requested (filed as `phase19_fix-cypher-database-routing`). Rather than
+what was requested (filed as `phase0_fix-cypher-database-routing`). Rather than
 ship a flag that silently does nothing, the harness assumes one database per
 server process: start a server on a dedicated `NEXUS_DATA_DIR` and point
 `--url` at it.

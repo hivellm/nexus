@@ -26,7 +26,7 @@ benchmark query.
       `SHOW INDEXES` unimplemented (gap-closure 4.6), negative numeric literals rejected in CREATE property
       maps (gap-closure 4.7), and REST database routing entirely non-functional — `database` field parsed
       and never read, `PUT /session/database` reports success without switching (new task
-      phase19_fix-cypher-database-routing, HIGH: cross-database leakage). Because of the last one the
+      phase0_fix-cypher-database-routing, HIGH: cross-database leakage). Because of the last one the
       script deliberately has NO `--database` flag; the harness assumes one database per server process.
       Coverage is proven via the planner's `UnindexedPropertyAccess` notification since `SHOW INDEXES` is
       absent. First implementation of that check was VACUOUS — the notification needs rows to scan, so an
@@ -34,6 +34,18 @@ benchmark query.
       node per label, probing, then deleting and asserting removal. Validated with both controls:
       Person.firstName (no index) → MISS, Person.id (indexed) → silent.
 - [ ] 1.3 Bulk loader (`benchmarks/ldbc-snb/loader/`, Rust bin or Python script): stream the composite-merged CSVs into Nexus via `/ingest` — all 8 node labels first, then all edge files with date/datetime coercion; verify post-load node/edge counts against the dataset's expected cardinalities and fail loudly on mismatch
+      **BLOCKED on two engine bugs; the "via `/ingest`" premise does not hold.** Measured before writing
+      any loader code: `/ingest` cannot load a connected graph at all — `NodeIngest.id` is parsed and never
+      read, and `IngestResponse` never returns the created internal ids that `RelIngest.src`/`.dst` require,
+      so the node and relationship halves do not compose. It is also ~11x slower than the plain query path
+      (469 nodes/s vs 5 097 for `UNWIND`, release; `/ingest` does not improve with optimizations because its
+      cost is per-node lock + parse). Filed as `phase0_fix-ingest-bulk-path`.
+      The natural alternative — `UNWIND $rows AS r MATCH (a:P {id: r.s}), (b:P {id: r.d}) CREATE (a)-[:R]->(b)`,
+      which resolves edges by LDBC id through the 1.2 indexes — **aborts the server process** with
+      `memory allocation of 4000000000000 bytes failed`. Filed as `phase0_fix-cypher-oom-process-abort`
+      (CRITICAL: one query kills the server). Minimal repro not yet isolated.
+      Resume by either waiting on those two, or loading edges with a shape that avoids the cartesian
+      multi-pattern MATCH — but confirm the workaround does not abort before building on it.
 - [ ] 1.4 Port short reads IS1–IS7 from `ldbc/ldbc_snb_interactive_impls` (cypher flavor) into `benchmarks/ldbc-snb/queries/`, one file per query with parameter placeholders; smoke-validate each against SF0.1 comparing results with the same query on Neo4j (docker via `scripts/bench/docker-compose.yml`)
 - [ ] 1.5 Port complex reads IC1–IC14 the same way, validating each against Neo4j on SF0.1; each query Nexus cannot express or answers differently → file a finding (repro + expected vs actual) in phase7_opencypher-gap-closure and mark the query BLOCKED in the README table
 - [ ] 1.6 Port the 8 Interactive updates (INS1–INS8: add person/like/post/comment/forum/membership/friendship/reply) with parameter streams from the dataset's update CSVs; validate side effects (counts before/after) on SF0.1

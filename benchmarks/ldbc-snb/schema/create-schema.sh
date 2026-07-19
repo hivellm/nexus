@@ -16,7 +16,7 @@
 # THERE IS DELIBERATELY NO --database FLAG. Nexus currently ignores the
 # `database` field on POST /cypher and never switches the session database, so
 # every query lands in the same store no matter what is requested (filed as
-# phase19_fix-cypher-database-routing). A flag that silently does nothing is
+# phase0_fix-cypher-database-routing). A flag that silently does nothing is
 # worse than no flag, so this harness assumes ONE DATABASE PER SERVER PROCESS:
 # point --url at a server started on a dedicated --data-dir.
 #
