@@ -45,12 +45,14 @@ fn create_on_conflict_match_returns_existing_node() {
     );
 }
 
-// `RETURN n._id` projection (phase9 §4.7) is exercised in isolation —
-// running it inside the integration suite collides with stale entries in
-// the process-wide shared catalog (`TEST_CATALOG_DIR`) used by all
-// nexus-core integration tests. The projection wiring itself is verified
-// by `cargo test -p nexus-core --test cypher_external_id <single>` and
-// by manual validation against the Cypher endpoint.
+// `RETURN n._id` / `WHERE n._id = ...` projection (phase9 §4.7) is
+// deliberately NOT exercised in THIS file: `Engine::new()` uses a
+// process-wide shared catalog, and stale entries left behind by other
+// tests in this same binary collide across runs. Instead, that coverage
+// (plus the write-path forms fixed by issue #29 — MERGE, CREATE+SET,
+// UNWIND+CREATE) lives in `tests/cypher_external_id_write_paths.rs`,
+// which uses `Engine::with_isolated_catalog` + `testing::TestContext`
+// for a fresh, unshared catalog per test.
 
 #[test]
 fn create_on_conflict_default_errors_on_duplicate() {

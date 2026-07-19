@@ -3,11 +3,61 @@
 
 use super::Engine;
 use super::crud::NodeWriteState;
+use crate::storage::external_id::{ConflictPolicy, ExternalId};
 use crate::{Error, Result, executor};
 use serde_json::{Map, Value};
 use std::collections::{HashMap, HashSet};
 
+/// Convert an AST-level conflict policy to the storage-level one used by
+/// [`Engine::create_node_with_external_id`]. Mirrors
+/// `executor::operators::create::ast_conflict_policy_to_storage`; duplicated
+/// here (rather than reused across the module boundary) because the
+/// executor's helper is `pub(in crate::executor)` and the write-query path
+/// lives in `crate::engine`.
+fn ast_conflict_policy_to_storage(p: executor::parser::AstConflictPolicy) -> ConflictPolicy {
+    match p {
+        executor::parser::AstConflictPolicy::Error => ConflictPolicy::Error,
+        executor::parser::AstConflictPolicy::Match => ConflictPolicy::Match,
+        executor::parser::AstConflictPolicy::Replace => ConflictPolicy::Replace,
+    }
+}
+
 impl Engine {
+    /// Resolve a parsed `_id` expression (string-literal or parameter) into
+    /// an [`ExternalId`]. Mirrors `Executor::resolve_external_id`; anything
+    /// other than a string literal or parameter is rejected at parse time,
+    /// so this function only needs to handle those two cases.
+    fn resolve_external_id(&self, expr: &executor::parser::Expression) -> Result<ExternalId> {
+        use std::str::FromStr;
+        let raw: String = match expr {
+            executor::parser::Expression::Literal(executor::parser::Literal::String(s)) => {
+                s.clone()
+            }
+            executor::parser::Expression::Parameter(name) => match self.current_params.get(name) {
+                Some(Value::String(s)) => s.clone(),
+                Some(other) => {
+                    return Err(Error::executor(format!(
+                        "_id parameter `{}` must be a string, got {:?}",
+                        name, other
+                    )));
+                }
+                None => {
+                    return Err(Error::executor(format!(
+                        "_id parameter `{}` not provided",
+                        name
+                    )));
+                }
+            },
+            _ => {
+                return Err(Error::executor(
+                    "_id expression must be a string literal or parameter (parser invariant)",
+                ));
+            }
+        };
+        ExternalId::from_str(&raw)
+            .map_err(|e| Error::executor(format!("invalid _id `{}`: {}", raw, e)))
+    }
+
     pub(super) fn execute_write_query(
         &mut self,
         ast: &executor::parser::CypherQuery,
@@ -59,6 +109,19 @@ impl Engine {
                 // UNWIND-write loop (`execute_unwind_write_query`),
                 // extended here to also support relationship elements.
                 executor::parser::Clause::Create(create_clause) => {
+                    // `_id` (issue #29): resolved once per CREATE clause and
+                    // consumed by only the FIRST node the pattern creates —
+                    // the parser hoists `_id` out of that node's property
+                    // map into `external_id_expr`, so any other node in the
+                    // pattern (e.g. a relationship's target) must never
+                    // receive it.
+                    let ext_id = create_clause
+                        .external_id_expr
+                        .as_ref()
+                        .map(|expr| self.resolve_external_id(expr))
+                        .transpose()?;
+                    let ext_policy = ast_conflict_policy_to_storage(create_clause.conflict_policy);
+                    let mut ext_id_consumed = false;
                     let mut last_node_id: Option<u64> = None;
                     for (i, element) in create_clause.pattern.elements.iter().enumerate() {
                         match element {
@@ -69,8 +132,18 @@ impl Engine {
                                         props.insert(k.clone(), self.eval_write_value(expr)?);
                                     }
                                 }
-                                let id =
-                                    self.create_node(node.labels.clone(), Value::Object(props))?;
+                                let node_ext_id = if ext_id_consumed {
+                                    None
+                                } else {
+                                    ext_id_consumed = true;
+                                    ext_id.clone()
+                                };
+                                let id = self.create_node_with_external_id(
+                                    node.labels.clone(),
+                                    Value::Object(props),
+                                    node_ext_id,
+                                    ext_policy,
+                                )?;
                                 if let Some(var) = &node.variable {
                                     context.insert(var.clone(), vec![id]);
                                 }
@@ -320,6 +393,32 @@ impl Engine {
         };
 
         let post = &ast.clauses[unwind_idx + 1..];
+
+        // `_id` (issue #29): resolved ONCE, before the per-row loop below.
+        // `create_clause.external_id_expr` cannot vary per row — a per-row
+        // `_id` (e.g. `_id: row.id`) is a parse error today (out of scope
+        // here) — so resolving it here is equivalent to resolving it
+        // inside the loop, but avoids a `?`-propagating early return from
+        // inside the loop body that would skip the manual
+        // `self.unwind_bindings.clear()` cleanup every other early-return
+        // arm below performs.
+        let create_ext_id = post
+            .iter()
+            .find_map(|c| match c {
+                Clause::Create(cc) => cc.external_id_expr.as_ref(),
+                _ => None,
+            })
+            .map(|expr| self.resolve_external_id(expr))
+            .transpose()?;
+        let create_ext_policy = post
+            .iter()
+            .find_map(|c| match c {
+                Clause::Create(cc) => Some(cc.conflict_policy),
+                _ => None,
+            })
+            .map(ast_conflict_policy_to_storage)
+            .unwrap_or(ConflictPolicy::Error);
+
         for item in items {
             self.unwind_bindings.insert(unwind.variable.clone(), item);
             // Fresh per-row context seeded from the shared MATCH bindings, so
@@ -342,6 +441,10 @@ impl Engine {
                         }
                     }
                     Clause::Create(create_clause) => {
+                        // Consumed by only the FIRST node this pattern
+                        // creates — same "one _id, first node only"
+                        // contract as the linear CREATE arm above.
+                        let mut ext_id_consumed = false;
                         for element in &create_clause.pattern.elements {
                             match element {
                                 executor::parser::PatternElement::Node(node) => {
@@ -351,9 +454,17 @@ impl Engine {
                                             props.insert(k.clone(), self.eval_write_value(expr)?);
                                         }
                                     }
-                                    let id = self.create_node(
+                                    let node_ext_id = if ext_id_consumed {
+                                        None
+                                    } else {
+                                        ext_id_consumed = true;
+                                        create_ext_id.clone()
+                                    };
+                                    let id = self.create_node_with_external_id(
                                         node.labels.clone(),
                                         serde_json::Value::Object(props),
+                                        node_ext_id,
+                                        create_ext_policy,
                                     )?;
                                     if let Some(var) = &node.variable {
                                         row_context.insert(var.clone(), vec![id]);
@@ -483,9 +594,35 @@ impl Engine {
             }
         }
 
-        let mut node_ids = self.find_nodes_by_node_pattern(&node_pattern)?;
-        node_ids.sort_unstable();
-        node_ids.dedup();
+        // `_id` (issue #29): resolve the magic `_id` property the parser
+        // hoisted out of `node_pattern.properties` into `external_id_expr`.
+        // The external id is a stronger key than the property-based search
+        // below — the search is now `_id`-blind, since the parser already
+        // stripped `_id` out of `node_pattern.properties` — so a hit here
+        // short-circuits that search entirely.
+        let ext_id = merge_clause
+            .external_id_expr
+            .as_ref()
+            .map(|expr| self.resolve_external_id(expr))
+            .transpose()?;
+
+        let existing_by_ext_id = if let Some(ext) = &ext_id {
+            let txn = self.catalog.read_txn()?;
+            let found = self.catalog.external_id_index().get_internal(&txn, ext)?;
+            drop(txn);
+            found
+        } else {
+            None
+        };
+
+        let mut node_ids = if let Some(id) = existing_by_ext_id {
+            vec![id]
+        } else {
+            let mut ids = self.find_nodes_by_node_pattern(&node_pattern)?;
+            ids.sort_unstable();
+            ids.dedup();
+            ids
+        };
 
         if node_ids.is_empty() {
             let labels = node_pattern.labels.clone();
@@ -496,8 +633,19 @@ impl Engine {
                     props.insert(key.clone(), value);
                 }
             }
-            // create_node already checks constraints, so we can call it directly
-            let node_id = self.create_node(labels, Value::Object(props))?;
+            // create_node_with_external_id already checks constraints, so
+            // we can call it directly. `ConflictPolicy::Match` closes the
+            // TOCTOU window between the `existing_by_ext_id` lookup above
+            // and this create: if a concurrent MERGE raced in and won,
+            // this falls back to the now-existing internal id instead of
+            // erroring (`MergeClause` has no `conflict_policy` of its own —
+            // find-or-create is always the semantics here).
+            let node_id = self.create_node_with_external_id(
+                labels,
+                Value::Object(props),
+                ext_id,
+                ConflictPolicy::Match,
+            )?;
             node_ids.push(node_id);
 
             if let Some(on_create) = &merge_clause.on_create {
