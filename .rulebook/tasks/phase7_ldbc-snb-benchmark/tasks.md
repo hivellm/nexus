@@ -18,7 +18,21 @@ benchmark query.
       SF0.1 and SF1, both scripts, including idempotent re-runs and `--verify-only`. README records the
       scope statement, measured disk footprint (SF0.1 135 MiB / SF1 1.5 GiB), SF0.1 cardinalities
       (327 588 nodes / 576 896 edge rows) and the merge-foreign FK→edge mapping the loader must synthesize.
-- [ ] 1.2 Schema prep script: Cypher DDL creating the SNB label indexes + B-tree property indexes (Person.id, Post.id, Comment.id, Forum.id, Place.name, Tag.name, Organisation.id, creationDate fields) — run against a fresh Nexus database before load
+- [x] 1.2 Schema prep script: Cypher DDL creating the SNB label indexes + B-tree property indexes (Person.id, Post.id, Comment.id, Forum.id, Place.name, Tag.name, Organisation.id, creationDate fields) — run against a fresh Nexus database before load
+      Done: `schema/indexes.cypher` (15 property indexes: 8 id, 3 name incl. TagClass.name for IC12,
+      4 creationDate) + `schema/create-schema.sh`. Label indexes are NOT declared — Nexus maintains a
+      RoaringBitmap per label automatically, so only property indexes need DDL. All 15 statements verified
+      executing against a live server. Three engine gaps found and FILED, not worked around:
+      `SHOW INDEXES` unimplemented (gap-closure 4.6), negative numeric literals rejected in CREATE property
+      maps (gap-closure 4.7), and REST database routing entirely non-functional — `database` field parsed
+      and never read, `PUT /session/database` reports success without switching (new task
+      phase19_fix-cypher-database-routing, HIGH: cross-database leakage). Because of the last one the
+      script deliberately has NO `--database` flag; the harness assumes one database per server process.
+      Coverage is proven via the planner's `UnindexedPropertyAccess` notification since `SHOW INDEXES` is
+      absent. First implementation of that check was VACUOUS — the notification needs rows to scan, so an
+      empty database reported every index present even with none created. Fixed by creating one throwaway
+      node per label, probing, then deleting and asserting removal. Validated with both controls:
+      Person.firstName (no index) → MISS, Person.id (indexed) → silent.
 - [ ] 1.3 Bulk loader (`benchmarks/ldbc-snb/loader/`, Rust bin or Python script): stream the composite-merged CSVs into Nexus via `/ingest` — all 8 node labels first, then all edge files with date/datetime coercion; verify post-load node/edge counts against the dataset's expected cardinalities and fail loudly on mismatch
 - [ ] 1.4 Port short reads IS1–IS7 from `ldbc/ldbc_snb_interactive_impls` (cypher flavor) into `benchmarks/ldbc-snb/queries/`, one file per query with parameter placeholders; smoke-validate each against SF0.1 comparing results with the same query on Neo4j (docker via `scripts/bench/docker-compose.yml`)
 - [ ] 1.5 Port complex reads IC1–IC14 the same way, validating each against Neo4j on SF0.1; each query Nexus cannot express or answers differently → file a finding (repro + expected vs actual) in phase7_opencypher-gap-closure and mark the query BLOCKED in the README table

@@ -32,7 +32,7 @@ answer is worthless.
 | Component | State |
 |---|---|
 | Dataset fetch + checksum pinning | **done** |
-| Schema prep DDL | not started |
+| Schema prep DDL | **done** |
 | Bulk loader | not started |
 | Short reads IS1–IS7 | not started |
 | Complex reads IC1–IC14 | not started |
@@ -101,6 +101,47 @@ sf1/
 
 `.gitignore` in this directory mirrors that layout as a safety net for anyone
 who points `--cache` at the repository.
+
+## Schema preparation
+
+Apply the index DDL to a **fresh** database before loading, so the loader
+populates the indexes incrementally instead of paying for a rebuild afterwards:
+
+```bash
+./schema/create-schema.sh --url http://localhost:15474
+```
+
+`schema/indexes.cypher` declares 15 property indexes (8 id lookups, 3 name
+lookups, 4 creationDate ranges). Label indexes are not declared: Nexus keeps a
+RoaringBitmap per label automatically, so `MATCH (n:Person)` is already indexed.
+Every statement is `IF NOT EXISTS`, so re-running is a no-op.
+
+Bash only, matching `scripts/bench/`, which is also bash-only — the alternative
+is two implementations of the same probe logic that must be kept in lockstep.
+
+### One database per server process
+
+**The harness deliberately has no `--database` flag.** Nexus currently ignores
+the `database` field on `POST /cypher` and `PUT /session/database` reports
+success without switching, so every query lands in the same store regardless of
+what was requested (filed as `phase19_fix-cypher-database-routing`). Rather than
+ship a flag that silently does nothing, the harness assumes one database per
+server process: start a server on a dedicated `NEXUS_DATA_DIR` and point
+`--url` at it.
+
+### How coverage is verified
+
+Nexus has no `SHOW INDEXES` (filed as `phase7_opencypher-gap-closure` item 4.6),
+so the script cannot read the index set back. It instead uses the planner's
+`Nexus.Performance.UnindexedPropertyAccess` notification, which fires when a
+label+property predicate falls back to a label scan — its absence is positive
+evidence the index is registered and used.
+
+That signal only fires when the label has rows to scan, so on an empty database
+the check would pass vacuously (confirmed: probing a database with *no* indexes
+at all reported every index present). The script therefore creates one throwaway
+node per label, probes, then deletes them and asserts they are gone — a leaked
+probe row would corrupt the loader's post-load cardinality verification.
 
 ## Dataset
 
