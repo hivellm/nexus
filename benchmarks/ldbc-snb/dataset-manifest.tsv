@@ -1,0 +1,28 @@
+# LDBC SNB Interactive v1 pre-generated artifacts — pinned manifest.
+#
+# Single source of truth for both fetch-dataset.sh and fetch-dataset.ps1.
+# Columns are TAB separated:
+#
+#   scale     scale factor the artifact belongs to (0.1 | 1)
+#   kind      dataset | parameters | updates
+#   filename  basename written into the cache directory
+#   url       pinned absolute download URL
+#   sha256    SHA-256 of the compressed archive, captured 2026-07-19
+#   bytes     Content-Length as served on 2026-07-19 (progress + early mismatch)
+#
+# The checksums below were computed locally from the downloaded archives, not
+# copied from upstream (LDBC publishes no checksum file for Interactive v1).
+# Re-pinning is a deliberate act: download, verify the contents are what you
+# expect, then update the sha256 here in the same commit.
+#
+# Serializer choice: CsvCompositeMergeForeign — the composite-merged layout,
+# 18 CSV files total, the fewest of the CSV serializers. LongDateFormatter
+# emits dates as epoch milliseconds, which the loader coerces explicitly.
+#
+# scale	kind	filename	url	sha256	bytes
+0.1	dataset	social_network-sf0.1-CsvCompositeMergeForeign-LongDateFormatter.tar.zst	https://datasets.ldbcouncil.org/snb-interactive-v1/social_network-sf0.1-CsvCompositeMergeForeign-LongDateFormatter.tar.zst	96e86d1435f9ab44837c0919ac717112c1634be12118b1f423573389e9619b86	16484658
+0.1	parameters	substitution_parameters-sf0.1.tar.zst	https://datasets.ldbcouncil.org/snb-interactive-v1-parameters/substitution_parameters-sf0.1.tar.zst	c1ac2db1c1b8166dd2d466341e9682fb92e12d856f0b40e1be65da9cb9d008ff	203161
+0.1	updates	social_network-sf0.1-numpart-1.tar.zst	https://datasets.ldbcouncil.org/snb-interactive-v1-updates/social_network-sf0.1-numpart-1.tar.zst	6b2f00952a40119685e5428f798d823a096b577bcbb1b852c2b6f202b7521432	6261392
+1	dataset	social_network-sf1-CsvCompositeMergeForeign-LongDateFormatter.tar.zst	https://datasets.ldbcouncil.org/snb-interactive-v1/social_network-sf1-CsvCompositeMergeForeign-LongDateFormatter.tar.zst	0b2e240061e51098bc19e9d5ee535cc16d01da522c8aab3d6dfde6350cbe5bf6	211535038
+1	parameters	substitution_parameters-sf1.tar.zst	https://datasets.ldbcouncil.org/snb-interactive-v1-parameters/substitution_parameters-sf1.tar.zst	35ed6bd8d86e9911b826421a0d514a764b2141c09e6a0df087239ae0b1d595cb	513588
+1	updates	social_network-sf1-numpart-1.tar.zst	https://datasets.ldbcouncil.org/snb-interactive-v1-updates/social_network-sf1-numpart-1.tar.zst	cb8d0e7b21d659a6909e76467cab4d79aa4a6e5c7cec6eb7d410a759001a2a07	79580826

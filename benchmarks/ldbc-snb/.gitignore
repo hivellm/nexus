@@ -1,0 +1,23 @@
+# LDBC SNB datasets never belong in git history.
+#
+# By default fetch-dataset.sh / .ps1 cache everything outside the working tree
+# (~/.cache/ldbc-snb, or $LDBC_SNB_CACHE_DIR). These entries are the safety net
+# for operators who point --cache / -Cache at the repository instead: a single
+# SF1 archive is 211 MiB compressed and expands to roughly 2 GiB of CSV.
+
+# Compressed archives and interrupted downloads.
+*.tar.zst
+*.tar.zst.part
+
+# Cache layout produced by the fetch scripts.
+archives/
+sf0.1/
+sf1/
+sf3/
+sf10/
+
+# Extracted payloads, wherever they land. Deliberately NOT a blanket *.csv:
+# the loader's unit-test fixtures are small hand-written CSVs that must stay
+# tracked.
+social_network-sf*/
+substitution_parameters-sf*/

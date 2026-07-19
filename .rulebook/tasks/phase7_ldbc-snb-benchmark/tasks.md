@@ -7,7 +7,17 @@ phase7_opencypher-gap-closure with a repro query — never worked around by simp
 benchmark query.
 
 ## 1. Implementation
-- [ ] 1.1 Scaffold `benchmarks/ldbc-snb/` (README with scope statement: Interactive workload, unaudited, REST harness) + `fetch-dataset.sh`/`.ps1` downloading LDBC pre-generated SNB Interactive CSVs for SF0.1 and SF1 with pinned URLs and SHA-256 checksums, cached outside git
+- [x] 1.1 Scaffold `benchmarks/ldbc-snb/` (README with scope statement: Interactive workload, unaudited, REST harness) + `fetch-dataset.sh`/`.ps1` downloading LDBC pre-generated SNB Interactive CSVs for SF0.1 and SF1 with pinned URLs and SHA-256 checksums, cached outside git
+      Done: `dataset-manifest.tsv` pins 6 artifacts (SF0.1 + SF1 × dataset/parameters/updates) from
+      `datasets.ldbcouncil.org`, serializer CsvCompositeMergeForeign + LongDateFormatter, with SHA-256
+      computed locally (LDBC publishes no checksum file for Interactive v1). Both fetch scripts read that
+      one manifest; cached archives are always re-hashed — no flag skips verification. `--force` controls
+      re-extraction only. zstd via CLI or Python `zstandard` fallback. Cache defaults to `~/.cache/ldbc-snb`,
+      overridable via `$LDBC_SNB_CACHE_DIR`; `.gitignore` is a safety net for `--cache` pointed at the repo
+      (deliberately not a blanket `*.csv`, so loader test fixtures stay tracked). Verified end-to-end on
+      SF0.1 and SF1, both scripts, including idempotent re-runs and `--verify-only`. README records the
+      scope statement, measured disk footprint (SF0.1 135 MiB / SF1 1.5 GiB), SF0.1 cardinalities
+      (327 588 nodes / 576 896 edge rows) and the merge-foreign FK→edge mapping the loader must synthesize.
 - [ ] 1.2 Schema prep script: Cypher DDL creating the SNB label indexes + B-tree property indexes (Person.id, Post.id, Comment.id, Forum.id, Place.name, Tag.name, Organisation.id, creationDate fields) — run against a fresh Nexus database before load
 - [ ] 1.3 Bulk loader (`benchmarks/ldbc-snb/loader/`, Rust bin or Python script): stream the composite-merged CSVs into Nexus via `/ingest` — all 8 node labels first, then all edge files with date/datetime coercion; verify post-load node/edge counts against the dataset's expected cardinalities and fail loudly on mismatch
 - [ ] 1.4 Port short reads IS1–IS7 from `ldbc/ldbc_snb_interactive_impls` (cypher flavor) into `benchmarks/ldbc-snb/queries/`, one file per query with parameter placeholders; smoke-validate each against SF0.1 comparing results with the same query on Neo4j (docker via `scripts/bench/docker-compose.yml`)
