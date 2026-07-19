@@ -72,13 +72,26 @@ impl Engine {
         // lets us route both Ok and Err through the same cleanup
         // path without the borrow-checker conflict.
         self.current_params = params;
+        self.side_effects = executor::types::SideEffects::default();
+        self.storage.reset_nodes_created();
         let result = self.execute_cypher_with_context(
             query,
             None,
             crate::cluster::TenantIsolationMode::None,
         );
         self.current_params.clear();
-        result
+        let mut side_effects = std::mem::take(&mut self.side_effects);
+        // Node creations are counted in the storage layer rather than here:
+        // both the engine write path and the executor's create operator
+        // funnel through `create_node_with_label_bits_inner`, and which one
+        // runs depends on the clause mix (see the routing at :659-666).
+        // Counting at the shared chokepoint is what keeps the number right
+        // for both shapes.
+        side_effects.nodes_created = self.storage.nodes_created();
+        result.map(|mut rs| {
+            rs.side_effects = side_effects;
+            rs
+        })
     }
 
     /// Same as [`Self::execute_cypher_with_params`], but for callers that
@@ -108,6 +121,8 @@ impl Engine {
         params: HashMap<String, Value>,
     ) -> Result<executor::ResultSet> {
         self.current_params = params;
+        self.side_effects = executor::types::SideEffects::default();
+        self.storage.reset_nodes_created();
         let result = self.execute_cypher_ast_with_context(
             ast,
             query_str,
@@ -115,7 +130,12 @@ impl Engine {
             crate::cluster::TenantIsolationMode::None,
         );
         self.current_params.clear();
-        result
+        let mut side_effects = std::mem::take(&mut self.side_effects);
+        side_effects.nodes_created = self.storage.nodes_created();
+        result.map(|mut rs| {
+            rs.side_effects = side_effects;
+            rs
+        })
     }
 
     /// Execute a Cypher query, optionally rewriting catalog-visible

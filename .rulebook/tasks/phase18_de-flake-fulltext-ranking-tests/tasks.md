@@ -10,6 +10,9 @@ helper — so the fault is in shared setup, not in any assertion.
 - [ ] 1.2 Determine which of the three candidate causes holds: (a) tests sharing one index directory, (b) a `TempDir` dropped while a Tantivy writer still holds open handles (Windows refuses deletion/reopen of mapped files, unlike Linux — which is why this is OS-specific), or (c) genuine parallel-writer contention inside the helper. Confirm with evidence, do not pick by plausibility
 - [ ] 1.3 Establish whether the same handle-release problem can affect production index rebuilds on Windows, or whether it is strictly a test-harness artifact — this decides if the fix belongs in the test or in the fulltext registry's writer lifecycle
 
+## 1b. A second, unrelated flake (found 2026-07-19 during the phase7 gate)
+- [ ] 1b.1 `hub::client::tests::from_env_disabled_when_url_missing` fails intermittently (1 in 2 workspace runs observed, exit 101 then exit 0 with no other change). Different root cause from the Tantivy flake: it reads process environment variables, and Rust runs unit tests on parallel threads sharing one environment, so a sibling test setting/clearing the same var races it. Fix by serializing the env-touching tests (the `serial_test` crate is already a dependency — `serial_test v3.4.0` appears in the build) or by removing the shared-env dependency entirely. Do not paper over with a retry
+
 ## 2. Fix the cause
 - [ ] 2.1 Apply the fix indicated by 1.2 — per-test isolated index directory, explicit writer commit+drop before the directory goes out of scope, or serialized access to the shared index, as the diagnosis dictates
 - [ ] 2.2 If 1.3 found a production-side lifecycle defect, fix that too (or file it separately with justification if it is genuinely out of scope)

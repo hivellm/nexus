@@ -485,6 +485,7 @@ impl RecordStore {
 
                     self.write_node(node_id, &record)?;
                     wtxn.commit()?;
+                    self.nodes_created.fetch_add(1, Ordering::SeqCst);
                     return Ok(node_id);
                 }
                 Some(existing_id) => {
@@ -570,6 +571,7 @@ impl RecordStore {
             );
         }
 
+        self.nodes_created.fetch_add(1, Ordering::SeqCst);
         Ok(node_id)
     }
 

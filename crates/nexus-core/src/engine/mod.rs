@@ -202,6 +202,13 @@ pub struct Engine {
     /// parameters — in that case a query containing a `:$param` label
     /// is rejected with `ERR_INVALID_LABEL`.
     pub(crate) current_params: HashMap<String, Value>,
+    /// Mutation counters for the currently-executing top-level Cypher
+    /// query. Reset at the same point as `current_params` (query
+    /// entry), incremented by the write-path CRUD helpers (e.g.
+    /// `create_node_inner`), and copied onto the returned
+    /// `ResultSet::side_effects` before the entry-point call returns.
+    /// Mirrors `current_params`'s reset/clear lifecycle.
+    pub(crate) side_effects: executor::types::SideEffects,
     /// Per-iteration UNWIND row bindings for the write path (issue #13).
     /// `UNWIND [...] AS row MERGE/SET ...` runs the downstream write
     /// clauses once per row; this map binds the loop variable (e.g.
@@ -334,6 +341,7 @@ impl Engine {
             cache,
             quota_provider: None,
             current_params: HashMap::new(),
+            side_effects: executor::types::SideEffects::default(),
             unwind_bindings: HashMap::new(),
             relationship_index_dirty: std::sync::atomic::AtomicBool::new(false),
             typed_list_constraints: HashMap::new(),
@@ -530,6 +538,7 @@ impl Engine {
             cache,
             quota_provider: None,
             current_params: HashMap::new(),
+            side_effects: executor::types::SideEffects::default(),
             unwind_bindings: HashMap::new(),
             relationship_index_dirty: std::sync::atomic::AtomicBool::new(false),
             typed_list_constraints: HashMap::new(),

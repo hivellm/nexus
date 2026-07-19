@@ -140,6 +140,32 @@ pub struct Notification {
     pub category: NotificationCategory,
 }
 
+/// Counters for the mutations a query performed, in the vocabulary the
+/// openCypher TCK uses (`+nodes`, `-properties`, ...). Every field is a
+/// plain `u64` counter, `Copy`, and defaults to all-zero — read-only
+/// queries surface a zeroed `SideEffects` on their `ResultSet`.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct SideEffects {
+    /// Nodes actually inserted. A `MERGE`/`ConflictPolicy::Match` that
+    /// resolves to an existing node must NOT increment this.
+    pub nodes_created: u64,
+    /// Nodes marked deleted.
+    pub nodes_deleted: u64,
+    /// Relationships actually inserted.
+    pub relationships_created: u64,
+    /// Relationships marked deleted.
+    pub relationships_deleted: u64,
+    /// Property key/value writes, including overwriting a property
+    /// with the value it already held (the TCK counts that as a set).
+    pub properties_set: u64,
+    /// Property keys removed (via `REMOVE` or `SET n.k = null`).
+    pub properties_removed: u64,
+    /// Labels added to an existing node (`SET n:Label`).
+    pub labels_added: u64,
+    /// Labels removed from an existing node (`REMOVE n:Label`).
+    pub labels_removed: u64,
+}
+
 /// Query result set
 #[derive(Debug, Clone, Default)]
 pub struct ResultSet {
@@ -153,20 +179,26 @@ pub struct ResultSet {
     /// `(label, property)` selector). The HTTP layer copies these into
     /// the `/cypher` response envelope.
     pub notifications: Vec<Notification>,
+    /// Mutation counters for this query. All-zero for read-only
+    /// queries. Populated by `Engine`'s write paths; the plain
+    /// executor's read-only operators never touch this field, so it
+    /// stays at `SideEffects::default()` for them.
+    pub side_effects: SideEffects,
 }
 
 impl ResultSet {
     /// Build a `ResultSet` from a column header and the row vector,
-    /// leaving `notifications` empty. Use this in the hot path; the
-    /// planner / executor can append notifications afterwards via
-    /// [`ResultSet::with_notifications`] or by mutating the field
-    /// directly.
+    /// leaving `notifications` empty and `side_effects` zeroed. Use
+    /// this in the hot path; the planner / executor can append
+    /// notifications afterwards via [`ResultSet::with_notifications`]
+    /// or by mutating the fields directly.
     #[inline]
     pub fn new(columns: Vec<String>, rows: Vec<Row>) -> Self {
         Self {
             columns,
             rows,
             notifications: Vec::new(),
+            side_effects: SideEffects::default(),
         }
     }
 

@@ -45,6 +45,16 @@ pub struct RecordStore {
     pub(super) next_node_id: Arc<AtomicU64>,
     /// Next available relationship ID (shared across clones)
     pub(super) next_rel_id: Arc<AtomicU64>,
+    /// Count of nodes actually created since the last reset.
+    ///
+    /// Shared across clones for the same reason as `next_node_id`: the
+    /// store is cloned on every `refresh_executor`, so the executor's
+    /// creations happen on a different clone than the one the engine
+    /// reads when it builds the `ResultSet`. A non-shared counter would
+    /// silently report zero for every query that routes through the
+    /// executor. Reset per query by the engine; read to populate
+    /// `ResultSet::side_effects`.
+    pub(super) nodes_created: Arc<AtomicU64>,
     /// Current nodes file size
     pub(super) nodes_file_size: usize,
     /// Current relationships file size
@@ -146,6 +156,7 @@ impl RecordStore {
             rels_mmap: Arc::new(RwLock::new(rels_mmap)),
             property_store,
             adjacency_store,
+            nodes_created: Arc::new(AtomicU64::new(0)),
             next_node_id: Arc::new(AtomicU64::new(next_node_id)),
             next_rel_id: Arc::new(AtomicU64::new(next_rel_id)),
             nodes_file_size,
@@ -177,6 +188,21 @@ impl RecordStore {
     /// `create_node_with_label_bits_inner` to write the external-id index
     /// entry before committing the id allocation.  Valid only in the
     /// single-writer model.
+    /// Nodes created since the last [`RecordStore::reset_nodes_created`].
+    ///
+    /// Counts only records actually written: an external-id create that
+    /// resolves to an existing node under `ConflictPolicy::Match` or
+    /// `Replace` created nothing and is not counted.
+    pub fn nodes_created(&self) -> u64 {
+        self.nodes_created.load(Ordering::SeqCst)
+    }
+
+    /// Zero the node-creation counter. Called at query start so the count
+    /// reported on a `ResultSet` covers only that query.
+    pub fn reset_nodes_created(&self) {
+        self.nodes_created.store(0, Ordering::SeqCst);
+    }
+
     pub fn peek_next_node_id(&self) -> u64 {
         self.next_node_id.load(Ordering::SeqCst)
     }
@@ -343,6 +369,7 @@ impl Clone for RecordStore {
             rels_mmap: Arc::clone(&self.rels_mmap),
             property_store, // CRITICAL: Shared PropertyStore instance (not a clone)
             adjacency_store,
+            nodes_created: Arc::clone(&self.nodes_created),
             next_node_id: Arc::clone(&self.next_node_id),
             next_rel_id: Arc::clone(&self.next_rel_id),
             nodes_file_size: self.nodes_file_size,

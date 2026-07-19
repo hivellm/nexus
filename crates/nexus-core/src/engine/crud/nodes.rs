@@ -168,7 +168,6 @@ impl Engine {
             self.storage
                 .create_node_with_label_bits(tx, label_bits, properties.clone())?
         };
-
         // 3.4: Track every external-id reservation made during a session
         // transaction so the rollback path can undo them.  Only relevant
         // when `external_id.is_some()` AND the policy actually reserved a
