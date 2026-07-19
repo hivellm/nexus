@@ -1,7 +1,22 @@
 #!/bin/bash
-# Neo4j vs Nexus Compatibility Test Suite - 200+ Tests
-# Compares query results between Neo4j and Nexus to ensure 100% compatibility
-# 
+# Neo4j vs Nexus Compatibility Test Suite - 196 Tests
+#
+# !!! STALE FORK -- NOT THE CANONICAL SUITE !!!
+#
+# This script has drifted from its PowerShell counterpart and is no longer
+# maintained. It contains 196 cases; the canonical suite,
+# test-neo4j-nexus-compatibility-200.ps1, contains 325. Results from this file
+# are NOT the "325/325" figure quoted in project documentation, and a green run
+# here does not mean the compatibility suite passed.
+#
+# It is kept only because scripts/debug/test-section7-10.sh sources it. Do not
+# add cases here -- add them to the .ps1. Porting the missing 129 cases or
+# retiring this file (and its one consumer) is tracked in
+# .rulebook/tasks/phase7_opencypher-gap-closure/tasks.md item 1.2.
+#
+# This is also a DIFFERENTIAL suite against a live Neo4j -- it is NOT the
+# openCypher TCK and does not measure openCypher conformance.
+#
 # Usage: ./test-neo4j-nexus-compatibility-200.sh [--neo4j-uri URI] [--neo4j-user USER] [--neo4j-password PASSWORD] [--nexus-uri URI] [--verbose]
 # Requirements: Neo4j running on localhost:7474, Nexus running on localhost:15474
 # Dependencies: curl, jq (for JSON parsing)

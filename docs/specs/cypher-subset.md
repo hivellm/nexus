@@ -743,6 +743,12 @@ DROP INDEX IF EXISTS ON :Person(name)
 
 ### Constraint Management
 
+Both the legacy Cypher 4.x `ON … ASSERT` form and the Cypher 25 `FOR … REQUIRE`
+form are supported. New queries should prefer `FOR … REQUIRE`; the legacy form is
+kept for backward compatibility.
+
+#### Legacy form (Cypher 4.x)
+
 ```cypher
 -- Unique constraint
 CREATE CONSTRAINT ON (n:Person) ASSERT n.email IS UNIQUE
@@ -756,6 +762,35 @@ DROP CONSTRAINT ON (n:Person) ASSERT n.email IS UNIQUE
 -- Drop constraint if exists
 DROP CONSTRAINT IF EXISTS ON (n:Person) ASSERT EXISTS(n.email)
 ```
+
+#### Cypher 25 form — node scope
+
+An optional constraint name may precede `IF NOT EXISTS`.
+
+```cypher
+CREATE CONSTRAINT FOR (n:Person) REQUIRE n.email IS UNIQUE
+CREATE CONSTRAINT FOR (n:Person) REQUIRE n.email IS NOT NULL
+
+-- Named, idempotent
+CREATE CONSTRAINT person_email_unique IF NOT EXISTS
+    FOR (n:Person) REQUIRE n.email IS UNIQUE
+
+-- Composite node key
+CREATE CONSTRAINT FOR (n:Person) REQUIRE (n.first, n.last) IS NODE KEY
+
+-- Property type constraint
+-- (INTEGER | FLOAT | STRING | BOOLEAN | BYTES | LIST | MAP)
+CREATE CONSTRAINT FOR (n:Person) REQUIRE n.age IS :: INTEGER
+```
+
+#### Cypher 25 form — relationship scope
+
+```cypher
+CREATE CONSTRAINT FOR ()-[r:KNOWS]-() REQUIRE r.since IS NOT NULL
+CREATE CONSTRAINT FOR ()-[r:KNOWS]-() REQUIRE r.weight IS :: FLOAT
+```
+
+A violated constraint raises `ERR_CONSTRAINT_VIOLATED`.
 
 ### Database Management
 
