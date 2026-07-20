@@ -157,6 +157,16 @@ impl Executor {
         self.config.columnar_threshold = threshold;
     }
 
+    /// Override the `cartesian_product_max_bytes` budget on this executor.
+    ///
+    /// Exposed as a narrow public mutator so the server can honour the
+    /// `NEXUS_CARTESIAN_PRODUCT_MAX_BYTES` operator override without
+    /// constructing an `ExecutorConfig` by hand. See
+    /// `phase0_fix-cypher-oom-process-abort`.
+    pub fn set_cartesian_product_max_bytes(&mut self, max_bytes: usize) {
+        self.config.cartesian_product_max_bytes = max_bytes;
+    }
+
     /// Run the filter operator over an in-memory working set.
     ///
     /// Builds a fresh `ExecutionContext`, binds `rows` to `variable`,

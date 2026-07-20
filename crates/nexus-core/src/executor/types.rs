@@ -45,6 +45,18 @@ pub struct ExecutorConfig {
     /// `RwLock`. Set to 1 to force serial execution; `0` is rejected.
     /// Default: 4.
     pub cypher_concurrency: usize,
+    /// Byte budget for a single materialised Cartesian product in
+    /// `apply_cartesian_product` (multi-pattern `MATCH (a), (b)` combined
+    /// with an existing row set, e.g. from `UNWIND`). The estimate is
+    /// `product_rows × columns × size_of::<serde_json::Value>()`, where
+    /// `product_rows = current_row_count × new_pattern_candidate_count`
+    /// and `columns` is the number of bound variables after adding the
+    /// new one. Exceeding this budget returns `Error::OutOfMemory`
+    /// instead of asking the allocator for the product size directly,
+    /// which used to abort the whole process (see
+    /// `phase0_fix-cypher-oom-process-abort`). Operators who knowingly
+    /// need a bigger product can raise this value.
+    pub cartesian_product_max_bytes: usize,
 }
 
 impl Default for ExecutorConfig {
@@ -67,6 +79,12 @@ impl Default for ExecutorConfig {
             enable_numa_caching: false,       // Disabled by default (requires NUMA hardware)
             enable_lock_free_structures: true, // Enabled by default (always beneficial)
             cypher_concurrency: 4,
+            // 1 GiB: decisive enough to reject the ~4 TB multi-pattern
+            // UNWIND cross product from `phase0_fix-cypher-oom-process-abort`
+            // (a 5 000-row UNWIND joined against two 5 000-node patterns
+            // reaches ~4e12 bytes, ~4 000x over this ceiling) while staying
+            // generous for legitimate products on realistic working sets.
+            cartesian_product_max_bytes: 1_073_741_824,
         }
     }
 }

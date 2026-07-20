@@ -91,6 +91,61 @@ impl Executor {
             return Ok(());
         }
 
+        // Audit (phase0_fix-cypher-oom-process-abort §3.3): this function has
+        // exactly two sites that size an allocation from a product of counts
+        // rather than from data already in hand — the per-column rebuild
+        // below (`Vec::with_capacity(arr.len() * new_count)`) and the
+        // new-variable expansion further down
+        // (`Vec::with_capacity(new_count * current_count)`). Both derive
+        // their length from the same `current_count * new_count` product
+        // computed here, so a single pre-allocation check bounds both. The
+        // clone loops that follow only push into these pre-sized vecs and
+        // never allocate beyond them. No other allocation in this function
+        // is sized from a product of counts.
+        //
+        // Check the size BEFORE allocating: `Vec::with_capacity` on an
+        // unchecked product aborts the process rather than failing the
+        // query — an UNWIND of 5 000 rows over two 5 000-node patterns
+        // reaches 1.25e11 cells and asks the allocator for ~4 TB. The
+        // budget is expressed in bytes, not rows, because the true cost is
+        // `rows * size_of::<Value>() * columns` and a row limit means a
+        // different amount of memory for a 2-column context than for a
+        // 20-column one.
+        let product = current_count.checked_mul(new_count).ok_or_else(|| {
+            Error::OutOfMemory(format!(
+                "Cartesian product {} x {} overflows usize; add LIMIT or narrow the query",
+                current_count, new_count
+            ))
+        })?;
+
+        // Every existing variable is rebuilt to `product` length, plus the
+        // new variable itself adds one more column.
+        let columns = context.variables.len() + 1;
+        let est_bytes = product
+            .checked_mul(columns)
+            .and_then(|cells| cells.checked_mul(std::mem::size_of::<Value>()));
+
+        let budget = self.config.cartesian_product_max_bytes;
+        match est_bytes {
+            Some(bytes) if bytes <= budget => {}
+            Some(bytes) => {
+                return Err(Error::OutOfMemory(format!(
+                    "Cartesian product would materialise {} rows ({} x {}) across {} \
+                     columns (~{} bytes), exceeding the configured budget of {} bytes; \
+                     add LIMIT or narrow the query",
+                    product, current_count, new_count, columns, bytes, budget
+                )));
+            }
+            None => {
+                return Err(Error::OutOfMemory(format!(
+                    "Cartesian product would materialise {} rows ({} x {}) across {} \
+                     columns, and the estimated byte size overflows usize, far exceeding \
+                     the configured budget of {} bytes; add LIMIT or narrow the query",
+                    product, current_count, new_count, columns, budget
+                )));
+            }
+        }
+
         // 2. Expand existing variables: repeat each element M times (M = new_count)
         // We need to collect keys first to avoid borrowing issues
         let keys: Vec<String> = context.variables.keys().cloned().collect();
@@ -932,5 +987,73 @@ impl Executor {
         }
 
         result
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    //! phase0_fix-cypher-oom-process-abort §4.2 — unit coverage for the
+    //! byte budget check in [`Executor::apply_cartesian_product`]. The
+    //! integration-level regression test (the §1.1 minimal repro shape
+    //! surviving end-to-end instead of aborting the process) lives in
+    //! `crates/nexus-core/tests/cypher_oom_guard_test.rs`; these tests
+    //! pin the ceiling itself: it fires deterministically, is
+    //! configurable via `ExecutorConfig::cartesian_product_max_bytes`,
+    //! and does not reject legitimate small products under the default
+    //! budget.
+
+    use super::*;
+    use crate::testing::create_test_executor;
+    use serde_json::json;
+
+    #[test]
+    fn apply_cartesian_product_rejects_when_budget_is_absurdly_low() {
+        let (mut executor, _ctx) = create_test_executor();
+        // A trivial 2x2 product estimates to 2 * 2 * columns * 32 bytes
+        // (>= 128 bytes even at columns=1). A 1-byte budget must reject
+        // it regardless of how small the product actually is.
+        executor.config.cartesian_product_max_bytes = 1;
+
+        let mut context = ExecutionContext::new(HashMap::new(), None);
+        context.set_variable("a", Value::Array(vec![json!(1), json!(2)]));
+
+        let result = executor.apply_cartesian_product(&mut context, "b", vec![json!(3), json!(4)]);
+
+        match result {
+            Err(Error::OutOfMemory(msg)) => {
+                assert!(
+                    msg.contains("Cartesian product"),
+                    "OutOfMemory message should name the offending operation: {msg}"
+                );
+            }
+            other => {
+                panic!("expected Err(Error::OutOfMemory(_)) under a 1-byte budget, got {other:?}")
+            }
+        }
+    }
+
+    #[test]
+    fn apply_cartesian_product_succeeds_under_default_budget() {
+        // Same shape as the low-budget test above, but with the
+        // default (1 GiB) budget left untouched — proves the rejection
+        // above comes specifically from the configured ceiling, not
+        // from `apply_cartesian_product` being broken for any input.
+        let (mut executor, _ctx) = create_test_executor();
+
+        let mut context = ExecutionContext::new(HashMap::new(), None);
+        context.set_variable("a", Value::Array(vec![json!(1), json!(2)]));
+
+        executor
+            .apply_cartesian_product(&mut context, "b", vec![json!(3), json!(4)])
+            .expect("a 2x2 product must stay well under the default 1 GiB budget");
+
+        assert_eq!(
+            context.get_variable("a"),
+            Some(&Value::Array(vec![json!(1), json!(1), json!(2), json!(2)]))
+        );
+        assert_eq!(
+            context.get_variable("b"),
+            Some(&Value::Array(vec![json!(3), json!(4), json!(3), json!(4)]))
+        );
     }
 }

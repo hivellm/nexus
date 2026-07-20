@@ -40,32 +40,79 @@ memory allocation of 4000000000000 bytes failed
 input is 5 000 parameter rows over a 10 000-node graph. Note the number is suspiciously
 round, which points at a computed capacity rather than genuine accumulated data.
 
-### What is NOT yet known
+### Mechanism — CONFIRMED (2026-07-19), original hypothesis REFUTED
 
-**The minimal repro has not been isolated** — the bisect was cut short, so the exact
-trigger is unconfirmed. Do not skip §1. The shapes to separate, in order:
+The proposal originally guessed "a capacity derived from an *estimated* cardinality".
+**That was wrong.** The estimate is not wrong — it is exact. The executor genuinely
+tries to materialize the entire cartesian product in memory.
 
-1. comma-separated `MATCH (a), (b)` alone (a cartesian product whose estimated
-   cardinality may be pre-multiplied into a capacity)
-2. the same with `CREATE` attached
-3. the same driven by `UNWIND` over parameters
-4. whether the allocation size tracks node count, `$rows` length, or their product
+Shape bisect, 5 000 `:P` nodes, 5 000 param rows, fresh release server per case:
 
-The working hypothesis is a capacity derived from an estimated cartesian cardinality
-and handed to `Vec::with_capacity` with no ceiling. That is a hypothesis, not a
-finding; §1 exists to replace it with evidence before any code changes.
+| # | Shape | Result |
+|---|---|---|
+| a | `MATCH (a:P {id:1}), (b:P {id:2}) RETURN …` | ok |
+| b | a + `CREATE (a)-[:R]->(b)` | ok |
+| c | `UNWIND` + comma MATCH + `RETURN` | **OOM, 4 000 000 000 000 bytes** |
+| d | `UNWIND` + comma MATCH + `CREATE` | **OOM, same size** |
+| e | `UNWIND` + single-pattern MATCH + `CREATE` | ok (141 s) |
+| f | `UNWIND` + chained `(a)-[:R]->(b)` | ok (174 s) |
+
+So the minimal trigger is **`UNWIND` + a comma-separated multi-pattern `MATCH`**.
+`CREATE` is irrelevant — case (c) aborts without it.
+
+**Allocation site**: `crates/nexus-core/src/executor/eval/helpers.rs:101`, in
+`apply_cartesian_product`:
+
+```rust
+let mut new_arr = Vec::with_capacity(arr.len() * new_count);
+```
+
+`ExecutionContext.variables` holds each bound variable as a **fully materialized
+columnar `Vec<Value>`**. Every new pattern multiplies every existing column:
+
+1. `UNWIND` → `r` = 5 000 rows
+2. `MATCH (a:P …)` → scan yields 5 000 candidates → every column becomes 5 000 × 5 000 = 25 000 000
+3. `MATCH (b:P …)` → 5 000 candidates → every column becomes 25 000 000 × 5 000 = **1.25e11**
+
+`1.25e11 × 32` (the size of `serde_json::Value` on x86-64) `= 4.0e12` — matching the
+logged figure exactly. The number is round because the inputs are round, not because
+it is a sentinel.
+
+`with_capacity` is only where it dies first; removing it would merely move the abort
+into the `push` loop at `:104`, which also clones each node value N×M times.
+
+### Why the product is astronomically large: correlated predicates never seek
+
+The deeper cause is that `{id: r.s}` — a property predicate whose value comes from
+the `UNWIND` row — does **not** use the property index. Measured on 3 000 `:P` nodes
+with an index on `:P(id)`:
+
+- constant `MATCH (a:P {id: 42})` → indexed, instant
+- correlated `UNWIND $rows AS r MATCH (a:P {id: r.s})` → **30 rows/s**, and scaling
+  **superlinearly**: 200 rows took 6.7 s, 400 rows took 22.7 s (3.4× for 2× the input)
+
+The scan returns *every* `:P` node per row and the predicate is applied after the
+cross product, instead of one index seek per row. That is what turns a 5 000-row
+load into a 1.25e11-cell table. It is a distinct defect and is filed separately as
+`phase0_fix-correlated-predicate-index-seek`; this task is scoped to making the
+abort impossible.
 
 ## What Changes
 
-- Isolate the minimal repro and identify the allocation site from a backtrace
-  (`RUST_BACKTRACE=1`, which the abort message itself suggests).
-- Fix the cause — most likely bound or remove an allocation sized from an
-  unvalidated cardinality estimate.
-- Add a defensive ceiling so no planner estimate can be turned directly into an
-  unbounded allocation: a query that would exceed a configured memory budget must
-  return a typed error, never abort the process.
-- Audit sibling call sites for the same pattern (`with_capacity` / `reserve` fed by
-  estimated rather than actual counts).
+Scope: **make the abort impossible.** Streaming the cartesian product instead of
+materializing it is the architecturally correct answer, but it is a large executor
+refactor; making a legitimate query fast again is `phase0_fix-correlated-predicate-index-seek`.
+A query that asks for more memory than exists must fail as a query, not take the
+server with it.
+
+- Bound the product in `apply_cartesian_product` before allocating: reject with a
+  typed, catchable error when `current_count × new_count` exceeds a budget, and use
+  checked multiplication so the count itself cannot overflow.
+- Express the budget in bytes rather than rows, since the cost is
+  `rows × size_of::<Value>() × columns`, and make it overridable for operators who
+  knowingly want a larger product.
+- Audit sibling call sites that size an allocation from a product of counts rather
+  than from data actually in hand.
 
 ## Impact
 

@@ -36,6 +36,42 @@ use std::time::Duration;
 pub fn build_executor() -> anyhow::Result<Executor> {
     let mut executor = Executor::default();
 
+    // Operator override for the cartesian-product memory budget. Absent env
+    // var keeps the `ExecutorConfig` default (1 GiB); a present-but-invalid
+    // value is a warning, not a fatal error — this is a server binary path
+    // and must never panic on operator-supplied input.
+    match std::env::var("NEXUS_CARTESIAN_PRODUCT_MAX_BYTES") {
+        Ok(raw) => match raw.parse::<usize>() {
+            Ok(max_bytes) if max_bytes > 0 => {
+                executor.set_cartesian_product_max_bytes(max_bytes);
+                tracing::info!(
+                    "NEXUS_CARTESIAN_PRODUCT_MAX_BYTES applied: cartesian_product_max_bytes={} bytes",
+                    max_bytes
+                );
+            }
+            Ok(_) => {
+                tracing::warn!(
+                    "NEXUS_CARTESIAN_PRODUCT_MAX_BYTES=\"{}\" is zero; keeping the default cartesian_product_max_bytes",
+                    raw
+                );
+            }
+            Err(e) => {
+                tracing::warn!(
+                    "NEXUS_CARTESIAN_PRODUCT_MAX_BYTES=\"{}\" is not a valid usize ({}); keeping the default cartesian_product_max_bytes",
+                    raw,
+                    e
+                );
+            }
+        },
+        Err(std::env::VarError::NotPresent) => {}
+        Err(std::env::VarError::NotUnicode(raw)) => {
+            tracing::warn!(
+                "NEXUS_CARTESIAN_PRODUCT_MAX_BYTES={:?} is not valid unicode; keeping the default cartesian_product_max_bytes",
+                raw
+            );
+        }
+    }
+
     // Enable intelligent query cache with default configuration
     let cache_config = nexus_core::query_cache::QueryCacheConfig {
         max_entries: 10000,
