@@ -1,16 +1,23 @@
-//! Detailed Neo4j Result Comparison Tests
-//!
-//! These tests compare query results between Nexus and Neo4j to ensure identical return values.
-//! Requires both servers to be running:
-//! - Nexus: http://localhost:15474 (via REST API)
-//! - Neo4j: http://localhost:7474 (HTTP endpoint)
+//! Integration test harness for the `compatibility` group.
+//! One test binary per group keeps link time down. Includes the former
+//! `neo4j_result_comparison_test` differential suite (its shared helpers
+//! live below; those modules require a live Neo4j + Nexus and self-skip).
 
+mod advanced_types_tck;
 mod basic_return;
 mod expressions;
 mod functions;
+mod neo4j_behavior_tests;
+mod neo4j_compatibility_additional_test;
+mod neo4j_compatibility_core_test;
+mod neo4j_compatibility_extended_test;
+mod neo4j_multi_database_compatibility_test;
 mod operators;
 mod parameters_and_null;
+mod qpp_tck_scenarios;
 mod query_clauses;
+mod test_advanced_compatibility_functions;
+mod test_new_compatibility_functions;
 
 use reqwest::Client;
 use serde_json::json;
