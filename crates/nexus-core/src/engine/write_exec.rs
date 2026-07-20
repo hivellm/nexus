@@ -1647,14 +1647,12 @@ impl Engine {
                                 self.delete_node_relationships(node_id)?;
                                 self.delete_node(node_id)?;
                             } else {
-                                // Regular DELETE: check for relationships
-                                let node_record = self.storage.read_node(node_id)?;
-                                if node_record.first_rel_ptr != 0 {
-                                    return Err(Error::CypherExecution(format!(
-                                        "Cannot DELETE node {} with existing relationships; use DETACH DELETE",
-                                        node_id
-                                    )));
-                                }
+                                // Regular DELETE: the relationship-existence
+                                // guard is centralized in `delete_node` (both
+                                // outgoing AND incoming edges — the local
+                                // `first_rel_ptr != 0` check only saw outgoing
+                                // ones and let an incoming-only node slip past;
+                                // phase0_fix-delete-node-dangling-relationships).
                                 self.delete_node(node_id)?;
                             }
                         }

@@ -715,6 +715,65 @@ mod tests {
         assert_eq!(deleted, NexusValue::Bool(true));
     }
 
+    // ── phase0_fix-delete-node-dangling-relationships (C-2b, RPC) ────────
+
+    /// `DELETE_NODE ... detach=false` must refuse to delete a node that is
+    /// only ever a relationship TARGET (incoming-only) — `first_rel_ptr`
+    /// alone cannot see this, so the guard has to live in
+    /// `Engine::delete_node` itself for the RPC transport to inherit it.
+    #[tokio::test]
+    async fn delete_node_non_detach_refuses_incoming_only_node_with_live_relationship() {
+        let s = session();
+        let a = match run(&s, "CREATE_NODE", &[labels(&["Person"]), props(&[])])
+            .await
+            .unwrap()
+        {
+            NexusValue::Int(id) => id,
+            other => panic!("{other:?}"),
+        };
+        let b = match run(&s, "CREATE_NODE", &[labels(&["Person"]), props(&[])])
+            .await
+            .unwrap()
+        {
+            NexusValue::Int(id) => id,
+            other => panic!("{other:?}"),
+        };
+        run(
+            &s,
+            "CREATE_REL",
+            &[
+                NexusValue::Int(a),
+                NexusValue::Int(b),
+                NexusValue::Str("KNOWS".into()),
+                props(&[]),
+            ],
+        )
+        .await
+        .unwrap();
+
+        let err = run(
+            &s,
+            "DELETE_NODE",
+            &[NexusValue::Int(b), NexusValue::Bool(false)],
+        )
+        .await
+        .unwrap_err();
+        assert!(
+            err.contains("existing relationships"),
+            "expected a relationships-guard error, got: {err}"
+        );
+
+        // DETACH DELETE must still work once relationships are cleared first.
+        let deleted = run(
+            &s,
+            "DELETE_NODE",
+            &[NexusValue::Int(b), NexusValue::Bool(true)],
+        )
+        .await
+        .unwrap();
+        assert_eq!(deleted, NexusValue::Bool(true));
+    }
+
     #[test]
     fn cypher_literal_handles_basic_types() {
         assert_eq!(cypher_literal(&NexusValue::Null).unwrap(), "null");

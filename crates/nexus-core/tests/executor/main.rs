@@ -7,6 +7,7 @@ mod collect_subquery_test;
 mod correlated_index_seek_e2e_test;
 mod correlated_predicate_notification_e2e_test;
 mod cypher_oom_guard_test;
+mod delete_node_dangling_relationships_test;
 mod executor_comprehensive_test;
 mod oom_budget_verification_test;
 mod optional_match_binding_leak_test;

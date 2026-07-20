@@ -136,6 +136,20 @@ while rel_ptr != 0xFFFFFFFFFFFFFFFF:
         rel_ptr = rel.next_src_ptr
 ```
 
+> **Note:** `first_rel_ptr` is set on a node only for its OUTGOING
+> relationships — `create_relationship` deliberately does NOT set it on the
+> destination node. A node that is only ever a relationship TARGET therefore
+> keeps `first_rel_ptr == 0`, so `first_rel_ptr != 0` alone is NOT a complete
+> liveness check for "has any relationship" (it misses incoming-only nodes).
+
+**Deletion invariant** (`phase0_fix-delete-node-dangling-relationships`): no
+LIVE relationship record may reference a deleted node. A non-`DETACH` node
+delete is refused (at `Engine::delete_node`, uniformly for all protocols) when
+the node still has any live relationship — outgoing OR incoming — so an edge can
+never be left pointing at a freed node. Node deletion is soft (`mark_deleted`),
+and ids are never recycled, so a lingering pointer to a soft-deleted node is a
+bug, not an expected transient.
+
 ### props.store
 
 **Variable-size records**: Property chains

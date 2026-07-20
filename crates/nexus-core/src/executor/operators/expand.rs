@@ -437,6 +437,27 @@ impl Executor {
                         let target_node =
                             self.read_node_as_value_with_store(&expand_store, target_id)?;
 
+                        // phase0_fix-delete-node-dangling-relationships §3.5 — a
+                        // non-`Value::Null` relationship record that resolves to a
+                        // `Value::Null` endpoint means the endpoint node was hard-deleted
+                        // out from under a live relationship (the only case
+                        // `read_node_as_value_with_store` returns `Null` is
+                        // `node_record.is_deleted()`). For a NON-optional pattern this is
+                        // graph corruption, not a legitimate "no match" — skip the row
+                        // instead of surfacing a phantom `null` endpoint, mirroring the
+                        // empty-relationship-list skip above. OPTIONAL MATCH keeps its
+                        // existing behavior (a `Null` endpoint is pushed, not skipped) so
+                        // its LEFT OUTER JOIN semantics are unaffected.
+                        if !optional && target_node.is_null() {
+                            tracing::trace!(
+                                "Expand: skipping relationship {} (rel_id: {}) - target node {} is dangling (deleted), refusing to surface a null endpoint",
+                                rel_idx + 1,
+                                rel_info.id,
+                                target_id
+                            );
+                            continue;
+                        }
+
                         // CRITICAL FIX: Check if target variable is already bound in the row
                         // If so, we must ensure the relationship's target matches the bound value
                         // This prevents Cartesian product issues where Expand overwrites the target variable

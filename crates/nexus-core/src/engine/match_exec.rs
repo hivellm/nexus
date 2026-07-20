@@ -135,13 +135,15 @@ impl Engine {
                                         self.delete_node_relationships(node_id)?;
                                         self.delete_node(node_id)?;
                                     } else {
-                                        let node_record = self.storage.read_node(node_id)?;
-                                        if node_record.first_rel_ptr != 0 {
-                                            return Err(Error::CypherExecution(
-                                                "Cannot DELETE node with existing relationships; use DETACH DELETE"
-                                                    .to_string(),
-                                            ));
-                                        }
+                                        // phase0_fix-delete-node-dangling-relationships §3.3 —
+                                        // `first_rel_ptr` only tracks OUTGOING relationships, so a
+                                        // node that is only ever a relationship TARGET would pass
+                                        // a check against it alone and be hard-deleted while a
+                                        // live edge still pointed at it. Rely entirely on
+                                        // `Engine::delete_node`'s own relationship-existence check
+                                        // (both directions), which returns the same
+                                        // `Error::CypherExecution` when the node still has a live
+                                        // relationship — no local pre-check needed here.
                                         self.delete_node(node_id)?;
                                     }
                                     deleted_count += 1;

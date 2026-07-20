@@ -398,6 +398,17 @@ MATCH (n:Person {name: 'Alice'})
 DETACH DELETE n
 ```
 
+**Relationship-existence guard** (`phase0_fix-delete-node-dangling-relationships`):
+a non-`DETACH` `DELETE` of a node that still has ANY live relationship —
+**outgoing OR incoming** — fails with an error; use `DETACH DELETE`. The check
+is enforced centrally in `Engine::delete_node`, so it applies uniformly to
+every entry point (Cypher `MATCH…DELETE` and `FOREACH…DELETE`, REST, RPC,
+RESP3), not just Cypher. This closes a prior gap where an incoming-only node
+(which keeps `first_rel_ptr == 0`, since that pointer tracks outgoing edges
+only) slipped past the guard and was hard-deleted under a live edge, leaving a
+dangling relationship. Invariant: no live relationship record may reference a
+deleted node.
+
 ### REMOVE
 
 ```cypher

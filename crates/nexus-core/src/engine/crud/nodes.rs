@@ -360,10 +360,38 @@ impl Engine {
         Ok(())
     }
 
-    /// Delete a node by ID
+    /// Delete a node by ID.
+    ///
+    /// Refuses to delete a node that still has a live relationship (either
+    /// outgoing or incoming) pointing at it — see
+    /// `node_has_live_relationship` for why `first_rel_ptr != 0` alone is
+    /// not a sufficient check. DETACH callers must call
+    /// [`Engine::delete_node_relationships`] first so this check sees zero
+    /// remaining relationships and passes through.
+    ///
+    /// # Errors
+    ///
+    /// Returns `Error::CypherExecution` if the node still has a live
+    /// relationship attached.
     pub fn delete_node(&mut self, id: u64) -> Result<bool> {
         // Check if node exists
         if let Ok(Some(node_record)) = self.get_node(id) {
+            // phase0_fix-delete-node-dangling-relationships §3.1/§3.2 —
+            // refuse a hard delete while a live relationship (either
+            // direction) still points at this node. `first_rel_ptr` alone
+            // (checked previously only in `match_exec.rs`) tracks OUTGOING
+            // relationships exclusively — `create_relationship` never sets
+            // it on the destination node (see `record_store_ops.rs`) — so
+            // an incoming-only node was able to slip past that guard and be
+            // hard-deleted while a live edge still referenced it, leaving
+            // the edge dangling. Checked here so every caller (Cypher, REST,
+            // RPC, RESP3) inherits the same guard from one place.
+            if self.node_has_live_relationship(id)? {
+                return Err(Error::CypherExecution(
+                    "Cannot DELETE node with existing relationships; use DETACH DELETE".to_string(),
+                ));
+            }
+
             // Remove node from label index before marking as deleted
             // This removes the node from all labels it belongs to
             self.indexes.label_index.remove_node(id)?;
@@ -399,6 +427,33 @@ impl Engine {
         } else {
             Ok(false)
         }
+    }
+
+    /// Returns `true` if any live (non-deleted) relationship references
+    /// `node_id` as either endpoint (source or destination).
+    ///
+    /// Deliberately does NOT rely on `NodeRecord::first_rel_ptr` — that
+    /// pointer only tracks OUTGOING relationships (`create_relationship`
+    /// never updates it on the destination node, see
+    /// `storage::record_store_ops::create_relationship`), so a node that is
+    /// only ever a relationship target has `first_rel_ptr == 0` regardless
+    /// of how many live edges point at it. Instead this performs the same
+    /// authoritative linear scan over every relationship record that
+    /// `delete_node_relationships` already uses for DETACH DELETE, checked
+    /// here read-only rather than mutating anything, so both directions are
+    /// covered without introducing a new index.
+    fn node_has_live_relationship(&self, node_id: u64) -> Result<bool> {
+        let total_rels = self.storage.relationship_count();
+        for rel_id in 0..total_rels {
+            if let Ok(rel_record) = self.storage.read_rel(rel_id) {
+                if !rel_record.is_deleted()
+                    && (rel_record.src_id == node_id || rel_record.dst_id == node_id)
+                {
+                    return Ok(true);
+                }
+            }
+        }
+        Ok(false)
     }
 
     /// Delete all relationships connected to a node (for DETACH DELETE)
