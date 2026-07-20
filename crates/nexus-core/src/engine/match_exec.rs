@@ -43,6 +43,7 @@ impl Engine {
         // like `CREATE (n:BenchCycle) WITH n DELETE n` resolve (the
         // outer caller now admits queries with CREATE-or-MATCH + DELETE).
         let mut node_variables = Vec::new();
+        let mut rel_variables: Vec<String> = Vec::new();
         for clause in &match_query.clauses {
             let pattern_opt = match clause {
                 executor::parser::Clause::Match(mc) => Some(&mc.pattern),
@@ -51,12 +52,22 @@ impl Engine {
             };
             if let Some(pattern) = pattern_opt {
                 for element in &pattern.elements {
-                    if let executor::parser::PatternElement::Node(node) = element {
-                        if let Some(var) = &node.variable {
-                            if !node_variables.contains(var) {
-                                node_variables.push(var.clone());
+                    match element {
+                        executor::parser::PatternElement::Node(node) => {
+                            if let Some(var) = &node.variable {
+                                if !node_variables.contains(var) {
+                                    node_variables.push(var.clone());
+                                }
                             }
                         }
+                        executor::parser::PatternElement::Relationship(rel) => {
+                            if let Some(var) = &rel.variable {
+                                if !rel_variables.contains(var) {
+                                    rel_variables.push(var.clone());
+                                }
+                            }
+                        }
+                        _ => {}
                     }
                 }
             }
@@ -77,6 +88,7 @@ impl Engine {
         // identically — one code path, two modes.
         let return_items: Vec<executor::parser::ReturnItem> = node_variables
             .iter()
+            .chain(rel_variables.iter())
             .map(|var| executor::parser::ReturnItem {
                 expression: executor::parser::Expression::Variable(var.clone()),
                 alias: Some(var.clone()),
@@ -118,36 +130,62 @@ impl Engine {
         // Count deleted nodes
         let mut deleted_count = 0u64;
 
-        // For each row in MATCH result, delete the nodes
+        // For each row in MATCH result, delete relationships first, then nodes
         if let Some(delete_clause) = delete_clause_opt {
             let detach = delete_clause.detach;
 
+            // Pass 1 — relationship bindings first, so a same-statement
+            // non-DETACH node delete (openCypher `DELETE a, r, b`) no longer
+            // trips the live-edge guard. Idempotent per edge.
             for row in &match_results.rows {
-                // Extract node IDs from the row
                 for (idx, column) in match_results.columns.iter().enumerate() {
-                    // Check if this variable is in the DELETE clause items
-                    if delete_clause.items.contains(column) && idx < row.values.len() {
-                        if let serde_json::Value::Object(obj) = &row.values[idx] {
-                            if let Some(serde_json::Value::Number(id)) = obj.get("_nexus_id") {
-                                if let Some(node_id) = id.as_u64() {
-                                    if detach {
-                                        // Delete all relationships connected to this node first
-                                        self.delete_node_relationships(node_id)?;
-                                        self.delete_node(node_id)?;
-                                    } else {
-                                        // phase0_fix-delete-node-dangling-relationships §3.3 —
-                                        // `first_rel_ptr` only tracks OUTGOING relationships, so a
-                                        // node that is only ever a relationship TARGET would pass
-                                        // a check against it alone and be hard-deleted while a
-                                        // live edge still pointed at it. Rely entirely on
-                                        // `Engine::delete_node`'s own relationship-existence check
-                                        // (both directions), which returns the same
-                                        // `Error::CypherExecution` when the node still has a live
-                                        // relationship — no local pre-check needed here.
-                                        self.delete_node(node_id)?;
-                                    }
+                    if !rel_variables.contains(column)
+                        || !delete_clause.items.contains(column)
+                        || idx >= row.values.len()
+                    {
+                        continue;
+                    }
+                    if let serde_json::Value::Object(obj) = &row.values[idx] {
+                        if let Some(serde_json::Value::Number(id)) = obj.get("_nexus_id") {
+                            if let Some(rel_id) = id.as_u64() {
+                                if self.delete_relationship(rel_id)? {
                                     deleted_count += 1;
                                 }
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Pass 2 — node bindings.
+            for row in &match_results.rows {
+                for (idx, column) in match_results.columns.iter().enumerate() {
+                    if rel_variables.contains(column)
+                        || !delete_clause.items.contains(column)
+                        || idx >= row.values.len()
+                    {
+                        continue;
+                    }
+                    if let serde_json::Value::Object(obj) = &row.values[idx] {
+                        if let Some(serde_json::Value::Number(id)) = obj.get("_nexus_id") {
+                            if let Some(node_id) = id.as_u64() {
+                                if detach {
+                                    // Delete all relationships connected to this node first
+                                    self.delete_node_relationships(node_id)?;
+                                    self.delete_node(node_id)?;
+                                } else {
+                                    // phase0_fix-delete-node-dangling-relationships §3.3 —
+                                    // `first_rel_ptr` only tracks OUTGOING relationships, so a
+                                    // node that is only ever a relationship TARGET would pass
+                                    // a check against it alone and be hard-deleted while a
+                                    // live edge still pointed at it. Rely entirely on
+                                    // `Engine::delete_node`'s own relationship-existence check
+                                    // (both directions), which returns the same
+                                    // `Error::CypherExecution` when the node still has a live
+                                    // relationship — no local pre-check needed here.
+                                    self.delete_node(node_id)?;
+                                }
+                                deleted_count += 1;
                             }
                         }
                     }

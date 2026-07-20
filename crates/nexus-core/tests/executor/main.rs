@@ -13,6 +13,7 @@ mod oom_budget_verification_test;
 mod optional_match_binding_leak_test;
 mod optional_match_empty_driver_test;
 mod query_analysis_test;
+mod relationship_delete_test;
 mod side_effects;
 mod statistics_driven_join_ordering_test;
 mod test_metadata_count_optimization;

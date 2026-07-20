@@ -219,13 +219,12 @@ fn non_detach_delete_allowed_after_outgoing_edge_soft_deleted() {
         .execute_cypher("CREATE (a:Person {name: 'Alice'})-[:KNOWS]->(b:Person {name: 'Bob'})")
         .unwrap();
 
-    // NOTE: Cypher relationship delete (`MATCH ... DELETE r`) is a pre-existing
-    // no-op stub — the `Delete` operator never wires through to
-    // `storage::delete_rel`, so the edge record is left live (tracked as a
-    // separate phase0 task). To authentically produce the "node whose only
-    // outgoing edge is soft-deleted" state that Tier 1 must walk past, mark the
-    // edge deleted directly at the storage layer — the same technique
-    // `expand_skips_dangling_endpoint_instead_of_null_row` uses for nodes.
+    // Soft-delete the edge directly at the storage layer to isolate the Tier-1
+    // path from the (separately tested) Cypher relationship-delete path — the
+    // same technique `expand_skips_dangling_endpoint_instead_of_null_row` uses
+    // for nodes. This authentically produces the "node whose only outgoing edge
+    // is soft-deleted" state that Tier 1 must walk past. (Cypher `DELETE r`
+    // itself is covered by `relationship_delete_test.rs`.)
     let total_rels = engine.storage.relationship_count();
     for rel_id in 0..total_rels {
         let mut rel = engine.storage.read_rel(rel_id).unwrap();

@@ -360,6 +360,48 @@ impl Engine {
         Ok(())
     }
 
+    /// Soft-delete a single relationship by id (bare Cypher `DELETE r`).
+    ///
+    /// Returns `true` if a live relationship was deleted, `false` if it was
+    /// absent or already soft-deleted (idempotent — a double `DELETE r` is a
+    /// clean no-op). Mirrors the `mark_deleted` + `write_rel` (inside a write
+    /// transaction) + relationship-index upkeep that `delete_node_relationships`
+    /// uses for DETACH DELETE, but for exactly one edge. Exposed on `Engine` so
+    /// every protocol (Cypher/REST/RPC/RESP3) can delete an edge from one place.
+    pub fn delete_relationship(&mut self, rel_id: u64) -> Result<bool> {
+        let rel_record = match self.storage.read_rel(rel_id) {
+            Ok(r) => r,
+            Err(_) => return Ok(false),
+        };
+        if rel_record.is_deleted() {
+            return Ok(false);
+        }
+
+        let mut deleted_record = rel_record;
+        deleted_record.mark_deleted();
+
+        let mut tx = self.transaction_manager.write().begin_write()?;
+        self.storage.write_rel(rel_id, &deleted_record)?;
+        self.transaction_manager.write().commit(&mut tx)?;
+
+        // Keep the (perf-hint) relationship index consistent, exactly as
+        // `delete_node_relationships` does. Best-effort: a stale index entry is
+        // a performance concern, never a correctness one.
+        if let Err(e) = self.cache.relationship_index().remove_relationship(
+            rel_id,
+            rel_record.src_id,
+            rel_record.dst_id,
+            rel_record.type_id,
+        ) {
+            tracing::warn!(
+                "Failed to update relationship index on relationship delete: {}",
+                e
+            );
+        }
+
+        Ok(true)
+    }
+
     /// Delete a node by ID.
     ///
     /// Refuses to delete a node that still has a live relationship (either
