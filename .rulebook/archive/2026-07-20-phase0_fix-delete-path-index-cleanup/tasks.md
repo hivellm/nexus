@@ -47,16 +47,18 @@ exercises them together.
   node, asserts the bitmap is now empty — inspecting index occupancy directly, not via queries.
 
 ## 5. Tail (docs + tests — check or waive with tailWaiver)
-- [x] 5.1 CHANGELOG entry added under `[3.0.0]` (`### Fixed — phase0_fix-delete-path-index-cleanup`,
+- [x] 5.1 Update or create documentation covering the implementation — DONE:
+  CHANGELOG entry added under `[3.0.0]` (`### Fixed — phase0_fix-delete-path-index-cleanup`,
   covering H-1/M-1/M-3). The `docs/specs/cypher-subset.md` edit is WAIVED: the fix makes DELETE
   behavior match the already-documented constraint/DELETE semantics (freeing a tuple on delete was
   always the intent); there is no new user-facing semantic to specify beyond the CHANGELOG note.
-- [x] 5.2 Tests: NODE KEY tuple reuse after DETACH DELETE (§1.1 + rel-bearing variant), property
-  storage does not leak (§3.2), typed index has no dead entries (§4.2) — 4/4 green.
-- [x] 5.3 Green: `cargo +nightly fmt --all`,
+- [x] 5.2 Write tests covering the new behavior — DONE: NODE KEY tuple reuse after DETACH DELETE
+  (§1.1 + rel-bearing variant), property storage does not leak (§3.2), typed index has no dead
+  entries (§4.2) — 4/4 green.
+- [x] 5.3 Run tests and confirm they pass — DONE (green): `cargo +nightly fmt --all`,
   `cargo clippy -p nexus-core --all-targets --all-features -- -D warnings` (0 warnings), full
-  `cargo +nightly test -p nexus-core` (2422 lib + all integration groups, 0 failed) plus the
-  workspace test run below.
+  `cargo +nightly test -p nexus-core` (2422 lib + all integration groups, 0 failed), and
+  `cargo +nightly test --workspace` (all crates green).
 
 ## Related
 - `phase0_fix-delete-node-dangling-relationships` — same delete path, a different defect:
