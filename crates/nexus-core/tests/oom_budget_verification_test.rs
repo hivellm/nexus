@@ -63,9 +63,17 @@
 //!    product down to exactly `ROWS` rows (one match per driving row)
 //!    for the final `RETURN`.
 //!
-//! All estimates here are tiny in absolute terms (`ROWS * NODES * NODES`
-//! cells, tens of kilobytes even at `size_of::<Value>()`) — safe to
-//! actually allocate even if the guard were entirely absent.
+//! The `apply_cartesian_product` ESTIMATE here is tiny in absolute terms
+//! (`ROWS * NODES * NODES` aligned cells, tens of kilobytes even at
+//! `size_of::<Value>()`). NOTE: this is the size of the ALIGNED product,
+//! not the peak the executor used to allocate. Before
+//! `phase0_fix-materialize-recrosses-aligned-columns`, the downstream
+//! `materialize_rows_from_variables` RE-crossed those aligned columns into
+//! `(ROWS * NODES * NODES)^3` rows (`384^3 ≈ 56.6M`, ~13 GB) — which froze
+//! the host and is why `raising_budget_lets_the_same_query_return_exact_rows`
+//! was briefly `#[ignore]`d. The executor now zips the aligned columns, so
+//! the peak matches the estimate again and that test is a live regression
+//! guard for the `O(N)` peak.
 
 use nexus_core::Error;
 use nexus_core::executor::{Executor, Query, ResultSet};
@@ -165,20 +173,16 @@ fn low_budget_rejects_a_query_whose_estimate_exceeds_it() {
 /// semantics survive going through `apply_cartesian_product` at all,
 /// by checking the EXACT resulting rows rather than just `Ok(_)`.
 ///
-/// IGNORED — DANGEROUS TO RUN until the materialize cubic blowup is
-/// fixed. Raising the budget past the `apply_cartesian_product`
-/// estimate (384 aligned rows) lets execution reach
-/// `materialize_rows_from_variables`, which RE-crosses the already-
-/// aligned `r`/`a`/`b` columns (all length 384) into 384^3 ≈ 56M rows
-/// — an UNGUARDED ~13 GB allocation that freezes the host. The OOM
-/// budget guards `apply_cartesian_product` (which correctly aligns to
-/// 384) but NOT the downstream `materialize` re-cross. This test is
-/// the canary that exposed that bug; keep it ignored until
-/// `materialize_rows_from_variables` zips aligned columns instead of
-/// re-crossing them. See task
-/// `phase0_fix-materialize-recrosses-aligned-columns`.
+/// Doubles as the end-to-end regression for
+/// `phase0_fix-materialize-recrosses-aligned-columns`: once the budget
+/// is raised past the aligned 384-row product, execution reaches the
+/// materialisation step. Before that fix, `materialize_rows_from_variables`
+/// RE-crossed the already-aligned `r`/`a`/`b` columns into 384^3 ≈ 56M
+/// rows (~13 GB — an unguarded allocation that froze the host); now
+/// `seed_scan_main_loop` ZIPS the aligned columns (384 rows) via
+/// `materialize_aligned_rows`. If that fix regresses, this test does
+/// not merely fail — it exhausts memory — so the peak stays O(N).
 #[test]
-#[ignore = "detonates the host: materialize_rows_from_variables re-crosses aligned columns into 384^3 (~13 GB) — unguarded cubic blowup; see phase0_fix-materialize-recrosses-aligned-columns"]
 fn raising_budget_lets_the_same_query_return_exact_rows() {
     let (mut executor, _ctx) = create_isolated_test_executor();
     seed(&mut executor);

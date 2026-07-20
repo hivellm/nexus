@@ -55,6 +55,18 @@ impl Executor {
         // Example: MATCH (a), (b) -> a has N rows, b has M rows -> Result N*M rows
         if !context.variables.is_empty() {
             self.apply_cartesian_product(context, variable, nodes)?;
+            // `apply_cartesian_product` has ALIGNED every array variable into
+            // columns of the same product length (index `i` = one output row).
+            // Falling through to the shared `materialize_rows_from_variables`
+            // below would hit its `needs_cartesian_product` branch and RE-cross
+            // these already-aligned columns into `N^k` rows (a two-pattern
+            // `MATCH` over an 8-node label with 6 driving rows explodes 384
+            // aligned rows to 384^3 ≈ 56.6M ≈ 13 GB, freezing the host). Zip the
+            // aligned columns directly instead.
+            // (phase0_fix-materialize-recrosses-aligned-columns)
+            handled_cross_product = true;
+            let rows = self.materialize_aligned_rows(context);
+            self.update_result_set_from_rows(context, &rows);
         } else if !context.result_set.rows.is_empty() {
             // CRITICAL FIX for UNWIND...MATCH: Handle case where there are existing
             // rows from UNWIND but no variables yet. We need to cross-product the

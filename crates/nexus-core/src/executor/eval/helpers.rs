@@ -384,6 +384,78 @@ impl Executor {
         rows
     }
 
+    /// Materialises rows by ZIPPING already-aligned column variables — the
+    /// index-aligned counterpart to the cross-producing path in
+    /// [`Self::materialize_rows_from_variables`].
+    ///
+    /// Called right after [`Self::apply_cartesian_product`], which leaves
+    /// every array variable aligned to the SAME product length (index `i`
+    /// is one output row). Running the general materialiser there instead
+    /// would hit its `needs_cartesian_product` branch and RE-cross the
+    /// already-crossed columns into `N^k` rows (`384^3 ≈ 56.6M` for a
+    /// two-pattern `MATCH` over an 8-node label with 6 driving rows — a
+    /// ~13 GB allocation that freezes the host). Zipping returns the `N`
+    /// rows those aligned columns already represent.
+    /// (phase0_fix-materialize-recrosses-aligned-columns)
+    ///
+    /// Length-1 arrays and scalars broadcast across all rows, matching the
+    /// fallback (zip) semantics of [`Self::materialize_rows_from_variables`];
+    /// all-`Null` rows are dropped identically.
+    pub(in crate::executor) fn materialize_aligned_rows(
+        &self,
+        context: &ExecutionContext,
+    ) -> Vec<HashMap<String, Value>> {
+        let mut arrays: HashMap<String, Vec<Value>> = HashMap::new();
+        for (var, value) in &context.variables {
+            match value {
+                Value::Array(values) => {
+                    if !values.is_empty() {
+                        arrays.insert(var.clone(), values.clone());
+                    }
+                }
+                other => {
+                    if !matches!(other, Value::Null) {
+                        arrays.insert(var.clone(), vec![other.clone()]);
+                    }
+                }
+            }
+        }
+
+        if arrays.is_empty() {
+            return Vec::new();
+        }
+
+        let max_len = arrays.values().map(|v| v.len()).max().unwrap_or(0);
+        if max_len == 0 {
+            return Vec::new();
+        }
+
+        let mut rows = Vec::with_capacity(max_len);
+        for idx in 0..max_len {
+            let mut row = HashMap::new();
+            let mut all_null = true;
+            for (var, values) in &arrays {
+                let value = if values.len() == max_len {
+                    values.get(idx).cloned().unwrap_or(Value::Null)
+                } else if values.len() == 1 {
+                    values[0].clone()
+                } else if idx < values.len() {
+                    values[idx].clone()
+                } else {
+                    Value::Null
+                };
+                if !matches!(value, Value::Null) {
+                    all_null = false;
+                }
+                row.insert(var.clone(), value);
+            }
+            if !all_null {
+                rows.push(row);
+            }
+        }
+        rows
+    }
+
     pub(in crate::executor) fn update_result_set_from_rows(
         &self,
         context: &mut ExecutionContext,
@@ -443,6 +515,28 @@ impl Executor {
                 }
             }
 
+            // Fold non-entity columns (values with no `_nexus_id`, e.g. an
+            // `UNWIND` driving map like `{s: 10}`) into the dedup key. Without
+            // it, two rows that matched the SAME nodes from DIFFERENT driving
+            // rows collapse to one, dropping every driving row after the first
+            // — the truncation that surfaced once the aligned multi-pattern
+            // path stopped re-crossing into `N^k`
+            // (phase0_fix-materialize-recrosses-aligned-columns). Keying by
+            // content only makes keys MORE specific (keeps more rows), which is
+            // the correct direction: Cypher `MATCH` does not deduplicate rows.
+            let non_entity_suffix = {
+                let mut parts: Vec<String> = row_map
+                    .iter()
+                    .filter(|(_, v)| {
+                        !matches!(v, Value::Object(o) if o.contains_key("_nexus_id"))
+                            && !matches!(v, Value::Null)
+                    })
+                    .map(|(k, v)| format!("{}={}", k, serde_json::to_string(v).unwrap_or_default()))
+                    .collect();
+                parts.sort();
+                parts.join("|")
+            };
+
             // CRITICAL FIX: Determine deduplication key based on number of entity IDs
             // Relationship rows typically have multiple entity IDs (source node + target node + relationship)
             // Non-relationship rows have only one entity ID (just the node)
@@ -492,6 +586,9 @@ impl Executor {
                     for (var_name, var_id) in &var_entries {
                         key_parts.push(format!("{}_{}", var_name, var_id));
                     }
+                    if !non_entity_suffix.is_empty() {
+                        key_parts.push(non_entity_suffix.clone());
+                    }
                     let row_key = key_parts.join("_");
 
                     let is_dup = !seen_row_keys.insert(row_key.clone());
@@ -516,10 +613,13 @@ impl Executor {
                     var_entries.sort_by(|a, b| a.0.cmp(&b.0));
 
                     // Build key: var1_id1_var2_id2_var3_id3...
-                    let key_parts: Vec<String> = var_entries
+                    let mut key_parts: Vec<String> = var_entries
                         .iter()
                         .map(|(var_name, var_id)| format!("{}_{}", var_name, var_id))
                         .collect();
+                    if !non_entity_suffix.is_empty() {
+                        key_parts.push(non_entity_suffix.clone());
+                    }
                     let row_key = key_parts.join("_");
 
                     let is_dup = !seen_row_keys.insert(row_key.clone());
@@ -1054,6 +1154,69 @@ mod tests {
         assert_eq!(
             context.get_variable("b"),
             Some(&Value::Array(vec![json!(3), json!(4), json!(3), json!(4)]))
+        );
+    }
+
+    /// phase0_fix-materialize-recrosses-aligned-columns — DISCRIMINATING.
+    /// After `apply_cartesian_product` aligns two columns to length 4
+    /// (`a=[1,1,2,2]`, `b=[3,4,3,4]`, each index = one output row), the
+    /// aligned materialiser must ZIP them into exactly 4 rows, while the
+    /// general materialiser RE-crosses them into 4*4 = 16. The `k`-column
+    /// gap is `N^(k-1)`; at query scale (`N=384`, `k=3`) that same
+    /// re-cross is `384^3 ≈ 56.6M` rows (~13 GB), which froze the host.
+    #[test]
+    fn materialize_aligned_rows_zips_instead_of_recrossing() {
+        let (mut executor, _ctx) = create_test_executor();
+
+        let mut context = ExecutionContext::new(HashMap::new(), None);
+        context.set_variable("a", Value::Array(vec![json!(1), json!(2)]));
+        executor
+            .apply_cartesian_product(&mut context, "b", vec![json!(3), json!(4)])
+            .expect("2x2 product stays under the default budget");
+
+        // Preconditions: both columns are aligned to length 4.
+        assert_eq!(
+            context.get_variable("a"),
+            Some(&Value::Array(vec![json!(1), json!(1), json!(2), json!(2)]))
+        );
+        assert_eq!(
+            context.get_variable("b"),
+            Some(&Value::Array(vec![json!(3), json!(4), json!(3), json!(4)]))
+        );
+
+        // The general materialiser RE-crosses the aligned columns: 4 x 4 = 16.
+        // This is the over-production the fix avoids (documented, not desired).
+        let recrossed = executor.materialize_rows_from_variables(&context);
+        assert_eq!(
+            recrossed.len(),
+            16,
+            "materialize_rows_from_variables re-crosses aligned columns (N^k); \
+             this pins the bug the aligned path must avoid"
+        );
+
+        // The aligned materialiser ZIPS: exactly the 4 rows the columns
+        // already represent, in index order.
+        let zipped = executor.materialize_aligned_rows(&context);
+        assert_eq!(
+            zipped.len(),
+            4,
+            "materialize_aligned_rows must zip aligned columns to N rows, not N^k"
+        );
+
+        let mut pairs: Vec<(i64, i64)> = zipped
+            .iter()
+            .map(|row| {
+                (
+                    row["a"].as_i64().expect("a is an integer"),
+                    row["b"].as_i64().expect("b is an integer"),
+                )
+            })
+            .collect();
+        pairs.sort_unstable();
+        assert_eq!(
+            pairs,
+            vec![(1, 3), (1, 4), (2, 3), (2, 4)],
+            "zipped rows must be the exact index-aligned (a, b) pairs"
         );
     }
 }
