@@ -86,6 +86,18 @@ pub fn compute_unindexed_property_access_notifications(
     out
 }
 
+/// A property-predicate value is *correlated* (row-local) when it is
+/// evaluated per driving row rather than known at plan time — a bare
+/// variable (`UNWIND … AS r … {p: r}`) or a property access (`{p: r.s}`).
+/// Literals and parameters are single plan-/execution-time constants and
+/// remain index-seekable, so they are NOT correlated.
+fn is_correlated_value(expr: &Expression) -> bool {
+    matches!(
+        expr,
+        Expression::PropertyAccess { .. } | Expression::Variable(_)
+    )
+}
+
 /// Free-function form of `QueryPlanner::emit_unindexed_for_pattern`
 /// — pushes into a caller-provided `&mut Vec<Notification>` instead
 /// of the planner's per-call accumulator. Used by both the planner
@@ -108,11 +120,15 @@ fn emit_unindexed_for_pattern_into(
             let Ok(label_id) = catalog.get_label_id(label_name) else {
                 continue;
             };
-            for (prop_name, _value) in &properties.properties {
+            for (prop_name, value) in &properties.properties {
                 match catalog.get_key_id(prop_name) {
                     Ok(key_id) => {
                         if !prop_idx.has_index(label_id, key_id) {
                             record_unindexed_into(
+                                label_id, key_id, label_name, prop_name, clause, out,
+                            );
+                        } else if is_correlated_value(value) {
+                            record_correlated_predicate_into(
                                 label_id, key_id, label_name, prop_name, clause, out,
                             );
                         }
@@ -150,22 +166,31 @@ fn emit_unindexed_for_where_into(
     match expr {
         Expression::BinaryOp { left, op, right } => {
             if matches!(op, BinaryOperator::Equal) {
+                // `candidate` is the node-side operand (resolvable via
+                // `var_label`); `other` is whatever it is being compared
+                // against. Left is preferred when both sides are property
+                // accesses, matching the pre-existing resolution order.
                 let candidate = match (left.as_ref(), right.as_ref()) {
-                    (Expression::PropertyAccess { variable, property }, _) => {
-                        Some((variable, property))
+                    (Expression::PropertyAccess { variable, property }, other) => {
+                        Some((variable, property, other))
                     }
-                    (_, Expression::PropertyAccess { variable, property }) => {
-                        Some((variable, property))
+                    (other, Expression::PropertyAccess { variable, property }) => {
+                        Some((variable, property, other))
                     }
                     _ => None,
                 };
-                if let Some((variable, property)) = candidate
+                if let Some((variable, property, other)) = candidate
                     && let Some(label_name) = var_label.get(variable)
                     && let Ok(label_id) = catalog.get_label_id(label_name)
                     && let Ok(key_id) = catalog.get_key_id(property)
-                    && !prop_idx.has_index(label_id, key_id)
                 {
-                    record_unindexed_into(label_id, key_id, label_name, property, clause, out);
+                    if !prop_idx.has_index(label_id, key_id) {
+                        record_unindexed_into(label_id, key_id, label_name, property, clause, out);
+                    } else if is_correlated_where_operand(other, var_label) {
+                        record_correlated_predicate_into(
+                            label_id, key_id, label_name, property, clause, out,
+                        );
+                    }
                 }
             }
             emit_unindexed_for_where_into(catalog, prop_idx, left, var_label, clause, out);
@@ -175,6 +200,20 @@ fn emit_unindexed_for_where_into(
             emit_unindexed_for_where_into(catalog, prop_idx, operand, var_label, clause, out);
         }
         _ => {}
+    }
+}
+
+/// Whether the non-node-side operand of a WHERE `=` predicate is
+/// correlated (row-local): a bare variable, or a property access whose
+/// variable is *not* one of the matched node variables in `var_label`.
+/// A property access on another matched node (e.g. `a.id = b.id`) is a
+/// join predicate, not a per-driving-row value, so it is deliberately
+/// excluded here.
+fn is_correlated_where_operand(operand: &Expression, var_label: &HashMap<String, String>) -> bool {
+    match operand {
+        Expression::Variable(_) => true,
+        Expression::PropertyAccess { variable, .. } => !var_label.contains_key(variable),
+        _ => false,
     }
 }
 
@@ -244,6 +283,83 @@ fn record_unindexed_into(
             label_name,
             property_name,
             suggested_ddl,
+        );
+    }
+}
+
+/// Records `Nexus.Performance.CorrelatedPropertyPredicate` — a distinct
+/// notification from `record_unindexed_into` for the case where a
+/// `(label, property)` pair *is* indexed, but the predicate value is
+/// row-local (evaluated per driving row, e.g. from `UNWIND`/`WITH`
+/// rather than a plan-time constant) and the current planner cannot use
+/// the index seek for a per-row key. The remedy here is not "create an
+/// index" — one already exists — it is a planner limitation tracked
+/// separately.
+fn record_correlated_predicate_into(
+    label_id: u32,
+    key_id: u32,
+    label_name: &str,
+    property_name: &str,
+    clause: UnindexedAccessClause,
+    out: &mut Vec<Notification>,
+) {
+    let code = "Nexus.Performance.CorrelatedPropertyPredicate";
+
+    // Per-call dedup so MATCH + MERGE on the same (label, prop) pair
+    // produce a single notification.
+    if out.iter().any(|n| {
+        n.code == code && n.title.contains(label_name) && n.description.contains(property_name)
+    }) {
+        return;
+    }
+
+    let title = format!(
+        "Correlated property predicate on :{label_name}({property_name}) is not index-backed"
+    );
+    let description = format!(
+        "{clause} selects nodes by `:{label_name}` with a property predicate on \
+         `{property_name}` whose value is row-local — evaluated per driving row \
+         (e.g. from `UNWIND` or an earlier `WITH` binding) rather than known at \
+         plan time. An index on `:{label_name}({property_name})` already exists, \
+         but the current planner cannot use it to seek a per-row key, so it falls \
+         back to a full label scan per driving row, which is O(rows × N) over \
+         every `:{label_name}` node. Creating another index will not help — this \
+         is a planner limitation, not a missing index.",
+    );
+
+    out.push(Notification {
+        code: code.to_string(),
+        title,
+        description,
+        severity: NotificationSeverity::Information,
+        category: NotificationCategory::Performance,
+    });
+
+    // Rate-limited WARN log — shared across planner and engine paths
+    // via the process-global `warn_log_state()`.
+    let now = Instant::now();
+    let interval = planner_warn_interval();
+    let mut should_log = true;
+    if let Ok(mut state) = warn_log_state().lock() {
+        if let Some(last) = state.get(&(label_id, key_id)) {
+            if now.duration_since(*last) < interval {
+                should_log = false;
+            }
+        }
+        if should_log {
+            state.insert((label_id, key_id), now);
+        }
+    }
+    if should_log {
+        tracing::warn!(
+            code = code,
+            label = label_name,
+            property = property_name,
+            clause = %clause,
+            "correlated property predicate on :{}({}) cannot use the existing index — \
+             value is evaluated per driving row",
+            label_name,
+            property_name,
         );
     }
 }
