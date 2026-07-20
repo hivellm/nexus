@@ -14,6 +14,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > carry these fixes. The remediation is tracked across 27 `phase0_fix-*`
 > tasks and will land incrementally under this release.
 
+### Performance — `phase0_fix-correlated-predicate-index-seek`
+
+- **Correlated inline property predicates (`UNWIND` row-local values) now use property indexes per driving row.** `MATCH (a:Person {id: r.s})` where `r` comes from an earlier `UNWIND` now seeks the index on `Person(id)` for each row instead of scanning all `:Person` nodes and filtering after a materialized cross product. The execution plan now shifts from O(R·N) (label scan + filter over the driving row set) to O(R·log N) (per-row index seeks), where R is the driving row count and N is the label cardinality. This improvement requires an index on the `(label, property)` pair; without one, queries still fall back to a label scan (no performance regression, unchanged results). The inline property-map form `{prop: expr}` is optimized; the WHERE-clause form `WHERE prop = expr` is tracked as a separate task (`phase0_fix-where-clause-index-seek`). Not a breaking change — same query results, different (faster) plan. Verified by plan-assertion tests; see `docs/specs/cypher-subset.md` § "Index Seek on Property Predicates" for usage and predicate shapes.
+
 ## [2.6.0] — 2026-07-20
 
 > **Memory safety in Cartesian products.** Multi-pattern Cypher queries
@@ -27,10 +31,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed — `phase0_fix-cypher-oom-process-abort`
 
 - **Multi-pattern `UNWIND` + `MATCH` queries no longer abort the server process.** Queries combining an `UNWIND` row set with a comma-separated multi-pattern `MATCH` (e.g. `UNWIND $rows AS r MATCH (a:Label {id: r.s}), (b:Label {id: r.d}) CREATE (a)-[:KNOWS]->(b)`) used to attempt to materialize the entire cross product in memory without bounds, causing a process-fatal allocation failure on realistic data (e.g. 5 000 rows × 5 000-node patterns reached ~4 TB, aborting the entire process and disconnecting all clients). The executor now pre-checks the product against a configurable byte budget (`ExecutorConfig::cartesian_product_max_bytes`, default 1 GiB) before allocating, returning a catchable `Error::OutOfMemory` if exceeded. Operators who knowingly need larger products can raise the budget via the `NEXUS_CARTESIAN_PRODUCT_MAX_BYTES` environment variable. Not a breaking change — queries that previously crashed now fail gracefully and can be retried or adjusted by the application. See `docs/users/configuration/PERFORMANCE_TUNING.md` for configuration details.
-
-### Performance — `phase0_fix-correlated-predicate-index-seek`
-
-- **Correlated inline property predicates (`UNWIND` row-local values) now use property indexes per driving row.** `MATCH (a:Person {id: r.s})` where `r` comes from an earlier `UNWIND` now seeks the index on `Person(id)` for each row instead of scanning all `:Person` nodes and filtering after a materialized cross product. Measured baseline (3 000 nodes, index on `:Person(id)`): 200 driving rows / 6.7 s (quadratic 22.7 s / 400 rows) → now linear with per-row index seeks. Requires an index on the `(label, property)` pair; without one, queries still fall back to a label scan (no performance regression, unchanged results). The inline property-map form `{prop: expr}` is optimized; the WHERE-clause form `WHERE prop = expr` is tracked as a separate task (`phase0_fix-where-clause-index-seek`). Not a breaking change — same query results, different (faster) plan. See `docs/specs/cypher-subset.md` § "Index Seek on Property Predicates" for usage and predicate shapes.
 
 ## [2.5.0] — 2026-07-14
 

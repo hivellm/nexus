@@ -567,9 +567,18 @@ impl<'a> QueryPlanner<'a> {
                 Operator::Unwind { .. } => {
                     seen_unwind = true;
                 }
+                // Index seeks bind a node variable exactly like a label scan
+                // does (they generate fresh rows independent of any upstream
+                // row stream), so they must be detected here too — otherwise
+                // `UNWIND ... MATCH (a:P {id: r.s})` is missed and the seek
+                // ends up reordered after a `Filter` that references the
+                // variable it binds. See
+                // phase0_fix-correlated-predicate-index-seek.
                 Operator::NodeByLabel { .. }
                 | Operator::AllNodesScan { .. }
-                | Operator::IndexScan { .. } => {
+                | Operator::IndexScan { .. }
+                | Operator::NodeIndexSeek { .. }
+                | Operator::CompositeBtreeSeek { .. } => {
                     if seen_unwind {
                         unwind_before_scan = true;
                         break;
@@ -589,9 +598,17 @@ impl<'a> QueryPlanner<'a> {
 
         for operator in operators {
             match &operator {
+                // Index seeks bind a node variable exactly like a label
+                // scan — they must be ordered with the scans, before any
+                // `Filter`/`Expand` that references the variable they bind,
+                // or the residual predicate runs against unbound input and
+                // is silently dropped. See
+                // phase0_fix-correlated-predicate-index-seek.
                 Operator::NodeByLabel { .. }
                 | Operator::AllNodesScan { .. }
-                | Operator::IndexScan { .. } => {
+                | Operator::IndexScan { .. }
+                | Operator::NodeIndexSeek { .. }
+                | Operator::CompositeBtreeSeek { .. } => {
                     scans.push(operator);
                 }
                 Operator::Filter { .. } => {

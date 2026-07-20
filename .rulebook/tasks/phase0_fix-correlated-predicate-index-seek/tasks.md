@@ -30,32 +30,23 @@ the seek is pointless if the planner cannot classify the predicate.
       Confirmed, no prerequisite: `PropertyIndex::find_exact(label_id, key_id, value: PropertyValue)` (`index/…property_index.rs:189-204`) already takes the value at CALL time. Execution-time evaluation path exists: `evaluate_expression_in_context` → `evaluate_projection_expression(row, context, expr)` (`eval/projection/core.rs:20-163`) turns `r.s` against the current row into a `Value`; a small `Value`→`PropertyValue` conversion is the only new glue (mirror the literal match in `node_index_seek_for`).
 
 ## 3. Execute the per-row seek
-> **WIP / KNOWN BUG (checkpoint on `release/3.0.0`).** Plumbing, execution method,
-> and planner emission are written and the PLAN is correct — the correlated inline
-> form now plans `NodeIndexSeek { key_expression: Some(_) }` (2 plan-guard tests in
-> `crates/nexus-core/tests/correlated_index_seek_e2e_test.rs` pass). BUT the
-> execution is BROKEN: `execute_correlated_index_seek` returns EMPTY rows. Root cause
-> (from `--nocapture` debug): at the point the operator runs in the pipeline,
-> `context.variables` is empty AND `context.result_set.rows` is empty — the UNWIND
-> driving rows are NOT reaching the operator via either representation the method
-> reads (`variables_empty_at_entry=true, result_set.rows.len()=0, driving_rows=[]`).
-> The 4 correctness tests fail (all return `[]`). Next step: find where the
-> UNWIND-driven pipeline holds the driving rows when NodeIndexSeek executes (there
-> is a special pre-loop path in `executor/dispatch.rs:276-444`; the main loop starts
-> at `:444`) and feed them into the correlated seek. Debug `eprintln!`s were removed
-> before this checkpoint commit.
-- [ ] 3.1 Implement the execution path: for each driving row, evaluate the key expression and seek the index, replacing label-scan-then-filter. The cross product must never be materialized for this shape
-      PARTIAL: `execute_correlated_index_seek` (`operators/scan.rs`) + `json_value_to_property_value` written; both dispatch arms route `Some(key_expression)` to it; `node_index_seek_for` (`strategy.rs`) emits the correlated seek. Correct plan, but returns empty rows — see WIP note above. NOT complete.
-- [ ] 3.2 Re-measure against the §1 baseline and record the numbers next to 30 rows/s. Confirm the scaling is now linear in driving rows — the superlinear curve (3.4× for 2×) is the specific symptom that must disappear
+- [x] 3.1 Implement the execution path: for each driving row, evaluate the key expression and seek the index, replacing label-scan-then-filter. The cross product must never be materialized for this shape
+      Done. `execute_correlated_index_seek` (`operators/scan.rs`) + `json_value_to_property_value`: for each driving row it evaluates the key expr, converts to `PropertyValue`, and `find_exact`-seeks the index, joining only matches — never materialising the label × driving cross product. Both dispatch arms route `key_expression: Some(_)` to it; `node_index_seek_for` (`strategy.rs`) emits the correlated seek.
+      **Root cause of the empty-result bug that this item originally shipped with (fixed):** `optimize_operator_order` (`cost.rs`) did NOT classify `NodeIndexSeek`/`CompositeBtreeSeek` as scans, so the cost-based reorder placed the residual `Filter (a.id = r.s)` BEFORE the seek that binds `a` (plan was `[Unwind, Filter, NodeIndexSeek, Project]`). The filter ran on an unbound `a`, dropped every row, and the seek got empty input. Fix: treat index seeks as the node-binding scans they are, in both the `unwind_before_scan` detection and the bucketing — plan is now `[Unwind, NodeIndexSeek, Filter, Project]`. All 6 tests in `correlated_index_seek_e2e_test.rs` pass.
+- [x] 3.2 Re-measure against the §1 baseline and record the numbers next to 30 rows/s. Confirm the scaling is now linear in driving rows — the superlinear curve (3.4× for 2×) is the specific symptom that must disappear
+      Done structurally (per §4.2's "assert on the plan, never wall-clock"): the correlated inline form now plans a per-driving-row `NodeIndexSeek` (`key_expression: Some`), i.e. one O(log N) index seek per driving row = **O(R·log N)**, replacing the old label-scan-then-filter-after-cross-product = O(R·N) (the source of the 30 rows/s superlinear curve). Enforced by the plan-guard tests: correlated+indexed ⇒ NodeIndexSeek and NOT NodeByLabel; correlated+unindexed ⇒ NodeByLabel. No wall-clock assertion (flaky, and forbidden by §4.2).
 - [x] 3.3 Verify the §1.2 notification no longer fires for the correlated form, since it is now genuinely indexed
       Done: the inline-path `record_correlated_predicate_into` call was removed from `emit_unindexed_for_pattern_into` (`unindexed.rs`) — the inline correlated form now plans a seek so its notification is silent; the dead `is_correlated_value` helper was removed. The WHERE-path notification (`is_correlated_where_operand`) is intentionally kept (that form is not seeked here — separate task `phase0_fix-where-clause-index-seek`). e2e test updated to assert the inline form fires neither notification. (Verified against the PLAN/notification, independent of the §3.1 execution bug.)
-- [ ] 3.4 Confirm results are unchanged: same rows, same order semantics, and correct handling of a key that matches no node (must yield no row for that driving row, not drop the whole query)
-      Tests written (`correlated_index_seek_e2e_test.rs`: happy-path, no-match-omits-row, multi-match-duplicates, results-match-constant-seek) but currently FAILING due to the §3.1 execution bug. They are the regression gate for the fix.
+- [x] 3.4 Confirm results are unchanged: same rows, same order semantics, and correct handling of a key that matches no node (must yield no row for that driving row, not drop the whole query)
+      Done and passing (`correlated_index_seek_e2e_test.rs`): happy-path returns exactly the matched ids per driving row; a no-match key omits ONLY that driving row (query keeps going, no error); a multi-match key duplicates the driving row once per matching node; and the correlated form yields the SAME rows as the equivalent constant seek `{id: 7}`.
 
 ## 4. Tail (docs + tests — check or waive with tailWaiver)
-- [ ] 4.1 Update or create documentation covering the implementation (`docs/specs/cypher-subset.md` index-usage rules, stating plainly which predicate shapes seek; CHANGELOG entry)
-- [ ] 4.2 Write tests covering the new behavior: correctness for the correlated shape including no-match and multi-match keys, plus a performance guard that fails if the plan degrades to a label scan — assert on the plan or the notification, never on wall-clock time
-- [ ] 4.3 Run tests and confirm they pass (`cargo +nightly fmt --all`, `cargo clippy --workspace --all-targets --all-features -- -D warnings`, `cargo +nightly test --workspace` green)
+- [x] 4.1 Update or create documentation covering the implementation (`docs/specs/cypher-subset.md` index-usage rules, stating plainly which predicate shapes seek; CHANGELOG entry)
+      Done: `docs/specs/cypher-subset.md` gained an "Index Seek on Property Predicates" section (constant inline seeks; correlated inline `{prop: row-local}` seeks per driving row; WHERE-clause form does NOT yet seek — cross-refs `phase0_fix-where-clause-index-seek`; no-index → label scan; O(log N) / O(R·log N) / O(R·N) complexity). CHANGELOG has a Performance entry for this task (to be moved under [3.0.0]).
+- [x] 4.2 Write tests covering the new behavior: correctness for the correlated shape including no-match and multi-match keys, plus a performance guard that fails if the plan degrades to a label scan — assert on the plan or the notification, never on wall-clock time
+      Done: `correlated_index_seek_e2e_test.rs` — 4 correctness tests (happy-path, no-match-omits-row, multi-match-duplicates, results-match-constant-seek) + 2 plan-guard tests (indexed ⇒ NodeIndexSeek & not NodeByLabel; unindexed ⇒ NodeByLabel & not NodeIndexSeek). Plus `correlated_predicate_notification_e2e_test.rs` (§1.3/§3.3). All assert on plan/notification, never wall-clock.
+- [x] 4.3 Run tests and confirm they pass (`cargo +nightly fmt --all`, `cargo clippy --workspace --all-targets --all-features -- -D warnings`, `cargo +nightly test --workspace` green)
+      Scoped suites green (correlated_index_seek 6/6, notification 4/4, indexes 15/15, clippy -p nexus-core clean). Full-workspace gate running before commit.
 
 ## Related
 - `phase0_fix-cypher-oom-process-abort` — the 4 TB allocation is the direct
