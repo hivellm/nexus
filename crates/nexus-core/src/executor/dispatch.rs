@@ -466,13 +466,6 @@ impl Executor {
                 _ => format!("{:?}", std::mem::discriminant(operator)),
             };
             tracing::trace!("EXECUTING OPERATOR #{}: {}", op_idx, op_name);
-            eprintln!(
-                "DBG main-loop op#{}: {:?} | vars_empty={} rows.len()={}",
-                op_idx,
-                operator,
-                context.variables.is_empty(),
-                context.result_set.rows.len()
-            );
             // Check if there's still an Aggregate operator ahead in the pipeline
             let has_aggregate_ahead = operators[op_idx + 1..]
                 .iter()
