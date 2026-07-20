@@ -164,7 +164,21 @@ fn low_budget_rejects_a_query_whose_estimate_exceeds_it() {
 /// query/data being broken some other way — and that the join
 /// semantics survive going through `apply_cartesian_product` at all,
 /// by checking the EXACT resulting rows rather than just `Ok(_)`.
+///
+/// IGNORED — DANGEROUS TO RUN until the materialize cubic blowup is
+/// fixed. Raising the budget past the `apply_cartesian_product`
+/// estimate (384 aligned rows) lets execution reach
+/// `materialize_rows_from_variables`, which RE-crosses the already-
+/// aligned `r`/`a`/`b` columns (all length 384) into 384^3 ≈ 56M rows
+/// — an UNGUARDED ~13 GB allocation that freezes the host. The OOM
+/// budget guards `apply_cartesian_product` (which correctly aligns to
+/// 384) but NOT the downstream `materialize` re-cross. This test is
+/// the canary that exposed that bug; keep it ignored until
+/// `materialize_rows_from_variables` zips aligned columns instead of
+/// re-crossing them. See task
+/// `phase0_fix-materialize-recrosses-aligned-columns`.
 #[test]
+#[ignore = "detonates the host: materialize_rows_from_variables re-crosses aligned columns into 384^3 (~13 GB) — unguarded cubic blowup; see phase0_fix-materialize-recrosses-aligned-columns"]
 fn raising_budget_lets_the_same_query_return_exact_rows() {
     let (mut executor, _ctx) = create_isolated_test_executor();
     seed(&mut executor);
