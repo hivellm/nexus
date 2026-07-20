@@ -46,8 +46,6 @@ fn correlated_seek_returns_matched_node_ids_for_each_driving_row() {
         )
         .expect("correlated seek must succeed");
 
-    eprintln!("DEBUG result = {result:#?}");
-
     let ids: Vec<i64> = result
         .rows
         .iter()
@@ -255,5 +253,197 @@ fn correlated_match_plans_node_by_label_without_index() {
             .any(|op| matches!(op, Operator::NodeIndexSeek { .. })),
         "unindexed correlated selector must NOT plan a NodeIndexSeek; \
          plan = {plan:?}"
+    );
+}
+
+/// PLAN-ORDER guard (DISCRIMINATING): the exact defect fixed in
+/// `optimize_operator_order` was the residual `Filter (a.id = r.s)` being
+/// reordered BEFORE the `NodeIndexSeek` that binds `a` (plan was
+/// `[Unwind, Filter, NodeIndexSeek, ...]`), so the filter ran on an unbound
+/// `a`, dropped every row, and the seek got empty input. Assert the corrected
+/// order: `Unwind` precedes `NodeIndexSeek`, which precedes its `Filter`.
+/// This test FAILS against the pre-fix ordering.
+#[test]
+fn correlated_plan_orders_unwind_then_seek_then_filter() {
+    let ctx = TestContext::new();
+    let mut engine = Engine::with_isolated_catalog(ctx.path()).expect("engine init");
+
+    engine.execute_cypher("CREATE (:P {id: 1})").expect("seed");
+    engine
+        .execute_cypher("CREATE INDEX FOR (n:P) ON (n.id)")
+        .expect("create index");
+
+    let plan = engine
+        .executor
+        .parse_and_plan("UNWIND $rows AS r MATCH (a:P {id: r.s}) RETURN a.id")
+        .expect("plan must succeed");
+
+    let unwind = plan
+        .iter()
+        .position(|op| matches!(op, Operator::Unwind { .. }))
+        .unwrap_or_else(|| panic!("Unwind must be in the plan; plan = {plan:?}"));
+    let seek = plan
+        .iter()
+        .position(|op| matches!(op, Operator::NodeIndexSeek { .. }))
+        .unwrap_or_else(|| panic!("NodeIndexSeek must be in the plan; plan = {plan:?}"));
+
+    assert!(
+        unwind < seek,
+        "Unwind must precede the correlated NodeIndexSeek (the seek reads the \
+         driving rows UNWIND produces); plan = {plan:?}"
+    );
+    // The residual inline-property Filter, when present, must come AFTER the
+    // seek that binds `a` — never before it.
+    if let Some(filter) = plan
+        .iter()
+        .position(|op| matches!(op, Operator::Filter { .. }))
+    {
+        assert!(
+            seek < filter,
+            "the residual Filter (a.id = r.s) must run AFTER the NodeIndexSeek \
+             that binds `a`, not before it; plan = {plan:?}"
+        );
+    }
+}
+
+/// CORRECTNESS (duplicate keys + no-match in one shot): with an index on
+/// `:P(id)` and TWO nodes sharing `id = 20`, the correlated seek must return
+/// every match for every driving row — `10` (1 node), `20` (2 nodes), `99`
+/// (none, omitted), `30` (1 node) → `[10, 20, 20, 30]`. This pins that the
+/// per-row seek reads ALL nodes a key matches (not just the first) and that a
+/// miss drops only its own row.
+///
+/// NOTE: an earlier version compared this against the no-index label-scan path
+/// as a reference; that revealed a SEPARATE, pre-existing defect — the
+/// unindexed correlated form (`MATCH (a:P {id: r.s})` with no index → label
+/// scan + residual filter) returns only the FIRST driving row's match
+/// (`[10]` here), dropping the rest. That is NOT this fix's path (the seek is
+/// correct) and is tracked separately; asserting against it here would just
+/// pin the other bug. So this test asserts the seek's correct answer directly.
+#[test]
+fn correlated_seek_returns_all_matches_including_duplicate_keys() {
+    let ctx = TestContext::new();
+    let mut engine = Engine::with_isolated_catalog(ctx.path()).expect("engine init");
+
+    engine
+        .execute_cypher("CREATE (:P {id: 10}), (:P {id: 20}), (:P {id: 30}), (:P {id: 20})")
+        .expect("seed nodes (id 20 appears twice)");
+    engine
+        .execute_cypher("CREATE INDEX FOR (n:P) ON (n.id)")
+        .expect("create index");
+
+    let mut params = HashMap::new();
+    params.insert(
+        "rows".to_string(),
+        serde_json::json!([{ "s": 10 }, { "s": 20 }, { "s": 99 }, { "s": 30 }]),
+    );
+
+    let result = engine
+        .execute_cypher_with_params(
+            "UNWIND $rows AS r MATCH (a:P {id: r.s}) RETURN a.id",
+            params,
+        )
+        .expect("correlated seek must succeed");
+
+    let mut ids: Vec<i64> = result
+        .rows
+        .iter()
+        .map(|row| row.values[0].as_i64().expect("a.id must be an integer"))
+        .collect();
+    ids.sort_unstable();
+
+    assert_eq!(
+        ids,
+        vec![10, 20, 20, 30],
+        "the seek must return every match for every driving row (id 20 twice), \
+         and omit only the non-matching driving row (99); got {ids:?}"
+    );
+}
+
+/// TYPE COVERAGE: the seek key is not always an integer. String ids must seek
+/// correctly through `json_value_to_property_value`'s string arm.
+#[test]
+fn correlated_seek_matches_string_keys() {
+    let ctx = TestContext::new();
+    let mut engine = Engine::with_isolated_catalog(ctx.path()).expect("engine init");
+
+    engine
+        .execute_cypher("CREATE (:P {id: 'x'}), (:P {id: 'y'}), (:P {id: 'z'})")
+        .expect("seed string ids");
+    engine
+        .execute_cypher("CREATE INDEX FOR (n:P) ON (n.id)")
+        .expect("create index");
+
+    let mut params = HashMap::new();
+    params.insert(
+        "rows".to_string(),
+        serde_json::json!([{ "s": "x" }, { "s": "z" }, { "s": "missing" }]),
+    );
+
+    let result = engine
+        .execute_cypher_with_params(
+            "UNWIND $rows AS r MATCH (a:P {id: r.s}) RETURN a.id",
+            params,
+        )
+        .expect("string-key correlated seek must succeed");
+
+    let ids: Vec<String> = result
+        .rows
+        .iter()
+        .map(|row| {
+            row.values[0]
+                .as_str()
+                .expect("a.id must be a string")
+                .to_string()
+        })
+        .collect();
+
+    assert_eq!(
+        ids,
+        vec!["x".to_string(), "z".to_string()],
+        "string keys must seek exactly the matching nodes ('missing' matches none)"
+    );
+}
+
+/// SCALE: a larger fixture with a mix of hits and misses, to exercise the
+/// per-driving-row seek beyond toy sizes and confirm no row is dropped or
+/// duplicated. 300 `:P` nodes (id 0..299); 150 driving rows: 100 hits
+/// (id 0..99) followed by 50 misses (id 1000..1049).
+#[test]
+fn correlated_seek_larger_fixture_mixed_hits_and_misses() {
+    let ctx = TestContext::new();
+    let mut engine = Engine::with_isolated_catalog(ctx.path()).expect("engine init");
+
+    engine
+        .execute_cypher("UNWIND range(0, 299) AS i CREATE (:P {id: i})")
+        .expect("seed 300 nodes");
+    engine
+        .execute_cypher("CREATE INDEX FOR (n:P) ON (n.id)")
+        .expect("create index");
+
+    let mut rows: Vec<serde_json::Value> =
+        (0..100).map(|i| serde_json::json!({ "s": i })).collect();
+    rows.extend((1000..1050).map(|i| serde_json::json!({ "s": i })));
+    let mut params = HashMap::new();
+    params.insert("rows".to_string(), serde_json::Value::Array(rows));
+
+    let result = engine
+        .execute_cypher_with_params(
+            "UNWIND $rows AS r MATCH (a:P {id: r.s}) RETURN a.id",
+            params,
+        )
+        .expect("large correlated seek must succeed");
+
+    let ids: Vec<i64> = result
+        .rows
+        .iter()
+        .map(|row| row.values[0].as_i64().expect("a.id must be an integer"))
+        .collect();
+
+    let expected: Vec<i64> = (0..100).collect();
+    assert_eq!(
+        ids, expected,
+        "150 driving rows (100 hits id 0..99, then 50 misses) must yield exactly \
+         the 100 hits in driving-row order, none dropped or duplicated"
     );
 }
