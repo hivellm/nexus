@@ -399,6 +399,13 @@ impl Engine {
             );
         }
 
+        // phase0_fix-delete-path-index-cleanup M-1 — free the edge's
+        // property-store blob so the property store stops leaking across
+        // create/delete cycles. Best-effort: never abort the delete.
+        if let Err(e) = self.storage.delete_relationship_properties(rel_id) {
+            tracing::warn!("freeing property blob failed on delete of relationship {rel_id}: {e}");
+        }
+
         Ok(true)
     }
 
@@ -434,6 +441,32 @@ impl Engine {
                 ));
             }
 
+            // phase0_fix-delete-path-index-cleanup — `delete_node` used to free
+            // the record but never walk the index layer that create populated.
+            // Read the properties once, while the record's prop_ptr still points
+            // at the live blob, then evict every stale entry:
+            //   H-1: the composite B-tree (NODE KEY / composite). Node ids are
+            //        never recycled and the NODE KEY existence check does not
+            //        skip soft-deleted rows, so a leftover tuple would
+            //        permanently and falsely reject re-creating the same tuple.
+            //   M-3: the typed property B-tree, so it carries no dead entries.
+            {
+                let mut label_ids = Vec::new();
+                for bit in 0..64u32 {
+                    if (node_record.label_bits & (1u64 << bit)) != 0 {
+                        label_ids.push(bit);
+                    }
+                }
+                if let Ok(Some(props)) = self.storage.load_node_properties(id) {
+                    if let Err(e) = self.unindex_composite_tuples(id, &label_ids, &props) {
+                        tracing::warn!(
+                            "composite-index eviction failed on delete of node {id}: {e}"
+                        );
+                    }
+                    self.unindex_node_properties(id, &label_ids, &props);
+                }
+            }
+
             // Remove node from label index before marking as deleted
             // This removes the node from all labels it belongs to
             self.indexes.label_index.remove_node(id)?;
@@ -447,6 +480,14 @@ impl Engine {
             // phase6_spatial-index-autopopulate §4 — evict from every
             // spatial index that contains the node.
             self.spatial_evict_node(id);
+
+            // phase0_fix-delete-path-index-cleanup M-1 — free the node's
+            // property-store blob. Without this the property store only ever
+            // grew across create/delete cycles (a slow, unbounded storage
+            // leak). Best-effort: a failure here must not abort the delete.
+            if let Err(e) = self.storage.delete_node_properties(id) {
+                tracing::warn!("freeing property blob failed on delete of node {id}: {e}");
+            }
 
             // Mark node as deleted
             let mut deleted_record = node_record;
@@ -569,6 +610,15 @@ impl Engine {
                 ) {
                     tracing::warn!("Failed to update relationship index on deletion: {}", e);
                     // Don't fail the operation, just log the warning
+                }
+
+                // phase0_fix-delete-path-index-cleanup M-1 — free the edge's
+                // property-store blob so DETACH DELETE stops leaking property
+                // storage across create/delete cycles. Best-effort.
+                if let Err(e) = self.storage.delete_relationship_properties(rel_id) {
+                    tracing::warn!(
+                        "freeing property blob failed on DETACH delete of relationship {rel_id}: {e}"
+                    );
                 }
             }
         }

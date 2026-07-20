@@ -126,6 +126,52 @@ impl Engine {
         Ok(())
     }
 
+    /// Inverse of [`index_composite_tuples`]: remove `node_id`'s tuple from
+    /// every composite B-tree matching a label it carries. Called from
+    /// `delete_node` so a deleted node's NODE KEY / composite tuple is freed
+    /// for reuse — node ids are never recycled and the NODE KEY existence
+    /// check (`seek_exact`) does not skip soft-deleted rows, so a leftover
+    /// entry would permanently and falsely reject re-creating the same tuple.
+    /// Silent no-op when no composite index covers those labels; best-effort,
+    /// the index is an accelerator, never the source of truth.
+    pub(in crate::engine) fn unindex_composite_tuples(
+        &self,
+        node_id: u64,
+        label_ids: &[u32],
+        properties: &Value,
+    ) -> Result<()> {
+        let obj = match properties.as_object() {
+            Some(m) => m,
+            None => return Ok(()),
+        };
+        for (lbl, keys, _unique, _name) in self.indexes.composite_btree.list() {
+            if !label_ids.contains(&lbl) {
+                continue;
+            }
+            // Rebuild the exact tuple `index_composite_tuples` inserted, in key
+            // order; abort on any missing / NULL component (those were never
+            // indexed, so there is nothing to remove).
+            let mut tuple: Vec<crate::index::PropertyValue> = Vec::with_capacity(keys.len());
+            let mut ok = true;
+            for k in &keys {
+                match obj.get(k) {
+                    Some(Value::Null) | None => {
+                        ok = false;
+                        break;
+                    }
+                    Some(v) => tuple.push(super::super::json_to_property_value(v)),
+                }
+            }
+            if !ok {
+                continue;
+            }
+            if let Some(idx) = self.indexes.composite_btree.find(lbl, &keys) {
+                idx.write().remove(node_id, &tuple);
+            }
+        }
+        Ok(())
+    }
+
     /// Walk every registered FTS index and, for each one whose
     /// label / property match the node just created, enqueue an
     /// `FtsAdd` into both the Tantivy backend and the WAL.
@@ -470,6 +516,46 @@ impl Engine {
             }
         }
         Ok(())
+    }
+
+    /// Inverse of [`maintain_indexed_properties`]: remove `node_id`'s
+    /// `(label, key, value)` entries from the typed property B-tree for every
+    /// registered index covering its labels. Called from `delete_node` so the
+    /// typed index does not retain dead entries after a delete. Best-effort;
+    /// the typed index is never the source of truth (reads re-check
+    /// `is_deleted()`), so failures are logged, never escalated.
+    pub(in crate::engine) fn unindex_node_properties(
+        &self,
+        node_id: u64,
+        label_ids: &[u32],
+        properties: &serde_json::Value,
+    ) {
+        if !self.indexes.property_index.has_any_index() {
+            return;
+        }
+        let serde_json::Value::Object(props) = properties else {
+            return;
+        };
+        for (prop_name, prop_value) in props {
+            let Ok(key_id) = self.catalog.get_key_id(prop_name) else {
+                continue;
+            };
+            for &label_id in label_ids {
+                if self.indexes.property_index.has_index(label_id, key_id) {
+                    let pv = super::super::json_to_property_value(prop_value);
+                    if let Err(e) = self
+                        .indexes
+                        .property_index
+                        .remove_property(node_id, label_id, key_id, pv)
+                    {
+                        tracing::warn!(
+                            "typed property-index remove failed on delete for node {node_id} \
+                             (label {label_id}, key {key_id}): {e}"
+                        );
+                    }
+                }
+            }
+        }
     }
 
     /// Refresh the typed property B-tree after a SET / REMOVE / SET-label
