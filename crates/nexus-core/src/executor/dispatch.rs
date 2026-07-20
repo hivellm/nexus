@@ -466,6 +466,13 @@ impl Executor {
                 _ => format!("{:?}", std::mem::discriminant(operator)),
             };
             tracing::trace!("EXECUTING OPERATOR #{}: {}", op_idx, op_name);
+            eprintln!(
+                "DBG main-loop op#{}: {:?} | vars_empty={} rows.len()={}",
+                op_idx,
+                operator,
+                context.variables.is_empty(),
+                context.result_set.rows.len()
+            );
             // Check if there's still an Aggregate operator ahead in the pipeline
             let has_aggregate_ahead = operators[op_idx + 1..]
                 .iter()
@@ -479,16 +486,33 @@ impl Executor {
                     label_id,
                     key_id,
                     value,
+                    key_expression,
                     variable,
                 } => {
-                    // Read-side index seek: only nodes whose indexed property
-                    // equals `value` seed the scan (O(matches)), instead of a
-                    // full label scan. Residual `Filter` operators still run
-                    // for full correctness. The downstream seeding (cartesian
-                    // product / UNWIND cross-product / materialize) is shared
-                    // with NodeByLabel via `seed_scan_main_loop`.
-                    let nodes = self.execute_node_index_seek(*label_id, *key_id, value)?;
-                    self.seed_scan_main_loop(&mut context, variable, nodes)?;
+                    if let Some(expr) = key_expression {
+                        // Correlated seek: the key is row-local (e.g. `r.s`
+                        // from `UNWIND $rows AS r MATCH (a:P {id: r.s})`).
+                        // Seek per driving row instead of scanning the
+                        // label and cross-joining — see
+                        // `phase0_fix-correlated-predicate-index-seek` §3.
+                        self.execute_correlated_index_seek(
+                            &mut context,
+                            *label_id,
+                            *key_id,
+                            expr,
+                            variable,
+                        )?;
+                    } else {
+                        // Read-side index seek: only nodes whose indexed
+                        // property equals `value` seed the scan
+                        // (O(matches)), instead of a full label scan.
+                        // Residual `Filter` operators still run for full
+                        // correctness. The downstream seeding (cartesian
+                        // product / UNWIND cross-product / materialize) is
+                        // shared with NodeByLabel via `seed_scan_main_loop`.
+                        let nodes = self.execute_node_index_seek(*label_id, *key_id, value)?;
+                        self.seed_scan_main_loop(&mut context, variable, nodes)?;
+                    }
                 }
                 Operator::AllNodesScan { variable } => {
                     let nodes = self.execute_all_nodes_scan()?;

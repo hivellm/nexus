@@ -1,0 +1,64 @@
+# Tasks: phase0_fix-correlated-predicate-index-seek
+
+`MATCH (a:P {id: 42})` seeks the index. `UNWIND $rows AS r MATCH (a:P {id: r.s})`
+does not — it scans every `:P` per driving row and filters after a materialized
+cross product, measuring 30 rows/s on 3 000 nodes and scaling superlinearly
+(200 rows 6.7 s, 400 rows 22.7 s). No `UnindexedPropertyAccess` notification is
+emitted, so the slow path is invisible.
+
+Order matters: make the problem visible (§1) before optimising it, because the
+notification is also the regression signal for §3. Do not start §3 before §2 —
+the seek is pointless if the planner cannot classify the predicate.
+
+## 1. Make the slow path visible first
+- [x] 1.1 Establish why `emit_unindexed_for_where_into` (`executor/planner/queries/unindexed.rs:150-179`) stays silent for the correlated form. It matches `Expression::PropertyAccess` against a literal; a row-local expression on the right-hand side takes a different branch and never reaches `record_unindexed_into` (`:185`)
+      Done. Two independent paths, neither inspects the value expression:
+      (a) **Inline map** `MATCH (a:P {id: r.s})` → `emit_unindexed_for_pattern_into` (`unindexed.rs:93-139`). Line 111 iterates `for (prop_name, _value)` and **discards `_value`**; the only gate is `!prop_idx.has_index(...)` (:114). So with an index present it is silent, whether the value is a constant `42` or the row-local `r.s` — identical path.
+      (b) **WHERE `=`** `WHERE a.id = r.s` → `emit_unindexed_for_where_into` (`unindexed.rs:150-179`). It picks whichever side is a `PropertyAccess` (:153-161) and resolves it via `var_label` (:163), which `collect_node_var_labels` (:257-266) populates from node patterns only — never from UNWIND/WITH row variables. `a.id` wins and passes; the row-local nature of the other side is never examined. Also gated on `!has_index` (:166), so an existing index silences it.
+      `Expression` variants (`parser/ast.rs:1078+`): constant = `Literal(_)` (and `Parameter(_)`, an execution-time single value → still seekable); correlated/row-local = `PropertyAccess { variable, property }` and `Variable(_)`. Inline maps (`PropertyMap.properties: HashMap<String, Expression>`) and WHERE predicates use **separate** notification code paths.
+- [x] 1.2 Make the correlated case emit a notification — distinct wording from the constant case, since the remedy is different (the index exists and is simply not usable by the current plan). This is the signal §3 is measured against
+      Done: new `Nexus.Performance.CorrelatedPropertyPredicate` notification in `unindexed.rs`, distinct from `UnindexedPropertyAccess`. Fires when the predicate value is row-local (`is_correlated_value`: `PropertyAccess`/`Variable`) AND an index on the (label, prop) pair EXISTS. Wired into both the inline-map path (`emit_unindexed_for_pattern_into`) and the WHERE `=` path (`emit_unindexed_for_where_into`, via `is_correlated_where_operand` which excludes join predicates like `a.id = b.id`). Message states the index already exists and the remedy is a planner limitation, not a missing index. §3.3 will verify it stops firing once the per-row seek lands.
+- [x] 1.3 Add a test asserting the notification fires for `UNWIND … MATCH (a:P {id: r.s})` while an index on `:P(id)` exists, and does NOT fire for the constant form
+      Done: `crates/nexus-core/tests/correlated_predicate_notification_e2e_test.rs`, 4 e2e tests through `Engine::execute_cypher` (mirrors the sibling `unindexed_property_notification_e2e_test.rs` fixture): correlated inline form fires `CorrelatedPropertyPredicate` (and not `UnindexedPropertyAccess`); constant form fires neither; correlated WHERE form fires it; join predicate `a.id = b.id` fires neither. All pass, clippy clean.
+
+## 2. Classify correlated predicates in the planner
+- [x] 2.1 Identify where a property predicate is matched to an index and why a non-constant value disqualifies it. Distinguish three cases explicitly: constant (already seeks), row-local expression (must seek per row — this task), and genuinely unindexable
+      Done: `node_index_seek_for` (`executor/planner/queries/strategy.rs:1307-1342`). Line 1327 `_ => continue` accepts ONLY `Expression::Literal(...)` — a plan-time `PropertyValue` baked into `Operator::NodeIndexSeek { value, .. }`. Three cases: (a) constant literal → `NodeIndexSeek`; (b) row-local `PropertyAccess`/`Variable` → rejected → `NodeByLabel` (strategy.rs:186) + `Filter` (strategy.rs:227) applied AFTER the cross product; (c) no index → `NodeByLabel`. The rejection is structural: the value can't be evaluated at plan time (no driving row yet).
+- [x] 2.2 Represent "seek key evaluated per driving row" in the plan. Confirm whether the existing operator set can express it or whether a variant is needed; record the answer before writing the operator
+      Answer recorded: REUSE `Operator::NodeIndexSeek` (`executor/types.rs:255-264`) with one new field `key_expression: Option<parser::Expression>` — `Some(expr)` = evaluate per driving row, `None` = current constant `value` path. No new operator variant. NOTE (to verify in §3 before coding): there is currently no Apply/NestedLoop operator; UNWIND rows are materialised columnar and joined via `apply_cartesian_product`. The per-row seek must consume driving rows and emit only matches, so the exact execution seam (where NodeIndexSeek receives driving rows) must be confirmed against `operators/dispatch.rs` before implementing — this is the crux and highest risk of §3.
+- [x] 2.3 Confirm the property index API supports a seek with a key supplied at execution time rather than plan time; if it does not, that is a prerequisite and belongs here
+      Confirmed, no prerequisite: `PropertyIndex::find_exact(label_id, key_id, value: PropertyValue)` (`index/…property_index.rs:189-204`) already takes the value at CALL time. Execution-time evaluation path exists: `evaluate_expression_in_context` → `evaluate_projection_expression(row, context, expr)` (`eval/projection/core.rs:20-163`) turns `r.s` against the current row into a `Value`; a small `Value`→`PropertyValue` conversion is the only new glue (mirror the literal match in `node_index_seek_for`).
+
+## 3. Execute the per-row seek
+> **WIP / KNOWN BUG (checkpoint on `release/3.0.0`).** Plumbing, execution method,
+> and planner emission are written and the PLAN is correct — the correlated inline
+> form now plans `NodeIndexSeek { key_expression: Some(_) }` (2 plan-guard tests in
+> `crates/nexus-core/tests/correlated_index_seek_e2e_test.rs` pass). BUT the
+> execution is BROKEN: `execute_correlated_index_seek` returns EMPTY rows. Root cause
+> (from `--nocapture` debug): at the point the operator runs in the pipeline,
+> `context.variables` is empty AND `context.result_set.rows` is empty — the UNWIND
+> driving rows are NOT reaching the operator via either representation the method
+> reads (`variables_empty_at_entry=true, result_set.rows.len()=0, driving_rows=[]`).
+> The 4 correctness tests fail (all return `[]`). Next step: find where the
+> UNWIND-driven pipeline holds the driving rows when NodeIndexSeek executes (there
+> is a special pre-loop path in `executor/dispatch.rs:276-444`; the main loop starts
+> at `:444`) and feed them into the correlated seek. Debug `eprintln!`s were removed
+> before this checkpoint commit.
+- [ ] 3.1 Implement the execution path: for each driving row, evaluate the key expression and seek the index, replacing label-scan-then-filter. The cross product must never be materialized for this shape
+      PARTIAL: `execute_correlated_index_seek` (`operators/scan.rs`) + `json_value_to_property_value` written; both dispatch arms route `Some(key_expression)` to it; `node_index_seek_for` (`strategy.rs`) emits the correlated seek. Correct plan, but returns empty rows — see WIP note above. NOT complete.
+- [ ] 3.2 Re-measure against the §1 baseline and record the numbers next to 30 rows/s. Confirm the scaling is now linear in driving rows — the superlinear curve (3.4× for 2×) is the specific symptom that must disappear
+- [x] 3.3 Verify the §1.2 notification no longer fires for the correlated form, since it is now genuinely indexed
+      Done: the inline-path `record_correlated_predicate_into` call was removed from `emit_unindexed_for_pattern_into` (`unindexed.rs`) — the inline correlated form now plans a seek so its notification is silent; the dead `is_correlated_value` helper was removed. The WHERE-path notification (`is_correlated_where_operand`) is intentionally kept (that form is not seeked here — separate task `phase0_fix-where-clause-index-seek`). e2e test updated to assert the inline form fires neither notification. (Verified against the PLAN/notification, independent of the §3.1 execution bug.)
+- [ ] 3.4 Confirm results are unchanged: same rows, same order semantics, and correct handling of a key that matches no node (must yield no row for that driving row, not drop the whole query)
+      Tests written (`correlated_index_seek_e2e_test.rs`: happy-path, no-match-omits-row, multi-match-duplicates, results-match-constant-seek) but currently FAILING due to the §3.1 execution bug. They are the regression gate for the fix.
+
+## 4. Tail (docs + tests — check or waive with tailWaiver)
+- [ ] 4.1 Update or create documentation covering the implementation (`docs/specs/cypher-subset.md` index-usage rules, stating plainly which predicate shapes seek; CHANGELOG entry)
+- [ ] 4.2 Write tests covering the new behavior: correctness for the correlated shape including no-match and multi-match keys, plus a performance guard that fails if the plan degrades to a label scan — assert on the plan or the notification, never on wall-clock time
+- [ ] 4.3 Run tests and confirm they pass (`cargo +nightly fmt --all`, `cargo clippy --workspace --all-targets --all-features -- -D warnings`, `cargo +nightly test --workspace` green)
+
+## Related
+- `phase0_fix-cypher-oom-process-abort` — the 4 TB allocation is the direct
+  consequence of this; that task stops the crash, this one makes the query work
+- `phase7_ldbc-snb-benchmark` item 1.3 — loading 576 896 edges by LDBC id needs this
+  shape to be linear

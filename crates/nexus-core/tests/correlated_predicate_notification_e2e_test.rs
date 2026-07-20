@@ -9,6 +9,13 @@
 //! rather than a plan-time constant. The constant form seeks the
 //! existing index and must emit neither this code nor
 //! `Nexus.Performance.UnindexedPropertyAccess`.
+//!
+//! §3.3 (phase0_fix-correlated-predicate-index-seek): the inline
+//! property-map form `MATCH (a:P {id: r.s})` now plans a genuine
+//! per-row `NodeIndexSeek`, so it must ALSO stay silent — see
+//! `engine_omits_correlated_notification_for_unwind_inline_match_now_that_it_seeks`
+//! below. The WHERE `=` form (`WHERE a.id = r.s`) does not yet seek per
+//! row and must keep firing.
 
 use nexus_core::Engine;
 use nexus_core::testing::TestContext;
@@ -18,14 +25,18 @@ const CORRELATED_CODE: &str = "Nexus.Performance.CorrelatedPropertyPredicate";
 const UNINDEXED_CODE: &str = "Nexus.Performance.UnindexedPropertyAccess";
 
 #[test]
-fn engine_emits_correlated_predicate_notification_for_unwind_inline_match_with_index() {
+fn engine_omits_correlated_notification_for_unwind_inline_match_now_that_it_seeks() {
     let ctx = TestContext::new();
     let mut engine = Engine::with_isolated_catalog(ctx.path()).expect("engine init");
 
     // Seed the catalog so `id` on `:P` is interned, then create the
-    // covering index. The correlated notification only fires when the
-    // index genuinely EXISTS — this is what distinguishes it from the
-    // constant-value case, which stays silent once indexed.
+    // covering index. §3.3: the inline property-map form
+    // `MATCH (a:P {id: r.s})` now plans a genuine per-row `NodeIndexSeek`
+    // (§2/§3), so it is no different from the constant-value case once
+    // an index exists — it must NOT surface CorrelatedPropertyPredicate
+    // (nor UnindexedPropertyAccess) any more. That notification remains
+    // reserved for the WHERE `=` form below, which is not yet
+    // per-row-seek-backed.
     engine.execute_cypher("CREATE (s:P {id: 0})").expect("seed");
     engine
         .execute_cypher("CREATE INDEX FOR (n:P) ON (n.id)")
@@ -44,31 +55,23 @@ fn engine_emits_correlated_predicate_notification_for_unwind_inline_match_with_i
         )
         .expect("correlated inline match");
 
-    let correlated: Vec<_> = result
-        .notifications
-        .iter()
-        .filter(|n| n.code == CORRELATED_CODE)
-        .collect();
-    assert_eq!(
-        correlated.len(),
-        1,
-        "UNWIND … MATCH (a:P {{id: r.s}}) with an index on :P(id) must surface \
-         exactly one CorrelatedPropertyPredicate notification; got {:?}",
-        result.notifications
-    );
-
-    let n = correlated[0];
     assert!(
-        n.title.contains(":P(id)"),
-        "title must name the (label, property) pair: {}",
-        n.title
+        result
+            .notifications
+            .iter()
+            .all(|n| n.code != CORRELATED_CODE),
+        "UNWIND … MATCH (a:P {{id: r.s}}) with an index on :P(id) now plans a \
+         per-row NodeIndexSeek — CorrelatedPropertyPredicate must not fire; \
+         got {:?}",
+        result.notifications
     );
     assert!(
         result
             .notifications
             .iter()
             .all(|n| n.code != UNINDEXED_CODE),
-        "the index exists, so UnindexedPropertyAccess must not also fire: {:?}",
+        "the index exists and is used, so UnindexedPropertyAccess must not \
+         fire either: {:?}",
         result.notifications
     );
 }

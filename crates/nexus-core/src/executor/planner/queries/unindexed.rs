@@ -86,18 +86,6 @@ pub fn compute_unindexed_property_access_notifications(
     out
 }
 
-/// A property-predicate value is *correlated* (row-local) when it is
-/// evaluated per driving row rather than known at plan time — a bare
-/// variable (`UNWIND … AS r … {p: r}`) or a property access (`{p: r.s}`).
-/// Literals and parameters are single plan-/execution-time constants and
-/// remain index-seekable, so they are NOT correlated.
-fn is_correlated_value(expr: &Expression) -> bool {
-    matches!(
-        expr,
-        Expression::PropertyAccess { .. } | Expression::Variable(_)
-    )
-}
-
 /// Free-function form of `QueryPlanner::emit_unindexed_for_pattern`
 /// — pushes into a caller-provided `&mut Vec<Notification>` instead
 /// of the planner's per-call accumulator. Used by both the planner
@@ -120,15 +108,19 @@ fn emit_unindexed_for_pattern_into(
             let Ok(label_id) = catalog.get_label_id(label_name) else {
                 continue;
             };
-            for (prop_name, value) in &properties.properties {
+            for (prop_name, _value) in &properties.properties {
                 match catalog.get_key_id(prop_name) {
                     Ok(key_id) => {
+                        // §3.3: the inline property-map form now plans a
+                        // genuine per-row `NodeIndexSeek` (§2/§3) for both
+                        // constant and row-local (`r.s`) values, so this
+                        // path no longer distinguishes them — silence
+                        // whenever an index exists. `CorrelatedPropertyPredicate`
+                        // only remains for the WHERE `=` form
+                        // (`emit_unindexed_for_where_into`), which does not
+                        // yet seek per row.
                         if !prop_idx.has_index(label_id, key_id) {
                             record_unindexed_into(
-                                label_id, key_id, label_name, prop_name, clause, out,
-                            );
-                        } else if is_correlated_value(value) {
-                            record_correlated_predicate_into(
                                 label_id, key_id, label_name, prop_name, clause, out,
                             );
                         }

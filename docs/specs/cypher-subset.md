@@ -497,6 +497,49 @@ MATCH (n) WHERE n._id = 'sha256:abc…'
 RETURN n
 ```
 
+### Index Seek on Property Predicates
+
+The query planner uses property indexes when available for inline property predicates in node patterns:
+
+**Constant inline predicates** (already seekable):
+```cypher
+-- Constant literal → index seek
+MATCH (n:Person {id: 42})
+RETURN n
+
+-- Constant parameter → index seek
+MATCH (n:Person {id: $userId})
+RETURN n
+```
+
+**Correlated inline predicates** (row-local expressions from UNWIND/WITH):
+```cypher
+-- Row-local property access from UNWIND → index seek per driving row
+UNWIND $rows AS r
+MATCH (a:Person {id: r.s})
+RETURN a
+
+-- Multi-step: correlated predicate with multiple rows
+UNWIND [10, 20, 30] AS user_id
+MATCH (u:Person {id: user_id})
+CREATE (u)-[:VISITED]->(place:Place {name: 'New Location'})
+
+-- Batch endpoint resolution via correlated predicates
+UNWIND $edges AS edge
+MATCH (a:Person {id: edge.from_id}), (b:Person {id: edge.to_id})
+CREATE (a)-[:KNOWS]->(b)
+```
+
+**Fallback and limitations**:
+- If no index exists on the `(label, property)` pair, both constant and correlated predicates fall back to a label scan followed by property filtering.
+- The WHERE-clause form `MATCH (n:Label) WHERE n.property = value` does **not** yet use index seeks (tracked separately; currently evaluates the filter after matching nodes).
+- Predicate values that are function calls or complex expressions are not index-eligible and trigger a label scan.
+
+**Performance impact**:
+- Constant inline predicates: O(log N) or O(matches) via index seek
+- Correlated inline predicates with an index: O(R·log N) where R is the driving row count (one seek per row)
+- Correlated inline predicates without an index: O(R·N) label scan (quadratic behavior in the absence of indexes)
+
 ### MERGE with External ID
 
 ```cypher

@@ -1301,9 +1301,12 @@ impl<'a> QueryPlanner<'a> {
 
     /// Build a `NodeIndexSeek` for the first inline equality property of
     /// `node` whose `(label_id, key_id)` has a registered property index
-    /// and whose value is an indexable literal. Returns `None` (caller
-    /// falls back to `NodeByLabel`) when no PropertyIndex handle is
-    /// installed, no property qualifies, or the value is null/point/non-literal.
+    /// and whose value is either an indexable literal (constant seek) or a
+    /// row-local expression (`a.prop` / bare variable — per-row correlated
+    /// seek, evaluated at execution time by `execute_correlated_index_seek`).
+    /// Returns `None` (caller falls back to `NodeByLabel`) when no
+    /// PropertyIndex handle is installed, no property qualifies, or the
+    /// value is null/point/parameter/non-literal and non-correlated.
     fn node_index_seek_for(
         &self,
         node: &NodePattern,
@@ -1313,29 +1316,67 @@ impl<'a> QueryPlanner<'a> {
         let prop_idx = self.property_index?;
         let property_map = node.properties.as_ref()?;
         for (prop_name, expr) in &property_map.properties {
-            let pv = match expr {
-                Expression::Literal(Literal::String(s)) => {
-                    crate::index::PropertyValue::String(s.clone())
-                }
-                Expression::Literal(Literal::Integer(i)) => {
-                    crate::index::PropertyValue::Integer(*i)
-                }
-                Expression::Literal(Literal::Float(f)) => crate::index::PropertyValue::Float(*f),
-                Expression::Literal(Literal::Boolean(b)) => {
-                    crate::index::PropertyValue::Boolean(*b)
-                }
-                _ => continue, // null / point / param / non-literal: not indexable
-            };
             let Ok(key_id) = self.catalog.get_key_id(prop_name) else {
                 continue;
             };
-            if prop_idx.has_index(label_id, key_id) {
-                return Some(Operator::NodeIndexSeek {
-                    label_id,
-                    key_id,
-                    value: pv,
-                    variable: variable.to_string(),
-                });
+            if !prop_idx.has_index(label_id, key_id) {
+                continue;
+            }
+            match expr {
+                // Constant: value baked into the plan at plan time.
+                Expression::Literal(Literal::String(s)) => {
+                    return Some(Operator::NodeIndexSeek {
+                        label_id,
+                        key_id,
+                        value: crate::index::PropertyValue::String(s.clone()),
+                        key_expression: None,
+                        variable: variable.to_string(),
+                    });
+                }
+                Expression::Literal(Literal::Integer(i)) => {
+                    return Some(Operator::NodeIndexSeek {
+                        label_id,
+                        key_id,
+                        value: crate::index::PropertyValue::Integer(*i),
+                        key_expression: None,
+                        variable: variable.to_string(),
+                    });
+                }
+                Expression::Literal(Literal::Float(f)) => {
+                    return Some(Operator::NodeIndexSeek {
+                        label_id,
+                        key_id,
+                        value: crate::index::PropertyValue::Float(*f),
+                        key_expression: None,
+                        variable: variable.to_string(),
+                    });
+                }
+                Expression::Literal(Literal::Boolean(b)) => {
+                    return Some(Operator::NodeIndexSeek {
+                        label_id,
+                        key_id,
+                        value: crate::index::PropertyValue::Boolean(*b),
+                        key_expression: None,
+                        variable: variable.to_string(),
+                    });
+                }
+                // Row-local / correlated: e.g. `r.s` from
+                // `UNWIND $rows AS r MATCH (a:P {id: r.s})`. The key is
+                // evaluated per driving row at execution time, so the
+                // plan-time `value` is a documented no-op placeholder —
+                // `execute_correlated_index_seek` ignores it whenever
+                // `key_expression` is `Some(_)`.
+                Expression::PropertyAccess { .. } | Expression::Variable(_) => {
+                    return Some(Operator::NodeIndexSeek {
+                        label_id,
+                        key_id,
+                        value: crate::index::PropertyValue::Null,
+                        key_expression: Some(expr.clone()),
+                        variable: variable.to_string(),
+                    });
+                }
+                // null / point / param / other non-literal: not indexable.
+                _ => continue,
             }
         }
         None

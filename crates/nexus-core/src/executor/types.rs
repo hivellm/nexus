@@ -257,8 +257,16 @@ pub enum Operator {
         label_id: u32,
         /// Property key ID.
         key_id: u32,
-        /// Exact value to look up in the index.
+        /// Constant seek key, used when `key_expression` is `None` (the
+        /// existing `MATCH (a:P {id: 42})` path). Ignored when
+        /// `key_expression` is `Some`.
         value: crate::index::PropertyValue,
+        /// When `Some`, the seek key is a row-local expression evaluated
+        /// per driving row (correlated form `MATCH (a:P {id: r.s})` from an
+        /// UNWIND/WITH binding) rather than a plan-time constant. Set by the
+        /// planner in a follow-up step; execution handling lands with it.
+        /// See `phase0_fix-correlated-predicate-index-seek`.
+        key_expression: Option<parser::Expression>,
         /// Pattern variable to bind the returned nodes to.
         variable: String,
     },

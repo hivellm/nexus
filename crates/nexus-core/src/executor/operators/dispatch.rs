@@ -38,17 +38,27 @@ impl Executor {
                 label_id,
                 key_id,
                 value,
+                key_expression,
                 variable,
             } => {
-                let nodes = self.execute_node_index_seek(*label_id, *key_id, value)?;
-                tracing::debug!(
-                    "execute_operator NodeIndexSeek: found {} nodes for label_id {}/key_id {}, variable '{}'",
-                    nodes.len(),
-                    label_id,
-                    key_id,
-                    variable
-                );
-                self.seed_scan_variable(context, variable, nodes)?;
+                if let Some(expr) = key_expression {
+                    // Correlated seek — evaluate the key per driving row
+                    // instead of scanning the label and cross-joining. See
+                    // `phase0_fix-correlated-predicate-index-seek` §3.
+                    self.execute_correlated_index_seek(
+                        context, *label_id, *key_id, expr, variable,
+                    )?;
+                } else {
+                    let nodes = self.execute_node_index_seek(*label_id, *key_id, value)?;
+                    tracing::debug!(
+                        "execute_operator NodeIndexSeek: found {} nodes for label_id {}/key_id {}, variable '{}'",
+                        nodes.len(),
+                        label_id,
+                        key_id,
+                        variable
+                    );
+                    self.seed_scan_variable(context, variable, nodes)?;
+                }
             }
             Operator::AllNodesScan { variable } => {
                 let nodes = self.execute_all_nodes_scan()?;
