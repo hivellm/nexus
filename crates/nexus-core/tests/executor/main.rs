@@ -20,3 +20,4 @@ mod statistics_driven_join_ordering_test;
 mod test_metadata_count_optimization;
 mod unindexed_correlated_match_test;
 mod unindexed_property_notification_e2e_test;
+mod update_node_index_divergence_test;

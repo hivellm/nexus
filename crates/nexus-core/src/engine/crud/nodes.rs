@@ -311,53 +311,36 @@ impl Engine {
             return Err(Error::NotFound(format!("Node {} not found", id)));
         }
 
-        // Get or create label IDs
-        let mut label_bits = 0u64;
+        // Resolve label ids for the constraint checks below.
         let mut label_ids = Vec::new();
         for label in &labels {
-            let label_id = self.catalog.get_or_create_label(label)?;
-            if label_id < 64 {
-                label_bits |= 1u64 << label_id;
-            }
-            label_ids.push(label_id);
+            label_ids.push(self.catalog.get_or_create_label(label)?);
         }
 
         // Check constraints before updating node (exclude current node from uniqueness check)
         self.check_constraints(&label_ids, &properties, Some(id))?;
         self.enforce_extended_node_constraints(&label_ids, &properties, Some(id))?;
 
-        // Start from the EXISTING record so we preserve first_rel_ptr (the head
-        // of the relationship chain), flags, etc. Building a blank
-        // `NodeRecord::new()` here would zero first_rel_ptr and orphan the
-        // node's relationships (data-integrity bug related to issue #4).
-        let mut node_record = self.storage.read_node(id)?;
-        node_record.label_bits = label_bits;
-
-        // Store properties and get property pointer
-        node_record.prop_ptr =
-            if properties.is_object() && !properties.as_object().unwrap().is_empty() {
-                self.storage
-                    .property_store
-                    .write()
-                    .unwrap()
-                    .store_properties(id, storage::property_store::EntityType::Node, properties)?
-            } else {
-                0
-            };
-
-        // Write updated record
-        let mut tx = self.transaction_manager.write().begin_write()?;
-        self.storage.write_node(id, &node_record)?;
-        self.transaction_manager.write().commit(&mut tx)?;
-
-        // Update statistics
-        for label in &labels {
-            if let Ok(label_id) = self.catalog.get_or_create_label(label) {
-                self.catalog.increment_node_count(label_id)?;
-            }
-        }
-
-        Ok(())
+        // phase0_fix-update-node-index-divergence — route through the same
+        // write + full index-refresh path the Cypher SET path uses
+        // (`persist_node_state`) instead of writing the record and property
+        // blob directly. The old direct write updated neither the label-bitmap
+        // index, the typed property B-tree, nor the FTS / spatial indexes, so a
+        // node updated here became permanently unfindable by its new value (and
+        // a stale seek on the OLD value still matched). `persist_node_state`
+        // captures the pre-write old state, writes the new properties (via
+        // `update_node_properties`, which preserves `first_rel_ptr`) and labels,
+        // then refreshes every covering index — keeping REST `PUT /data/nodes`,
+        // RPC `UPDATE_NODE`, and RESP3 `NODE.UPDATE` consistent with Cypher SET.
+        let properties_map = match properties {
+            serde_json::Value::Object(map) => map,
+            _ => serde_json::Map::new(),
+        };
+        let state = super::NodeWriteState {
+            properties: properties_map,
+            labels: labels.into_iter().collect(),
+        };
+        self.persist_node_state(id, state)
     }
 
     /// Soft-delete a single relationship by id (bare Cypher `DELETE r`).

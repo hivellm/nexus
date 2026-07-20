@@ -103,6 +103,20 @@ impl Engine {
             &effective_label_ids,
             &props_value,
         );
+        // phase0_fix-update-node-index-divergence §3.3 — composite / NODE KEY
+        // B-tree refresh: evict the node's OLD tuple and insert its NEW one, so
+        // updating a property covered by a composite index (via Cypher SET or
+        // `update_node`) does not leave the old tuple behind (a stale tuple
+        // falsely blocks NODE KEY reuse and hides the new value). Best-effort;
+        // uniqueness was already enforced upstream, so the reinsert cannot
+        // introduce a duplicate the constraint check would have rejected.
+        let old_props_value = Value::Object(old_properties.clone());
+        if let Err(e) = self.unindex_composite_tuples(node_id, &old_label_ids, &old_props_value) {
+            tracing::warn!("composite-index evict on update failed for node {node_id}: {e}");
+        }
+        if let Err(e) = self.index_composite_tuples(node_id, &effective_label_ids, &props_value) {
+            tracing::warn!("composite-index reinsert on update failed for node {node_id}: {e}");
+        }
         Ok(())
     }
 

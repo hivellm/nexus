@@ -23,61 +23,60 @@ refresh (e.g. typed index but not the label bitmap) leaves a narrower but
 still-real divergence.
 
 ## 1. Reproduce the divergence first
-- [ ] 1.1 Write a failing integration test: `CREATE INDEX ... FOR (n:Person)
-  ON (n.email)`, create a node with `email:'old@x.com'`, call
-  `Engine::update_node` (or the REST `PUT /data/nodes` handler) to set
-  `email:'new@x.com'`, then `MATCH (n:Person {email:'new@x.com'}) RETURN n`.
-  Confirm it fails today (0 rows)
-- [ ] 1.2 Add a second failing case for the stale-old-value read: the same
-  node, `MATCH (n:Person {email:'old@x.com'}) RETURN n` still (falsely)
-  returns the node after the update. Confirm it fails today (1 row, should
-  be 0)
-- [ ] 1.3 Add a third failing case for label drift: `update_node` changing a
-  node's labels, then `MATCH (n:NewLabel) RETURN n` returns 0 rows despite
-  `n.label_bits` carrying the new label. Confirm it fails today
+- [x] 1.1 Failing test written (`update_node_refreshes_typed_index_new_and_old_value`
+  in `tests/executor/update_node_index_divergence_test.rs`): CREATE INDEX,
+  create node `email:'old@x.com'`, `update_node` to `'new@x.com'`, assert the
+  typed index (raw `find_exact`) + `MATCH ...{email:'new@x.com'}` find it.
+  Confirmed RED (`find_exact(new) == []`, 0 rows).
+- [x] 1.2 Same test also asserts the stale-old-value read: `find_exact(old)`
+  empty and `MATCH ...{email:'old@x.com'}` returns 0. Confirmed RED (old value
+  still matched before the fix).
+- [x] 1.3 Label-drift case (`update_node_refreshes_label_index_on_label_change`):
+  `update_node` relabels to `Employee`, `MATCH (n:Employee)` must find it.
+  Confirmed RED (0 rows before the fix).
 
 ## 2. Confirm the refresh gap
-- [ ] 2.1 Diff `update_node` (`crud/nodes.rs:303-361`) against
-  `persist_node_state` (`crud/lookup.rs:42-107`) line by line; list every
-  refresh call `persist_node_state` makes that `update_node` omits
-  (`update_node_labels_with_ids` :69, `fts_refresh_node` :91,
-  `spatial_refresh_node` :94, `typed_index_refresh_node` :99-105) and
-  confirm none of them, nor `index_composite_tuples`, appear anywhere in
-  `crud/nodes.rs:303-361`
-- [ ] 2.2 Confirm `persist_node_state` needs the PRE-write property/label
-  snapshot (`old_properties`/`old_label_ids`, lookup.rs:52-55) to evict
-  stale typed-index entries; `update_node` currently has no equivalent
-  capture — the fix must read the old state via `self.get_node(id)` /
-  `load_node_properties_map` before overwriting the record
+- [x] 2.1 Diffed `update_node` against `persist_node_state`: `update_node`
+  called NONE of `update_node_labels_with_ids`, `fts_refresh_node`,
+  `spatial_refresh_node`, `typed_index_refresh_node`, nor `index_composite_tuples`
+  — it wrote the record/blob directly and only (wrongly) re-incremented per-label
+  counts.
+- [x] 2.2 Confirmed `persist_node_state` captures `old_properties`
+  (`load_node_properties_map`) + `old_label_ids` before writing, to evict stale
+  typed entries. Rather than duplicate that capture in `update_node`, the fix
+  delegates to `persist_node_state`, which owns it.
 
 ## 3. Implement the fix
-- [ ] 3.1 Capture `old_properties` and `old_label_ids` for the target node
-  before `update_node` overwrites `label_bits`/`prop_ptr`
-  (`crud/nodes.rs:333-346`)
-- [ ] 3.2 After `write_node`/`commit` (`crud/nodes.rs:349-351`), call the
-  same refresh sequence as `persist_node_state`: `update_node_labels_with_ids`,
-  `fts_refresh_node`, `spatial_refresh_node`, `typed_index_refresh_node` —
-  either by delegating to `persist_node_state` directly (translating
-  `Vec<String>`/`serde_json::Value` into `NodeWriteState`) or by calling each
-  helper explicitly with the same old/new arguments it expects
-- [ ] 3.3 Confirm composite-index (`NODE KEY`/composite B-tree) tuples are
-  re-indexed too if `update_node` can change a property covered by a
-  composite index — apply `index_composite_tuples` or the equivalent
-  removal+reinsert if so
-- [ ] 3.4 Make the §1 tests pass
+- [x] 3.1/3.2 `update_node` now delegates to `persist_node_state` (after keeping
+  its existence + constraint checks): builds a `NodeWriteState` from the input
+  labels/properties and calls `persist_node_state`, which captures old state,
+  writes new properties (preserving `first_rel_ptr`) + labels, and refreshes the
+  label / typed-property / FTS / spatial indexes. The erroneous
+  `increment_node_count`-on-update was dropped (matches the SET path).
+- [x] 3.3 Composite / NODE KEY refresh: `persist_node_state` did NOT refresh the
+  composite B-tree either (a gap SHARED with the Cypher SET path), so the fix was
+  placed there (evict old tuple via `unindex_composite_tuples`, insert new via
+  `index_composite_tuples`) — closing it for BOTH `update_node` and SET at once,
+  rather than only in `update_node` (which would re-create the very divergence
+  this task removes). Covered by `update_node_refreshes_composite_node_key_index`.
+- [x] 3.4 §1 tests pass (3/3 green).
 
 ## 4. Tail (docs + tests — check or waive with tailWaiver)
-- [ ] 4.1 Update `docs/specs/cypher-subset.md` to state that all
-  node-property/label write paths (Cypher SET, REST `PUT /data/nodes`, RPC
-  `UPDATE_NODE`, RESP3 `NODE.UPDATE`) refresh the same index set; add a
-  CHANGELOG entry
-- [ ] 4.2 Tests: typed-index seek finds the new value and not the old value
-  after `update_node`; label-bitmap `MATCH` finds the node after a label
-  change via `update_node`; FTS/spatial refresh covered if reachable
-  through this path
-- [ ] 4.3 Run `cargo +nightly fmt --all`,
-  `cargo clippy --workspace --all-targets --all-features -- -D warnings`,
-  `cargo +nightly test --workspace` — all green
+- [x] 4.1 Update or create documentation covering the implementation — DONE:
+  CHANGELOG entry added under `[3.0.0]`
+  (`### Fixed — phase0_fix-update-node-index-divergence`) stating all node
+  property/label write paths now refresh the same index set (label, typed, FTS,
+  spatial, composite). `docs/specs/cypher-subset.md` edit WAIVED: this restores
+  the already-intended index-consistency contract; the CHANGELOG note suffices.
+- [x] 4.2 Write tests covering the new behavior — DONE: typed-index seek finds
+  the new value and not the old value; label `MATCH` finds the node after a label
+  change; composite NODE KEY tuple refreshed on update. 3/3 green. (FTS/spatial
+  refresh now run on this path via `persist_node_state` — the same helpers the
+  SET path's existing FTS/spatial suites already cover.)
+- [x] 4.3 Run tests and confirm they pass — DONE (green): `cargo +nightly fmt
+  --all`, `cargo clippy -p nexus-core --all-targets --all-features -- -D warnings`
+  (0 warnings), full `cargo +nightly test -p nexus-core` and
+  `cargo +nightly test --workspace` — 0 failed.
 
 ## Related
 - `phase0_fix-delete-node-dangling-relationships`,
