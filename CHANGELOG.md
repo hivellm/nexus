@@ -5,6 +5,15 @@ All notable changes to Nexus will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.0.0] — Unreleased
+
+> **Engine audit remediation.** A deep audit of the execution engine
+> uncovered several chronic, systemic correctness and durability problems
+> that require substantial refactoring to address properly. Rather than
+> accumulate workarounds, this major version line was opened off 2.6.0 to
+> carry these fixes. The remediation is tracked across 27 `phase0_fix-*`
+> tasks and will land incrementally under this release.
+
 ## [2.6.0] — 2026-07-20
 
 > **Memory safety in Cartesian products.** Multi-pattern Cypher queries
