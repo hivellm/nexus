@@ -31,19 +31,21 @@ graphs.
   incoming-only guard.
 
 ## 2. Tail (docs + tests — check or waive with tailWaiver)
-- [x] 2.1 Waived: the relationship-lookup contract did not change materially
-  (same inputs/outputs, same correctness guarantee). Rationale is captured in
-  the doc comments on `node_has_live_relationship` and `delete_node_relationships`.
-- [x] 2.2 Added Tier-1 regression tests to
-  `delete_node_dangling_relationships_test.rs`:
-  `non_detach_delete_of_outgoing_only_node_errors`,
+- [x] 2.1 Update or create documentation covering the implementation — DONE
+  (waived as a separate doc file): the relationship-lookup contract did not
+  change materially (same inputs/outputs, same correctness guarantee), so the
+  rationale is captured in the doc comments on `node_has_live_relationship` and
+  `delete_node_relationships` rather than a standalone doc.
+- [x] 2.2 Write tests covering the new behavior — DONE: added Tier-1 regression
+  tests to `delete_node_dangling_relationships_test.rs`
+  (`non_detach_delete_of_outgoing_only_node_errors`,
   `non_detach_delete_of_node_with_both_incoming_and_outgoing_edges_errors`,
-  `non_detach_delete_allowed_after_outgoing_edge_soft_deleted` (soft-deletes the
-  edge at the storage layer because Cypher `DELETE r` is a pre-existing no-op —
+  `non_detach_delete_allowed_after_outgoing_edge_soft_deleted` — soft-deletes the
+  edge at the storage layer because Cypher `DELETE r` is a pre-existing no-op,
   see Related). Incoming-only guard already covered by the existing suite.
-- [x] 2.3 Green: `cargo +nightly fmt --all`,
-  `cargo clippy -p nexus-core --all-targets --all-features -- -D warnings`,
-  `cargo +nightly test -p nexus-core --test executor` (137 passed).
+- [x] 2.3 Run tests and confirm they pass — DONE (green): `cargo +nightly fmt
+  --all`, `cargo clippy -p nexus-core --all-targets --all-features -- -D
+  warnings`, `cargo +nightly test -p nexus-core --test executor` (137 passed).
 
 ## Related
 - `phase0_fix-delete-node-dangling-relationships` — introduced the correctness
