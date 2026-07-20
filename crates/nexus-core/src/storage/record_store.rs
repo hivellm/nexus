@@ -19,7 +19,7 @@ use super::adjacency_list;
 use super::property_store;
 use super::records::{
     FILE_GROWTH_FACTOR, INITIAL_NODES_FILE_SIZE, INITIAL_RELS_FILE_SIZE, NODE_RECORD_SIZE,
-    REL_RECORD_SIZE, RecordStoreStats,
+    NodeRecord, REL_RECORD_SIZE, RecordStoreStats, RelationshipRecord,
 };
 
 /// Record store for managing nodes and relationships
@@ -118,25 +118,72 @@ impl RecordStore {
         // Phase 3: Initialize adjacency list store (optional, for optimization)
         let adjacency_store = adjacency_list::AdjacencyListStore::new(&path).ok();
 
-        // Calculate next available IDs by scanning existing data
-        // Count non-empty records (records where any field is non-zero)
+        // Calculate next available IDs by scanning existing data.
+        //
+        // phase0_fix-anonymous-node-lost-on-restart: a slot is IN USE
+        // (reserves its id — i.e. advances `next_node_id`/`next_rel_id`
+        // past it) if EITHER of these holds:
+        //   - the FLAG_ALLOCATED bit is set (new-format record, live OR
+        //     soft-deleted — see `RecordStore::write_node` / `write_rel`,
+        //     which OR the bit into every write regardless of the deleted
+        //     bit), OR
+        //   - (back-compat) any byte is non-zero — a pre-fix record with
+        //     `flags == 0`/`flags == FLAG_DELETED` that still carries
+        //     labels/properties/relationships (nodes) or a non-degenerate
+        //     src/dst/type/pointer (relationships).
+        //
+        // This is deliberately independent of `is_deleted()`: the deleted
+        // bit is the QUERY-VISIBILITY gate used by `get_node`/
+        // `get_relationship`, never the id-RESERVATION gate. A legacy
+        // record that was soft-deleted by the pre-fix binary still has
+        // non-zero residual bytes and must keep reserving its id — treating
+        // it as free would let the next `allocate_node_id()`/
+        // `allocate_rel_id()` reuse that id and overwrite the (still
+        // externally-referenced) slot, which is the same class of bug this
+        // task fixes, and a case the ORIGINAL "any non-zero byte" scan
+        // already handled correctly.
+        //
+        // A pre-fix ANONYMOUS node (all-zero, including `flags == 0`) or a
+        // pre-fix degenerate all-zero self-loop relationship is
+        // indistinguishable from a free slot under either arm and is NOT
+        // recovered — the accepted caveat of
+        // phase0_fix-anonymous-node-lost-on-restart: only future anonymous
+        // records are protected, because the pre-fix format never wrote a
+        // marker that could tell them apart from unallocated space.
+        //
+        // Every in-use legacy (non-allocated-bit) slot found here — deleted
+        // or not — is collected for a one-time migration pass below, which
+        // stamps the allocated bit so subsequent writes are new-format.
+        // `write_node`/`write_rel` OR the bit in without touching the
+        // deleted bit, so a migrated legacy-deleted record becomes
+        // `ALLOCATED | DELETED` — still deleted, now reserved.
         let mut next_node_id = 0u64;
+        let mut legacy_nodes: Vec<(u64, NodeRecord)> = Vec::new();
         for i in 0..(nodes_file_size / NODE_RECORD_SIZE) {
             let offset = i * NODE_RECORD_SIZE;
             let slice = &nodes_mmap[offset..offset + NODE_RECORD_SIZE];
-            // Check if record is non-empty (any byte is non-zero)
-            if slice.iter().any(|&b| b != 0) {
+            let record: NodeRecord = *bytemuck::from_bytes(slice);
+            let legacy_in_use = slice.iter().any(|&b| b != 0);
+            if record.is_allocated() || legacy_in_use {
                 next_node_id = (i + 1) as u64;
+                if legacy_in_use && !record.is_allocated() {
+                    legacy_nodes.push((i as u64, record));
+                }
             }
         }
 
         let mut next_rel_id = 0u64;
+        let mut legacy_rels: Vec<(u64, RelationshipRecord)> = Vec::new();
         for i in 0..(rels_file_size / REL_RECORD_SIZE) {
             let offset = i * REL_RECORD_SIZE;
             let slice = &rels_mmap[offset..offset + REL_RECORD_SIZE];
-            // Check if record is non-empty (any byte is non-zero)
-            if slice.iter().any(|&b| b != 0) {
+            let record: RelationshipRecord = *bytemuck::from_bytes(slice);
+            let legacy_in_use = slice.iter().any(|&b| b != 0);
+            if record.is_allocated() || legacy_in_use {
                 next_rel_id = (i + 1) as u64;
+                if legacy_in_use && !record.is_allocated() {
+                    legacy_rels.push((i as u64, record));
+                }
             }
         }
 
@@ -162,6 +209,65 @@ impl RecordStore {
             nodes_file_size,
             rels_file_size,
         };
+
+        // phase0_fix-anonymous-node-lost-on-restart §2.2: one-time migration
+        // — stamp the allocated bit on every legacy (non-allocated-bit)
+        // in-use slot found by the scan above — DELETED OR NOT — so
+        // subsequent writes are new-format. `write_node`/`write_rel`
+        // already OR in FLAG_ALLOCATED on every write without touching the
+        // deleted bit, so re-writing the unchanged record is sufficient and
+        // preserves a legacy-deleted record's deleted status (it becomes
+        // `ALLOCATED | DELETED`). Errors are logged and skipped rather than
+        // propagated — same fail-open-and-continue posture as the prop_ptr
+        // repair below, and idempotent: a record already carrying the
+        // allocated bit is never selected for migration on a later reopen.
+        let migrated_nodes = legacy_nodes.len();
+        for (node_id, record) in legacy_nodes {
+            if let Err(e) = store.write_node(node_id, &record) {
+                tracing::error!(
+                    "RecordStore::new: failed to migrate allocated bit for node {}: {}",
+                    node_id,
+                    e
+                );
+            }
+        }
+        if migrated_nodes > 0 {
+            if let Err(e) = store.nodes_mmap.read().unwrap().flush() {
+                tracing::error!(
+                    "RecordStore::new: failed to flush node allocated-bit migration: {}",
+                    e
+                );
+            } else {
+                tracing::info!(
+                    "migrated {} legacy node record(s) to allocated-bit format",
+                    migrated_nodes
+                );
+            }
+        }
+
+        let migrated_rels = legacy_rels.len();
+        for (rel_id, record) in legacy_rels {
+            if let Err(e) = store.write_rel(rel_id, &record) {
+                tracing::error!(
+                    "RecordStore::new: failed to migrate allocated bit for rel {}: {}",
+                    rel_id,
+                    e
+                );
+            }
+        }
+        if migrated_rels > 0 {
+            if let Err(e) = store.rels_mmap.read().unwrap().flush() {
+                tracing::error!(
+                    "RecordStore::new: failed to flush rel allocated-bit migration: {}",
+                    e
+                );
+            } else {
+                tracing::info!(
+                    "migrated {} legacy relationship record(s) to allocated-bit format",
+                    migrated_rels
+                );
+            }
+        }
 
         // Issue #4: run the durable startup repair so corrupt prop_ptrs are
         // fixed on disk before any query sees them.  On error we log and

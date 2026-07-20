@@ -19,6 +19,25 @@ pub(super) const INITIAL_RELS_FILE_SIZE: usize = 1024 * 1024;
 /// Growth factor for file expansion
 pub(super) const FILE_GROWTH_FACTOR: f64 = 1.5;
 
+/// `flags` bit 0 (both [`NodeRecord`] and [`RelationshipRecord`]): the
+/// record has been soft-deleted. Set by `mark_deleted`; checked by
+/// `is_deleted`. Unchanged by phase0_fix-anonymous-node-lost-on-restart.
+pub const FLAG_DELETED: u32 = 0b01;
+
+/// `flags` bit 1 (both [`NodeRecord`] and [`RelationshipRecord`]): the
+/// record is allocated / in use. Set on every live write via
+/// [`super::record_store::RecordStore::write_node`] /
+/// [`super::record_store::RecordStore::write_rel`].
+///
+/// phase0_fix-anonymous-node-lost-on-restart: without this bit, a node with
+/// no labels, no properties and no relationships (or a relationship with
+/// `src_id == dst_id == 0`, `type_id == 0`, no pointers) persists as a
+/// byte-for-byte all-zero record, indistinguishable from an unallocated
+/// slot. The restart recovery scan reconstructs `next_node_id` /
+/// `next_rel_id` from this bit instead of "any byte is non-zero", so an
+/// all-zero live record is no longer silently dropped and its id reused.
+pub const FLAG_ALLOCATED: u32 = 0b10;
+
 /// Node record structure (32 bytes)
 #[derive(Debug, Clone, Copy, Default, bytemuck::Pod, bytemuck::Zeroable)]
 #[repr(C)]
@@ -66,12 +85,24 @@ impl NodeRecord {
 
     /// Mark this node as deleted
     pub fn mark_deleted(&mut self) {
-        self.flags |= 1;
+        self.flags |= FLAG_DELETED;
     }
 
     /// Check if this node is deleted
     pub fn is_deleted(&self) -> bool {
-        (self.flags & 1) != 0
+        (self.flags & FLAG_DELETED) != 0
+    }
+
+    /// Check if this node has the allocated (in-use) bit set.
+    ///
+    /// Set automatically by [`super::record_store::RecordStore::write_node`]
+    /// on every write. Used by the restart recovery scan to reconstruct
+    /// `next_node_id` without relying on "any byte is non-zero", which
+    /// cannot distinguish a live anonymous node (no labels, no properties,
+    /// no relationships) from a free slot. See
+    /// phase0_fix-anonymous-node-lost-on-restart.
+    pub fn is_allocated(&self) -> bool {
+        (self.flags & FLAG_ALLOCATED) != 0
     }
 
     /// Get all labels for this node
@@ -128,12 +159,23 @@ impl RelationshipRecord {
 
     /// Mark this relationship as deleted
     pub fn mark_deleted(&mut self) {
-        self.flags |= 1;
+        self.flags |= FLAG_DELETED;
     }
 
     /// Check if this relationship is deleted
     pub fn is_deleted(&self) -> bool {
-        (self.flags & 1) != 0
+        (self.flags & FLAG_DELETED) != 0
+    }
+
+    /// Check if this relationship has the allocated (in-use) bit set.
+    ///
+    /// Set automatically by [`super::record_store::RecordStore::write_rel`]
+    /// on every write. Closes the degenerate all-zero self-loop gap (`src_id
+    /// == dst_id == 0`, `type_id == 0`, no pointers) with the same scheme
+    /// used for [`NodeRecord::is_allocated`]. See
+    /// phase0_fix-anonymous-node-lost-on-restart.
+    pub fn is_allocated(&self) -> bool {
+        (self.flags & FLAG_ALLOCATED) != 0
     }
 }
 

@@ -60,6 +60,32 @@ reference to the lost id.
   written by the current code has `flags == 0` for a live node) — migration or a
   scan that recognises both encodings is required, not a silent format bump.
 
+## Decision (§2.1) — option (a): explicit in-use / allocated flag bit
+
+Chosen: **(a) an explicit in-use/allocated bit on the record flags**, not (b) a
+durable store header.
+
+- `NodeRecord.flags`: bit 0 = deleted (unchanged, `mark_deleted` sets `|= 1`);
+  **bit 1 = allocated** (new), set on every live write. A live node therefore
+  has `flags & 0b10 != 0`, so even a labelless/propertyless/relationshipless
+  node is no longer byte-for-byte all-zero.
+- Recovery scan, `get_node`, `is_deleted`, `node_count` test the allocated bit
+  instead of "any non-zero byte".
+
+Why (a) over (b): the bit rides along in the record write that already goes
+through the WAL/flush path, so it adds **no new durable structure** that must
+itself be made crash-safe — (b)'s header is a chicken-and-egg durability surface
+in a durability fix. (a) is local to the record and lower blast-radius.
+
+**Back-compat (§2.2):** existing stores have live nodes with `flags == 0`. The
+recovery scan recognises BOTH encodings — a slot is in use if the allocated bit
+is set OR (legacy) any byte is non-zero and it is not marked deleted. On reopen,
+live slots are stamped with the allocated bit (one-time migration) so subsequent
+writes are new-format. **Caveat (accepted):** an anonymous node already written
+by the OLD format is byte-for-byte all-zero and is indistinguishable from free
+space even at migration time — it cannot be recovered; only future anonymous
+nodes are protected. This is inherent to the pre-fix on-disk format.
+
 ## Impact
 
 - Affected specs: `docs/specs/storage-format.md` (node record layout, flags

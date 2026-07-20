@@ -22,7 +22,8 @@ pub use external_id::{ConflictPolicy, ExternalId};
 
 // Record layout types — constants and structs
 pub use records::{
-    NODE_RECORD_SIZE, NodeRecord, REL_RECORD_SIZE, RecordStoreStats, RelationshipRecord,
+    FLAG_ALLOCATED, FLAG_DELETED, NODE_RECORD_SIZE, NodeRecord, REL_RECORD_SIZE, RecordStoreStats,
+    RelationshipRecord,
 };
 
 // RecordStore — struct + lifecycle methods (record_store.rs) and operations

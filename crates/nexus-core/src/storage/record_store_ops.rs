@@ -15,8 +15,8 @@ use super::external_id::{ConflictPolicy, ExternalId};
 use super::property_store;
 use super::record_store::RecordStore;
 use super::records::{
-    INITIAL_NODES_FILE_SIZE, INITIAL_RELS_FILE_SIZE, NODE_RECORD_SIZE, NodeRecord, REL_RECORD_SIZE,
-    RelationshipRecord,
+    FLAG_ALLOCATED, INITIAL_NODES_FILE_SIZE, INITIAL_RELS_FILE_SIZE, NODE_RECORD_SIZE, NodeRecord,
+    REL_RECORD_SIZE, RelationshipRecord,
 };
 
 impl RecordStore {
@@ -76,7 +76,14 @@ impl RecordStore {
         // Phase 3 Optimization: Direct write without intermediate allocation
         let start = offset as usize;
         let end = start + NODE_RECORD_SIZE;
-        let record_bytes = bytemuck::bytes_of(record);
+        // phase0_fix-anonymous-node-lost-on-restart: stamp the allocated bit
+        // on every write so a live node — even one with no labels,
+        // properties or relationships — is never byte-for-byte all-zero on
+        // disk. This also self-migrates any legacy (flags == 0) record that
+        // gets rewritten after the fix, without mutating the caller's copy.
+        let mut record_to_write = *record;
+        record_to_write.flags |= FLAG_ALLOCATED;
+        let record_bytes = bytemuck::bytes_of(&record_to_write);
         self.nodes_mmap.write().unwrap()[start..end].copy_from_slice(record_bytes);
 
         // Memory barrier to ensure write is visible to subsequent reads
@@ -271,7 +278,12 @@ impl RecordStore {
         // Phase 3 Optimization: Direct write without intermediate allocation
         let start = offset as usize;
         let end = start + REL_RECORD_SIZE;
-        let record_bytes = bytemuck::bytes_of(record);
+        // phase0_fix-anonymous-node-lost-on-restart §2.3: same allocated-bit
+        // stamp as write_node, closing the degenerate all-zero self-loop gap
+        // (src_id == dst_id == 0, type_id == 0, no pointers).
+        let mut record_to_write = *record;
+        record_to_write.flags |= FLAG_ALLOCATED;
+        let record_bytes = bytemuck::bytes_of(&record_to_write);
         self.rels_mmap.write().unwrap()[start..end].copy_from_slice(record_bytes);
 
         // Memory barrier to ensure write is visible to subsequent reads

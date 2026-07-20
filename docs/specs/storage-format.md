@@ -51,11 +51,29 @@ record_offset = node_id * 32
 ```
 Bit    | Meaning
 -------|----------------------------------------------------------
-0      | Deleted (soft delete, GC later)
-1      | Locked (transaction in progress)
+0      | Deleted (soft delete, GC later)          — FLAG_DELETED = 0b01
+1      | Allocated / in-use (set on every write)  — FLAG_ALLOCATED = 0b10
 2-7    | Reserved
 8-31   | Version/epoch (for MVCC, 24 bits = 16M versions)
 ```
+
+**Allocated bit & recovery contract** (`phase0_fix-anonymous-node-lost-on-restart`):
+Bit 1 (`FLAG_ALLOCATED`) is set by `write_node`/`write_rel` on every live
+write. It exists because a node with no labels, no properties and no
+relationships (or a relationship with `src=dst=type=0` and no pointers) would
+otherwise persist as a byte-for-byte **all-zero** record — indistinguishable
+from an unallocated slot. On startup the store reconstructs
+`next_node_id`/`next_rel_id` by scanning the record file; a slot counts as
+**in use** (reserving its id) if `FLAG_ALLOCATED` is set **or**, for
+backward-compatibility with pre-fix stores, any byte is non-zero. This
+reservation is independent of the deleted bit: a soft-deleted record still
+reserves its id (deletion never releases an id; `is_deleted()` is the
+query-visibility gate, not the id-reservation gate). Legacy non-zero slots are
+stamped with `FLAG_ALLOCATED` by a one-time migration on reopen (the deleted
+bit is preserved). Caveat: an anonymous record already written by the pre-fix
+format is physically all-zero and cannot be recovered — only records written
+after the fix are protected. (Bit 1 was previously reserved in this document
+for a "Locked" flag that was never implemented.)
 
 **label_bits Encoding**:
 ```
@@ -509,7 +527,7 @@ Offset 0x0540 (node_id 42):
 05 00 00 00 00 00 00 00  ← label_bits (0x05 = labels 0,2)
 A0 12 00 00 00 00 00 00  ← first_rel_ptr (offset 0x12A0)
 10 34 00 00 00 00 00 00  ← prop_ptr (offset 0x3410)
-00 00 00 00              ← flags (0 = active)
+02 00 00 00              ← flags (bit 1 = FLAG_ALLOCATED, in use; bit 0 = deleted, clear)
 00 00 00 00              ← reserved
 ```
 
