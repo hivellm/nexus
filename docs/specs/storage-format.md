@@ -600,6 +600,41 @@ nexus-cli inspect nodes.store --id 42
 # Relationships: 2 outgoing, 1 incoming
 ```
 
+## Property Store Entry Layout & Rebuild Contract
+
+Each entity's properties are stored as one contiguous, append-oriented entry:
+
+```
+Offset | Size | Field        | Notes
+-------|------|--------------|-------------------------------------------
+0      | 8    | entity_id    | u64
+8      | 1    | entity_type  | 0 = Node, 1 = Relationship
+9      | 4    | data_size    | u32, length of the JSON payload in bytes
+13     | data_size | data    | serde_json payload
+```
+
+`data_size` is BOTH the payload length and the entry's physical footprint —
+the two must never diverge. Writes are therefore **grow-only**
+(`phase0_fix-property-store-shrink-corruption`): `update_properties` rewrites
+an entry in place ONLY when the new payload is exactly the same size; a
+strictly smaller or larger payload is written as a fresh entry at the store's
+append cursor (`next_offset`) and the index is repointed. A shrink never
+reduces `data_size` below the physical footprint in place (which would leave a
+stale tail), so the superseded old entry stays a valid, fully-parseable blob —
+dead space until a future compaction pass, deduplicated by `entity_id` on
+rebuild (later offset wins).
+
+**Rebuild contract:** on reopen the index is rebuilt by scanning entries in
+ascending offset order, striding by `13 + data_size`. `next_offset` is set to
+the end of the LAST successfully parsed entry, never to a raw cursor position.
+For backward compatibility with stores written by the pre-fix code (which
+could leave a shrunk-in-place entry with a stale tail), the scanner RESYNCS:
+on landing on bytes that do not parse as a valid header + complete JSON
+payload, it scans forward for the next parseable entry instead of stopping —
+so a damaged old store recovers its later entities rather than dropping them.
+Caveat: an entry whose header was already overwritten by a pre-fix mis-scan is
+unrecoverable.
+
 ## Advanced-type Wire Encodings (v1.5)
 
 phase6_opencypher-advanced-types introduces scalar shapes that ride

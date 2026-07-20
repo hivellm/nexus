@@ -46,6 +46,33 @@ struct PropertyEntry {
     data_size: u32,
 }
 
+/// Byte size of a property entry's on-disk header:
+/// `entity_id: u64` (8) + `entity_type: u8` (1) + `data_size: u32` (4).
+const PROPERTY_ENTRY_HEADER_SIZE: u64 = 13;
+
+/// A successfully parsed property-entry header at some on-disk offset.
+/// See [`PropertyStore::try_parse_entry`].
+struct PropertyEntryHeader {
+    /// Byte offset of this entry's header within the property file.
+    offset: u64,
+    entity_id: u64,
+    entity_type: EntityType,
+    /// Total footprint of this entry (header + payload), in bytes.
+    entry_size: u64,
+}
+
+/// Result of classifying the property entry at a given offset during an
+/// index-rebuild scan. See [`PropertyStore::scan_entry_at`].
+enum PropertyScanStep {
+    /// A live, successfully parsed entry (possibly found via resync).
+    Entry(PropertyEntryHeader),
+    /// A never-written, zeroed header — the legitimate end of live entries.
+    End,
+    /// The header at the scanned offset did not parse, and no later valid
+    /// header could be resynced to before the scan's `limit`.
+    Unrecoverable,
+}
+
 impl PropertyStore {
     /// Create a new property store
     pub fn new(path: PathBuf) -> Result<Self> {
@@ -304,14 +331,25 @@ impl PropertyStore {
             new_data_size
         );
 
-        // If new data fits in existing space, update in place
-        if new_data_size <= existing_data_size {
+        // phase0_fix-property-store-shrink-corruption (§2.1, option b —
+        // grow-only): rewrite in place ONLY when the footprint is
+        // IDENTICAL. A strictly smaller payload used to reuse this slot by
+        // overwriting `data_size` and the leading bytes while leaving the
+        // freed tail of the old, longer payload untouched on disk. On
+        // reopen, `rebuild_index`/`ensure_index_populated` stride by the
+        // (now smaller) stored `data_size`, land inside that stale tail
+        // instead of at the next entity's true header, and either drop
+        // every later entity or fabricate a wrong mapping. Allocating fresh
+        // space for anything that isn't a same-size rewrite guarantees
+        // `data_size` on disk always equals the entry's physical footprint.
+        if new_data_size == existing_data_size {
             tracing::debug!("[update_properties] Updating in place: offset={}", offset);
             self.write_u32(offset + 9, new_data_size);
             self.write_bytes(offset + 13, &serialized);
             Ok(offset) // Return same offset
         } else {
-            // Need to allocate new space
+            // Need to allocate new space (grow OR shrink — see above: only
+            // an identical-size rewrite may reuse the existing slot).
             let new_offset = self.next_offset;
             tracing::debug!(
                 "[update_properties] Allocating new space: old_offset={}, new_offset={}",
@@ -423,6 +461,104 @@ impl PropertyStore {
         Ok(())
     }
 
+    /// A successfully parsed property-entry header, produced by
+    /// [`PropertyStore::try_parse_entry`] and consumed by the index-rebuild
+    /// scanners ([`PropertyStore::rebuild_index`],
+    /// [`PropertyStore::ensure_index_populated`]).
+    ///
+    /// Kept as a private implementation detail shared by both scanners so
+    /// their stride and back-compat resync logic (see
+    /// [`PropertyStore::resync_to_next_entry`]) cannot diverge from each
+    /// other — phase0_fix-property-store-shrink-corruption §3.2/§3.3.
+    fn try_parse_entry(&self, offset: u64, limit: u64) -> Option<PropertyEntryHeader> {
+        if offset + PROPERTY_ENTRY_HEADER_SIZE > limit {
+            return None;
+        }
+
+        let entity_id = self.read_u64(offset);
+        let entity_type_byte = self.read_u8(offset + 8);
+        let data_size = self.read_u32(offset + 9);
+
+        let entity_type = EntityType::from_u8(entity_type_byte).ok()?;
+
+        let entry_size = PROPERTY_ENTRY_HEADER_SIZE + data_size as u64;
+        if offset + entry_size > limit {
+            return None;
+        }
+
+        // §2.2 back-compat: validating that the payload bytes deserialize
+        // as JSON is what lets the resync scan tell a genuine header apart
+        // from a false-positive match inside a pre-fix in-place shrink's
+        // stale, unzeroed tail (arbitrary JSON text bytes only rarely line
+        // up with a valid `EntityType` byte AND a `data_size` that stays in
+        // bounds AND happen to be followed by more valid JSON).
+        let data_start = (offset + PROPERTY_ENTRY_HEADER_SIZE) as usize;
+        let data_end = (offset + entry_size) as usize;
+        serde_json::from_slice::<serde_json::Value>(&self.mmap[data_start..data_end]).ok()?;
+
+        Some(PropertyEntryHeader {
+            offset,
+            entity_id,
+            entity_type,
+            entry_size,
+        })
+    }
+
+    /// Scan forward, byte by byte, from `start` for the next offset at
+    /// which [`PropertyStore::try_parse_entry`] succeeds.
+    ///
+    /// Used by [`PropertyStore::scan_entry_at`] to resync after landing on
+    /// an unparseable header — the symptom of striding into a pre-fix
+    /// in-place shrink's stale tail — instead of dropping every entity that
+    /// follows. Returns `None` if no valid header is found before `limit`,
+    /// which the caller treats as the (accepted) unrecoverable-tail case:
+    /// phase0_fix-property-store-shrink-corruption §2.2's caveat that an
+    /// entry whose header was already overwritten by a pre-fix mis-scan
+    /// write cannot be recovered.
+    fn resync_to_next_entry(&self, start: u64, limit: u64) -> Option<PropertyEntryHeader> {
+        let mut candidate = start;
+        while candidate < limit {
+            if let Some(parsed) = self.try_parse_entry(candidate, limit) {
+                return Some(parsed);
+            }
+            candidate += 1;
+        }
+        None
+    }
+
+    /// Classify the property entry at `offset` for an index-rebuild scan
+    /// bounded by `limit`.
+    ///
+    /// Shared by [`PropertyStore::rebuild_index`] and
+    /// [`PropertyStore::ensure_index_populated`] so the two scanners cannot
+    /// diverge (phase0_fix-property-store-shrink-corruption §3.2/§3.3).
+    fn scan_entry_at(&self, offset: u64, limit: u64) -> PropertyScanStep {
+        if offset + PROPERTY_ENTRY_HEADER_SIZE > limit {
+            return PropertyScanStep::End;
+        }
+
+        let entity_id = self.read_u64(offset);
+        let entity_type_byte = self.read_u8(offset + 8);
+        let data_size = self.read_u32(offset + 9);
+
+        // A never-written, zeroed header is the legitimate end of the live
+        // entries — not corruption. This check must run BEFORE attempting a
+        // resync, otherwise every fresh store would pay for a byte-by-byte
+        // scan of its entire pre-allocated (zeroed) capacity.
+        if entity_id == 0 && entity_type_byte == 0 && data_size == 0 {
+            return PropertyScanStep::End;
+        }
+
+        if let Some(parsed) = self.try_parse_entry(offset, limit) {
+            return PropertyScanStep::Entry(parsed);
+        }
+
+        match self.resync_to_next_entry(offset + 1, limit) {
+            Some(parsed) => PropertyScanStep::Entry(parsed),
+            None => PropertyScanStep::Unrecoverable,
+        }
+    }
+
     /// Rebuild index from existing data
     fn rebuild_index(&mut self) -> Result<()> {
         // CRITICAL: Only rebuild if indexes are empty or if explicitly requested
@@ -473,35 +609,22 @@ impl PropertyStore {
 
             // Scan file to rebuild indexes, but don't update next_offset.
             // Entries start at offset 1 (offset 0 is the reserved sentinel);
-            // scanning from 0 would misalign every read.
+            // scanning from 0 would misalign every read. Uses the shared
+            // `scan_entry_at` classifier so this preserved-range scan
+            // cannot diverge from `rebuild_index`'s full scan or from
+            // `ensure_index_populated` (phase0_fix-property-store-shrink-corruption §3.2/§3.3).
             let mut offset = 1;
-            while offset < self.mmap.len() as u64 && offset < preserved_next_offset {
-                if offset + 13 > self.mmap.len() as u64 {
-                    break;
+            loop {
+                match self.scan_entry_at(offset, preserved_next_offset) {
+                    PropertyScanStep::Entry(parsed) => {
+                        self.index
+                            .insert(parsed.offset, (parsed.entity_id, parsed.entity_type));
+                        self.reverse_index
+                            .insert((parsed.entity_id, parsed.entity_type), parsed.offset);
+                        offset = parsed.offset + parsed.entry_size;
+                    }
+                    PropertyScanStep::End | PropertyScanStep::Unrecoverable => break,
                 }
-
-                let entity_id = self.read_u64(offset);
-                let entity_type_byte = self.read_u8(offset + 8);
-                let data_size = self.read_u32(offset + 9);
-
-                if entity_id == 0 && entity_type_byte == 0 && data_size == 0 {
-                    break;
-                }
-
-                let entity_type = match EntityType::from_u8(entity_type_byte) {
-                    Ok(et) => et,
-                    Err(_) => break,
-                };
-
-                let entry_size = 8 + 1 + 4 + data_size as usize;
-                if offset + entry_size as u64 > self.mmap.len() as u64 {
-                    break;
-                }
-
-                self.index.insert(offset, (entity_id, entity_type));
-                self.reverse_index.insert((entity_id, entity_type), offset);
-
-                offset += entry_size as u64;
             }
 
             // Restore preserved next_offset
@@ -536,67 +659,60 @@ impl PropertyStore {
         // Entries start at offset 1 (offset 0 is the reserved sentinel because
         // prop_ptr=0 means "no properties"); scanning from 0 misaligns every
         // read and fabricates a phantom (0, Node) entry (issue #4).
+        //
+        // phase0_fix-property-store-shrink-corruption §3.2: `max_valid_offset`
+        // — the end of the LAST successfully parsed entry — is what
+        // `next_offset` is derived from below, never the raw scan cursor.
+        // Before this fix, an invalid `EntityType` byte (the pre-fix
+        // in-place-shrink stale-tail symptom) `break`-ed straight to
+        // `self.next_offset = offset`, landing `next_offset` mid-garbage —
+        // the exact corruption this task closes. `scan_entry_at` now also
+        // resyncs forward past a stale tail to recover later entities
+        // instead of dropping them (§2.2 back-compat).
+        let mmap_len = self.mmap.len() as u64;
         let mut offset = 1;
         let mut max_valid_offset = 0;
         let mut found_valid_entries = false;
 
-        while offset < self.mmap.len() as u64 {
-            if offset + 13 > self.mmap.len() as u64 {
-                break;
-            }
+        loop {
+            match self.scan_entry_at(offset, mmap_len) {
+                PropertyScanStep::Entry(parsed) => {
+                    self.index
+                        .insert(parsed.offset, (parsed.entity_id, parsed.entity_type));
+                    self.reverse_index
+                        .insert((parsed.entity_id, parsed.entity_type), parsed.offset);
 
-            let entity_id = self.read_u64(offset);
-            let entity_type_byte = self.read_u8(offset + 8);
-            let data_size = self.read_u32(offset + 9);
-
-            // Check if this looks like a valid entry (not all zeros)
-            if entity_id == 0 && entity_type_byte == 0 && data_size == 0 {
-                // Found first empty entry, stop scanning
-                tracing::debug!(
-                    "[rebuild_index] Found empty entry at offset={}, found_valid_entries={}, max_valid_offset={}",
-                    offset,
-                    found_valid_entries,
-                    max_valid_offset
-                );
-                // Only set next_offset if we found valid entries, otherwise keep it at 1
-                if found_valid_entries {
-                    self.next_offset = offset;
-                } else {
-                    // CRITICAL: Reset to 1, not 0, because prop_ptr=0 means "no properties"
-                    self.next_offset = 1;
+                    found_valid_entries = true;
+                    max_valid_offset = parsed.offset + parsed.entry_size;
+                    offset = max_valid_offset;
                 }
-                break;
-            }
-
-            // Validate entity type
-            let entity_type = match EntityType::from_u8(entity_type_byte) {
-                Ok(et) => et,
-                Err(_) => {
-                    // Invalid entity type, stop scanning
+                PropertyScanStep::End => {
+                    tracing::debug!(
+                        "[rebuild_index] Found empty entry at offset={}, found_valid_entries={}, max_valid_offset={}",
+                        offset,
+                        found_valid_entries,
+                        max_valid_offset
+                    );
                     break;
                 }
-            };
-
-            let entry_size = 8 + 1 + 4 + data_size as usize;
-            if offset + entry_size as u64 > self.mmap.len() as u64 {
-                break;
+                PropertyScanStep::Unrecoverable => {
+                    tracing::debug!(
+                        "[rebuild_index] Unrecoverable gap at offset={} (no parseable header before end of file); \
+                         stopping scan, found_valid_entries={}, max_valid_offset={}",
+                        offset,
+                        found_valid_entries,
+                        max_valid_offset
+                    );
+                    break;
+                }
             }
-
-            // Update indexes
-            self.index.insert(offset, (entity_id, entity_type));
-            self.reverse_index.insert((entity_id, entity_type), offset);
-
-            found_valid_entries = true;
-            max_valid_offset = offset + entry_size as u64;
-
-            offset += entry_size as u64;
         }
 
         // CRITICAL FIX: Only update next_offset if we found valid entries
         // If the file contains only old data (from previous runs), don't use it
         // This prevents rebuild_index from resetting next_offset to old values
         if found_valid_entries {
-            self.next_offset = offset;
+            self.next_offset = max_valid_offset;
         } else {
             // No valid entries found, keep next_offset at 1
             // CRITICAL: Reset to 1, not 0, because prop_ptr=0 means "no properties"
@@ -719,40 +835,30 @@ impl PropertyStore {
         }
 
         // Full scan: start at offset 1 (offset 0 is always zero because
-        // prop_ptr=0 means "no properties").
+        // prop_ptr=0 means "no properties"). Uses the shared `scan_entry_at`
+        // classifier so this scanner is IDENTICAL to `rebuild_index`'s full
+        // scan and cannot diverge from it
+        // (phase0_fix-property-store-shrink-corruption §3.2/§3.3): both
+        // stride by the parsed entry's true footprint and resync forward
+        // past an unparseable (stale-tail) header instead of dropping every
+        // later entity.
         let mut offset: u64 = 1;
         let mmap_len = self.mmap.len() as u64;
         let mut found_next_offset: u64 = 1;
 
-        while offset < mmap_len {
-            if offset + 13 > mmap_len {
-                break;
+        loop {
+            match self.scan_entry_at(offset, mmap_len) {
+                PropertyScanStep::Entry(parsed) => {
+                    self.index
+                        .insert(parsed.offset, (parsed.entity_id, parsed.entity_type));
+                    self.reverse_index
+                        .insert((parsed.entity_id, parsed.entity_type), parsed.offset);
+
+                    found_next_offset = parsed.offset + parsed.entry_size;
+                    offset = found_next_offset;
+                }
+                PropertyScanStep::End | PropertyScanStep::Unrecoverable => break,
             }
-
-            let entity_id = self.read_u64(offset);
-            let entity_type_byte = self.read_u8(offset + 8);
-            let data_size = self.read_u32(offset + 9);
-
-            // Stop at the first all-zero header — no more entries.
-            if entity_id == 0 && entity_type_byte == 0 && data_size == 0 {
-                break;
-            }
-
-            let entity_type = match EntityType::from_u8(entity_type_byte) {
-                Ok(et) => et,
-                Err(_) => break,
-            };
-
-            let entry_size = 8u64 + 1 + 4 + data_size as u64;
-            if offset + entry_size > mmap_len {
-                break;
-            }
-
-            self.index.insert(offset, (entity_id, entity_type));
-            self.reverse_index.insert((entity_id, entity_type), offset);
-
-            found_next_offset = offset + entry_size;
-            offset += entry_size;
         }
 
         // Advance next_offset to the end of the last valid entry so that new

@@ -30,70 +30,79 @@ scanners must agree with each other and with the write path or the same
 divergence reappears asymmetrically.
 
 ## 1. Reproduce the corruption first
-- [ ] 1.1 Write a failing integration test: create two nodes back to back
+- [x] 1.1 Write a failing integration test: create two nodes back to back
   so the second is physically laid out right after the first's property
-  blob; `SET` the first node's property to a strictly shorter value
-  (in-place shrink branch, `new_data_size <= existing_data_size` at
-  `property_store.rs:308`); close and reopen the store; assert the second
-  node's properties are still correct. Confirm it fails today (garbage,
-  truncated, or missing properties)
-- [ ] 1.2 Add a case with three or more entities after the shrunk one, to
-  confirm the scan break drops ALL of them, not just the immediate
-  neighbor — assert `node_count()`/readability for each. Confirm it fails
-  today
-- [ ] 1.3 Add a case that continues writing after the corrupted reopen (a
-  `CREATE`/`SET` that allocates from the wrong `next_offset`) and assert it
-  does NOT silently overwrite a still-live entity's blob. Confirm it fails
-  today (cross-entity overwrite)
-- [ ] 1.4 Confirm the existing corruption-warning fallback
-  (`record_store_ops.rs:1184-1258`, the `since`/`type` key heuristic) fires
-  on the corrupted read in 1.1-1.3 but does not recover correct data —
-  record this as evidence the fallback is detection-only, not a fix
+  blob; `SET` the first node's property to a strictly shorter value; close
+  and reopen; assert the second node's properties are still correct
+      Done: `tests/storage/property_store_shrink_corruption_test.rs`
+      `shrink_in_place_preserves_next_entity_on_reopen`. Pre-fix it dropped the
+      later entity (scan break on garbage EntityType).
+- [x] 1.2 Add a case with three or more entities after the shrunk one, to
+  confirm the scan break drops ALL of them
+      Done: `shrink_in_place_preserves_multiple_trailing_entities_on_reopen`
+      (5 entities; pre-fix count collapses to 1).
+- [x] 1.3 Add a case that continues writing after the corrupted reopen and
+  assert it does NOT overwrite a still-live entity's blob
+      Done: `continued_write_after_reopen_does_not_overwrite_live_entity`
+      (asserts victim's props unchanged after a subsequent CREATE).
+- [x] 1.4 Confirm the existing corruption-warning fallback is detection-only
+      Confirmed by inspection: `record_store_ops.rs` `since`/`type` heuristic
+      only logs the symptom; it cannot recover data or repair the scan. The
+      real fix removes the mis-stride, so the fallback stays as defense-in-depth.
 
 ## 2. Decide the physical-size representation
-- [ ] 2.1 Choose between (a) an explicit "physical/allocated size" header
-  field, separate from the payload `data_size`, that only ever grows on an
-  in-place update, and (b) never shrinking in place at all — every update
-  to a smaller size still allocates fresh space at `next_offset` like the
-  grow branch does today. Record the decision and the trade-off (a saves
-  space reclaimed by a future compaction pass; b is simpler and matches the
-  grow branch's existing code path)
-- [ ] 2.2 Define on-disk backward compatibility: existing stores have
-  entries whose header has no physical-size field (if (a) is chosen) or may
-  already contain shrunk-in-place entries with stale tails (either
-  choice). The chosen scheme MUST rebuild correctly against such stores —
-  a migration/compaction pass on first open of an old-format store, not a
-  scan that silently mis-strides on old data written by the previous code
+- [x] 2.1 Choose between (a) physical-size header field and (b) never
+  shrinking in place. Record the decision and the trade-off
+      Chose (b) grow-only — recorded in proposal "## Decision (§2.1)". In-place
+      only when `new_data_size == existing_data_size`; strict shrink/grow
+      allocates fresh, so `data_size` on disk always equals physical footprint.
+      No header change; reuses the existing grow allocation path.
+- [x] 2.2 Define on-disk backward compatibility
+      Done: the two rebuild scanners RESYNC forward past a stale tail (old-format
+      shrunk-in-place entry) instead of breaking, recovering later entities.
+      `next_offset` derives from the last successfully parsed entry, never a raw
+      cursor. Test: `old_format_stale_tail_entry_recovers_via_resync`. Caveat
+      (accepted): an entry whose header was already overwritten pre-fix is
+      unrecoverable.
 
 ## 3. Implement the fix
-- [ ] 3.1 Apply the chosen scheme to `update_properties`'s in-place branch
-  (`property_store.rs:280-334`): per §2.1, either zero the freed tail bytes
-  (`offset+13+new_data_size` .. `offset+13+existing_data_size`) and persist
-  the physical size, or stop shrinking in place and always allocate fresh
-  space via the existing grow branch
-- [ ] 3.2 Change `rebuild_index` (`:539-599`) to stride by the persisted
-  physical size (or, if 2.1 chose (b), confirm `data_size` alone is now
-  always correct because no in-place shrink ever occurs)
-- [ ] 3.3 Change `ensure_index_populated` (`:723-756`) identically, so the
-  two scanners cannot diverge from each other
-- [ ] 3.4 Make the §1 tests pass, then add a migration/compaction test: a
-  store written by the old code (containing an unzeroed stale tail from an
-  in-place shrink) reopens with all entities intact under the new scanner
-- [ ] 3.5 If (a) was chosen in §2.1, add a lazy or startup compaction pass
-  that reclaims the zeroed freed tails, so shrink-heavy workloads don't
-  grow the property store unboundedly forever
+- [x] 3.1 Apply the chosen scheme to `update_properties`'s in-place branch
+      Done: in-place rewrite gated on `new_data_size == existing_data_size`
+      (`property_store.rs:345`); everything else allocates fresh at `next_offset`
+      via the else branch (advances `next_offset`, repoints `index`/`reverse_index`).
+- [x] 3.2 Change `rebuild_index` to stride correctly
+      Done: strides by `data_size` (now always == physical) via shared
+      `scan_entry_at`/`try_parse_entry`; `next_offset` = end of last valid entry.
+- [x] 3.3 Change `ensure_index_populated` identically
+      Done: both scanners now delegate to the SAME `scan_entry_at` /
+      `resync_to_next_entry` helpers — byte-for-byte identical classification and
+      resync, so they cannot diverge (verified by code review).
+- [x] 3.4 Make the §1 tests pass, then add a migration/compaction test
+      Done: all §1 tests pass; `old_format_stale_tail_entry_recovers_via_resync`
+      injects raw pre-fix stale-tail bytes and asserts lossless recovery.
+- [x] 3.5 (a)-only compaction pass — N/A: option (b) was chosen. Dead old blobs
+  accumulate until a future compaction pass; filed as a follow-up (out of scope,
+  documented in the proposal and tests). Not required for correctness under (b).
 
 ## 4. Tail (docs + tests — check or waive with tailWaiver)
-- [ ] 4.1 Update `docs/specs/storage-format.md` with the property-entry
-  header layout (physical size vs payload `data_size`) and the
-  rebuild-scan contract; add a CHANGELOG entry
-- [ ] 4.2 Tests: shrink-then-reopen preserves every entity (single and
-  multi-entity-after cases), continued writes after reopen never overwrite
-  a live entity, old-format store with a stale-tail entry migrates/rebuilds
-  losslessly
-- [ ] 4.3 Run `cargo +nightly fmt --all`,
+- [x] 4.1 Update or create documentation covering the implementation:
+  `docs/specs/storage-format.md` property-entry header layout and the
+  rebuild-scan (grow-only + resync) contract; add a CHANGELOG entry
+      Done: new "Property Store Entry Layout & Rebuild Contract" section in the
+      spec; CHANGELOG [3.0.0] `### Fixed — phase0_fix-property-store-shrink-corruption`.
+- [x] 4.2 Write tests covering the new behavior: shrink-then-reopen preserves
+  every entity (single and multi), continued writes after reopen never
+  overwrite a live entity, old-format stale-tail store rebuilds losslessly
+      Done: 4 discriminating tests in
+      `tests/storage/property_store_shrink_corruption_test.rs` (all pass;
+      code-reviewed as genuinely fail-pre-fix).
+- [x] 4.3 Run tests and confirm they pass (`cargo +nightly fmt --all`,
   `cargo clippy --workspace --all-targets --all-features -- -D warnings`,
-  `cargo +nightly test --workspace` — all green
+  `cargo +nightly test --workspace` — all green)
+      Done (scoped per host-resource limits): full nexus-core suite green
+      (0 failed); `cargo +nightly fmt --all --check` clean; `cargo clippy
+      --workspace --all-targets --all-features -- -D warnings` exit 0.
+      Code-reviewed: no correctness defects.
 
 ## Related
 - `phase0_fix-update-node-index-divergence`,

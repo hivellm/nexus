@@ -92,6 +92,39 @@ MATCH (b) WHERE id(b) = <b's id> RETURN b      -- b's properties are now garbage
   payload `data_size`, so a shrunk entry's true on-disk footprint is always
   respected during recovery.
 
+## Decision (§2.1) — option (b): grow-only, no in-place shrink
+
+Chosen: **(b) never shrink in place** — no new header field.
+
+- `update_properties` does an in-place rewrite ONLY when the new payload is
+  the SAME size as the existing one (`new_data_size == existing_data_size`);
+  that footprint is unchanged so the tail question never arises. A STRICTLY
+  SMALLER payload no longer reuses the slot in place — it allocates fresh
+  space at `next_offset`, exactly like the existing grow branch. Result:
+  `data_size` on disk is ALWAYS equal to the entry's physical footprint, so
+  `rebuild_index` and `ensure_index_populated` striding by `data_size` can
+  never land mid-entry.
+- The superseded old blob becomes dead space; the rebuild scan already keys
+  by `entity_id` and the later (fresh) offset wins, so it is harmless (just
+  unreclaimed until a future compaction pass — out of scope here).
+
+Why (b) over (a): no on-disk header change, no migration of the header
+layout, and it reuses the grow branch's already-tested allocation path —
+lowest blast-radius for a corruption fix. (a)'s space reuse is not worth a
+header-format change plus a mandatory compaction pass in a durability fix.
+
+**Back-compat (§2.2):** a store written by the OLD code may already contain a
+shrunk-in-place entry (stored `data_size` smaller than its true physical
+footprint, with a stale tail). (b) prevents any NEW such entry, but cannot
+know the true footprint of one already on disk. So the two rebuild scanners
+are hardened to RESYNC instead of breaking: on an invalid `EntityType` byte
+(the symptom of landing mid-tail) they scan forward for the next parseable
+header rather than `break`-ing and dropping every later entity. This degrades
+an already-damaged old store gracefully (later entities recovered) rather
+than catastrophically. **Caveat (accepted):** the specific entry whose header
+was already overwritten by a pre-fix mis-scan write is unrecoverable — only
+forward correctness and graceful old-store recovery are guaranteed.
+
 ## Impact
 
 - Affected specs: `docs/specs/storage-format.md` (property store entry
