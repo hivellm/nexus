@@ -479,6 +479,20 @@ Example progression:
 1MB → 2MB → 4MB → 8MB → 16MB → ... → 1TB
 ```
 
+## Adjacency-List Encoding
+
+Compressed adjacency lists (`graph_engine`) store each entry's `rel_id` as a
+**little-endian `u64`** (8 bytes/entry for the uncompressed `None` form; the
+LZ4/Zstd forms compress that same little-endian byte stream).
+
+The decompression path **must not assume 8-byte alignment** of the buffer it
+decodes. `decompress_none` operates directly on an mmap sub-slice starting at
+`list_offset`, an on-disk byte offset with no alignment guarantee, so entries
+are reconstructed with `chunks_exact(8)` + `u64::from_le_bytes` — never by
+reinterpreting the byte slice as `&[AdjacencyEntry]` (which is undefined
+behaviour on a misaligned pointer, regardless of platform). The little-endian
+contract also keeps the on-disk encoding portable across host byte orders.
+
 ## Compatibility
 
 ### Version Evolution
