@@ -15,6 +15,7 @@ use crossbeam_channel::{Receiver, Sender, TrySendError, bounded};
 use std::io::Write;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::mpsc;
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 use tracing;
@@ -24,8 +25,13 @@ use tracing;
 enum WalCommand {
     /// Append a WAL entry
     Append(WalEntry),
-    /// Force flush all pending entries
-    Flush,
+    /// Force flush all pending entries. Carries a completion handshake
+    /// (see `phase0_fix-async-wal-flush-durability` §2.1): a fresh,
+    /// single-use `std::sync::mpsc::Sender` that `writer_thread` signals
+    /// with `flush_batch`'s real `Result` once the flush this command
+    /// requested has actually executed. `AsyncWalWriter::flush()` blocks
+    /// on the paired receiver so the barrier it documents is real.
+    Flush(mpsc::Sender<Result<()>>),
     /// Shutdown the writer thread
     Shutdown,
 }
@@ -125,6 +131,22 @@ pub struct AsyncWalConfig {
     pub flush_interval: Duration,
     /// Channel buffer size
     pub channel_buffer_size: usize,
+    /// Test-only hook (`phase0_fix-async-wal-flush-durability` §1.2):
+    /// when set, `writer_thread` blocks on this receiver immediately
+    /// before running `flush_batch` for a `WalCommand::Flush`, so a test
+    /// can hold the gate closed to deterministically observe that
+    /// `flush()` has not yet returned, then release it to observe the
+    /// unblock + durability. Not part of the public configuration
+    /// surface — only compiled in test builds of this crate.
+    #[cfg(test)]
+    pub(crate) flush_gate: Option<Receiver<()>>,
+    /// Test-only hook: when set and loaded `true`, `flush_batch` treats
+    /// every `wal.append` in the batch as a failure (instead of touching
+    /// the real WAL file), so tests can deterministically exercise the
+    /// retry-exhaustion / emergency-save error path without depending on
+    /// platform-specific I/O failure injection.
+    #[cfg(test)]
+    pub(crate) fail_flush: Option<Arc<AtomicBool>>,
 }
 
 impl Default for AsyncWalConfig {
@@ -135,6 +157,10 @@ impl Default for AsyncWalConfig {
             max_queue_depth: 10_000,                  // Block if queue gets too deep
             flush_interval: Duration::from_millis(5), // Background flush every 5ms
             channel_buffer_size: 1000,                // Channel buffer for commands
+            #[cfg(test)]
+            flush_gate: None,
+            #[cfg(test)]
+            fail_flush: None,
         }
     }
 }
@@ -149,6 +175,16 @@ pub struct AsyncWalWriter {
     stats: Arc<AsyncWalStats>,
     /// Shutdown flag
     shutdown: Arc<AtomicBool>,
+    /// Set true by the writer thread as its VERY LAST action, after its
+    /// final drain + flush, right before it returns. Distinct from
+    /// `shutdown` (which is set at the START of `shutdown()`): this marks
+    /// that the writer will process no further commands. `flush()` uses it
+    /// to avoid hanging forever on a `Flush` command that was sent into the
+    /// narrow window after the writer's final drain but before it exited —
+    /// crossbeam keeps such a buffered command (and its handshake sender)
+    /// alive until `AsyncWalWriter` itself drops, so `ack_rx.recv()` would
+    /// otherwise never return (phase0_fix-async-wal-flush-durability §3.4).
+    writer_exited: Arc<AtomicBool>,
     /// Configuration
     config: AsyncWalConfig,
 }
@@ -179,14 +215,23 @@ impl AsyncWalWriter {
         let (sender, receiver) = bounded(capacity);
         let stats = Arc::new(AsyncWalStats::default());
         let shutdown = Arc::new(AtomicBool::new(false));
+        let writer_exited = Arc::new(AtomicBool::new(false));
 
         let stats_clone = stats.clone();
         let shutdown_clone = shutdown.clone();
+        let writer_exited_clone = writer_exited.clone();
         let config_clone = config.clone();
 
         // Start the background writer thread
         let handle = thread::spawn(move || {
-            Self::writer_thread(wal, receiver, stats_clone, shutdown_clone, &config_clone);
+            Self::writer_thread(
+                wal,
+                receiver,
+                stats_clone,
+                shutdown_clone,
+                writer_exited_clone,
+                &config_clone,
+            );
         });
 
         Ok(Self {
@@ -194,6 +239,7 @@ impl AsyncWalWriter {
             handle: Some(handle),
             stats,
             shutdown,
+            writer_exited,
             config,
         })
     }
@@ -247,16 +293,63 @@ impl AsyncWalWriter {
 
     /// Force flush all pending entries
     ///
-    /// This ensures all previously submitted entries are written and synced to disk.
+    /// This is a synchronous durability barrier: it blocks until the
+    /// background writer thread has actually run `flush_batch` (i.e. the
+    /// fsync backing every entry successfully `append()`-ed *before* this
+    /// call has completed) and returns the real outcome of that flush —
+    /// not merely the fact that the request was enqueued. See
+    /// `phase0_fix-async-wal-flush-durability` for the full contract.
+    ///
+    /// # Errors
+    ///
+    /// Returns `Error::Wal` if the writer thread's command channel is
+    /// already closed, if the writer thread exits (e.g. racing
+    /// `shutdown()`) without signaling completion, or if the underlying
+    /// `flush_batch` failed after exhausting its retries.
     pub fn flush(&self) -> Result<()> {
         use std::sync::atomic::Ordering::Relaxed;
         self.stats.force_flushes.fetch_add(1, Relaxed);
 
+        // Fresh single-use handshake channel per call (§2.1: plain
+        // `std::sync::mpsc`, already in std — no new crate dependency).
+        // The writer thread signals this specific request's outcome
+        // through `ack_tx` once it has actually run `flush_batch`.
+        let (ack_tx, ack_rx) = mpsc::channel();
+
         self.sender
-            .send(WalCommand::Flush)
+            .send(WalCommand::Flush(ack_tx))
             .map_err(|_| Error::wal("Failed to send flush command - channel closed"))?;
 
-        Ok(())
+        // Block until signaled. Two exit conditions besides a normal ack:
+        //  - Disconnected: the writer dropped `ack_tx` without sending (e.g.
+        //    it unwound from a panic mid-flush) — surface as an error.
+        //  - Timeout + writer already exited: our `Flush` command was sent
+        //    into the narrow window after the writer's final drain but
+        //    before it exited, so it is trapped in the crossbeam command
+        //    buffer (which keeps the buffered command — and this `ack_tx` —
+        //    alive until `AsyncWalWriter` itself drops, so plain `recv()`
+        //    would hang forever). Poll `writer_exited` so we return an error
+        //    instead. (phase0_fix-async-wal-flush-durability §3.4.)
+        loop {
+            match ack_rx.recv_timeout(Duration::from_millis(50)) {
+                Ok(result) => return result,
+                Err(mpsc::RecvTimeoutError::Disconnected) => {
+                    return Err(Error::wal(
+                        "Flush handshake channel closed before completion \
+                         (writer thread exited without acknowledging the flush)",
+                    ));
+                }
+                Err(mpsc::RecvTimeoutError::Timeout) => {
+                    if self.writer_exited.load(Ordering::SeqCst) {
+                        return Err(Error::wal(
+                            "Flush not acknowledged: the async WAL writer \
+                             thread has exited (command was not processed)",
+                        ));
+                    }
+                    // Writer still alive — keep waiting for the real ack.
+                }
+            }
+        }
     }
 
     /// Get a consistent-per-field snapshot of the current statistics.
@@ -295,8 +388,22 @@ impl AsyncWalWriter {
         receiver: Receiver<WalCommand>,
         stats: Arc<AsyncWalStats>,
         shutdown: Arc<AtomicBool>,
+        writer_exited: Arc<AtomicBool>,
         config: &AsyncWalConfig,
     ) {
+        // Mark the thread as fully finished on ANY exit path (normal or
+        // unwinding from a panic), as the LAST thing that happens — so a
+        // `flush()` blocked on a command that will never be processed can
+        // observe it and return an error instead of hanging forever.
+        // (phase0_fix-async-wal-flush-durability §3.4.)
+        struct ExitGuard(Arc<AtomicBool>);
+        impl Drop for ExitGuard {
+            fn drop(&mut self) {
+                self.0.store(true, Ordering::SeqCst);
+            }
+        }
+        let _exit_guard = ExitGuard(writer_exited);
+
         let mut batch = Vec::with_capacity(config.max_batch_size);
         let mut last_flush = Instant::now();
         let mut batch_start = Instant::now();
@@ -324,23 +431,41 @@ impl AsyncWalWriter {
 
                     // Check if batch reached max size - flush immediately
                     if batch.len() >= config.max_batch_size {
-                        Self::flush_batch(&mut wal, &batch, &stats, config);
+                        let _ = Self::flush_batch(&mut wal, &batch, &stats, config);
                         batch.clear();
                         batch_start = Instant::now();
                         last_flush = Instant::now();
                     }
                 }
-                Ok(WalCommand::Flush) => {
-                    // Force flush current batch
-                    Self::flush_batch(&mut wal, &batch, &stats, config);
+                Ok(WalCommand::Flush(ack_tx)) => {
+                    // Test-only deterministic gate (§1.2): block right
+                    // here, before running `flush_batch`, so a test can
+                    // hold the gate closed and observe that `flush()`
+                    // has not yet returned.
+                    #[cfg(test)]
+                    if let Some(gate) = &config.flush_gate {
+                        let _ = gate.recv();
+                    }
+
+                    // Force flush current batch and signal the real
+                    // outcome back through the handshake (§2.1/§3.2/§3.3)
+                    // before continuing the loop.
+                    let result = Self::flush_batch(&mut wal, &batch, &stats, config);
                     batch.clear();
                     batch_start = Instant::now();
                     last_flush = Instant::now();
+                    let _ = ack_tx.send(result);
                     continue;
                 }
                 Ok(WalCommand::Shutdown) => {
-                    // Final flush before shutdown
-                    Self::flush_batch(&mut wal, &batch, &stats, config);
+                    // Final flush before shutdown. Clear the batch
+                    // afterward — leaving already-flushed entries in
+                    // `batch` would replay them a second time via the
+                    // drain-phase flush below, and would corrupt the
+                    // ordering guarantee (§2.2) for any `Flush` handshake
+                    // drained after this point.
+                    let _ = Self::flush_batch(&mut wal, &batch, &stats, config);
+                    batch.clear();
                     break;
                 }
                 Err(_) => {
@@ -350,7 +475,7 @@ impl AsyncWalWriter {
                         || last_flush.elapsed() >= config.flush_interval;
 
                     if should_flush && !batch.is_empty() {
-                        Self::flush_batch(&mut wal, &batch, &stats, config);
+                        let _ = Self::flush_batch(&mut wal, &batch, &stats, config);
                         batch.clear();
                         batch_start = Instant::now();
                         last_flush = Instant::now();
@@ -364,34 +489,54 @@ impl AsyncWalWriter {
         // in the channel — dropping them would break the "accepted ⇒
         // durable" contract (`append()` already returned Ok to the caller).
         // Consume everything still queued before the final flush.
+        //
+        // §2.3/§3.4: a `Flush` command can also be sitting here if a
+        // caller's `flush()` raced `shutdown()` and lost — honor its
+        // handshake instead of silently dropping the sender. Dropping it
+        // would still unblock the caller (a disconnected receiver becomes
+        // an `Err`), but running the real flush and acking it keeps the
+        // §2.2 ordering guarantee (this flush() covers everything
+        // appended before it) and avoids a false-negative error report.
         while let Ok(cmd) = receiver.try_recv() {
             match cmd {
                 WalCommand::Append(entry) => {
                     batch.push(entry);
                     if batch.len() >= config.max_batch_size {
-                        Self::flush_batch(&mut wal, &batch, &stats, config);
+                        let _ = Self::flush_batch(&mut wal, &batch, &stats, config);
                         batch.clear();
                     }
                 }
-                WalCommand::Flush | WalCommand::Shutdown => {}
+                WalCommand::Flush(ack_tx) => {
+                    let result = Self::flush_batch(&mut wal, &batch, &stats, config);
+                    batch.clear();
+                    let _ = ack_tx.send(result);
+                }
+                WalCommand::Shutdown => {}
             }
         }
 
         // Final flush on exit
         if !batch.is_empty() {
-            Self::flush_batch(&mut wal, &batch, &stats, config);
+            let _ = Self::flush_batch(&mut wal, &batch, &stats, config);
         }
     }
 
-    /// Flush a batch of WAL entries
+    /// Flush a batch of WAL entries.
+    ///
+    /// Returns the real outcome: `Ok(())` once every entry in `batch` has
+    /// been written and `wal.flush()` (the real fsync) has succeeded, or
+    /// `Err` carrying the last observed failure once `MAX_RETRIES` attempts
+    /// are exhausted (after the emergency backup save). `flush()`'s
+    /// completion handshake relies on this being faithful — see
+    /// `phase0_fix-async-wal-flush-durability` §3.3.
     fn flush_batch(
         wal: &mut Wal,
         batch: &[WalEntry],
         stats: &Arc<AsyncWalStats>,
         config: &AsyncWalConfig,
-    ) {
+    ) -> Result<()> {
         if batch.is_empty() {
-            return;
+            return Ok(());
         }
 
         let start_time = Instant::now();
@@ -399,14 +544,42 @@ impl AsyncWalWriter {
         // Try to flush batch with retry logic for I/O errors
         let mut retry_count = 0;
         const MAX_RETRIES: u32 = 3;
+        let mut last_error: Option<Error> = None;
 
         while retry_count < MAX_RETRIES {
             let mut success_count = 0;
-            let mut last_error = None;
 
             // Write all entries in batch
             for entry in batch {
-                match wal.append(entry) {
+                // Test-only fault injection (§4.2: "flush() propagates a
+                // real Err when flush_batch fails after retries"): when
+                // `config.fail_flush` is set and true, every append in
+                // this batch is treated as failed without touching the
+                // real WAL file, so the retry-exhaustion path is
+                // deterministic and platform-independent.
+                let inject_failure = {
+                    #[cfg(test)]
+                    {
+                        config
+                            .fail_flush
+                            .as_ref()
+                            .is_some_and(|flag| flag.load(Ordering::Relaxed))
+                    }
+                    #[cfg(not(test))]
+                    {
+                        false
+                    }
+                };
+
+                let append_result = if inject_failure {
+                    Err(Error::wal(
+                        "injected test failure (AsyncWalConfig::fail_flush gate)",
+                    ))
+                } else {
+                    wal.append(entry)
+                };
+
+                match append_result {
                     Ok(_) => success_count += 1,
                     Err(e) => {
                         last_error = Some(e);
@@ -463,7 +636,7 @@ impl AsyncWalWriter {
                                 retry_count
                             );
                         }
-                        return;
+                        return Ok(());
                     }
                     Err(e) => {
                         last_error = Some(e);
@@ -498,6 +671,12 @@ impl AsyncWalWriter {
 
         // Try emergency save to a backup WAL file
         Self::emergency_save_batch(batch);
+
+        Err(last_error.unwrap_or_else(|| {
+            Error::wal(format!(
+                "WAL flush failed after {MAX_RETRIES} retries with no captured error"
+            ))
+        }))
     }
 
     /// Emergency save batch to backup WAL file when main WAL fails
@@ -555,6 +734,8 @@ mod tests {
             max_queue_depth: 100,
             flush_interval: Duration::from_millis(25),
             channel_buffer_size: 50,
+            flush_gate: None,
+            fail_flush: None,
         };
 
         let writer = AsyncWalWriter::new(wal, config).unwrap();
@@ -638,6 +819,8 @@ mod tests {
             max_queue_depth: 16, // channel capacity = max(8, 16) = 16
             flush_interval: Duration::from_millis(10),
             channel_buffer_size: 8,
+            flush_gate: None,
+            fail_flush: None,
         };
         let mut writer = AsyncWalWriter::new(wal, config).unwrap();
 
@@ -691,6 +874,8 @@ mod tests {
             max_queue_depth: 100,
             flush_interval: Duration::from_millis(50), // Short flush interval
             channel_buffer_size: 50,
+            flush_gate: None,
+            fail_flush: None,
         };
 
         let mut writer = AsyncWalWriter::new(wal, config).unwrap();
@@ -748,5 +933,218 @@ mod tests {
         }
         let snap = writer.stats();
         assert_eq!(snap.entries_submitted, 10);
+    }
+
+    /// §1.2 (`phase0_fix-async-wal-flush-durability`) — deterministic
+    /// proof that `flush()` blocks until the writer thread has actually
+    /// executed `flush_batch` for the `WalCommand::Flush` it enqueued,
+    /// not merely until the request landed on the channel. A test-only
+    /// gate (`AsyncWalConfig::flush_gate`) holds the writer thread
+    /// immediately before it runs `flush_batch`; while the gate is
+    /// closed, `flush()` must not have returned and the entry must not
+    /// yet be durable on disk. Releasing the gate must unblock `flush()`
+    /// and make the entry durable by the time it returns. This is the
+    /// permanent regression test for the bug: before the fix, `flush()`
+    /// returned as soon as the command was sent, so this test would fail
+    /// at the "must not have returned" assertion.
+    #[test]
+    fn flush_blocks_until_writer_thread_signals_completion() {
+        let ctx = TestContext::new();
+        let wal_path = ctx.path().join("wal.log");
+        let wal = Wal::new(&wal_path).unwrap();
+
+        // Rendezvous gate: `writer_thread` blocks in `gate.recv()` until
+        // this test sends on `gate_tx`.
+        let (gate_tx, gate_rx) = bounded::<()>(0);
+        let config = AsyncWalConfig {
+            max_batch_size: 100,
+            max_batch_age: Duration::from_secs(60), // no age-based auto-flush
+            max_queue_depth: 100,
+            flush_interval: Duration::from_secs(60), // no interval-based auto-flush
+            channel_buffer_size: 50,
+            flush_gate: Some(gate_rx),
+            fail_flush: None,
+        };
+
+        let writer = Arc::new(AsyncWalWriter::new(wal, config).unwrap());
+
+        writer
+            .append(WalEntry::CreateNode {
+                node_id: 1,
+                label_bits: 0,
+            })
+            .unwrap();
+
+        // Give the writer thread time to dequeue the Append into its
+        // batch before the gated Flush is issued, isolating the
+        // enqueue-vs-complete gap on the Flush command itself.
+        thread::sleep(Duration::from_millis(50));
+
+        let flush_writer = Arc::clone(&writer);
+        let (done_tx, done_rx) = mpsc::channel::<Result<()>>();
+        let flush_thread = thread::spawn(move || {
+            let _ = done_tx.send(flush_writer.flush());
+        });
+
+        // Gate is closed: flush() must NOT have returned yet.
+        thread::sleep(Duration::from_millis(200));
+        assert!(
+            done_rx.try_recv().is_err(),
+            "flush() returned before the writer thread processed WalCommand::Flush \
+             — the durability barrier is not actually blocking"
+        );
+
+        // ...and the entry must not be durable on disk yet either.
+        let mut probe = Wal::new(&wal_path).unwrap();
+        let recovered_before_release = probe.recover().unwrap();
+        assert!(
+            recovered_before_release.is_empty(),
+            "entry must not be durable while flush() is still gated"
+        );
+
+        // Release the gate: the writer thread runs flush_batch and
+        // signals completion; flush() must then return promptly.
+        gate_tx.send(()).unwrap();
+
+        let result = done_rx
+            .recv_timeout(Duration::from_secs(5))
+            .expect("flush() must return once the gate is released (bounded wait)");
+        result.expect("flush() must succeed");
+        flush_thread.join().unwrap();
+
+        let mut probe = Wal::new(&wal_path).unwrap();
+        let recovered_after = probe.recover().unwrap();
+        assert_eq!(
+            recovered_after.len(),
+            1,
+            "entry must be durable immediately after flush() returns"
+        );
+
+        Arc::try_unwrap(writer)
+            .unwrap_or_else(|_| panic!("writer still has outstanding Arc clones"))
+            .shutdown()
+            .unwrap();
+    }
+
+    /// §4.2 — `flush()` must propagate a real `Err`, not a blind
+    /// `Ok(())`, when `flush_batch` fails after exhausting its retries.
+    /// Uses the `AsyncWalConfig::fail_flush` test-only fault injector so
+    /// the failure is deterministic and platform-independent while still
+    /// exercising the real retry/backoff/emergency-save path in
+    /// `flush_batch`.
+    #[test]
+    fn flush_propagates_error_after_retries_exhausted() {
+        let ctx = TestContext::new();
+        let wal = Wal::new(ctx.path().join("wal.log")).unwrap();
+
+        let fail_flush = Arc::new(AtomicBool::new(true));
+        let config = AsyncWalConfig {
+            max_batch_size: 10,
+            max_batch_age: Duration::from_millis(20),
+            max_queue_depth: 100,
+            flush_interval: Duration::from_millis(10),
+            channel_buffer_size: 50,
+            flush_gate: None,
+            fail_flush: Some(Arc::clone(&fail_flush)),
+        };
+
+        let mut writer = AsyncWalWriter::new(wal, config).unwrap();
+
+        writer
+            .append(WalEntry::CreateNode {
+                node_id: 1,
+                label_bits: 0,
+            })
+            .unwrap();
+
+        // Exhausts MAX_RETRIES with exponential backoff (~600ms of
+        // sleeping) before returning — bounded well under any test
+        // harness timeout.
+        let result = writer.flush();
+        assert!(
+            result.is_err(),
+            "flush() must return Err when flush_batch exhausts its retries, got {result:?}"
+        );
+
+        fail_flush.store(false, Ordering::Relaxed);
+        writer.shutdown().unwrap();
+    }
+
+    /// §2.3/§3.4 — a `flush()` call racing `shutdown()` must not hang: it
+    /// must return (`Ok` via a signaled handshake, or `Err` if the
+    /// writer thread's handshake sender was dropped because the thread
+    /// exited first). The public API's `shutdown(&mut self)` cannot
+    /// literally run concurrently with `flush(&self)` from safe code on
+    /// the same instance (the `&mut` borrow forbids it), so this test
+    /// drives the race directly through the writer's internal command
+    /// channel — `sender` and `shutdown` are private fields of
+    /// `AsyncWalWriter`, reachable here because this test module is a
+    /// child of `async_wal` — issuing the exact same
+    /// flag-then-`WalCommand::Shutdown` sequence the real `shutdown()`
+    /// method uses, but from a second thread while several `flush()`
+    /// calls are already in flight.
+    #[test]
+    fn flush_concurrent_with_shutdown_does_not_hang() {
+        let ctx = TestContext::new();
+        let wal = Wal::new(ctx.path().join("wal.log")).unwrap();
+        let config = AsyncWalConfig {
+            max_batch_size: 10,
+            max_batch_age: Duration::from_millis(10),
+            max_queue_depth: 100,
+            flush_interval: Duration::from_millis(5),
+            channel_buffer_size: 50,
+            flush_gate: None,
+            fail_flush: None,
+        };
+        let writer = Arc::new(AsyncWalWriter::new(wal, config).unwrap());
+
+        writer
+            .append(WalEntry::CreateNode {
+                node_id: 1,
+                label_bits: 0,
+            })
+            .unwrap();
+
+        let (done_tx, done_rx) = mpsc::channel::<Result<()>>();
+        let flush_threads: Vec<_> = (0..8)
+            .map(|_| {
+                let w = Arc::clone(&writer);
+                let tx = done_tx.clone();
+                thread::spawn(move || {
+                    let _ = tx.send(w.flush());
+                })
+            })
+            .collect();
+        drop(done_tx);
+
+        // Race the manual shutdown sequence (identical to what
+        // `AsyncWalWriter::shutdown()` does) against the in-flight
+        // `flush()` calls above.
+        writer.shutdown.store(true, Ordering::SeqCst);
+        let _ = writer.sender.send(WalCommand::Shutdown);
+
+        for _ in 0..8 {
+            done_rx.recv_timeout(Duration::from_secs(5)).expect(
+                "flush() concurrent with shutdown() must return within the bound \
+                 (a disconnected handshake channel must surface as Err, not a hang)",
+            );
+        }
+
+        for t in flush_threads {
+            t.join().unwrap();
+        }
+
+        // Bound teardown too: dropping the last `Arc<AsyncWalWriter>`
+        // runs `Drop::drop`, which joins the background thread. Do that
+        // on a helper thread with a timeout so a regression there fails
+        // this test instead of hanging the whole test binary.
+        let (teardown_tx, teardown_rx) = mpsc::channel::<()>();
+        thread::spawn(move || {
+            drop(writer);
+            let _ = teardown_tx.send(());
+        });
+        teardown_rx
+            .recv_timeout(Duration::from_secs(5))
+            .expect("dropping the writer (joining the background thread) must not hang");
     }
 }

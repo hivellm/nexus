@@ -12,6 +12,21 @@ Ensures durability via the "write-ahead" principle:
 3. **Then** modify data pages in memory (cached)
 4. Periodically checkpoint (flush pages + truncate WAL)
 
+#### Async WAL flush barrier contract (`phase0_fix-async-wal-flush-durability`)
+
+The async WAL writer (`AsyncWalWriter`) batches appends on a background writer
+thread. Its `flush()` is a **synchronous durability barrier**: it blocks until
+the writer thread has actually fsynced every entry that was `append()`-ed
+*before* `flush()` was called, and returns the real outcome (an error if the
+underlying batch flush failed after exhausting retries) — not merely that the
+flush *request* was enqueued. Mechanism: `WalCommand::Flush` carries a single-use
+completion channel; `flush()` blocks on it until the writer thread signals. mpsc
+FIFO ordering guarantees all prior appends are in the flushed batch. A `flush()`
+racing `shutdown()` is honored on the writer's drain path, and can never hang —
+if the writer thread has already exited, `flush()` returns an error instead of
+blocking forever. `Engine::flush_async_wal` is a pass-through with the same
+(now-real) guarantee.
+
 ### MVCC (Multi-Version Concurrency Control)
 
 Provides snapshot isolation without locking readers:

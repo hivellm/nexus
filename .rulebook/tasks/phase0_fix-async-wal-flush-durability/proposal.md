@@ -82,6 +82,51 @@ true durability guarantee, because the fix under review here has not happened ye
 - No change to `Engine::flush_async_wal`'s signature — it stays a pass-through; its
   guarantee becomes real once the underlying `flush()` blocks correctly.
 
+## Decision (§2.1)
+
+The completion handshake is a plain `std::sync::mpsc::channel::<Result<()>>()` —
+a fresh, single-use `(Sender, Receiver)` pair created inside `flush()` for each
+call, not a shared/persistent channel and not a third-party `oneshot` crate.
+
+- **`std::sync::mpsc` over a dedicated `oneshot` crate**: the workspace already
+  depends on `crossbeam_channel` for the main `WalCommand` queue, but a
+  completion handshake only ever carries exactly one message from exactly one
+  sender to exactly one receiver — that is precisely `std::sync::mpsc`'s
+  built-in contract, already in `std`, requiring **no new crate dependency**
+  (a hard constraint for this fix). A `oneshot`-style crate would add a
+  dependency purely for an ergonomic `.send()`/`.await` API that this
+  synchronous (non-async) call site does not need.
+- **Fresh channel per `flush()` call, not a shared one**: reusing a single
+  channel across calls would require correlating which reply belongs to which
+  request (e.g. request IDs), or serializing all `flush()` callers through a
+  mutex around the channel. A fresh `mpsc::channel()` per call sidesteps both:
+  the `Sender<Result<()>>` is moved into exactly one `WalCommand::Flush(tx)`,
+  `writer_thread` calls `tx.send(result)` exactly once for that command, and
+  the calling thread blocks on its own private `Receiver::recv()` — no
+  correlation, no cross-call contention, and multiple concurrent `flush()`
+  callers each get their own handshake and their own accurate result.
+- **`mpsc::Sender<Result<()>>` (not `Sender<()>` plus a side-channel for the
+  error)**: sending the actual `Result<()>` through the handshake is what
+  makes §3.3 possible — `flush_batch`'s real outcome (success, or the
+  exhausted-retries error) travels back through the same channel the caller
+  is already blocked on, so `flush()` returns a faithful `Result` rather than
+  a blind `Ok(())` regardless of what happened inside the batch flush.
+- **Never hang, even on the shutdown race (§2.3/§3.4)** — hardened after code
+  review found a subtle trap: the main `WalCommand` queue is a *crossbeam*
+  bounded channel, which keeps a BUFFERED command (and the `ack_tx` it carries)
+  alive until BOTH endpoints drop. `AsyncWalWriter` holds the `Sender` for its
+  whole life, so a `Flush(ack_tx)` that lands in the buffer *after* the writer
+  thread's final drain but *before* it exits is never processed AND never
+  dropped — a plain `ack_rx.recv()` would block forever. Two guards close this:
+  (1) the writer thread sets a shared `writer_exited: AtomicBool` as its very
+  last action via a `Drop` guard (fires on normal exit AND panic unwind);
+  (2) `flush()` waits with `recv_timeout` in a loop and, on a timeout where
+  `writer_exited` is already set, returns `Error::Wal(...)` instead of looping
+  forever. A cleanly-dropped `ack_tx` (writer unwound mid-flush) still surfaces
+  as `RecvTimeoutError::Disconnected → Err`. A caller waiting on a durability
+  barrier from a writer that no longer exists is told "we don't know", never
+  blocked indefinitely.
+
 ## Impact
 
 - Affected specs: `docs/specs/wal-mvcc.md` (durability barrier contract for the
