@@ -478,7 +478,8 @@ fn compute_row_dedup_key(row: &HashMap<String, Value>) -> String {
         if let Some(value) = row.get(var_name) {
             let value_key = match value {
                 Value::Object(obj) => {
-                    // For objects (nodes/relationships), use _nexus_id
+                    // For nodes/relationships, `_nexus_id` uniquely identifies
+                    // the entity.
                     if let Some(Value::Number(id)) = obj.get("_nexus_id") {
                         if let Some(node_id) = id.as_u64() {
                             format!("obj:{}", node_id)
@@ -486,7 +487,14 @@ fn compute_row_dedup_key(row: &HashMap<String, Value>) -> String {
                             "obj:unknown".to_string()
                         }
                     } else {
-                        "obj:no_id".to_string()
+                        // A plain map with no `_nexus_id` — e.g. an `UNWIND`
+                        // row object like `{s: 10}`. Key by its CONTENT, not a
+                        // constant: keying every such map identically collapsed
+                        // distinct driving rows that shared a scanned node and
+                        // dropped all but the first, silently truncating
+                        // `UNWIND … MATCH (a {prop: r.field})` over an unindexed
+                        // pair (phase0_fix-unindexed-correlated-match-drops-rows).
+                        format!("map:{}", serde_json::to_string(obj).unwrap_or_default())
                     }
                 }
                 // CRITICAL: Handle primitive values from UNWIND
