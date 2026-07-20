@@ -432,18 +432,50 @@ impl Engine {
     /// Returns `true` if any live (non-deleted) relationship references
     /// `node_id` as either endpoint (source or destination).
     ///
-    /// Deliberately does NOT rely on `NodeRecord::first_rel_ptr` — that
-    /// pointer only tracks OUTGOING relationships (`create_relationship`
-    /// never updates it on the destination node, see
-    /// `storage::record_store_ops::create_relationship`), so a node that is
-    /// only ever a relationship target has `first_rel_ptr == 0` regardless
-    /// of how many live edges point at it. Instead this performs the same
-    /// authoritative linear scan over every relationship record that
-    /// `delete_node_relationships` already uses for DETACH DELETE, checked
-    /// here read-only rather than mutating anything, so both directions are
-    /// covered without introducing a new index.
+    /// Two-tier, correctness-preserving by construction:
+    ///
+    /// 1. Fast path (optimization only): a live OUTGOING edge is reachable in
+    ///    O(out-degree) via the node's own adjacency chain. `first_rel_ptr`
+    ///    heads the OUTGOING list — `create_relationship` updates it only on
+    ///    the source node (see `storage::record_store_ops::create_relationship`),
+    ///    walked via `next_src_ptr`. This tier can only SHORT-CIRCUIT to `true`
+    ///    on an authoritative live edge read from storage; it never concludes
+    ///    `false`. Any read error or unexpected chain state simply falls through
+    ///    to the exhaustive scan, so correctness never depends on chain
+    ///    integrity or on the (non-authoritative) relationship index.
+    ///
+    /// 2. Authoritative fallback: INCOMING edges have no reverse adjacency in
+    ///    the store, so every `false` (and any incoming-only `true`) is decided
+    ///    by the same full relationship scan the guard has always used, covering
+    ///    both directions. A dedicated O(in-degree) incoming lookup would require
+    ///    a store-maintained reverse index (tracked separately).
     fn node_has_live_relationship(&self, node_id: u64) -> Result<bool> {
         let total_rels = self.storage.relationship_count();
+
+        // Tier 1 — outgoing fast path. Best-effort: on any error or unexpected
+        // chain state we break and let the authoritative scan below decide.
+        if let Ok(node) = self.storage.read_node(node_id) {
+            let mut rel_ptr = node.first_rel_ptr;
+            let mut steps = 0u64;
+            while rel_ptr != 0 && steps <= total_rels {
+                steps += 1;
+                let rel = match self.storage.read_rel(rel_ptr - 1) {
+                    Ok(r) => r,
+                    Err(_) => break,
+                };
+                if rel.src_id != node_id {
+                    // `first_rel_ptr` should only head edges this node sources;
+                    // anything else means a broken chain — defer to the scan.
+                    break;
+                }
+                if !rel.is_deleted() {
+                    return Ok(true);
+                }
+                rel_ptr = rel.next_src_ptr;
+            }
+        }
+
+        // Tier 2 — authoritative full scan (covers incoming + outgoing).
         for rel_id in 0..total_rels {
             if let Ok(rel_record) = self.storage.read_rel(rel_id) {
                 if !rel_record.is_deleted()
@@ -464,6 +496,10 @@ impl Engine {
         let total_rels = self.storage.relationship_count();
         let mut rels_to_delete = Vec::new();
 
+        // Full scan is required here: DETACH DELETE must find EVERY connected
+        // edge, and INCOMING edges have no reverse adjacency in the store. An
+        // O(degree) version needs a store-maintained reverse index (tracked as
+        // a separate task); the outgoing-only chain walk cannot cover incoming.
         for rel_id in 0..total_rels {
             if let Ok(rel_record) = self.storage.read_rel(rel_id) {
                 if !rel_record.is_deleted() {

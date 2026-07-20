@@ -175,3 +175,107 @@ fn detach_delete_still_works() {
         "Bob must be gone after DETACH DELETE"
     );
 }
+
+// ── Tier 1 (outgoing fast-path) coverage ──────────────────────────────────
+//
+// `node_has_live_relationship` walks the node's own `first_rel_ptr` /
+// `next_src_ptr` chain as an O(out-degree) short-circuit before ever
+// reaching the authoritative full-store scan. These tests exercise that
+// fast path directly: a node with a live OUTGOING edge, a node whose only
+// outgoing edge has been soft-deleted, and a node with both an incoming and
+// an outgoing edge (Tier 1 must catch the outgoing one).
+
+#[test]
+fn non_detach_delete_of_outgoing_only_node_errors() {
+    let (mut engine, _ctx) = setup_isolated_test_engine().unwrap();
+    engine
+        .execute_cypher("CREATE (a:Person {name: 'Alice'})-[:KNOWS]->(b:Person {name: 'Bob'})")
+        .unwrap();
+
+    // Alice is the relationship SOURCE, so `first_rel_ptr` heads her own
+    // outgoing chain — the Tier 1 fast path must see the live edge and
+    // short-circuit to `true` without needing the full-store scan.
+    let result = engine.execute_cypher("MATCH (a:Person {name: 'Alice'}) DELETE a");
+    assert!(
+        result.is_err(),
+        "non-DETACH DELETE of a node with a live outgoing relationship must be refused, \
+         got {result:?}"
+    );
+
+    let still_there = engine
+        .execute_cypher("MATCH (a:Person {name: 'Alice'}) RETURN a")
+        .unwrap();
+    assert_eq!(
+        still_there.rows.len(),
+        1,
+        "node must survive a refused non-DETACH delete"
+    );
+}
+
+#[test]
+fn non_detach_delete_allowed_after_outgoing_edge_soft_deleted() {
+    let (mut engine, _ctx) = setup_isolated_test_engine().unwrap();
+    engine
+        .execute_cypher("CREATE (a:Person {name: 'Alice'})-[:KNOWS]->(b:Person {name: 'Bob'})")
+        .unwrap();
+
+    // NOTE: Cypher relationship delete (`MATCH ... DELETE r`) is a pre-existing
+    // no-op stub — the `Delete` operator never wires through to
+    // `storage::delete_rel`, so the edge record is left live (tracked as a
+    // separate phase0 task). To authentically produce the "node whose only
+    // outgoing edge is soft-deleted" state that Tier 1 must walk past, mark the
+    // edge deleted directly at the storage layer — the same technique
+    // `expand_skips_dangling_endpoint_instead_of_null_row` uses for nodes.
+    let total_rels = engine.storage.relationship_count();
+    for rel_id in 0..total_rels {
+        let mut rel = engine.storage.read_rel(rel_id).unwrap();
+        rel.mark_deleted();
+        engine.storage.write_rel(rel_id, &rel).unwrap();
+    }
+
+    // Alice's only outgoing edge is now soft-deleted, so Tier 1 must walk past
+    // it (`rel.is_deleted()` true) without short-circuiting, and Tier 2's
+    // authoritative scan must confirm no live relationship remains — the plain
+    // DELETE must succeed.
+    engine
+        .execute_cypher("MATCH (a:Person {name: 'Alice'}) DELETE a")
+        .unwrap();
+
+    let gone = engine
+        .execute_cypher("MATCH (a:Person {name: 'Alice'}) RETURN a")
+        .unwrap();
+    assert_eq!(
+        gone.rows.len(),
+        0,
+        "node must be deletable once its only relationship is soft-deleted"
+    );
+}
+
+#[test]
+fn non_detach_delete_of_node_with_both_incoming_and_outgoing_edges_errors() {
+    let (mut engine, _ctx) = setup_isolated_test_engine().unwrap();
+    engine
+        .execute_cypher(
+            "CREATE (a:Person {name: 'Alice'})-[:KNOWS]->(hub:Person {name: 'Hub'})-[:KNOWS]->(c:Person {name: 'Carol'})",
+        )
+        .unwrap();
+
+    // Hub is both a relationship DESTINATION (from Alice) and a
+    // relationship SOURCE (to Carol). Tier 1 only needs to see the live
+    // outgoing edge to Carol to short-circuit to `true`.
+    let result = engine.execute_cypher("MATCH (hub:Person {name: 'Hub'}) DELETE hub");
+    assert!(
+        result.is_err(),
+        "non-DETACH DELETE of a node with both incoming and outgoing relationships must be \
+         refused, got {result:?}"
+    );
+
+    let still_there = engine
+        .execute_cypher("MATCH (hub:Person {name: 'Hub'}) RETURN hub")
+        .unwrap();
+    assert_eq!(
+        still_there.rows.len(),
+        1,
+        "node must survive a refused non-DETACH delete"
+    );
+}
