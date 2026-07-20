@@ -78,7 +78,8 @@ recognised by recovery.
       `flags==0` bytes, reopens, asserts intact) plus the soft-deleted regression.
 
 ## 4. Tail (docs + tests — check or waive with tailWaiver)
-- [x] 4.1 Update `docs/specs/storage-format.md` with the flags/in-use semantics or
+- [x] 4.1 Update or create documentation covering the implementation:
+  `docs/specs/storage-format.md` with the flags/in-use semantics or
   the header layout, and the recovery contract; add a CHANGELOG entry
       Done: `docs/specs/storage-format.md` flags/allocated-bit + recovery contract
       section; CHANGELOG [3.0.0] `### Fixed — phase0_fix-anonymous-node-lost-on-restart`.
@@ -87,9 +88,9 @@ recognised by recovery.
       Done: 6 tests in `tests/storage/anonymous_node_survives_restart_test.rs`
       (trailing, all-anonymous, id-not-reused, old-format migration, degenerate
       self-loop rel, legacy-soft-deleted id-reservation). All pass.
-- [x] 4.3 Run `cargo +nightly fmt --all`,
+- [x] 4.3 Run tests and confirm they pass (`cargo +nightly fmt --all`,
   `cargo clippy --workspace --all-targets --all-features -- -D warnings`,
-  `cargo +nightly test --workspace` — all green
+  `cargo +nightly test --workspace` — all green)
       Done (scoped, per host-resource limits): full nexus-core suite green (0 failed);
       `cargo +nightly fmt --all --check` clean; `cargo clippy --workspace
       --all-targets --all-features -- -D warnings` exit 0. Code-reviewed; a BLOCKER
