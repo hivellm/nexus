@@ -562,14 +562,19 @@ async fn async_main(_worker_threads: usize) -> anyhow::Result<()> {
             "/auth/users",
             get({
                 let server = nexus_server.clone();
-                move || api::auth::list_users(axum::extract::State(server))
+                move |ext: axum::extract::Extension<
+                    Option<nexus_core::auth::middleware::AuthContext>,
+                >| api::auth::list_users(axum::extract::State(server), ext)
             }),
         )
         .route(
             "/auth/users/{username}",
             get({
                 let server = nexus_server.clone();
-                move |path| api::auth::get_user(axum::extract::State(server), path)
+                move |ext: axum::extract::Extension<
+                    Option<nexus_core::auth::middleware::AuthContext>,
+                >,
+                      path| api::auth::get_user(axum::extract::State(server), ext, path)
             }),
         )
         .route("/auth/users/{username}", delete(api::auth::delete_user))
@@ -581,7 +586,14 @@ async fn async_main(_worker_threads: usize) -> anyhow::Result<()> {
             "/auth/users/{username}/permissions",
             get({
                 let server = nexus_server.clone();
-                move |path| api::auth::get_user_permissions(axum::extract::State(server), path)
+                move |ext: axum::extract::Extension<
+                    Option<nexus_core::auth::middleware::AuthContext>,
+                >,
+                      path| api::auth::get_user_permissions(
+                    axum::extract::State(server),
+                    ext,
+                    path,
+                )
             }),
         )
         .route(
@@ -594,14 +606,20 @@ async fn async_main(_worker_threads: usize) -> anyhow::Result<()> {
             "/auth/keys",
             get({
                 let server = nexus_server.clone();
-                move |query| api::auth::list_api_keys(axum::extract::State(server), query)
+                move |ext: axum::extract::Extension<
+                    Option<nexus_core::auth::middleware::AuthContext>,
+                >,
+                      query| api::auth::list_api_keys(axum::extract::State(server), ext, query)
             }),
         )
         .route(
             "/auth/keys/{key_id}",
             get({
                 let server = nexus_server.clone();
-                move |path| api::auth::get_api_key(axum::extract::State(server), path)
+                move |ext: axum::extract::Extension<
+                    Option<nexus_core::auth::middleware::AuthContext>,
+                >,
+                      path| api::auth::get_api_key(axum::extract::State(server), ext, path)
             }),
         )
         .route("/auth/keys/{key_id}", delete(api::auth::delete_api_key))

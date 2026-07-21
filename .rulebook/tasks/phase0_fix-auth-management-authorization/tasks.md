@@ -20,49 +20,55 @@ compromise — the shared authorization design (§2) must be settled before impl
 handler is wired to the same check rather than six slightly different ones.
 
 ## 1. Reproduce the escalation first
-- [ ] 1.1 Write a failing integration test: start the server with auth enabled, create a Read-only key,
-  `POST /auth/keys` with that key's `X-API-Key` header and body
-  `{"name":"pwn","permissions":["SUPER"]}`. Assert today it returns `200` with a Super-permission key
-  (confirms the hole) — this must flip to `403` once fixed
-- [ ] 1.2 Add the `grant_permissions` variant: Read-only key calls the grant-permissions endpoint
-  (`api/auth.rs:287`) targeting its own key or another key with `Admin`/`Super` (`:299-303,:339`);
-  assert it currently succeeds
-- [ ] 1.3 Add the `create_user`/`delete_user`/`list_users`/`revoke_permission` variants
-  (`api/auth.rs:59,216,145,392`): each called by a non-Admin key; assert each currently succeeds
-  (`list_users`/`revoke_permission` return data or apply the change instead of `403`)
+- [x] 1.1 Failing test written (`readonly_key_cannot_mint_super_key` in
+  `tests/auth_management_authorization_test.rs`): exercises `create_api_key` directly with a Read-only
+  `AuthContext` and body `{permissions:["SUPER"]}`. Confirmed RED (returned `Ok` with a minted Super
+  key); now `403`.
+- [x] 1.2 `grant_permissions` variant (`readonly_key_cannot_grant_permissions`): Read-only caller
+  granting `ADMIN`. Confirmed RED (succeeded); now `403`.
+- [x] 1.3 `create_user`/`delete_user`/`revoke_permission` variants plus the read handlers
+  (`list_users`/`get_user`/`get_user_permissions`/`list_api_keys`/`get_api_key`): each with a non-Admin
+  caller. All confirmed RED (succeeded / returned data); now `403`.
 
 ## 2. Design the authorization check
-- [ ] 2.1 Confirm `AuthMiddleware::has_permission` (`nexus-core/src/auth/middleware.rs:438` area) can be
-  invoked with the authenticated `auth_context`'s permissions and a required `Permission::Admin`/`Super`
-  threshold; document its exact signature in the PR description if it needs extending
-- [ ] 2.2 Decide the enforcement point: a shared middleware/extractor applied to the whole `/auth/*`
-  route group vs. a per-handler check at the top of each function. Prefer the shared layer so no future
-  `/auth/*` handler can be added without inheriting the check; record the decision
-- [ ] 2.3 Define the "no lateral escalation" rule precisely: the caller's own permission set must be a
-  superset of any permission set supplied in the request body (for `create_api_key` and
-  `grant_permissions`), not merely "caller has Admin"
+- [x] 2.1 Design confirmed. Rather than `AuthMiddleware::has_permission` (which needs the AuthMiddleware
+  + api_key), the caller's permissions are read directly from `auth_context.api_key.permissions` and
+  checked with `PermissionSet::has_permission` (nexus-core `permissions.rs`), which already encodes the
+  hierarchy (Super⊇Admin⊇Write⊇Read, etc.). No signature extension needed.
+- [x] 2.2 Decision: **per-handler shared helpers** (`require_admin`, `require_permission_superset` in
+  `api/auth.rs`), NOT a blanket `/auth/*` route-group layer. Rationale: (a) a layer cannot see the parsed
+  body, so the no-escalation superset check must be per-handler anyway; (b) a blanket layer would wrongly
+  gate the `login`/`refresh_token` authentication flows (a user logging in holds no key). The helpers are
+  called at the top of each management handler.
+- [x] 2.3 No-lateral-escalation rule defined and implemented: `require_permission_superset` requires the
+  caller's set to `has_permission` every requested permission (superset), so an Admin key cannot
+  mint/grant Super — not merely "caller has Admin".
 
 ## 3. Implement the fix
-- [ ] 3.1 Wire the chosen authorization check onto `create_api_key` (`api/auth.rs:868`) — reject with
-  `403` when the caller lacks `Admin`/`Super`, and additionally reject when the requested `permissions`
-  (`:884-885`) exceed the caller's own
-- [ ] 3.2 Wire the same check onto `grant_permissions` (`api/auth.rs:287`) — reject when the caller lacks
-  `Admin`/`Super`, and when the granted permission (`:299-303,:339`) exceeds the caller's own; keep the
-  existing root-account guard (`:326`) as an additional, independent check
-- [ ] 3.3 Wire the same check onto `create_user` (`:59`), `delete_user` (`:216`), `list_users` (`:145`),
-  and `revoke_permission` (`:392`)
-- [ ] 3.4 Make every §1 test pass (`403` for the non-Admin caller in each case), then add a positive
-  test: an Admin/Super key performing the same operations still succeeds
+- [x] 3.1 `create_api_key`: `require_admin` + `require_permission_superset(&permissions)` (over the
+  resolved set, including the `[Read,Write]` default).
+- [x] 3.2 `grant_permissions`: `require_admin` + `require_permission_superset`; the existing root-account
+  guard is kept as an independent check.
+- [x] 3.3 `require_admin` wired onto ALL management handlers — the task's `create_user`, `delete_user`,
+  `list_users`, `revoke_permission`, PLUS the same-shape siblings `get_user`, `get_user_permissions`,
+  `list_api_keys`, `get_api_key`, `delete_api_key`, `revoke_api_key` (12 handlers total; only
+  `login`/`refresh_token` are exempt). Read handlers that lacked `auth_context` (list_users, get_user,
+  get_user_permissions, list_api_keys, get_api_key) had the extractor added and their `main.rs` router
+  closures updated to pass it.
+- [x] 3.4 Every §1 test passes (`403` for non-Admin), plus positives (`super_key_can_mint_super_key`,
+  `admin_key_can_create_user`, `admin_key_can_list_users`) and an auth-disabled bootstrap case
+  (`auth_disabled_still_allows_management`) — 15/15 green.
 
 ## 4. Tail (docs + tests — check or waive with tailWaiver)
-- [ ] 4.1 Update `docs/security/AUTHENTICATION.md` with the authorization contract for `/auth/*`
-  management routes (required permission per route, no-lateral-escalation rule); add a CHANGELOG entry
-- [ ] 4.2 Tests: each `/auth/*` management handler rejects a caller without `Admin`/`Super`; each rejects
-  a body-supplied permission set exceeding the caller's own; each succeeds for a properly privileged
-  caller
-- [ ] 4.3 Run `cargo +nightly fmt --all`,
-  `cargo clippy --workspace --all-targets --all-features -- -D warnings`,
-  `cargo +nightly test --workspace` — all green
+- [x] 4.1 Update or create documentation covering the implementation — DONE: `docs/security/AUTHENTICATION.md`
+  now documents the per-route required permission, the no-vertical-escalation rule, the login/refresh
+  exemption, and the auth-disabled no-op; CHANGELOG entry added under `[3.0.0]`.
+- [x] 4.2 Write tests covering the new behavior — DONE: each management handler rejects a non-Admin caller
+  (403); `create_api_key`/`grant_permissions` reject a body permission set exceeding the caller's own; a
+  properly privileged caller still succeeds (15 tests).
+- [x] 4.3 Run tests and confirm they pass — DONE (green): `cargo +nightly fmt --all`,
+  `cargo clippy -p nexus-server --all-targets --all-features -- -D warnings` (0 warnings), full
+  `cargo +nightly test -p nexus-server` and `cargo +nightly test --workspace` — 0 failed.
 
 ## Related
 - `phase0_fix-server-secure-defaults-and-dos` — H1 (auth disabled by default) makes this surface

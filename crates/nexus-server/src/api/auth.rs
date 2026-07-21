@@ -5,10 +5,67 @@ use axum::extract::{Extension, Path, Query, State};
 use axum::http::StatusCode;
 use axum::response::Json;
 use nexus_core::auth::middleware::AuthContext;
-use nexus_core::auth::{Permission, User, verify_password};
+use nexus_core::auth::{Permission, PermissionSet, User, verify_password};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::Arc;
+
+/// phase0_fix-auth-management-authorization — authorization guards for the
+/// `/auth/*` management surface.
+///
+/// The auth middleware only *authenticates*; none of the management handlers
+/// used to check the CALLER's own permissions, so any authenticated key
+/// (even a Read-only one) could create users, manage keys, or mint an
+/// Admin/Super key. These helpers add the missing authorization.
+///
+/// Semantics: enforcement applies only when a caller identity is present
+/// (`Some(auth_context)` — i.e. authentication is enabled and the request was
+/// authenticated). When authentication is disabled the request carries no
+/// identity (`None`) and there are no keys/permissions to escalate; that
+/// surface is hardened separately by `phase0_fix-server-secure-defaults-and-dos`.
+fn forbidden(message: &str) -> (StatusCode, Json<serde_json::Value>) {
+    (
+        StatusCode::FORBIDDEN,
+        Json(serde_json::json!({ "error": message })),
+    )
+}
+
+/// Require the calling key to hold `Admin` (or `Super`, which includes it)
+/// before it may manage users, keys, or permissions.
+fn require_admin(
+    auth_context: &Option<AuthContext>,
+) -> Result<(), (StatusCode, Json<serde_json::Value>)> {
+    if let Some(ctx) = auth_context {
+        let caller = PermissionSet::from_vec(ctx.api_key.permissions.clone());
+        if !caller.has_permission(&Permission::Admin) {
+            return Err(forbidden(
+                "Insufficient permissions: this operation requires Admin or Super",
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// Forbid vertical privilege escalation: the calling key may not create or
+/// grant a permission it does not itself hold (its permission set must be a
+/// superset of `requested`). Prevents e.g. an Admin key minting a Super key.
+/// Combined with [`require_admin`] at each call site.
+fn require_permission_superset(
+    auth_context: &Option<AuthContext>,
+    requested: &[Permission],
+) -> Result<(), (StatusCode, Json<serde_json::Value>)> {
+    if let Some(ctx) = auth_context {
+        let caller = PermissionSet::from_vec(ctx.api_key.permissions.clone());
+        for perm in requested {
+            if !caller.has_permission(perm) {
+                return Err(forbidden(&format!(
+                    "Insufficient permissions: the calling key cannot grant '{perm}' — it does not hold that permission"
+                )));
+            }
+        }
+    }
+    Ok(())
+}
 
 /// Request to create a user
 #[derive(Debug, Deserialize)]
@@ -61,6 +118,9 @@ pub async fn create_user(
     Extension(auth_context): Extension<Option<AuthContext>>,
     Json(request): Json<CreateUserRequest>,
 ) -> Result<Json<UserResponse>, (StatusCode, Json<serde_json::Value>)> {
+    // Authorization: only an Admin/Super caller may create users.
+    require_admin(&auth_context)?;
+
     let mut rbac = server.rbac.write().await;
 
     // Check if user already exists
@@ -142,7 +202,13 @@ pub async fn create_user(
 
 /// List all users
 /// GET /auth/users
-pub async fn list_users(State(server): State<Arc<NexusServer>>) -> Json<UsersResponse> {
+pub async fn list_users(
+    State(server): State<Arc<NexusServer>>,
+    Extension(auth_context): Extension<Option<AuthContext>>,
+) -> Result<Json<UsersResponse>, (StatusCode, Json<serde_json::Value>)> {
+    // Authorization: enumerating users is Admin/Super only.
+    require_admin(&auth_context)?;
+
     let rbac = server.rbac.read().await;
     let users = rbac.list_users();
 
@@ -168,17 +234,21 @@ pub async fn list_users(State(server): State<Arc<NexusServer>>) -> Json<UsersRes
         })
         .collect();
 
-    Json(UsersResponse {
+    Ok(Json(UsersResponse {
         users: user_responses,
-    })
+    }))
 }
 
 /// Get a specific user
 /// GET /auth/users/{username}
 pub async fn get_user(
     State(server): State<Arc<NexusServer>>,
+    Extension(auth_context): Extension<Option<AuthContext>>,
     Path(username): Path<String>,
 ) -> Result<Json<UserResponse>, (StatusCode, Json<serde_json::Value>)> {
+    // Authorization: reading a user record is Admin/Super only.
+    require_admin(&auth_context)?;
+
     let rbac = server.rbac.read().await;
     let users = rbac.list_users();
 
@@ -218,6 +288,9 @@ pub async fn delete_user(
     Extension(auth_context): Extension<Option<AuthContext>>,
     Path(username): Path<String>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
+    // Authorization: only an Admin/Super caller may delete users.
+    require_admin(&auth_context)?;
+
     let mut rbac = server.rbac.write().await;
     let users_list = rbac.list_users();
 
@@ -290,6 +363,9 @@ pub async fn grant_permissions(
     Path(username): Path<String>,
     Json(request): Json<UpdatePermissionsRequest>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
+    // Authorization: only an Admin/Super caller may grant permissions.
+    require_admin(&auth_context)?;
+
     let mut rbac = server.rbac.write().await;
 
     // Parse permissions
@@ -317,6 +393,10 @@ pub async fn grant_permissions(
             ));
         }
     };
+
+    // No vertical escalation: the caller may not grant a permission it does
+    // not itself hold (e.g. an Admin key cannot grant Super).
+    require_permission_superset(&auth_context, &permissions)?;
 
     let users_list = rbac.list_users();
     let target_user = users_list.iter().find(|u| u.username == username);
@@ -394,6 +474,9 @@ pub async fn revoke_permission(
     Extension(auth_context): Extension<Option<AuthContext>>,
     Path((username, permission_str)): Path<(String, String)>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
+    // Authorization: only an Admin/Super caller may revoke permissions.
+    require_admin(&auth_context)?;
+
     let mut rbac = server.rbac.write().await;
 
     let permission = match permission_str.to_uppercase().as_str() {
@@ -483,8 +566,12 @@ pub async fn revoke_permission(
 /// GET /auth/users/{username}/permissions
 pub async fn get_user_permissions(
     State(server): State<Arc<NexusServer>>,
+    Extension(auth_context): Extension<Option<AuthContext>>,
     Path(username): Path<String>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
+    // Authorization: reading a user's permissions is Admin/Super only.
+    require_admin(&auth_context)?;
+
     let rbac = server.rbac.read().await;
     let users = rbac.list_users();
 
@@ -872,6 +959,9 @@ pub async fn create_api_key(
 ) -> Result<Json<CreateApiKeyResponse>, (StatusCode, Json<serde_json::Value>)> {
     use nexus_core::auth::Permission;
 
+    // Authorization: only an Admin/Super caller may mint keys.
+    require_admin(&auth_context)?;
+
     // Parse permissions
     let permissions: Result<Vec<Permission>, _> = request
         .permissions
@@ -908,6 +998,10 @@ pub async fn create_api_key(
             ));
         }
     };
+
+    // No vertical escalation: the caller may not mint a key more privileged
+    // than itself (e.g. an Admin key cannot create a Super key).
+    require_permission_superset(&auth_context, &permissions)?;
 
     // Resolve user_id if username is provided
     let user_id = if let Some(ref username) = request.username {
@@ -1018,8 +1112,12 @@ pub async fn create_api_key(
 /// GET /auth/keys?username=...
 pub async fn list_api_keys(
     State(server): State<Arc<NexusServer>>,
+    Extension(auth_context): Extension<Option<AuthContext>>,
     Query(params): Query<HashMap<String, String>>,
 ) -> Result<Json<ApiKeysResponse>, (StatusCode, Json<serde_json::Value>)> {
+    // Authorization: enumerating API keys is Admin/Super only.
+    require_admin(&auth_context)?;
+
     let auth_manager = &server.auth_manager;
 
     let api_keys = if let Some(username) = params.get("username") {
@@ -1070,8 +1168,12 @@ pub async fn list_api_keys(
 /// GET /auth/keys/{key_id}
 pub async fn get_api_key(
     State(server): State<Arc<NexusServer>>,
+    Extension(auth_context): Extension<Option<AuthContext>>,
     Path(key_id): Path<String>,
 ) -> Result<Json<ApiKeyResponse>, (StatusCode, Json<serde_json::Value>)> {
+    // Authorization: reading an API key record is Admin/Super only.
+    require_admin(&auth_context)?;
+
     let auth_manager = &server.auth_manager;
 
     if let Some(api_key) = auth_manager.get_api_key(&key_id) {
@@ -1105,6 +1207,9 @@ pub async fn delete_api_key(
     Extension(auth_context): Extension<Option<AuthContext>>,
     Path(key_id): Path<String>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
+    // Authorization: only an Admin/Super caller may delete API keys.
+    require_admin(&auth_context)?;
+
     let auth_manager = &server.auth_manager;
 
     if auth_manager.delete_api_key(&key_id) {
@@ -1151,6 +1256,9 @@ pub async fn revoke_api_key(
     Path(key_id): Path<String>,
     Json(request): Json<RevokeApiKeyRequest>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
+    // Authorization: only an Admin/Super caller may revoke API keys.
+    require_admin(&auth_context)?;
+
     let auth_manager = &server.auth_manager;
 
     match auth_manager.revoke_api_key(&key_id, request.reason.clone()) {

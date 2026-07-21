@@ -385,11 +385,33 @@ Permissions are automatically checked by the authentication middleware. If a use
 |----------|-------------------|
 | `GET /cypher` (read queries) | READ |
 | `POST /cypher` (write queries) | WRITE |
-| `POST /auth/users` | ADMIN |
-| `DELETE /auth/users/{username}` | ADMIN |
-| `POST /auth/api-keys` | ADMIN |
-| `DELETE /auth/api-keys/{id}` | ADMIN |
-| `POST /auth/users/{username}/permissions` | SUPER |
+| `GET /auth/users`, `GET /auth/users/{username}` | ADMIN |
+| `POST /auth/users`, `DELETE /auth/users/{username}` | ADMIN |
+| `GET /auth/users/{username}/permissions` | ADMIN |
+| `POST /auth/users/{username}/permissions` (grant) | ADMIN + caller ⊇ granted |
+| `DELETE /auth/users/{username}/permissions/{permission}` | ADMIN |
+| `GET /auth/keys`, `GET /auth/keys/{key_id}` | ADMIN |
+| `POST /auth/keys` (create) | ADMIN + caller ⊇ requested |
+| `DELETE /auth/keys/{key_id}`, `POST /auth/keys/{key_id}/revoke` | ADMIN |
+| `POST /auth/login`, `POST /auth/refresh` | none (authentication flow) |
+
+### Authorization contract for `/auth/*` management
+
+Every `/auth/*` management handler enforces **authorization**, not just
+authentication:
+
+- The calling key must hold `ADMIN` (or `SUPER`, which includes it). A
+  `READ`/`WRITE`/etc. key receives `403 FORBIDDEN`.
+- **No vertical escalation.** For key creation (`POST /auth/keys`) and permission
+  grants (`POST /auth/users/{username}/permissions`), the caller's own permission
+  set must be a *superset* of the permissions in the request body. An `ADMIN` key
+  therefore cannot mint or grant `SUPER` — only a `SUPER` key can.
+- The `login` and `refresh_token` flows are intentionally exempt (a user logging
+  in holds no key yet).
+- Enforcement applies whenever a caller identity is present. When authentication
+  is **disabled**, requests carry no identity and this check is a no-op — run the
+  server with authentication enabled (and bound to a non-public interface) to
+  rely on it.
 
 ### Function-level permissions (cluster mode)
 
