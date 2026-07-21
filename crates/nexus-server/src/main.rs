@@ -827,31 +827,12 @@ async fn async_main(_worker_threads: usize) -> anyhow::Result<()> {
                 }
             }),
         )
-        // Session database endpoints
-        .route(
-            "/session/database",
-            get({
-                let server = nexus_server.clone();
-                move || {
-                    let manager = server.database_manager.clone();
-                    async move {
-                        api::database::get_session_database(axum::extract::State(api::database::DatabaseState { manager })).await
-                    }
-                }
-            }),
-        )
-        .route(
-            "/session/database",
-            put({
-                let server = nexus_server.clone();
-                move |request| {
-                    let manager = server.database_manager.clone();
-                    async move {
-                        api::database::switch_session_database(axum::extract::State(api::database::DatabaseState { manager }), request).await
-                    }
-                }
-            }),
-        )
+        // phase0_fix-cypher-database-routing §4 — the `/session/database`
+        // GET/PUT endpoints were removed: the stateless HTTP model has no
+        // per-connection identity to hang a session database on, and the
+        // switch was a stub that always reported success without persisting.
+        // Clients select a database with the per-request `database` field on
+        // `POST /cypher`.
         .route("/cache/stats", get(api::cypher::get_cache_stats))
         .route("/cache/clear", post(api::cypher::clear_cache))
         .route("/cache/clean", post(api::cypher::clean_cache))

@@ -114,9 +114,29 @@ Content-Type: application/json
   "params": {
     "min_age": 25
   },
+  "database": "neo4j",
   "timeout_ms": 30000
 }
 ```
+
+**Database selection**. The optional `database` field selects which database the
+query runs against. Resolution precedence: the `database` field → the server
+default (`neo4j`). There is no session-scoped database (the stateless HTTP model
+has no per-connection identity — the former `GET`/`PUT /session/database`
+endpoints were removed); the per-request `database` field is the only mechanism.
+
+- Absent, or `"neo4j"` → the default engine (existing single-database clients are
+  unaffected).
+- Any other name → that database's **isolated** store (create it first with
+  `CREATE DATABASE <name>`). Databases do not share nodes, relationships, or
+  indexes.
+- A name that was never created returns an error (`"Database '<name>' does not
+  exist"`) — it is **never** implicitly created; a typo fails loudly rather than
+  silently writing to the default store.
+
+Only `POST /cypher` honors `database`. `POST /cypher/stream`, `POST /ingest`,
+`POST /knn_traverse`, `POST /graphql`, and the RPC `CYPHER` command do not accept
+a `database` field and operate on the **default database only**.
 
 **Response**:
 ```json

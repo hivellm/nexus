@@ -186,70 +186,13 @@ pub async fn get_database(
     }
 }
 
-/// Request to switch database
-#[derive(Debug, Deserialize)]
-pub struct SwitchDatabaseRequest {
-    /// Database name to switch to
-    pub name: String,
-}
-
-/// Response for session database
-#[derive(Debug, Serialize)]
-pub struct SessionDatabaseResponse {
-    /// Current database name
-    pub database: String,
-}
-
-/// Get current session database
-pub async fn get_session_database(State(state): State<DatabaseState>) -> Response {
-    let manager_arc = state.manager.clone();
-    let current_db = tokio::task::spawn_blocking(move || {
-        let manager = manager_arc.read();
-        manager.default_database_name().to_string()
-    })
-    .await
-    .expect("spawn_blocking panicked");
-
-    Json(SessionDatabaseResponse {
-        database: current_db,
-    })
-    .into_response()
-}
-
-/// Switch session database
-pub async fn switch_session_database(
-    State(state): State<DatabaseState>,
-    Json(req): Json<SwitchDatabaseRequest>,
-) -> Response {
-    let manager_arc = state.manager.clone();
-    let name_for_task = req.name.clone();
-    let exists = tokio::task::spawn_blocking(move || {
-        let manager = manager_arc.read();
-        manager.exists(&name_for_task)
-    })
-    .await
-    .expect("spawn_blocking panicked");
-
-    // Check if database exists
-    if !exists {
-        return (
-            StatusCode::NOT_FOUND,
-            Json(DatabaseResponse {
-                success: false,
-                message: format!("Database '{}' does not exist", req.name),
-            }),
-        )
-            .into_response();
-    }
-
-    // In a full implementation, this would set the session's current database
-    // For now, we just validate the database exists
-    Json(DatabaseResponse {
-        success: true,
-        message: format!("Switched to database '{}'", req.name),
-    })
-    .into_response()
-}
+// phase0_fix-cypher-database-routing §4 — the session-scoped database switch
+// (`GET`/`PUT /session/database`) was removed. It could not be honored in the
+// stateless HTTP model (no per-connection identity), and the switch was a
+// stub that reported `{"success":true,"message":"Switched to database 'X'"}`
+// while never persisting anything — `GET` always returned the default. Per
+// no-shortcuts, an endpoint that lies is worse than an absent one. The
+// supported mechanism is the per-request `database` field on `POST /cypher`.
 
 #[cfg(test)]
 mod tests {

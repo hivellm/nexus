@@ -50,6 +50,105 @@ async fn log_write_audit(
     }
 }
 
+/// A Cypher request's target engine, resolved once per request from
+/// `CypherRequest.database` (Option B —
+/// `phase0_fix-cypher-database-routing`). `Default` routes to
+/// `server.engine` (the async, tokio-locked engine opened on the root
+/// data dir, unaffected when a request has no `database` field);
+/// `Named` routes to a `DatabaseManager`-owned, per-database engine
+/// reached through `parking_lot`'s synchronous lock via
+/// `spawn_blocking` (see [`with_write_engine`] / [`with_read_engine`]).
+/// Each per-database `Engine` owns its own `executor` (and thus its own
+/// plan cache) — there is no query-text-keyed cache shared across
+/// databases, so a named database's queries cannot see or pollute the
+/// default engine's plan cache.
+enum ResolvedEngine {
+    Default,
+    Named(Arc<parking_lot::RwLock<nexus_core::Engine>>),
+}
+
+/// Resolve `request.database` (falling back to the server's default
+/// database name, `DatabaseManager::default_database_name`) to a
+/// [`ResolvedEngine`]. Returns `Err(message)` for a database name that
+/// was never created — a nonexistent database is never implicitly
+/// created here; that is `CREATE DATABASE`'s job.
+fn resolve_engine(
+    server: &NexusServer,
+    requested: Option<&str>,
+) -> std::result::Result<ResolvedEngine, String> {
+    let manager = server.database_manager.read();
+    let default_name = manager.default_database_name().to_string();
+    let name = requested.unwrap_or(default_name.as_str());
+    if name == default_name {
+        return Ok(ResolvedEngine::Default);
+    }
+    if !manager.exists(name) {
+        return Err(format!("Database '{}' does not exist", name));
+    }
+    manager
+        .get_database(name)
+        .map(ResolvedEngine::Named)
+        .map_err(|e| e.to_string())
+}
+
+/// Run `f` against the resolved engine with exclusive (write) access,
+/// never holding a `parking_lot` guard across `.await` — axum handler
+/// futures must be `Send`, and a `parking_lot::RwLockWriteGuard` held
+/// across an await point isn't. `Default` takes the server's own async
+/// write lock for the duration of `f`; `Named` takes the per-database
+/// engine's sync lock inside `spawn_blocking`, so the lock is acquired
+/// and released entirely on the blocking thread.
+async fn with_write_engine<R>(
+    server: &NexusServer,
+    resolved: &ResolvedEngine,
+    f: impl FnOnce(&mut nexus_core::Engine) -> R + Send + 'static,
+) -> R
+where
+    R: Send + 'static,
+{
+    match resolved {
+        ResolvedEngine::Default => {
+            let mut guard = server.engine.write().await;
+            f(&mut guard)
+        }
+        ResolvedEngine::Named(arc) => {
+            let arc = arc.clone();
+            tokio::task::spawn_blocking(move || {
+                let mut guard = arc.write();
+                f(&mut guard)
+            })
+            .await
+            .expect("engine task panicked")
+        }
+    }
+}
+
+/// Same as [`with_write_engine`] but with a shared (read) lock.
+async fn with_read_engine<R>(
+    server: &NexusServer,
+    resolved: &ResolvedEngine,
+    f: impl FnOnce(&nexus_core::Engine) -> R + Send + 'static,
+) -> R
+where
+    R: Send + 'static,
+{
+    match resolved {
+        ResolvedEngine::Default => {
+            let guard = server.engine.read().await;
+            f(&guard)
+        }
+        ResolvedEngine::Named(arc) => {
+            let arc = arc.clone();
+            tokio::task::spawn_blocking(move || {
+                let guard = arc.read();
+                f(&guard)
+            })
+            .await
+            .expect("engine task panicked")
+        }
+    }
+}
+
 pub async fn execute_cypher(
     State(server): State<Arc<NexusServer>>,
     auth_context: Option<Extension<Option<AuthContext>>>,
@@ -170,6 +269,27 @@ pub async fn execute_cypher(
         return execute_query_management_commands(server.clone(), &ast, start_time).await;
     }
 
+    // Resolve which engine this request targets (Option B,
+    // `phase0_fix-cypher-database-routing`) — every remaining branch in
+    // this handler that touches an engine must go through
+    // `resolved_engine` (via `with_write_engine`/`with_read_engine`)
+    // instead of `server.engine` directly, so a `database` field
+    // actually routes to that database's isolated store instead of
+    // always hitting the default engine.
+    let resolved_engine = match resolve_engine(&server, request.database.as_deref()) {
+        Ok(r) => r,
+        Err(message) => {
+            let execution_time = start_time.elapsed().as_millis() as u64;
+            return Json(CypherResponse {
+                columns: vec![],
+                rows: vec![],
+                execution_time_ms: execution_time,
+                error: Some(message),
+                notifications: Vec::new(),
+            });
+        }
+    };
+
     // Check for SHOW CONSTRAINTS or SHOW FUNCTIONS commands
     let has_show_constraints_or_functions = ast.clauses.iter().any(|c| {
         matches!(
@@ -184,35 +304,37 @@ pub async fn execute_cypher(
     });
 
     if has_show_constraints_or_functions {
-        // Use Engine for these commands
-        {
-            let mut engine = server.engine.write().await;
-            match engine.execute_cypher(&request.query) {
-                Ok(result) => {
-                    let execution_time = start_time.elapsed().as_millis() as u64;
-                    let rows: Vec<serde_json::Value> = result
-                        .rows
-                        .into_iter()
-                        .map(|row| serde_json::Value::Array(row.values))
-                        .collect();
-                    return Json(CypherResponse {
-                        columns: result.columns,
-                        rows,
-                        execution_time_ms: execution_time,
-                        error: None,
-                        notifications: Vec::new(),
-                    });
-                }
-                Err(e) => {
-                    let execution_time = start_time.elapsed().as_millis() as u64;
-                    return Json(CypherResponse {
-                        columns: vec![],
-                        rows: vec![],
-                        execution_time_ms: execution_time,
-                        error: Some(format!("Execution error: {}", e)),
-                        notifications: Vec::new(),
-                    });
-                }
+        // Use the resolved engine for these commands.
+        let query = request.query.clone();
+        let result = with_write_engine(&server, &resolved_engine, move |engine| {
+            engine.execute_cypher(&query)
+        })
+        .await;
+        match result {
+            Ok(result) => {
+                let execution_time = start_time.elapsed().as_millis() as u64;
+                let rows: Vec<serde_json::Value> = result
+                    .rows
+                    .into_iter()
+                    .map(|row| serde_json::Value::Array(row.values))
+                    .collect();
+                return Json(CypherResponse {
+                    columns: result.columns,
+                    rows,
+                    execution_time_ms: execution_time,
+                    error: None,
+                    notifications: Vec::new(),
+                });
+            }
+            Err(e) => {
+                let execution_time = start_time.elapsed().as_millis() as u64;
+                return Json(CypherResponse {
+                    columns: vec![],
+                    rows: vec![],
+                    execution_time_ms: execution_time,
+                    error: Some(format!("Execution error: {}", e)),
+                    notifications: Vec::new(),
+                });
             }
         }
     }
@@ -230,8 +352,12 @@ pub async fn execute_cypher(
     });
 
     if is_property_index_ddl {
-        let mut engine = server.engine.write().await;
-        match engine.execute_cypher(&request.query) {
+        let query = request.query.clone();
+        let result = with_write_engine(&server, &resolved_engine, move |engine| {
+            engine.execute_cypher(&query)
+        })
+        .await;
+        match result {
             Ok(result) => {
                 let execution_time = start_time.elapsed().as_millis() as u64;
                 // Preserve the single-column ["index"] shape that the executor
@@ -307,9 +433,13 @@ pub async fn execute_cypher(
             )
         });
         if has_tx_cmd {
-            let mut engine = server.engine.write().await;
+            let query = request.query.clone();
+            let result = with_write_engine(&server, &resolved_engine, move |engine| {
+                engine.execute_cypher(&query)
+            })
+            .await;
             let execution_time = start_time.elapsed().as_millis() as u64;
-            return match engine.execute_cypher(&request.query) {
+            return match result {
                 Ok(result) => {
                     let rows: Vec<serde_json::Value> = result
                         .rows
@@ -355,9 +485,14 @@ pub async fn execute_cypher(
             )
         });
         if has_unwind && has_write {
-            let mut engine = server.engine.write().await;
+            let query = request.query.clone();
+            let params = request.params.clone();
+            let result = with_write_engine(&server, &resolved_engine, move |engine| {
+                engine.execute_cypher_with_params(&query, params)
+            })
+            .await;
             let execution_time = start_time.elapsed().as_millis() as u64;
-            return match engine.execute_cypher_with_params(&request.query, request.params.clone()) {
+            return match result {
                 Ok(result) => {
                     let rows: Vec<serde_json::Value> = result
                         .rows
@@ -421,18 +556,25 @@ pub async fn execute_cypher(
         // pre-parsed-AST entry point instead of
         // `execute_cypher_with_params` so the exclusive lock's
         // critical section no longer pays for a second parse of the
-        // same query text. See `Engine::execute_cypher_ast_with_params`'s
-        // doc comment.
-        let mut engine_guard = server.engine.write().await;
-        let dispatch_result = engine_guard.execute_cypher_ast_with_params(
-            &ast,
-            &request.query,
-            request.params.clone(),
-        );
-        // Release the write lock before the (async) audit-log call —
-        // auditing never touches the engine, and holding a write lock
-        // across an `.await` unnecessarily serializes unrelated writes.
-        drop(engine_guard);
+        // same query text. `with_write_engine` uses
+        // `execute_cypher_with_params` uniformly across both the
+        // default and named-database arms rather than the AST-optimized
+        // `execute_cypher_ast_with_params` — the `Named` arm's closure
+        // must be `'static` (it may run inside `spawn_blocking`), and
+        // `ast` cannot be cheaply moved into it, so both arms re-parse
+        // the query text. That double-parse is correctness-neutral —
+        // see `Engine::execute_cypher_ast_with_params`'s doc comment for
+        // why it exists as a perf optimization only.
+        //
+        // The write lock is released as soon as `with_write_engine`
+        // returns (its `.await` boundary), before the (async)
+        // audit-log call below — auditing never touches the engine.
+        let query = request.query.clone();
+        let params = request.params.clone();
+        let dispatch_result = with_write_engine(&server, &resolved_engine, move |engine| {
+            engine.execute_cypher_with_params(&query, params)
+        })
+        .await;
 
         let execution_time = start_time.elapsed().as_millis() as u64;
         return match dispatch_result {
@@ -528,15 +670,16 @@ pub async fn execute_cypher(
             // every MATCH, an arbitrary number of readers can hold
             // `.read().await` concurrently: this no longer serializes
             // reads against each other.
-            let (lock_free_executor, in_explicit_tx) = {
-                let engine_guard = server.engine.read().await;
-                let in_tx = engine_guard
-                    .session_manager
-                    .get_session(&"default".to_string())
-                    .map(|session| session.has_active_transaction())
-                    .unwrap_or(false);
-                (engine_guard.executor.clone(), in_tx)
-            };
+            let (lock_free_executor, in_explicit_tx) =
+                with_read_engine(&server, &resolved_engine, |engine| {
+                    let in_tx = engine
+                        .session_manager
+                        .get_session(&"default".to_string())
+                        .map(|session| session.has_active_transaction())
+                        .unwrap_or(false);
+                    (engine.executor.clone(), in_tx)
+                })
+                .await;
 
             if !in_explicit_tx {
                 let query = Query {
@@ -599,16 +742,17 @@ pub async fn execute_cypher(
         }
 
         {
-            // Use the engine's execute_cypher method which uses its internal executor.
-            // phase8_neo4j-concurrency-gaps §3 — reuse the `ast` parsed
-            // above instead of re-parsing inside the exclusive write
-            // lock; see `Engine::execute_cypher_ast_with_params`.
-            let mut engine_guard = server.engine.write().await;
-            match engine_guard.execute_cypher_ast_with_params(
-                &ast,
-                &request.query,
-                request.params.clone(),
-            ) {
+            // Use the resolved engine's execute_cypher_with_params, which
+            // uses its own internal executor. See the write-path branch
+            // above for why this re-parses `request.query` instead of
+            // reusing `ast` — the `Named` arm's closure must be `'static`.
+            let query = request.query.clone();
+            let params = request.params.clone();
+            let result = with_write_engine(&server, &resolved_engine, move |engine| {
+                engine.execute_cypher_with_params(&query, params)
+            })
+            .await;
+            match result {
                 Ok(result_set) => {
                     let execution_time = start_time.elapsed().as_millis() as u64;
                     tracing::info!(
