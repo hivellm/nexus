@@ -129,9 +129,10 @@ pub struct UsersResponse {
 /// POST /auth/users
 pub async fn create_user(
     State(server): State<Arc<NexusServer>>,
-    Extension(auth_context): Extension<Option<AuthContext>>,
+    auth_context: Option<Extension<Option<AuthContext>>>,
     Json(request): Json<CreateUserRequest>,
 ) -> Result<Json<UserResponse>, (StatusCode, Json<serde_json::Value>)> {
+    let auth_context = auth_context.and_then(|e| e.0);
     // Authorization: only an Admin/Super caller may create users.
     require_admin(&auth_context)?;
 
@@ -218,8 +219,9 @@ pub async fn create_user(
 /// GET /auth/users
 pub async fn list_users(
     State(server): State<Arc<NexusServer>>,
-    Extension(auth_context): Extension<Option<AuthContext>>,
+    auth_context: Option<Extension<Option<AuthContext>>>,
 ) -> Result<Json<UsersResponse>, (StatusCode, Json<serde_json::Value>)> {
+    let auth_context = auth_context.and_then(|e| e.0);
     // Authorization: enumerating users is Admin/Super only.
     require_admin(&auth_context)?;
 
@@ -257,9 +259,10 @@ pub async fn list_users(
 /// GET /auth/users/{username}
 pub async fn get_user(
     State(server): State<Arc<NexusServer>>,
-    Extension(auth_context): Extension<Option<AuthContext>>,
+    auth_context: Option<Extension<Option<AuthContext>>>,
     Path(username): Path<String>,
 ) -> Result<Json<UserResponse>, (StatusCode, Json<serde_json::Value>)> {
+    let auth_context = auth_context.and_then(|e| e.0);
     // Authorization: reading a user record is Admin/Super only.
     require_admin(&auth_context)?;
 
@@ -299,9 +302,10 @@ pub async fn get_user(
 /// DELETE /auth/users/{username}
 pub async fn delete_user(
     State(server): State<Arc<NexusServer>>,
-    Extension(auth_context): Extension<Option<AuthContext>>,
+    auth_context: Option<Extension<Option<AuthContext>>>,
     Path(username): Path<String>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
+    let auth_context = auth_context.and_then(|e| e.0);
     // Authorization: only an Admin/Super caller may delete users.
     require_admin(&auth_context)?;
 
@@ -373,10 +377,11 @@ pub async fn delete_user(
 /// POST /auth/users/{username}/permissions
 pub async fn grant_permissions(
     State(server): State<Arc<NexusServer>>,
-    Extension(auth_context): Extension<Option<AuthContext>>,
+    auth_context: Option<Extension<Option<AuthContext>>>,
     Path(username): Path<String>,
     Json(request): Json<UpdatePermissionsRequest>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
+    let auth_context = auth_context.and_then(|e| e.0);
     // Authorization: only an Admin/Super caller may grant permissions.
     require_admin(&auth_context)?;
 
@@ -485,9 +490,10 @@ pub async fn grant_permissions(
 /// DELETE /auth/users/{username}/permissions/{permission}
 pub async fn revoke_permission(
     State(server): State<Arc<NexusServer>>,
-    Extension(auth_context): Extension<Option<AuthContext>>,
+    auth_context: Option<Extension<Option<AuthContext>>>,
     Path((username, permission_str)): Path<(String, String)>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
+    let auth_context = auth_context.and_then(|e| e.0);
     // Authorization: only an Admin/Super caller may revoke permissions.
     require_admin(&auth_context)?;
 
@@ -580,9 +586,10 @@ pub async fn revoke_permission(
 /// GET /auth/users/{username}/permissions
 pub async fn get_user_permissions(
     State(server): State<Arc<NexusServer>>,
-    Extension(auth_context): Extension<Option<AuthContext>>,
+    auth_context: Option<Extension<Option<AuthContext>>>,
     Path(username): Path<String>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
+    let auth_context = auth_context.and_then(|e| e.0);
     // Authorization: reading a user's permissions is Admin/Super only.
     require_admin(&auth_context)?;
 
@@ -968,11 +975,12 @@ fn parse_duration(duration_str: &str) -> Result<chrono::DateTime<chrono::Utc>, S
 /// POST /auth/keys
 pub async fn create_api_key(
     State(server): State<Arc<NexusServer>>,
-    Extension(auth_context): Extension<Option<AuthContext>>,
+    auth_context: Option<Extension<Option<AuthContext>>>,
     Json(request): Json<CreateApiKeyRequest>,
 ) -> Result<Json<CreateApiKeyResponse>, (StatusCode, Json<serde_json::Value>)> {
     use nexus_core::auth::Permission;
 
+    let auth_context = auth_context.and_then(|e| e.0);
     // Authorization: only an Admin/Super caller may mint keys.
     require_admin(&auth_context)?;
 
@@ -1126,9 +1134,10 @@ pub async fn create_api_key(
 /// GET /auth/keys?username=...
 pub async fn list_api_keys(
     State(server): State<Arc<NexusServer>>,
-    Extension(auth_context): Extension<Option<AuthContext>>,
+    auth_context: Option<Extension<Option<AuthContext>>>,
     Query(params): Query<HashMap<String, String>>,
 ) -> Result<Json<ApiKeysResponse>, (StatusCode, Json<serde_json::Value>)> {
+    let auth_context = auth_context.and_then(|e| e.0);
     // Authorization: enumerating API keys is Admin/Super only.
     require_admin(&auth_context)?;
 
@@ -1182,9 +1191,10 @@ pub async fn list_api_keys(
 /// GET /auth/keys/{key_id}
 pub async fn get_api_key(
     State(server): State<Arc<NexusServer>>,
-    Extension(auth_context): Extension<Option<AuthContext>>,
+    auth_context: Option<Extension<Option<AuthContext>>>,
     Path(key_id): Path<String>,
 ) -> Result<Json<ApiKeyResponse>, (StatusCode, Json<serde_json::Value>)> {
+    let auth_context = auth_context.and_then(|e| e.0);
     // Authorization: reading an API key record is Admin/Super only.
     require_admin(&auth_context)?;
 
@@ -1218,9 +1228,10 @@ pub async fn get_api_key(
 /// DELETE /auth/keys/{key_id}
 pub async fn delete_api_key(
     State(server): State<Arc<NexusServer>>,
-    Extension(auth_context): Extension<Option<AuthContext>>,
+    auth_context: Option<Extension<Option<AuthContext>>>,
     Path(key_id): Path<String>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
+    let auth_context = auth_context.and_then(|e| e.0);
     // Authorization: only an Admin/Super caller may delete API keys.
     require_admin(&auth_context)?;
 
@@ -1266,10 +1277,11 @@ pub async fn delete_api_key(
 /// POST /auth/keys/{key_id}/revoke
 pub async fn revoke_api_key(
     State(server): State<Arc<NexusServer>>,
-    Extension(auth_context): Extension<Option<AuthContext>>,
+    auth_context: Option<Extension<Option<AuthContext>>>,
     Path(key_id): Path<String>,
     Json(request): Json<RevokeApiKeyRequest>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
+    let auth_context = auth_context.and_then(|e| e.0);
     // Authorization: only an Admin/Super caller may revoke API keys.
     require_admin(&auth_context)?;
 

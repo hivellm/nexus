@@ -562,8 +562,8 @@ async fn async_main(_worker_threads: usize) -> anyhow::Result<()> {
             "/auth/users",
             get({
                 let server = nexus_server.clone();
-                move |ext: axum::extract::Extension<
-                    Option<nexus_core::auth::middleware::AuthContext>,
+                move |ext: Option<
+                    axum::extract::Extension<Option<nexus_core::auth::middleware::AuthContext>>,
                 >| api::auth::list_users(axum::extract::State(server), ext)
             }),
         )
@@ -571,8 +571,8 @@ async fn async_main(_worker_threads: usize) -> anyhow::Result<()> {
             "/auth/users/{username}",
             get({
                 let server = nexus_server.clone();
-                move |ext: axum::extract::Extension<
-                    Option<nexus_core::auth::middleware::AuthContext>,
+                move |ext: Option<
+                    axum::extract::Extension<Option<nexus_core::auth::middleware::AuthContext>>,
                 >,
                       path| api::auth::get_user(axum::extract::State(server), ext, path)
             }),
@@ -586,8 +586,8 @@ async fn async_main(_worker_threads: usize) -> anyhow::Result<()> {
             "/auth/users/{username}/permissions",
             get({
                 let server = nexus_server.clone();
-                move |ext: axum::extract::Extension<
-                    Option<nexus_core::auth::middleware::AuthContext>,
+                move |ext: Option<
+                    axum::extract::Extension<Option<nexus_core::auth::middleware::AuthContext>>,
                 >,
                       path| api::auth::get_user_permissions(
                     axum::extract::State(server),
@@ -606,8 +606,8 @@ async fn async_main(_worker_threads: usize) -> anyhow::Result<()> {
             "/auth/keys",
             get({
                 let server = nexus_server.clone();
-                move |ext: axum::extract::Extension<
-                    Option<nexus_core::auth::middleware::AuthContext>,
+                move |ext: Option<
+                    axum::extract::Extension<Option<nexus_core::auth::middleware::AuthContext>>,
                 >,
                       query| api::auth::list_api_keys(axum::extract::State(server), ext, query)
             }),
@@ -616,8 +616,8 @@ async fn async_main(_worker_threads: usize) -> anyhow::Result<()> {
             "/auth/keys/{key_id}",
             get({
                 let server = nexus_server.clone();
-                move |ext: axum::extract::Extension<
-                    Option<nexus_core::auth::middleware::AuthContext>,
+                move |ext: Option<
+                    axum::extract::Extension<Option<nexus_core::auth::middleware::AuthContext>>,
                 >,
                       path| api::auth::get_api_key(axum::extract::State(server), ext, path)
             }),
@@ -789,8 +789,8 @@ async fn async_main(_worker_threads: usize) -> anyhow::Result<()> {
             "/databases",
             post({
                 let server = nexus_server.clone();
-                move |ext: axum::extract::Extension<
-                    Option<nexus_core::auth::middleware::AuthContext>,
+                move |ext: Option<
+                    axum::extract::Extension<Option<nexus_core::auth::middleware::AuthContext>>,
                 >,
                       request| {
                     let manager = server.database_manager.clone();
@@ -807,8 +807,8 @@ async fn async_main(_worker_threads: usize) -> anyhow::Result<()> {
             "/databases/{name}",
             delete({
                 let server = nexus_server.clone();
-                move |ext: axum::extract::Extension<
-                    Option<nexus_core::auth::middleware::AuthContext>,
+                move |ext: Option<
+                    axum::extract::Extension<Option<nexus_core::auth::middleware::AuthContext>>,
                 >,
                       path| {
                     let manager = server.database_manager.clone();

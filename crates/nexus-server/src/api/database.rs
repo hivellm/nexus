@@ -70,9 +70,10 @@ pub struct DatabaseResponse {
 /// identity (`None`) and the check is a no-op, preserving bootstrap.
 pub async fn create_database(
     State(state): State<DatabaseState>,
-    Extension(auth_context): Extension<Option<AuthContext>>,
+    auth_context: Option<Extension<Option<AuthContext>>>,
     Json(req): Json<CreateDatabaseRequest>,
 ) -> Response {
+    let auth_context = auth_context.and_then(|e| e.0);
     if let Err((status, body)) = crate::api::auth::require_admin(&auth_context) {
         return (status, body).into_response();
     }
@@ -111,9 +112,10 @@ pub async fn create_database(
 /// to hold `Admin`/`Super`, matching [`create_database`].
 pub async fn drop_database(
     State(state): State<DatabaseState>,
-    Extension(auth_context): Extension<Option<AuthContext>>,
+    auth_context: Option<Extension<Option<AuthContext>>>,
     Path(name): Path<String>,
 ) -> Response {
+    let auth_context = auth_context.and_then(|e| e.0);
     if let Err((status, body)) = crate::api::auth::require_admin(&auth_context) {
         return (status, body).into_response();
     }
@@ -353,7 +355,7 @@ mod tests {
 
         let response = create_database(
             State(state),
-            Extension(None),
+            Some(Extension(None)),
             Json(CreateDatabaseRequest {
                 name: "test_db".to_string(),
             }),
@@ -396,7 +398,7 @@ mod tests {
 
         let response = create_database(
             State(state),
-            Extension(None),
+            Some(Extension(None)),
             Json(CreateDatabaseRequest {
                 name: "invalid name".to_string(),
             }),
@@ -421,7 +423,7 @@ mod tests {
         // Try to create again
         let response = create_database(
             State(state),
-            Extension(None),
+            Some(Extension(None)),
             Json(CreateDatabaseRequest {
                 name: "test_db".to_string(),
             }),
@@ -540,7 +542,7 @@ mod tests {
         // Drop it
         let _response1 = drop_database(
             State(state.clone()),
-            Extension(None),
+            Some(Extension(None)),
             Path("test_db".to_string()),
         )
         .await;
@@ -548,7 +550,7 @@ mod tests {
         // Recreate with same name
         let response2 = create_database(
             State(state),
-            Extension(None),
+            Some(Extension(None)),
             Json(CreateDatabaseRequest {
                 name: "test_db".to_string(),
             }),

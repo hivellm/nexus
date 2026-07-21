@@ -213,7 +213,7 @@ async fn readonly_caller_cannot_create_database_via_rest() {
     let (server, _ctx) = server_with_auth().await;
     let response = create_database(
         State(database_state(&server)),
-        Extension(caller(vec![Permission::Read])),
+        Some(Extension(caller(vec![Permission::Read]))),
         Json(CreateDatabaseRequest {
             name: "rest_readonly_db".to_string(),
         }),
@@ -231,7 +231,7 @@ async fn admin_caller_can_create_database_via_rest() {
     let (server, _ctx) = server_with_auth().await;
     let response = create_database(
         State(database_state(&server)),
-        Extension(caller(vec![Permission::Admin])),
+        Some(Extension(caller(vec![Permission::Admin]))),
         Json(CreateDatabaseRequest {
             name: "rest_admin_db".to_string(),
         }),
@@ -251,7 +251,7 @@ async fn readonly_caller_cannot_drop_database_via_rest() {
     // authorization, not on a missing database.
     let seed = create_database(
         State(database_state(&server)),
-        Extension(caller(vec![Permission::Admin])),
+        Some(Extension(caller(vec![Permission::Admin]))),
         Json(CreateDatabaseRequest {
             name: "rest_readonly_drop_db".to_string(),
         }),
@@ -261,7 +261,7 @@ async fn readonly_caller_cannot_drop_database_via_rest() {
 
     let response = drop_database(
         State(database_state(&server)),
-        Extension(caller(vec![Permission::Read])),
+        Some(Extension(caller(vec![Permission::Read]))),
         Path("rest_readonly_drop_db".to_string()),
     )
     .await;
@@ -277,7 +277,7 @@ async fn auth_disabled_caller_can_create_database_via_rest() {
     let (server, _ctx) = server_with_auth().await;
     let response = create_database(
         State(database_state(&server)),
-        Extension(None),
+        Some(Extension(None)),
         Json(CreateDatabaseRequest {
             name: "rest_bootstrap_db".to_string(),
         }),
@@ -287,5 +287,65 @@ async fn auth_disabled_caller_can_create_database_via_rest() {
         response.status(),
         axum::http::StatusCode::FORBIDDEN,
         "with auth disabled (no identity), REST database creation must not be 403'd"
+    );
+}
+
+/// Regression test for the auth-disabled 500: when authentication is
+/// disabled the auth middleware layer that injects
+/// `Extension(None::<AuthContext>)` is not applied at all (see
+/// `main.rs`'s `config.auth.enabled || cluster_enabled` gate), so the
+/// request truly carries NO `Extension<Option<AuthContext>>` — not even a
+/// `Some(None)`. Before the fix, `create_database`/`drop_database` extracted
+/// this via a bare (required) `Extension<Option<AuthContext>>` parameter,
+/// so axum's `FromRequestParts` failed with "Missing request extension" and
+/// the handler never ran, producing an HTTP 500 for every management call
+/// while auth was off. This test simulates that exact scenario — passing
+/// `None` for the optional extension — and asserts the handler still
+/// completes successfully instead of failing to extract.
+#[tokio::test]
+async fn create_database_succeeds_with_missing_auth_extension() {
+    let (server, _ctx) = server_with_auth().await;
+    let response = create_database(
+        State(database_state(&server)),
+        None,
+        Json(CreateDatabaseRequest {
+            name: "rest_missing_extension_db".to_string(),
+        }),
+    )
+    .await;
+    assert_eq!(
+        response.status(),
+        axum::http::StatusCode::OK,
+        "create_database must succeed when the Extension<Option<AuthContext>> is entirely \
+         absent (auth-disabled, middleware not applied), not fail extraction with a 500"
+    );
+}
+
+/// Same regression, for `drop_database` — the fix must cover both
+/// management handlers in `api::database`.
+#[tokio::test]
+async fn drop_database_succeeds_with_missing_auth_extension() {
+    let (server, _ctx) = server_with_auth().await;
+    let seed = create_database(
+        State(database_state(&server)),
+        None,
+        Json(CreateDatabaseRequest {
+            name: "rest_missing_extension_drop_db".to_string(),
+        }),
+    )
+    .await;
+    assert_eq!(seed.status(), axum::http::StatusCode::OK, "seed failed");
+
+    let response = drop_database(
+        State(database_state(&server)),
+        None,
+        Path("rest_missing_extension_drop_db".to_string()),
+    )
+    .await;
+    assert_eq!(
+        response.status(),
+        axum::http::StatusCode::OK,
+        "drop_database must succeed when the Extension<Option<AuthContext>> is entirely \
+         absent (auth-disabled, middleware not applied), not fail extraction with a 500"
     );
 }

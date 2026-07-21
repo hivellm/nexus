@@ -102,7 +102,7 @@ async fn readonly_key_cannot_mint_super_key() {
     let (server, _ctx) = server_with_auth().await;
     let res = create_api_key(
         State(server),
-        Extension(caller(vec![Permission::Read])),
+        Some(Extension(caller(vec![Permission::Read]))),
         Json(CreateApiKeyRequest {
             name: "pwn".to_string(),
             username: None,
@@ -123,7 +123,7 @@ async fn admin_key_cannot_escalate_to_super_via_new_key() {
     let (server, _ctx) = server_with_auth().await;
     let res = create_api_key(
         State(server),
-        Extension(caller(vec![Permission::Admin])),
+        Some(Extension(caller(vec![Permission::Admin]))),
         Json(CreateApiKeyRequest {
             name: "escalate".to_string(),
             username: None,
@@ -143,7 +143,7 @@ async fn super_key_can_mint_super_key() {
     let (server, _ctx) = server_with_auth().await;
     let res = create_api_key(
         State(server),
-        Extension(caller(vec![Permission::Super])),
+        Some(Extension(caller(vec![Permission::Super]))),
         Json(CreateApiKeyRequest {
             name: "legit".to_string(),
             username: None,
@@ -165,7 +165,7 @@ async fn readonly_key_cannot_grant_permissions() {
     let (server, _ctx) = server_with_auth().await;
     let res = grant_permissions(
         State(server),
-        Extension(caller(vec![Permission::Read])),
+        Some(Extension(caller(vec![Permission::Read]))),
         Path("someuser".to_string()),
         Json(UpdatePermissionsRequest {
             permissions: vec!["ADMIN".to_string()],
@@ -183,7 +183,7 @@ async fn readonly_key_cannot_create_user() {
     let (server, _ctx) = server_with_auth().await;
     let res = create_user(
         State(server),
-        Extension(caller(vec![Permission::Read])),
+        Some(Extension(caller(vec![Permission::Read]))),
         Json(CreateUserRequest {
             username: "victim".to_string(),
             password: Some("pw".to_string()),
@@ -202,7 +202,7 @@ async fn admin_key_can_create_user() {
     let (server, _ctx) = server_with_auth().await;
     let res = create_user(
         State(server),
-        Extension(caller(vec![Permission::Admin])),
+        Some(Extension(caller(vec![Permission::Admin]))),
         Json(CreateUserRequest {
             username: "legit-user".to_string(),
             password: Some("pw".to_string()),
@@ -221,7 +221,7 @@ async fn readonly_key_cannot_delete_user() {
     let (server, _ctx) = server_with_auth().await;
     let res = delete_user(
         State(server),
-        Extension(caller(vec![Permission::Read])),
+        Some(Extension(caller(vec![Permission::Read]))),
         Path("victim".to_string()),
     )
     .await;
@@ -236,7 +236,7 @@ async fn readonly_key_cannot_revoke_permission() {
     let (server, _ctx) = server_with_auth().await;
     let res = revoke_permission(
         State(server),
-        Extension(caller(vec![Permission::Read])),
+        Some(Extension(caller(vec![Permission::Read]))),
         Path(("victim".to_string(), "WRITE".to_string())),
     )
     .await;
@@ -251,7 +251,11 @@ async fn readonly_key_cannot_revoke_permission() {
 #[tokio::test]
 async fn readonly_key_cannot_list_users() {
     let (server, _ctx) = server_with_auth().await;
-    let res = list_users(State(server), Extension(caller(vec![Permission::Read]))).await;
+    let res = list_users(
+        State(server),
+        Some(Extension(caller(vec![Permission::Read]))),
+    )
+    .await;
     assert!(
         matches!(&res, Err((StatusCode::FORBIDDEN, _))),
         "a Read-only key must not enumerate users (403), got Ok"
@@ -261,7 +265,11 @@ async fn readonly_key_cannot_list_users() {
 #[tokio::test]
 async fn admin_key_can_list_users() {
     let (server, _ctx) = server_with_auth().await;
-    let res = list_users(State(server), Extension(caller(vec![Permission::Admin]))).await;
+    let res = list_users(
+        State(server),
+        Some(Extension(caller(vec![Permission::Admin]))),
+    )
+    .await;
     assert!(
         res.is_ok(),
         "an Admin key must be able to list users, got {res:?}"
@@ -273,7 +281,7 @@ async fn readonly_key_cannot_get_user() {
     let (server, _ctx) = server_with_auth().await;
     let res = get_user(
         State(server),
-        Extension(caller(vec![Permission::Read])),
+        Some(Extension(caller(vec![Permission::Read]))),
         Path("someuser".to_string()),
     )
     .await;
@@ -288,7 +296,7 @@ async fn readonly_key_cannot_get_user_permissions() {
     let (server, _ctx) = server_with_auth().await;
     let res = get_user_permissions(
         State(server),
-        Extension(caller(vec![Permission::Read])),
+        Some(Extension(caller(vec![Permission::Read]))),
         Path("someuser".to_string()),
     )
     .await;
@@ -303,7 +311,7 @@ async fn readonly_key_cannot_list_api_keys() {
     let (server, _ctx) = server_with_auth().await;
     let res = list_api_keys(
         State(server),
-        Extension(caller(vec![Permission::Read])),
+        Some(Extension(caller(vec![Permission::Read]))),
         Query(HashMap::new()),
     )
     .await;
@@ -318,7 +326,7 @@ async fn readonly_key_cannot_get_api_key() {
     let (server, _ctx) = server_with_auth().await;
     let res = get_api_key(
         State(server),
-        Extension(caller(vec![Permission::Read])),
+        Some(Extension(caller(vec![Permission::Read]))),
         Path("some-key-id".to_string()),
     )
     .await;
@@ -339,7 +347,7 @@ async fn auth_disabled_still_allows_management() {
     let (server, _ctx) = server_with_auth().await;
     let res = create_user(
         State(server),
-        Extension(None),
+        Some(Extension(None)),
         Json(CreateUserRequest {
             username: "bootstrap".to_string(),
             password: Some("pw".to_string()),
