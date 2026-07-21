@@ -119,6 +119,50 @@ fn test_database_name_validation() {
     assert!(manager.create_database("validName123").is_ok());
 }
 
+/// phase0_fix-multi-database-persistence-and-default G1 — a database created in
+/// one `DatabaseManager` must still exist (and keep its data) after the manager
+/// is dropped and rebuilt from the same base directory (a server restart).
+/// Today `DatabaseManager::new` only creates the default and never rediscovers
+/// existing database directories, so `alpha` is orphaned after a restart.
+#[test]
+fn databases_are_rediscovered_after_restart() {
+    let ctx = TestContext::new();
+    let base = ctx.path().to_path_buf();
+
+    // First "run": create a database and write a node into it.
+    {
+        let manager = DatabaseManager::new(base.clone()).unwrap();
+        manager.create_database("alpha").unwrap();
+        let engine = manager.get_database("alpha").unwrap();
+        engine
+            .write()
+            .execute_cypher("CREATE (:Canary {m: 'a'})")
+            .unwrap();
+    } // manager dropped — simulates shutdown
+
+    // Second "run": rebuild from the SAME base dir — simulates a restart.
+    let manager2 = DatabaseManager::new(base).unwrap();
+    assert!(
+        manager2.exists("alpha"),
+        "a database created before restart must be rediscovered from disk"
+    );
+    let engine2 = manager2.get_database("alpha").unwrap();
+    let res = engine2
+        .write()
+        .execute_cypher("MATCH (n:Canary) RETURN count(n)")
+        .unwrap();
+    let count = res
+        .rows
+        .first()
+        .and_then(|r| r.values.first())
+        .and_then(|v| v.as_u64());
+    assert_eq!(
+        count,
+        Some(1),
+        "the rediscovered database must retain its data, got {count:?}"
+    );
+}
+
 // ============================================================================
 // Cypher Command Tests
 // ============================================================================

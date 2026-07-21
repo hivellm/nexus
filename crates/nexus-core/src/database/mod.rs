@@ -78,7 +78,68 @@ impl DatabaseManager {
         // Create default database
         manager.create_database(&default_db)?;
 
+        // phase0_fix-multi-database-persistence-and-default G1 — re-adopt any
+        // database directories left under `base_dir` by a prior run, so a
+        // created database survives a restart instead of being orphaned.
+        manager.discover_existing_databases();
+
         Ok(manager)
+    }
+
+    /// Re-adopt every database directory already present under `base_dir` from a
+    /// previous run (G1). A subdirectory is treated as a database when it holds a
+    /// record store (`nodes.store`); the default (already created above) and
+    /// non-database directories (e.g. `auth`, `audit`, logs — none of which carry
+    /// a `nodes.store`) are skipped, as are entries whose name is not a valid
+    /// database name. Best-effort: a directory whose engine fails to open is
+    /// logged and skipped rather than aborting startup.
+    fn discover_existing_databases(&self) {
+        let entries = match std::fs::read_dir(&self.base_dir) {
+            Ok(e) => e,
+            Err(_) => return,
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if !path.is_dir() {
+                continue;
+            }
+            let Some(name) = path
+                .file_name()
+                .and_then(|n| n.to_str())
+                .map(str::to_string)
+            else {
+                continue;
+            };
+            // Already tracked (the default), or not a valid database name.
+            if self.databases.read().contains_key(&name) {
+                continue;
+            }
+            if name.is_empty()
+                || !name
+                    .chars()
+                    .all(|c| c.is_alphanumeric() || c == '_' || c == '-')
+            {
+                continue;
+            }
+            // Database signature: a record store lives here.
+            if !path.join("nodes.store").exists() {
+                continue;
+            }
+            match Engine::with_data_dir(&path) {
+                Ok(engine) => {
+                    self.databases
+                        .write()
+                        .insert(name.clone(), Arc::new(RwLock::new(engine)));
+                    self.states.write().insert(name, DatabaseState::Online);
+                }
+                Err(e) => {
+                    tracing::warn!(
+                        "database discovery: skipping {:?} — failed to open engine: {e}",
+                        path.display()
+                    );
+                }
+            }
+        }
     }
 
     /// Create a new database
