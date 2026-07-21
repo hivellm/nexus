@@ -642,6 +642,95 @@ impl Engine {
         }
     }
 
+    /// Enforce extended node constraints (`NODE KEY` / property-type) and
+    /// populate every registered composite B-tree for the nodes a just-finished
+    /// executor CREATE allocated in `node_from..self.storage.node_count()`.
+    ///
+    /// The executor CREATE operator runs only its own local `check_constraints`
+    /// (catalog UNIQUE / EXISTS) and never reaches the engine's extended
+    /// constraint set (`enforce_extended_node_constraints`) or
+    /// `index_composite_tuples`. Without this a bare `CREATE` silently bypassed
+    /// `NODE KEY` enforcement and left composite / NODE KEY indexes un-backed —
+    /// the sibling engine-level create path (`create_node`) has always done both
+    /// (`nodes.rs`). Runs post-write on the engine side, mirroring
+    /// [`Engine::index_typed_properties_for_new_nodes`].
+    ///
+    /// Enforcement is checked against the composite B-tree populated so far
+    /// (self-excluded), so a duplicate `NODE KEY` tuple — whether from an
+    /// earlier statement already in the index or an earlier node in the same
+    /// multi-node CREATE — is caught. On a violation the WHOLE CREATE statement
+    /// is rolled back (Neo4j rejects the entire write, never a partial one) via
+    /// [`Engine::rollback_created_range`], and the violation error is returned.
+    pub(in crate::engine) fn enforce_and_index_new_created_nodes(
+        &mut self,
+        node_from: u64,
+        rel_from: u64,
+    ) -> Result<()> {
+        let node_to = self.storage.node_count();
+        for node_id in node_from..node_to {
+            let record = match self.storage.read_node(node_id) {
+                Ok(r) => r,
+                Err(_) => continue,
+            };
+            if record.is_deleted() {
+                continue;
+            }
+            let mut label_ids = Vec::new();
+            for bit in 0..64u32 {
+                if (record.label_bits & (1u64 << bit)) != 0 {
+                    label_ids.push(bit);
+                }
+            }
+            if label_ids.is_empty() {
+                continue;
+            }
+            let properties = match self.storage.load_node_properties(node_id) {
+                Ok(Some(p)) => p,
+                _ => continue,
+            };
+            // Enforce NODE KEY / property-type against the composite B-tree
+            // populated so far (self excluded). On violation roll back the
+            // whole statement so nothing partial survives.
+            if let Err(e) =
+                self.enforce_extended_node_constraints(&label_ids, &properties, Some(node_id))
+            {
+                self.rollback_created_range(node_from, node_to, rel_from);
+                return Err(e);
+            }
+            // Populate every registered composite B-tree matching this node's
+            // labels so later nodes (this statement or a subsequent one) observe
+            // the tuple for uniqueness — the same maintenance `create_node` does.
+            if let Err(e) = self.index_composite_tuples(node_id, &label_ids, &properties) {
+                self.rollback_created_range(node_from, node_to, rel_from);
+                return Err(e);
+            }
+        }
+        Ok(())
+    }
+
+    /// Undo an entire CREATE statement whose extended-constraint enforcement
+    /// failed. Soft-deletes relationships in `rel_from..relationship_count()`
+    /// FIRST — so the [`Engine::delete_node`] live-relationship guard sees zero
+    /// remaining edges and passes — then nodes in `node_from..node_to`. Both
+    /// delete paths also evict the composite / typed / FTS / spatial index
+    /// entries and free the property blob, so the rollback leaves no index or
+    /// storage residue. Best-effort per record: a rollback that cannot fully
+    /// complete still reverts the statement maximally, and the caller surfaces
+    /// the original violation error.
+    fn rollback_created_range(&mut self, node_from: u64, node_to: u64, rel_from: u64) {
+        let rel_to = self.storage.relationship_count();
+        for rel_id in rel_from..rel_to {
+            if let Err(e) = self.delete_relationship(rel_id) {
+                tracing::warn!("CREATE rollback: deleting relationship {rel_id} failed: {e}");
+            }
+        }
+        for node_id in node_from..node_to {
+            if let Err(e) = self.delete_node(node_id) {
+                tracing::warn!("CREATE rollback: deleting node {node_id} failed: {e}");
+            }
+        }
+    }
+
     /// ISSUE #15: scoped per-commit index maintenance for explicit
     /// transactions. Replaces the previous per-COMMIT
     /// `rebuild_indexes_from_storage()` full O(N_nodes + N_rels) scan —

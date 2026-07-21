@@ -364,6 +364,25 @@ CREATE (a:Person {name: 'Alice'}), (b:Person {name: 'Bob'})
 CREATE (a)-[:KNOWS]->(b)
 ```
 
+**Index and constraint maintenance (both CREATE forms).** A node created by a
+bare `CREATE` and one created by a `MATCH…CREATE` are treated identically:
+
+- **Typed property index** — the new node is inserted into the typed property
+  B-tree for every registered `(label, key)` index, so it is immediately
+  visible to `NodeIndexSeek`, `find_exact`, and the index-backed `MERGE`
+  existence check (no `MERGE`-created duplicates of a `MATCH…CREATE` node).
+- **Composite / `NODE KEY` index** — the new node's tuple is inserted into every
+  registered composite B-tree matching its labels.
+- **Extended constraints** — `NODE KEY` (each key present, non-null, tuple
+  unique) and property-type constraints are enforced. A duplicate `NODE KEY`
+  tuple is rejected whether the duplicate comes from an earlier statement or an
+  earlier node in the same multi-node `CREATE`.
+
+A `CREATE` statement that violates an extended constraint is rejected **as a
+whole** — no partial write survives (relationships created by the statement are
+rolled back along with the nodes). Single-column `UNIQUE` / `EXISTS` constraints
+are additionally rejected up front by the executor's local check.
+
 ### SET
 
 ```cypher

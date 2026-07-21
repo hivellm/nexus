@@ -701,11 +701,31 @@ impl Engine {
                         Some("")
                     }
                 };
+                // phase0_fix-create-path-index-and-constraints — watermarks for
+                // the post-write engine-side index/constraint maintenance the
+                // executor CREATE operator skips (same as the standalone branch).
+                let pre_create_node_count = self.storage.node_count();
+                let pre_create_rel_count = self.storage.relationship_count();
                 let result = self.execute_match_create_query(ast, query_str_opt)?;
 
                 // CRITICAL: Sync executor's store back to engine's storage
                 // The executor has a cloned store, so changes need to be synced back
                 self.storage = self.executor.get_store();
+
+                // M-2 — enforce NODE KEY / property-type + populate composite
+                // B-trees for the just-created nodes (rolling the statement back
+                // on a violation); the executor CREATE operator never reaches the
+                // engine's extended-constraint set.
+                self.enforce_and_index_new_created_nodes(
+                    pre_create_node_count,
+                    pre_create_rel_count,
+                )?;
+                // C-5 — the executor CREATE operator maintains only its cloned
+                // label index; index the typed property B-tree for these nodes
+                // here (as the standalone-CREATE branch already does) so they are
+                // visible to `find_exact` / `NodeIndexSeek` and the index-backed
+                // MERGE existence check.
+                self.index_typed_properties_for_new_nodes(pre_create_node_count);
 
                 match source {
                     DispatchSource::TopLevel(_) => {
@@ -774,6 +794,7 @@ impl Engine {
             // (manual pattern walk in `match_exec.rs`), which never
             // indexed the node at all.
             let pre_create_node_count = self.storage.node_count();
+            let pre_create_rel_count = self.storage.relationship_count();
             let result = match source {
                 DispatchSource::TopLevel(query) => {
                     let query_obj = executor::Query {
@@ -795,6 +816,14 @@ impl Engine {
 
             // CRITICAL: Sync executor's store back to engine's storage
             self.storage = self.executor.get_store();
+
+            // phase0_fix-create-path-index-and-constraints M-2 — the executor
+            // CREATE operator runs only its local UNIQUE / EXISTS check, never
+            // the engine's NODE KEY / property-type enforcement or composite-index
+            // maintenance. Enforce + populate composite B-trees here (rolling the
+            // statement back on a violation) BEFORE the typed-index step, so a
+            // rejected CREATE leaves no index residue.
+            self.enforce_and_index_new_created_nodes(pre_create_node_count, pre_create_rel_count)?;
 
             self.index_typed_properties_for_new_nodes(pre_create_node_count);
 
