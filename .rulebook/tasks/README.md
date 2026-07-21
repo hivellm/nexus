@@ -9,7 +9,6 @@
 | Status | Task | Progress | Description |
 |--------|------|----------|-------------|
 | ⬚ | phase0_fix-cypher-unbounded-alloc-oom | 0/22 | fix cypher unbounded alloc oom |
-| ⬚ | phase0_fix-db-schema-procedures-return-empty | 0/5 | fix db schema procedures return empty |
 | ⬚ | phase0_fix-deleted-properties-resurrected-on-rebuild | 0/10 | fix deleted properties resurrected on rebuild |
 | ⬚ | phase0_fix-fts-async-writer-ordering | 0/10 | fix fts async writer ordering |
 | ⬚ | phase0_fix-ingest-bulk-path | 0/13 | fix ingest bulk path |
@@ -17,6 +16,7 @@
 | ⬚ | phase0_fix-match-create-inline-node-rel-dropped | 0/6 | fix match create inline node rel dropped |
 | ⬚ | phase0_fix-merge-relationship-dropped | 0/13 | fix merge relationship dropped |
 | ⬚ | phase0_fix-optional-match-var-scoping | 0/11 | fix optional match var scoping |
+| ⬚ | phase0_fix-order-by-on-call-yield | 0/6 | fix order by on call yield |
 | ⬚ | phase0_fix-password-hashing | 0/16 | fix password hashing |
 | ⬚ | phase0_fix-plan-reorder-drops-predicates | 0/15 | fix plan reorder drops predicates |
 | ⬚ | phase0_fix-relationship-publish-ordering | 0/13 | fix relationship publish ordering |
@@ -42,7 +42,7 @@
 
 | Status | Task | Progress | Description |
 |--------|------|----------|-------------|
-| 🔄 | phase9_store-lock-read-concurrency | 7/14 | store lock read concurrency |
+| 🔄 | phase9_store-lock-read-concurrency | 9/14 | store lock read concurrency |
 
 ## phase10
 
