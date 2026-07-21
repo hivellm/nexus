@@ -371,6 +371,67 @@ fn test_percentile_disc_and_cont_hand_computed() {
 }
 
 // ============================================================================
+// phase0_fix-cypher-eval-panics — percentileCont must validate its
+// percentile argument instead of indexing out of bounds or silently
+// saturating.
+// ============================================================================
+
+#[test]
+fn test_percentile_cont_out_of_range_high_errors() {
+    let (mut engine, _ctx) = setup_test_engine().unwrap();
+    engine
+        .execute_cypher("CREATE (:StatP {v: 1.0}), (:StatP {v: 2.0}), (:StatP {v: 3.0})")
+        .unwrap();
+    let result = engine.execute_cypher("MATCH (n:StatP) RETURN percentileCont(n.v, 1.5) AS y");
+    assert!(
+        result.is_err(),
+        "percentileCont with percentile > 1.0 must error, not panic OOB; got: {:?}",
+        result
+    );
+}
+
+// Note: a negative percentile literal (e.g. `-0.5`) parses as a `UnaryOp`,
+// not a `Literal`, so the planner's `percentileCont(...)` extraction (a
+// separate, out-of-scope code path in `executor/planner/queries/{planner_core,strategy}.rs`)
+// silently drops the whole aggregation before it ever reaches the executor —
+// there is currently no Cypher query text that reaches
+// `Aggregation::PercentileCont` with a negative `percentile` field. The
+// executor-level [0,1] guard added here is covered directly instead, in
+// `crates/nexus-core/src/executor/operators/aggregate/tests.rs::percentile_cont_rejects_negative_percentile`.
+
+#[test]
+fn test_percentile_cont_boundary_values_succeed() {
+    let (mut engine, _ctx) = setup_test_engine().unwrap();
+    engine
+        .execute_cypher("CREATE (:StatP {v: 1.0}), (:StatP {v: 2.0}), (:StatP {v: 3.0})")
+        .unwrap();
+
+    let result = engine
+        .execute_cypher("MATCH (n:StatP) RETURN percentileCont(n.v, 0.0) AS y")
+        .expect("percentileCont(n.v, 0.0) is a valid boundary and must succeed");
+    assert!((get_single_value(&result).as_f64().unwrap() - 1.0).abs() < 0.000_01);
+
+    let result = engine
+        .execute_cypher("MATCH (n:StatP) RETURN percentileCont(n.v, 1.0) AS y")
+        .expect("percentileCont(n.v, 1.0) is a valid boundary and must succeed");
+    assert!((get_single_value(&result).as_f64().unwrap() - 3.0).abs() < 0.000_01);
+}
+
+#[test]
+fn test_percentile_cont_just_past_boundary_errors() {
+    let (mut engine, _ctx) = setup_test_engine().unwrap();
+    engine
+        .execute_cypher("CREATE (:StatP {v: 1.0}), (:StatP {v: 2.0}), (:StatP {v: 3.0})")
+        .unwrap();
+    let result = engine.execute_cypher("MATCH (n:StatP) RETURN percentileCont(n.v, 1.0001) AS y");
+    assert!(
+        result.is_err(),
+        "percentileCont just past the [0,1] boundary must error; got: {:?}",
+        result
+    );
+}
+
+// ============================================================================
 // Multiple comma-separated patterns in one CREATE
 // ============================================================================
 

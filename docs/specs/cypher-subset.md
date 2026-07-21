@@ -284,6 +284,16 @@ AggFunc ::= 'COUNT' '(' ('DISTINCT')? Expr ')'
           | 'COLLECT' '(' Expr ')'  // V1
 ```
 
+**Argument-domain & overflow errors.** These operations return a bounded Cypher
+error (never a panic or a silently wrapped value) on out-of-range input:
+
+- `percentileCont(expr, p)` / `percentileDisc(expr, p)` require `p` in `[0.0, 1.0]`
+  (a value outside the range, or `NaN`, is rejected).
+- Temporal arithmetic — `date`/`datetime`/`localdatetime` `±` `duration` — errors
+  when the result would leave the representable date range instead of panicking.
+- Duration arithmetic — `duration ± duration` — errors on component overflow
+  instead of wrapping.
+
 ## KNN Procedures (MVP)
 
 ### vector.knn

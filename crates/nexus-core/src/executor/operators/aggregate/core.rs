@@ -846,6 +846,14 @@ impl Executor {
                         Aggregation::PercentileCont {
                             column, percentile, ..
                         } => {
+                            // Neo4j requires the percentile argument to be in [0.0, 1.0];
+                            // this also rejects NaN (all range comparisons with NaN are
+                            // false), which would otherwise poison `position` below.
+                            if !(0.0..=1.0).contains(percentile) {
+                                return Err(Error::CypherExecution(format!(
+                                    "percentileCont() requires a percentile between 0.0 and 1.0, got {percentile}"
+                                )));
+                            }
                             // See PercentileDisc above for why this uses
                             // extract_value_from_row instead of get_column_index.
                             let mut values: Vec<f64> = group_rows
@@ -862,10 +870,13 @@ impl Executor {
                                 values.sort_by(|a, b| {
                                     a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal)
                                 });
-                                // Continuous percentile: linear interpolation
+                                // Continuous percentile: linear interpolation.
+                                // lower_idx/upper_idx are clamped defensively (mirrors
+                                // PercentileDisc above) even though the [0,1] validation
+                                // already rules out the only way this could go OOB.
                                 let position = *percentile * (values.len() - 1) as f64;
-                                let lower_idx = position.floor() as usize;
-                                let upper_idx = position.ceil() as usize;
+                                let lower_idx = (position.floor() as usize).min(values.len() - 1);
+                                let upper_idx = (position.ceil() as usize).min(values.len() - 1);
 
                                 let result = if lower_idx == upper_idx {
                                     values[lower_idx]

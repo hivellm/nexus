@@ -390,3 +390,128 @@ fn test_datetime_month_crossover() {
         value_str
     );
 }
+
+// ============================================================================
+// phase0_fix-cypher-eval-panics — overflow must surface as a Cypher error,
+// never panic and never silently wrap.
+// ============================================================================
+
+#[test]
+fn test_date_plus_duration_days_overflow_errors() {
+    let (mut engine, _ctx) = setup_test_engine().unwrap();
+    let result =
+        engine.execute_cypher("RETURN date('2020-01-01') + duration({days: 999999999}) AS result");
+    assert!(
+        result.is_err(),
+        "date + duration with an out-of-range day count must error, not panic or wrap; got: {:?}",
+        result
+    );
+}
+
+#[test]
+fn test_datetime_plus_duration_days_overflow_errors() {
+    let (mut engine, _ctx) = setup_test_engine().unwrap();
+    let result = engine.execute_cypher(
+        "RETURN datetime('2020-01-01T00:00:00Z') + duration({days: 100000000}) AS result",
+    );
+    assert!(
+        result.is_err(),
+        "datetime + duration with an out-of-range day count must error, not panic or wrap; got: {:?}",
+        result
+    );
+}
+
+#[test]
+fn test_date_minus_duration_days_overflow_errors() {
+    let (mut engine, _ctx) = setup_test_engine().unwrap();
+    let result =
+        engine.execute_cypher("RETURN date('2020-01-01') - duration({days: 999999999}) AS result");
+    assert!(
+        result.is_err(),
+        "date - duration with an out-of-range day count must error, not panic or wrap; got: {:?}",
+        result
+    );
+}
+
+#[test]
+fn test_datetime_minus_duration_days_overflow_errors() {
+    let (mut engine, _ctx) = setup_test_engine().unwrap();
+    let result = engine.execute_cypher(
+        "RETURN datetime('2020-01-01T00:00:00Z') - duration({days: 100000000}) AS result",
+    );
+    assert!(
+        result.is_err(),
+        "datetime - duration with an out-of-range day count must error, not panic or wrap; got: {:?}",
+        result
+    );
+}
+
+#[test]
+fn test_naive_datetime_plus_duration_days_overflow_errors() {
+    let (mut engine, _ctx) = setup_test_engine().unwrap();
+    // No trailing 'Z'/offset — covers the offset-less datetime literal form
+    // (may resolve via either the RFC3339 or NaiveDateTime parse branch
+    // depending on chrono's leniency; both must be overflow-safe).
+    let result = engine.execute_cypher(
+        "RETURN datetime('2020-01-01T00:00:00') + duration({days: 100000000}) AS result",
+    );
+    assert!(
+        result.is_err(),
+        "naive datetime + duration with an out-of-range day count must error, not panic or wrap; got: {:?}",
+        result
+    );
+}
+
+#[test]
+fn test_date_plus_duration_large_but_in_range_succeeds() {
+    let (mut engine, _ctx) = setup_test_engine().unwrap();
+    // ~2,739 years — comfortably inside chrono's representable range
+    // (roughly +/-262,000 years) — this must still work after the fix.
+    let result =
+        engine.execute_cypher("RETURN date('2020-01-01') + duration({days: 1000000}) AS result");
+    assert!(
+        result.is_ok(),
+        "a large but in-range day count must still succeed; got: {:?}",
+        result
+    );
+}
+
+#[test]
+fn test_duration_plus_duration_years_overflow_errors() {
+    let (mut engine, _ctx) = setup_test_engine().unwrap();
+    let result = engine.execute_cypher(
+        "RETURN duration({years: 9223372036854775807}) + duration({years: 1}) AS result",
+    );
+    assert!(
+        result.is_err(),
+        "duration + duration years overflow (i64::MAX + 1) must error in both debug and release; got: {:?}",
+        result
+    );
+}
+
+#[test]
+fn test_duration_plus_duration_years_boundary_succeeds() {
+    let (mut engine, _ctx) = setup_test_engine().unwrap();
+    // i64::MAX - 1 + 1 == i64::MAX — no overflow, must succeed.
+    let result = engine.execute_cypher(
+        "RETURN duration({years: 9223372036854775806}) + duration({years: 1}) AS result",
+    );
+    assert!(
+        result.is_ok(),
+        "duration + duration exactly at i64::MAX must succeed; got: {:?}",
+        result
+    );
+}
+
+#[test]
+fn test_duration_minus_duration_years_underflow_errors() {
+    let (mut engine, _ctx) = setup_test_engine().unwrap();
+    let result = engine.execute_cypher(
+        "RETURN duration({years: -9223372036854775808}) - duration({years: 1}) AS result",
+    );
+    assert!(
+        result.is_err(),
+        "duration - duration years underflow (i64::MIN - 1) must error in both debug and release; got: {:?}",
+        result
+    );
+}

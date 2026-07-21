@@ -224,6 +224,35 @@ fn disable_columnar_hint_forces_aggregate_row_path_above_threshold() {
 }
 
 #[test]
+fn percentile_cont_rejects_negative_percentile() {
+    // phase0_fix-cypher-eval-panics §4 — a negative percentile currently
+    // cannot be produced by the Cypher parser (a negative numeric literal
+    // is a `UnaryOp`, not a `Literal`, so the planner's aggregation
+    // extraction silently drops the whole `percentileCont(...)` call rather
+    // than ever constructing this `Aggregation` with a negative value — a
+    // separate, out-of-scope planner gap). This test exercises the
+    // aggregate executor's own validation directly so the [0,1] guard is
+    // proven correct independent of how a negative value might reach it.
+    let nodes: Vec<Value> = (1..=3)
+        .map(|i| build_person(i, i as i64, i as f64))
+        .collect();
+    let (executor, _ctx) = create_test_executor();
+    let mut context = ExecutionContext::new(HashMap::new(), None);
+    context.set_variable("n", Value::Array(nodes));
+    let agg = Aggregation::PercentileCont {
+        column: "n.score".into(),
+        alias: "y".into(),
+        percentile: -0.5,
+    };
+    let result = executor.execute_aggregate(&mut context, &[], std::slice::from_ref(&agg), None);
+    assert!(
+        result.is_err(),
+        "percentileCont with a negative percentile must error, not silently saturate; got: {:?}",
+        result
+    );
+}
+
+#[test]
 fn aggregate_columnar_matches_row_path_on_10k_f64() {
     let nodes: Vec<Value> = (0..10_000)
         .map(|i| build_person(i, i as i64, i as f64 * 0.5))

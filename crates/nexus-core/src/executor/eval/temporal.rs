@@ -8,6 +8,68 @@ use crate::{Error, Result};
 use chrono::{Datelike, TimeZone, Timelike};
 use serde_json::{Map, Value};
 
+/// Combines `years * 12 + months` into a total month delta using checked
+/// arithmetic. Both components come from user-controlled duration literals
+/// (e.g. `duration({years: 9223372036854775807})`), so a plain `*`/`+`
+/// panics on overflow in debug builds and silently wraps in release.
+fn checked_total_months(years: i64, months: i64) -> Result<i64> {
+    years
+        .checked_mul(12)
+        .and_then(|m| m.checked_add(months))
+        .ok_or_else(|| {
+            Error::CypherExecution(
+                "duration arithmetic overflow: year/month component exceeds i64 range".to_string(),
+            )
+        })
+}
+
+/// Combines `days*86400 + hours*3600 + minutes*60 + seconds` into a total
+/// second delta using checked arithmetic, for the same reason as
+/// [`checked_total_months`].
+fn checked_duration_secs(days: i64, hours: i64, minutes: i64, seconds: i64) -> Result<i64> {
+    let overflow = || {
+        Error::CypherExecution(
+            "duration arithmetic overflow: day/hour/minute/second component exceeds i64 range"
+                .to_string(),
+        )
+    };
+    let d = days.checked_mul(86400).ok_or_else(overflow)?;
+    let h = hours.checked_mul(3600).ok_or_else(overflow)?;
+    let m = minutes.checked_mul(60).ok_or_else(overflow)?;
+    d.checked_add(h)
+        .and_then(|dh| dh.checked_add(m))
+        .and_then(|dhm| dhm.checked_add(seconds))
+        .ok_or_else(overflow)
+}
+
+/// Applies a signed month delta (positive to add, negative to subtract) to
+/// a (year, month) pair using checked arithmetic throughout — including the
+/// final `i64 -> i32` year narrowing, which chrono's own `NaiveDate::with_year`
+/// takes as a bare `i32` and would otherwise wrap silently for out-of-range
+/// years. Returns a Cypher error instead of panicking or wrapping.
+fn checked_month_rollover(
+    current_year: i32,
+    current_month: u32,
+    signed_total_months: i64,
+) -> Result<(i32, u32)> {
+    let overflow = || {
+        Error::CypherExecution(
+            "date arithmetic overflow: resulting year/month is out of range".to_string(),
+        )
+    };
+    let new_month = (current_month as i64)
+        .checked_add(signed_total_months)
+        .ok_or_else(overflow)?;
+    let zero_based = new_month.checked_sub(1).ok_or_else(overflow)?;
+    let year_offset = zero_based.div_euclid(12);
+    let final_month = (zero_based.rem_euclid(12) + 1) as u32;
+    let final_year_i64 = (current_year as i64)
+        .checked_add(year_offset)
+        .ok_or_else(overflow)?;
+    let final_year = i32::try_from(final_year_i64).map_err(|_| overflow())?;
+    Ok((final_year, final_month))
+}
+
 impl Executor {
     pub(in crate::executor) fn is_duration_object(value: &Value) -> bool {
         if let Value::Object(map) = value {
@@ -77,13 +139,18 @@ impl Executor {
             let (y1, mo1, d1, h1, mi1, s1) = Self::extract_duration_components(left);
             let (y2, mo2, d2, h2, mi2, s2) = Self::extract_duration_components(right);
 
+            let overflow = |unit: &str| {
+                Error::CypherExecution(format!(
+                    "duration arithmetic overflow: {unit} component exceeds i64 range"
+                ))
+            };
             let mut result_map = Map::new();
-            let years = y1 + y2;
-            let months = mo1 + mo2;
-            let days = d1 + d2;
-            let hours = h1 + h2;
-            let minutes = mi1 + mi2;
-            let seconds = s1 + s2;
+            let years = y1.checked_add(y2).ok_or_else(|| overflow("years"))?;
+            let months = mo1.checked_add(mo2).ok_or_else(|| overflow("months"))?;
+            let days = d1.checked_add(d2).ok_or_else(|| overflow("days"))?;
+            let hours = h1.checked_add(h2).ok_or_else(|| overflow("hours"))?;
+            let minutes = mi1.checked_add(mi2).ok_or_else(|| overflow("minutes"))?;
+            let seconds = s1.checked_add(s2).ok_or_else(|| overflow("seconds"))?;
 
             if years != 0 {
                 result_map.insert("years".to_string(), Value::Number(years.into()));
@@ -143,13 +210,18 @@ impl Executor {
             let (y1, mo1, d1, h1, mi1, s1) = Self::extract_duration_components(left);
             let (y2, mo2, d2, h2, mi2, s2) = Self::extract_duration_components(right);
 
+            let overflow = |unit: &str| {
+                Error::CypherExecution(format!(
+                    "duration arithmetic overflow: {unit} component exceeds i64 range"
+                ))
+            };
             let mut result_map = Map::new();
-            let years = y1 - y2;
-            let months = mo1 - mo2;
-            let days = d1 - d2;
-            let hours = h1 - h2;
-            let minutes = mi1 - mi2;
-            let seconds = s1 - s2;
+            let years = y1.checked_sub(y2).ok_or_else(|| overflow("years"))?;
+            let months = mo1.checked_sub(mo2).ok_or_else(|| overflow("months"))?;
+            let days = d1.checked_sub(d2).ok_or_else(|| overflow("days"))?;
+            let hours = h1.checked_sub(h2).ok_or_else(|| overflow("hours"))?;
+            let minutes = mi1.checked_sub(mi2).ok_or_else(|| overflow("minutes"))?;
+            let seconds = s1.checked_sub(s2).ok_or_else(|| overflow("seconds"))?;
 
             if years != 0 {
                 result_map.insert("years".to_string(), Value::Number(years.into()));
@@ -191,14 +263,12 @@ impl Executor {
 
                 // Add years and months using checked arithmetic
                 if years != 0 || months != 0 {
-                    let total_months = years * 12 + months;
-                    let new_month = result.month() as i64 + total_months;
-                    let year_offset = (new_month - 1).div_euclid(12);
-                    let final_month = ((new_month - 1).rem_euclid(12) + 1) as u32;
-                    let final_year = result.year() as i64 + year_offset;
+                    let total_months = checked_total_months(years, months)?;
+                    let (final_year, final_month) =
+                        checked_month_rollover(result.year(), result.month(), total_months)?;
 
                     if let Some(new_dt) = result
-                        .with_year(final_year as i32)
+                        .with_year(final_year)
                         .and_then(|d| d.with_month(final_month))
                     {
                         result = new_dt;
@@ -206,8 +276,17 @@ impl Executor {
                 }
 
                 // Add days, hours, minutes, seconds
-                let duration_secs = days * 86400 + hours * 3600 + minutes * 60 + seconds;
-                result = result + chrono::Duration::seconds(duration_secs);
+                let duration_secs = checked_duration_secs(days, hours, minutes, seconds)?;
+                let delta = chrono::Duration::try_seconds(duration_secs).ok_or_else(|| {
+                    Error::CypherExecution(
+                        "duration arithmetic overflow: seconds component is outside chrono's representable range".to_string(),
+                    )
+                })?;
+                result = result.checked_add_signed(delta).ok_or_else(|| {
+                    Error::CypherExecution(
+                        "datetime arithmetic overflow: result is outside chrono's representable date range".to_string(),
+                    )
+                })?;
 
                 return Ok(Value::String(result.to_rfc3339()));
             }
@@ -218,14 +297,12 @@ impl Executor {
 
                 // Add years and months
                 if years != 0 || months != 0 {
-                    let total_months = years * 12 + months;
-                    let new_month = result.month() as i64 + total_months;
-                    let year_offset = (new_month - 1).div_euclid(12);
-                    let final_month = ((new_month - 1).rem_euclid(12) + 1) as u32;
-                    let final_year = result.year() as i64 + year_offset;
+                    let total_months = checked_total_months(years, months)?;
+                    let (final_year, final_month) =
+                        checked_month_rollover(result.year(), result.month(), total_months)?;
 
                     if let Some(new_dt) = result
-                        .with_year(final_year as i32)
+                        .with_year(final_year)
                         .and_then(|d| d.with_month(final_month))
                     {
                         result = new_dt;
@@ -233,8 +310,17 @@ impl Executor {
                 }
 
                 // Add days, hours, minutes, seconds
-                let duration_secs = days * 86400 + hours * 3600 + minutes * 60 + seconds;
-                result = result + chrono::Duration::seconds(duration_secs);
+                let duration_secs = checked_duration_secs(days, hours, minutes, seconds)?;
+                let delta = chrono::Duration::try_seconds(duration_secs).ok_or_else(|| {
+                    Error::CypherExecution(
+                        "duration arithmetic overflow: seconds component is outside chrono's representable range".to_string(),
+                    )
+                })?;
+                result = result.checked_add_signed(delta).ok_or_else(|| {
+                    Error::CypherExecution(
+                        "datetime arithmetic overflow: result is outside chrono's representable date range".to_string(),
+                    )
+                })?;
 
                 return Ok(Value::String(
                     result.format("%Y-%m-%dT%H:%M:%S").to_string(),
@@ -247,14 +333,12 @@ impl Executor {
 
                 // Add years and months
                 if years != 0 || months != 0 {
-                    let total_months = years * 12 + months;
-                    let new_month = result.month() as i64 + total_months;
-                    let year_offset = (new_month - 1).div_euclid(12);
-                    let final_month = ((new_month - 1).rem_euclid(12) + 1) as u32;
-                    let final_year = result.year() as i64 + year_offset;
+                    let total_months = checked_total_months(years, months)?;
+                    let (final_year, final_month) =
+                        checked_month_rollover(result.year(), result.month(), total_months)?;
 
                     if let Some(new_dt) = result
-                        .with_year(final_year as i32)
+                        .with_year(final_year)
                         .and_then(|d| d.with_month(final_month))
                     {
                         result = new_dt;
@@ -262,7 +346,16 @@ impl Executor {
                 }
 
                 // Add days
-                result = result + chrono::Duration::days(days);
+                let delta = chrono::Duration::try_days(days).ok_or_else(|| {
+                    Error::CypherExecution(
+                        "duration arithmetic overflow: days component is outside chrono's representable range".to_string(),
+                    )
+                })?;
+                result = result.checked_add_signed(delta).ok_or_else(|| {
+                    Error::CypherExecution(
+                        "date arithmetic overflow: result is outside chrono's representable date range".to_string(),
+                    )
+                })?;
 
                 return Ok(Value::String(result.format("%Y-%m-%d").to_string()));
             }
@@ -287,14 +380,17 @@ impl Executor {
 
                 // Subtract years and months
                 if years != 0 || months != 0 {
-                    let total_months = years * 12 + months;
-                    let new_month = result.month() as i64 - total_months;
-                    let year_offset = (new_month - 1).div_euclid(12);
-                    let final_month = ((new_month - 1).rem_euclid(12) + 1) as u32;
-                    let final_year = result.year() as i64 + year_offset;
+                    let total_months = checked_total_months(years, months)?;
+                    let negated_months = total_months.checked_neg().ok_or_else(|| {
+                        Error::CypherExecution(
+                            "duration arithmetic overflow: negating year/month delta exceeds i64 range".to_string(),
+                        )
+                    })?;
+                    let (final_year, final_month) =
+                        checked_month_rollover(result.year(), result.month(), negated_months)?;
 
                     if let Some(new_dt) = result
-                        .with_year(final_year as i32)
+                        .with_year(final_year)
                         .and_then(|d| d.with_month(final_month))
                     {
                         result = new_dt;
@@ -302,8 +398,17 @@ impl Executor {
                 }
 
                 // Subtract days, hours, minutes, seconds
-                let duration_secs = days * 86400 + hours * 3600 + minutes * 60 + seconds;
-                result = result - chrono::Duration::seconds(duration_secs);
+                let duration_secs = checked_duration_secs(days, hours, minutes, seconds)?;
+                let delta = chrono::Duration::try_seconds(duration_secs).ok_or_else(|| {
+                    Error::CypherExecution(
+                        "duration arithmetic overflow: seconds component is outside chrono's representable range".to_string(),
+                    )
+                })?;
+                result = result.checked_sub_signed(delta).ok_or_else(|| {
+                    Error::CypherExecution(
+                        "datetime arithmetic overflow: result is outside chrono's representable date range".to_string(),
+                    )
+                })?;
 
                 return Ok(Value::String(result.to_rfc3339()));
             }
@@ -314,14 +419,17 @@ impl Executor {
 
                 // Subtract years and months
                 if years != 0 || months != 0 {
-                    let total_months = years * 12 + months;
-                    let new_month = result.month() as i64 - total_months;
-                    let year_offset = (new_month - 1).div_euclid(12);
-                    let final_month = ((new_month - 1).rem_euclid(12) + 1) as u32;
-                    let final_year = result.year() as i64 + year_offset;
+                    let total_months = checked_total_months(years, months)?;
+                    let negated_months = total_months.checked_neg().ok_or_else(|| {
+                        Error::CypherExecution(
+                            "duration arithmetic overflow: negating year/month delta exceeds i64 range".to_string(),
+                        )
+                    })?;
+                    let (final_year, final_month) =
+                        checked_month_rollover(result.year(), result.month(), negated_months)?;
 
                     if let Some(new_dt) = result
-                        .with_year(final_year as i32)
+                        .with_year(final_year)
                         .and_then(|d| d.with_month(final_month))
                     {
                         result = new_dt;
@@ -329,8 +437,17 @@ impl Executor {
                 }
 
                 // Subtract days, hours, minutes, seconds
-                let duration_secs = days * 86400 + hours * 3600 + minutes * 60 + seconds;
-                result = result - chrono::Duration::seconds(duration_secs);
+                let duration_secs = checked_duration_secs(days, hours, minutes, seconds)?;
+                let delta = chrono::Duration::try_seconds(duration_secs).ok_or_else(|| {
+                    Error::CypherExecution(
+                        "duration arithmetic overflow: seconds component is outside chrono's representable range".to_string(),
+                    )
+                })?;
+                result = result.checked_sub_signed(delta).ok_or_else(|| {
+                    Error::CypherExecution(
+                        "datetime arithmetic overflow: result is outside chrono's representable date range".to_string(),
+                    )
+                })?;
 
                 return Ok(Value::String(
                     result.format("%Y-%m-%dT%H:%M:%S").to_string(),
@@ -343,14 +460,17 @@ impl Executor {
 
                 // Subtract years and months
                 if years != 0 || months != 0 {
-                    let total_months = years * 12 + months;
-                    let new_month = result.month() as i64 - total_months;
-                    let year_offset = (new_month - 1).div_euclid(12);
-                    let final_month = ((new_month - 1).rem_euclid(12) + 1) as u32;
-                    let final_year = result.year() as i64 + year_offset;
+                    let total_months = checked_total_months(years, months)?;
+                    let negated_months = total_months.checked_neg().ok_or_else(|| {
+                        Error::CypherExecution(
+                            "duration arithmetic overflow: negating year/month delta exceeds i64 range".to_string(),
+                        )
+                    })?;
+                    let (final_year, final_month) =
+                        checked_month_rollover(result.year(), result.month(), negated_months)?;
 
                     if let Some(new_dt) = result
-                        .with_year(final_year as i32)
+                        .with_year(final_year)
                         .and_then(|d| d.with_month(final_month))
                     {
                         result = new_dt;
@@ -358,7 +478,16 @@ impl Executor {
                 }
 
                 // Subtract days
-                result = result - chrono::Duration::days(days);
+                let delta = chrono::Duration::try_days(days).ok_or_else(|| {
+                    Error::CypherExecution(
+                        "duration arithmetic overflow: days component is outside chrono's representable range".to_string(),
+                    )
+                })?;
+                result = result.checked_sub_signed(delta).ok_or_else(|| {
+                    Error::CypherExecution(
+                        "date arithmetic overflow: result is outside chrono's representable date range".to_string(),
+                    )
+                })?;
 
                 return Ok(Value::String(result.format("%Y-%m-%d").to_string()));
             }
