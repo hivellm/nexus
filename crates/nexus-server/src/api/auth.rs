@@ -23,25 +23,39 @@ use std::sync::Arc;
 /// authenticated). When authentication is disabled the request carries no
 /// identity (`None`) and there are no keys/permissions to escalate; that
 /// surface is hardened separately by `phase0_fix-server-secure-defaults-and-dos`.
-fn forbidden(message: &str) -> (StatusCode, Json<serde_json::Value>) {
+pub(crate) fn forbidden(message: &str) -> (StatusCode, Json<serde_json::Value>) {
     (
         StatusCode::FORBIDDEN,
         Json(serde_json::json!({ "error": message })),
     )
 }
 
+/// Whether the caller holds `Admin` (or `Super`, which includes it).
+///
+/// Semantics mirror [`require_admin`]: `None` (auth disabled, no identity)
+/// is treated as allowed — bootstrap must not be blocked here. `Some(ctx)`
+/// is allowed only if the caller's permission set includes `Admin`.
+///
+/// Shared with the Cypher DDL path (`CREATE/DROP DATABASE`), which needs a
+/// boolean rather than the `(StatusCode, Json)` tuple `require_admin`
+/// returns.
+pub(crate) fn caller_is_admin(auth_context: &Option<AuthContext>) -> bool {
+    match auth_context {
+        Some(ctx) => PermissionSet::from_vec(ctx.api_key.permissions.clone())
+            .has_permission(&Permission::Admin),
+        None => true,
+    }
+}
+
 /// Require the calling key to hold `Admin` (or `Super`, which includes it)
 /// before it may manage users, keys, or permissions.
-fn require_admin(
+pub(crate) fn require_admin(
     auth_context: &Option<AuthContext>,
 ) -> Result<(), (StatusCode, Json<serde_json::Value>)> {
-    if let Some(ctx) = auth_context {
-        let caller = PermissionSet::from_vec(ctx.api_key.permissions.clone());
-        if !caller.has_permission(&Permission::Admin) {
-            return Err(forbidden(
-                "Insufficient permissions: this operation requires Admin or Super",
-            ));
-        }
+    if !caller_is_admin(auth_context) {
+        return Err(forbidden(
+            "Insufficient permissions: this operation requires Admin or Super",
+        ));
     }
     Ok(())
 }

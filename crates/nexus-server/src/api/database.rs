@@ -7,10 +7,11 @@
 //! - GET /management/databases/:name - Get database info
 
 use axum::{
-    extract::{Path, State},
+    extract::{Extension, Path, State},
     http::StatusCode,
     response::{IntoResponse, Json, Response},
 };
+use nexus_core::auth::middleware::AuthContext;
 use nexus_core::database::{DatabaseInfo, DatabaseManager};
 use parking_lot::RwLock;
 use serde::{Deserialize, Serialize};
@@ -59,11 +60,22 @@ pub struct DatabaseResponse {
     pub message: String,
 }
 
-/// Create a new database
+/// Create a new database.
+///
+/// phase0_fix-multi-database-persistence-and-default §G3 — database creation
+/// mutates server-wide state shared by every caller, so (mirroring
+/// `require_admin` in `api::auth`) it requires the calling key to hold
+/// `Admin`/`Super`. When authentication is disabled the request carries no
+/// identity (`None`) and the check is a no-op, preserving bootstrap.
 pub async fn create_database(
     State(state): State<DatabaseState>,
+    Extension(auth_context): Extension<Option<AuthContext>>,
     Json(req): Json<CreateDatabaseRequest>,
 ) -> Response {
+    if let Err((status, body)) = crate::api::auth::require_admin(&auth_context) {
+        return (status, body).into_response();
+    }
+
     let manager_arc = state.manager.clone();
     let name = req.name.clone();
     let result = tokio::task::spawn_blocking(move || {
@@ -91,11 +103,20 @@ pub async fn create_database(
     }
 }
 
-/// Drop a database
+/// Drop a database.
+///
+/// phase0_fix-multi-database-persistence-and-default §G3 — dropping a
+/// database is destructive and server-wide, so it requires the calling key
+/// to hold `Admin`/`Super`, matching [`create_database`].
 pub async fn drop_database(
     State(state): State<DatabaseState>,
+    Extension(auth_context): Extension<Option<AuthContext>>,
     Path(name): Path<String>,
 ) -> Response {
+    if let Err((status, body)) = crate::api::auth::require_admin(&auth_context) {
+        return (status, body).into_response();
+    }
+
     let manager_arc = state.manager.clone();
     let name_for_task = name.clone();
     let result = tokio::task::spawn_blocking(move || {
@@ -234,6 +255,7 @@ mod tests {
 
         let response = create_database(
             State(state),
+            Extension(None),
             Json(CreateDatabaseRequest {
                 name: "test_db".to_string(),
             }),
@@ -276,6 +298,7 @@ mod tests {
 
         let response = create_database(
             State(state),
+            Extension(None),
             Json(CreateDatabaseRequest {
                 name: "invalid name".to_string(),
             }),
@@ -300,6 +323,7 @@ mod tests {
         // Try to create again
         let response = create_database(
             State(state),
+            Extension(None),
             Json(CreateDatabaseRequest {
                 name: "test_db".to_string(),
             }),
@@ -412,11 +436,17 @@ mod tests {
         }
 
         // Drop it
-        let _response1 = drop_database(State(state.clone()), Path("test_db".to_string())).await;
+        let _response1 = drop_database(
+            State(state.clone()),
+            Extension(None),
+            Path("test_db".to_string()),
+        )
+        .await;
 
         // Recreate with same name
         let response2 = create_database(
             State(state),
+            Extension(None),
             Json(CreateDatabaseRequest {
                 name: "test_db".to_string(),
             }),

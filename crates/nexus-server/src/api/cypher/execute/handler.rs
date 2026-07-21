@@ -221,7 +221,7 @@ pub async fn execute_cypher(
     });
 
     if has_db_cmd {
-        return execute_database_commands(server, &ast, start_time).await;
+        return execute_database_commands(server, &ast, start_time, &auth_context).await;
     }
 
     // Check for user management commands

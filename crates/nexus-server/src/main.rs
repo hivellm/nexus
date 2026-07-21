@@ -795,10 +795,13 @@ async fn async_main(_worker_threads: usize) -> anyhow::Result<()> {
             "/databases",
             post({
                 let server = nexus_server.clone();
-                move |request| {
+                move |ext: axum::extract::Extension<
+                    Option<nexus_core::auth::middleware::AuthContext>,
+                >,
+                      request| {
                     let manager = server.database_manager.clone();
                     async move {
-                        api::database::create_database(axum::extract::State(api::database::DatabaseState { manager }), request).await
+                        api::database::create_database(axum::extract::State(api::database::DatabaseState { manager }), ext, request).await
                     }
                 }
             }),
@@ -819,10 +822,13 @@ async fn async_main(_worker_threads: usize) -> anyhow::Result<()> {
             "/databases/{name}",
             delete({
                 let server = nexus_server.clone();
-                move |path| {
+                move |ext: axum::extract::Extension<
+                    Option<nexus_core::auth::middleware::AuthContext>,
+                >,
+                      path| {
                     let manager = server.database_manager.clone();
                     async move {
-                        api::database::drop_database(axum::extract::State(api::database::DatabaseState { manager }), path).await
+                        api::database::drop_database(axum::extract::State(api::database::DatabaseState { manager }), ext, path).await
                     }
                 }
             }),

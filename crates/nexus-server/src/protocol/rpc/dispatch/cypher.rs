@@ -119,8 +119,18 @@ async fn dispatch_admin_if_any(
     // Same waterfall order as the REST handler (api/cypher/execute.rs)
     // so behaviour is identical regardless of transport.
     let resp: Option<CypherResponse> = if has_db {
+        // phase0_fix-multi-database-persistence-and-default §G3 —
+        // `RpcSession` only tracks a boolean `authenticated` flag (see
+        // `dispatch::admin::verify_api_key`/`mark_authenticated`); unlike
+        // the REST `/cypher` handler it has no per-connection `AuthContext`
+        // carrying the caller's `ApiKey`/permission set, so there is no
+        // caller identity to check here. Passing `&None` reuses the same
+        // "no identity" bootstrap allowance the REST path grants when auth
+        // is disabled — RPC database-management authorization is out of
+        // scope for this fix until `RpcSession` gains a per-connection
+        // `AuthContext`.
         Some(
-            execute_database_commands(state.server.clone(), ast, started)
+            execute_database_commands(state.server.clone(), ast, started, &None)
                 .await
                 .0,
         )

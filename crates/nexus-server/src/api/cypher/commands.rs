@@ -4,16 +4,43 @@
 //! lifecycle (`CREATE/SHOW/REVOKE/DELETE API KEY`).
 
 use super::*;
+use nexus_core::auth::middleware::AuthContext;
 
+/// phase0_fix-multi-database-persistence-and-default §G3 — `CREATE DATABASE`
+/// / `DROP DATABASE` mutate server-wide state, so (mirroring the REST
+/// `create_database`/`drop_database` handlers) they require the calling key
+/// to hold `Admin`/`Super`. `USE DATABASE` and `SHOW DATABASES` are read-only
+/// / navigational and stay open to any authenticated (or unauthenticated,
+/// when auth is disabled) caller.
 pub(crate) async fn execute_database_commands(
     server: Arc<NexusServer>,
     ast: &nexus_core::executor::parser::CypherQuery,
     start_time: std::time::Instant,
+    auth_context: &Option<AuthContext>,
 ) -> Json<CypherResponse> {
     let mut columns = Vec::new();
     let mut rows = Vec::new();
 
     for clause in &ast.clauses {
+        if matches!(
+            clause,
+            nexus_core::executor::parser::Clause::CreateDatabase(_)
+                | nexus_core::executor::parser::Clause::DropDatabase(_)
+        ) && !crate::api::auth::caller_is_admin(auth_context)
+        {
+            let execution_time = start_time.elapsed().as_millis() as u64;
+            return Json(CypherResponse {
+                columns: vec![],
+                rows: vec![],
+                execution_time_ms: execution_time,
+                error: Some(
+                    "Insufficient permissions: database management requires Admin or Super"
+                        .to_string(),
+                ),
+                notifications: vec![],
+            });
+        }
+
         match clause {
             nexus_core::executor::parser::Clause::UseDatabase(use_db) => {
                 // Set columns if not already set
