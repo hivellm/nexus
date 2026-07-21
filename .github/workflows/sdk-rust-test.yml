@@ -75,3 +75,64 @@ jobs:
           exit 1
         fi
         echo "Build artifacts verified successfully"
+
+  # phase14 3.4 — the reserved `_id` external-id live e2e suite
+  # (sdks/rust/tests/external_id_live.rs) previously had no CI path: it
+  # gates on NEXUS_LIVE_HOST and silently no-ops without a live server,
+  # so it never ran anywhere except manually via
+  # scripts/sdks/run-live-suites.sh. That blind spot is what let the
+  # issue #29 `_id` write-path regression ship unnoticed. This job spawns
+  # a real nexus-server and runs the suite against it so the coverage is
+  # reachable in CI, not just documented as manual.
+  live-e2e:
+    runs-on: ubuntu-latest
+    steps:
+    - name: Install Rust toolchain
+      uses: dtolnay/rust-toolchain@stable
+
+    - uses: actions/checkout@v6
+
+    - name: Cache Rust dependencies
+      uses: Swatinem/rust-cache@v2
+      with:
+        workspaces: |
+          .
+          sdks/rust
+
+    # Debug build: this is a smoke e2e against a handful of endpoints,
+    # not a performance test, and it saves several minutes over release.
+    - name: Build nexus-server
+      run: cargo build -p nexus-server
+
+    - name: Start nexus-server
+      run: |
+        mkdir -p "$RUNNER_TEMP/nexus-live-data"
+        NEXUS_DATA_DIR="$RUNNER_TEMP/nexus-live-data" \
+        NEXUS_ADDR=127.0.0.1:15474 \
+          ./target/debug/nexus-server &
+        echo $! > "$RUNNER_TEMP/nexus-server.pid"
+
+    - name: Wait for /health
+      run: |
+        for i in $(seq 1 60); do
+          if curl -sf http://127.0.0.1:15474/health > /dev/null; then
+            echo "nexus-server healthy after ${i}s"
+            exit 0
+          fi
+          sleep 1
+        done
+        echo "nexus-server did not become healthy within 60s" >&2
+        exit 1
+
+    - name: Run external_id_live suite
+      working-directory: ./sdks/rust
+      env:
+        NEXUS_LIVE_HOST: http://127.0.0.1:15474
+      run: cargo test --test external_id_live
+
+    - name: Stop nexus-server
+      if: always()
+      run: |
+        if [ -f "$RUNNER_TEMP/nexus-server.pid" ]; then
+          kill "$(cat "$RUNNER_TEMP/nexus-server.pid")" || true
+        fi

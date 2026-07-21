@@ -580,20 +580,59 @@ CREATE (a)-[:KNOWS]->(b)
 - Correlated inline predicates with an index: O(R·log N) where R is the driving row count (one seek per row)
 - Correlated inline predicates without an index: O(R·N) label scan (quadratic behavior in the absence of indexes)
 
-### MERGE with External ID
+### Write Forms Honouring External ID
+
+Reserved property `_id` is now honoured by all major write forms:
+
+**Fast path: MERGE constrained by external ID**
 
 ```cypher
--- Fast path: MERGE constrained only by _id
+-- MERGE uses external-id index (consulted before property-pattern search)
+-- Returns existing node if _id matches; creates if absent
 MERGE (n:File {_id: 'sha256:abc…'})
 ON CREATE SET n.imported_at = timestamp()
+ON MATCH SET n.synced_at = timestamp()
 RETURN n._id
 
--- MERGE creates when absent, matches when present (idempotent)
+-- Idempotent: same _id always resolves to the same node
 MERGE (n:User {_id: 'uuid:1234…'})
 ON CREATE SET n.created_at = timestamp()
 ON MATCH SET n.last_seen = timestamp()
 RETURN n._id
 ```
+
+**All supported write forms now preserve `_id`**:
+
+- `CREATE (n:L {_id:'str:x', ...})` — creates node with external ID (always worked)
+- `CREATE (n:L {_id:'str:x', ...}) SET ...` — creates with external ID, then applies SET (fixed)
+- `MERGE (n:L {_id:'str:x'}) ON CREATE SET ... ON MATCH SET ...` — external-id index consulted first, TOCTOU-safe (fixed)
+- `UNWIND ... CREATE (n {_id: $id, ...})` — where `$id` is a literal string or parameter (fixed)
+- `UNWIND ... MERGE (n:L {_id: $id})` — delegates to MERGE path (fixed)
+- **NEW: Relationship MERGE with per-endpoint external IDs**:
+  ```cypher
+  -- Each endpoint may carry its own _id (or none)
+  MERGE (a:Person {_id:'uuid:alice'})
+  -[r:KNOWS {start_year: 2020}]->
+  (b:Person {_id:'uuid:bob'})
+  ON CREATE SET r.met_at = timestamp()
+  ```
+
+**Explicit limitations** (deliberate design):
+
+1. **Per-row `_id` from UNWIND row is a parse error**: `UNWIND $rows AS r CREATE (n {_id: r.id})` is rejected. Only a literal string or `$param` is accepted. Rationale: a constant `_id` across rows would collide from row 2 anyway; rejected explicitly rather than silently dropped.
+
+2. **At most one node in a CREATE pattern carries `_id`**: `CREATE (a {_id: 'str:a'}) (b {_id: 'str:b'})` is a parse error (`_id may only appear once`). Only MERGE patterns support per-endpoint `_id` (via separate MERGE clauses or relationship endpoints).
+
+3. **Invalid `_id` values surface an explicit error** (never silently ignored):
+   - Missing or unknown prefix: use one of `blake3:`, `sha256:`, `sha512:`, `uuid:`, `str:`, `bytes:`
+   - Non-string value: `_id` must be a string or parameter
+   - Unresolved `$param`: returns a Cypher error
+
+4. **Relationships have no external IDs** (by design): only node endpoints carry `_id`. A relationship record itself cannot be looked up by external ID.
+
+**Match-before-pattern-search semantics**:
+
+When a MERGE pattern includes `_id`, the external-id index is consulted **before** the property-pattern search. This makes the external ID the stronger key and closes a TOCTOU (time-of-check-time-of-use) window: if two concurrent MERGE requests target the same `_id`, one wins without either seeing a phantom duplicate.
 
 ## Query Examples
 

@@ -670,7 +670,8 @@ impl Engine {
     /// `ON MATCH` on the enclosing `MergeClause` still targets the
     /// relationship only, per the existing `process_merge_relationship`
     /// contract; mirrors the match-or-create logic in
-    /// [`Self::process_merge_clause`] minus that per-clause SET handling.
+    /// [`Self::process_merge_clause`] (including its `_id` external-id
+    /// fast path) minus that per-clause SET handling.
     pub(super) fn merge_single_node(
         &mut self,
         node_pattern: &executor::parser::NodePattern,
@@ -690,6 +691,31 @@ impl Engine {
             }
         }
 
+        // `_id` (relationship-MERGE endpoints): resolve the per-node `_id`
+        // the parser hoisted out of `node_pattern.properties` into
+        // `external_id_expr` (populated per-node for MERGE patterns — see
+        // `extract_underscore_id_from_pattern`). A hit in the external-id
+        // index short-circuits the property-based search below, mirroring
+        // `Self::process_merge_clause`.
+        let ext_id = node_pattern
+            .external_id_expr
+            .as_ref()
+            .map(|expr| self.resolve_external_id(expr))
+            .transpose()?;
+
+        let existing_by_ext_id = if let Some(ext) = &ext_id {
+            let txn = self.catalog.read_txn()?;
+            let found = self.catalog.external_id_index().get_internal(&txn, ext)?;
+            drop(txn);
+            found
+        } else {
+            None
+        };
+
+        if let Some(id) = existing_by_ext_id {
+            return Ok(id);
+        }
+
         let mut node_ids = self.find_nodes_by_node_pattern(node_pattern)?;
         node_ids.sort_unstable();
         node_ids.dedup();
@@ -706,7 +732,17 @@ impl Engine {
                 props.insert(key.clone(), value);
             }
         }
-        self.create_node(labels, Value::Object(props))
+        // `ConflictPolicy::Match` closes the TOCTOU window between the
+        // `existing_by_ext_id` lookup above and this create — mirrors
+        // `Self::process_merge_clause`. When `ext_id` is `None` this
+        // behaves identically to a plain `create_node`: `create_node_inner`
+        // only takes the external-id path when an id is actually supplied.
+        self.create_node_with_external_id(
+            labels,
+            Value::Object(props),
+            ext_id,
+            ConflictPolicy::Match,
+        )
     }
 
     pub(super) fn process_match_clause(

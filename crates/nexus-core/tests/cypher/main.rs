@@ -5,6 +5,7 @@
 mod builtin_functions_test;
 mod count_distinct_tests;
 mod cypher_external_id;
+mod cypher_external_id_rel_merge;
 mod cypher_external_id_write_paths;
 mod cypher_groupby_expression_key_test;
 mod cypher_non_ascii_test;
