@@ -13,8 +13,9 @@ use dashmap::DashMap;
 use heed::types::*;
 use heed::{Database, Env, EnvOpenOptions, byteorder};
 use parking_lot::RwLock;
-use std::path::Path;
-use std::sync::Arc;
+use std::collections::HashMap;
+use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex, Weak};
 
 /// Default LMDB `map_size` for a catalog environment — 100 MiB.
 ///
@@ -33,6 +34,67 @@ use std::sync::Arc;
 /// [`Catalog::with_map_size`] / [`Catalog::with_isolated_path`].
 pub const CATALOG_MMAP_INITIAL_SIZE: usize = 100 * 1024 * 1024;
 
+/// Process-global registry of the [`EnvCloser`] guarding each opened LMDB path,
+/// so multiple `Catalog`s opened on the SAME path (the shared per-process test
+/// catalog pool reopens one directory many times) share ONE closer and
+/// `prepare_for_closing` is called exactly once for that path.
+static ENV_CLOSERS: Mutex<Option<HashMap<PathBuf, Weak<EnvCloser>>>> = Mutex::new(None);
+
+/// Forces heed to actually close an LMDB environment when the last `Catalog`
+/// sharing it is dropped.
+///
+/// heed retains a copy of every opened `Env` in its internal global
+/// `OPENED_ENV` registry; a plain `Env`/`Arc<Env>` drop only decrements a
+/// reference the registry keeps alive, so `mdb_env_close` never runs and the
+/// `data.mdb` / `lock.mdb` OS handles stay open for the entire process. On
+/// Windows those open handles block removing the environment's directory, so
+/// every test `TempDir` holding a catalog (~5 MiB each) leaked permanently.
+/// `Env::prepare_for_closing` drops the registry's retained copy so the env
+/// closes once the remaining handles drop — this guard calls it exactly once,
+/// when the final `Arc<EnvCloser>` (shared across all `Catalog` clones of a
+/// path) is dropped. Correct for production shutdown too, not only tests.
+struct EnvCloser {
+    /// One owned `Env` handle kept alive so the registry entry still exists
+    /// when `prepare_for_closing` runs in `drop`.
+    env: Env,
+    /// heed's canonicalised path for this env (registry key).
+    path: PathBuf,
+}
+
+impl Drop for EnvCloser {
+    fn drop(&mut self) {
+        if let Ok(mut guard) = ENV_CLOSERS.lock() {
+            if let Some(map) = guard.as_mut() {
+                map.remove(&self.path);
+            }
+        }
+        // Hand heed an owned `Env` clone so it drops the copy it retains in
+        // `OPENED_ENV`; the real `mdb_env_close` (releasing the file handles)
+        // fires when the last remaining `Env` handle drops right after. Safe to
+        // call once — the registry guarantees a single `EnvCloser` per path, so
+        // the "env not registered" panic branch is unreachable here.
+        let _ = self.env.clone().prepare_for_closing();
+    }
+}
+
+/// Return the shared [`EnvCloser`] for `env`'s path, creating it on first open.
+fn env_closer_for(env: &Env) -> Arc<EnvCloser> {
+    let path = env.path().to_path_buf();
+    let mut guard = ENV_CLOSERS
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let map = guard.get_or_insert_with(HashMap::new);
+    if let Some(existing) = map.get(&path).and_then(Weak::upgrade) {
+        return existing;
+    }
+    let closer = Arc::new(EnvCloser {
+        env: env.clone(),
+        path: path.clone(),
+    });
+    map.insert(path, Arc::downgrade(&closer));
+    closer
+}
+
 /// Catalog for managing label/type/key mappings.
 ///
 /// Thread-safe via `RwLock` for concurrent reads.
@@ -46,6 +108,12 @@ pub struct Catalog {
     /// `read_txn` helpers.  No non-test code outside this module should
     /// access this field directly.
     pub(crate) env: Arc<Env>,
+
+    /// Guard that closes the LMDB environment (releasing its OS file handles)
+    /// when the last `Catalog` sharing this path is dropped — see [`EnvCloser`].
+    /// Shared across clones so the close fires exactly once, at the true end of
+    /// the env's lifetime.
+    env_closer: Arc<EnvCloser>,
 
     /// Label name → ID mapping.
     pub(super) label_name_to_id: Database<Str, U32<byteorder::NativeEndian>>,
@@ -391,8 +459,11 @@ impl Catalog {
                 constraint_id_to_key,
             )?;
 
+        let env_closer = env_closer_for(&env);
+
         Ok(Self {
             env,
+            env_closer,
             label_name_to_id,
             label_id_to_name,
             type_name_to_id,
