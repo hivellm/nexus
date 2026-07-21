@@ -498,3 +498,172 @@ fn merge_relationship_between_existing_nodes_is_immediately_visible() {
         "the newly merged relationship must be immediately visible to traversal"
     );
 }
+
+// ---------------------------------------------------------------------
+// 10. MATCH...CREATE with an inline-created relationship endpoint --
+//     regression coverage for phase0_fix-match-create-inline-node-rel-dropped
+//     (`.rulebook/tasks/phase0_fix-match-create-inline-node-rel-dropped`).
+//     The reported bug: `MATCH (a) CREATE (a)-[:T]->(x:Y {...})` persists
+//     the inline-created node `x` but silently drops the relationship --
+//     no error, just missing data. These tests exercise the natural
+//     "attach a new node to an existing one" shape that the split tests
+//     above (`match_create_when_match_matches_creates_node_and_is_visible`
+//     / `match_create_when_match_matches_creates_relationship_and_is_visible`)
+//     were deliberately narrowed to avoid.
+// ---------------------------------------------------------------------
+
+#[test]
+fn match_create_bound_source_inline_target_node_and_relationship_both_visible() {
+    let ctx = TestContext::new();
+    let mut engine = Engine::with_isolated_catalog(ctx.path()).expect("engine init");
+
+    engine
+        .execute_cypher("CREATE (a:InlineX {k: 1})")
+        .expect("seed anchor");
+
+    engine
+        .execute_cypher("MATCH (a:InlineX {k: 1}) CREATE (a)-[:CR]->(x:InlineY {k: 2})")
+        .expect("MATCH...CREATE with an inline-created relationship target");
+
+    let node = engine
+        .execute_cypher("MATCH (n:InlineY) RETURN n.k AS k")
+        .expect("read back the inline-created target node");
+    assert_eq!(
+        node.rows.len(),
+        1,
+        "the inline target node must be persisted"
+    );
+    assert_eq!(node.rows[0].values[0].as_i64(), Some(2));
+
+    let edge = engine
+        .execute_cypher("MATCH (a:InlineX)-[r:CR]->(x:InlineY) RETURN count(r) AS c")
+        .expect("read back the relationship to the inline-created target");
+    assert_eq!(
+        edge.rows[0].values[0].as_i64(),
+        Some(1),
+        "the relationship to the inline-created target node must not be silently dropped"
+    );
+}
+
+#[test]
+fn match_create_inline_target_mirrored_direction_relationship_visible() {
+    let ctx = TestContext::new();
+    let mut engine = Engine::with_isolated_catalog(ctx.path()).expect("engine init");
+
+    engine
+        .execute_cypher("CREATE (a:InlineMirrorA {k: 1})")
+        .expect("seed anchor");
+
+    // Mirrored surface syntax: the inline-created node is written FIRST,
+    // the bound node LAST, joined with a reversed (`<-`) arrow --
+    // `MATCH (a) CREATE (x:Y)<-[:T]-(a)`.
+    engine
+        .execute_cypher("MATCH (a:InlineMirrorA {k: 1}) CREATE (x:InlineMirrorB {k: 2})<-[:CR]-(a)")
+        .expect("MATCH...CREATE with a mirrored-direction inline-created target");
+
+    let node = engine
+        .execute_cypher("MATCH (n:InlineMirrorB) RETURN n.k AS k")
+        .expect("read back the inline-created target node");
+    assert_eq!(
+        node.rows.len(),
+        1,
+        "the inline target node must be persisted"
+    );
+    assert_eq!(node.rows[0].values[0].as_i64(), Some(2));
+
+    // Direction handling in CREATE is out of scope for this fix (tracked
+    // separately); assert only that the relationship itself was not
+    // silently dropped, via a direction-agnostic match.
+    let edge = engine
+        .execute_cypher("MATCH (a:InlineMirrorA)-[r:CR]-(x:InlineMirrorB) RETURN count(r) AS c")
+        .expect("read back the relationship to the mirrored-direction inline target");
+    assert_eq!(
+        edge.rows[0].values[0].as_i64(),
+        Some(1),
+        "the mirrored-direction relationship must not be silently dropped"
+    );
+}
+
+#[test]
+fn match_create_bound_source_with_two_chained_inline_targets_creates_all_relationships() {
+    let ctx = TestContext::new();
+    let mut engine = Engine::with_isolated_catalog(ctx.path()).expect("engine init");
+
+    engine
+        .execute_cypher("CREATE (a:ChainAnchor {k: 1})")
+        .expect("seed anchor");
+
+    engine
+        .execute_cypher(
+            "MATCH (a:ChainAnchor {k: 1}) CREATE (a)-[:R1]->(b:ChainMid {k: 2})-[:R2]->(c:ChainEnd {k: 3})",
+        )
+        .expect("MATCH...CREATE with a multi-hop pattern mixing a bound source and two inline targets");
+
+    let nodes = engine
+        .execute_cypher("MATCH (n) WHERE n:ChainMid OR n:ChainEnd RETURN count(n) AS c")
+        .expect("count both inline-created nodes");
+    assert_eq!(
+        nodes.rows[0].values[0].as_i64(),
+        Some(2),
+        "both inline nodes in the chain must be persisted"
+    );
+
+    // Assert each hop directly (rather than a single 2-hop `count(*)`
+    // pattern match, which has an unrelated pre-existing correctness gap
+    // for multi-hop patterns -- out of scope here; single-hop counts are
+    // the unambiguous, already-covered-elsewhere way to check each edge).
+    let r1_only = engine
+        .execute_cypher("MATCH (a:ChainAnchor)-[r1:R1]->(b:ChainMid) RETURN count(r1) AS c")
+        .expect("read back R1 alone");
+    assert_eq!(
+        r1_only.rows[0].values[0].as_i64(),
+        Some(1),
+        "the first hop (bound source -> inline target) must be persisted"
+    );
+
+    let r2_only = engine
+        .execute_cypher("MATCH (b:ChainMid)-[r2:R2]->(c:ChainEnd) RETURN count(r2) AS c")
+        .expect("read back R2 alone");
+    assert_eq!(
+        r2_only.rows[0].values[0].as_i64(),
+        Some(1),
+        "the second hop (inline target -> inline target) must be persisted, not just the first hop"
+    );
+}
+
+/// PROFILE/internal-dispatch variant of the reported bug shape -- pins
+/// the fix across both the top-level query-text dispatch and the
+/// internal AST-override dispatch used by PROFILE / CALL-subquery
+/// recursion (`DispatchSource::Internal` in `query_pipeline.rs`).
+#[test]
+fn profiled_match_create_bound_source_inline_target_node_and_relationship_both_visible() {
+    let ctx = TestContext::new();
+    let mut engine = Engine::with_isolated_catalog(ctx.path()).expect("engine init");
+
+    engine
+        .execute_cypher("CREATE (a:PInlineX {k: 1})")
+        .expect("seed anchor");
+
+    engine
+        .execute_cypher("PROFILE MATCH (a:PInlineX {k: 1}) CREATE (a)-[:CR]->(x:PInlineY {k: 2})")
+        .expect("PROFILE MATCH...CREATE with an inline-created relationship target");
+
+    let node = engine
+        .execute_cypher("MATCH (n:PInlineY) RETURN n.k AS k")
+        .expect("read back the profiled inline-created target node");
+    assert_eq!(
+        node.rows.len(),
+        1,
+        "the inline target node must be persisted"
+    );
+    assert_eq!(node.rows[0].values[0].as_i64(), Some(2));
+
+    let edge = engine
+        .execute_cypher("MATCH (a:PInlineX)-[r:CR]->(x:PInlineY) RETURN count(r) AS c")
+        .expect("read back the profiled relationship to the inline-created target");
+    assert_eq!(
+        edge.rows[0].values[0].as_i64(),
+        Some(1),
+        "the profiled relationship to the inline-created target node must not be silently dropped"
+    );
+}

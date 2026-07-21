@@ -769,6 +769,79 @@ impl Executor {
             _ => Ok("?".to_string()),
         }
     }
+
+    /// Create a single fresh node for a CREATE pattern element, resolved
+    /// against the current MATCH-driven `row` scope.
+    ///
+    /// Shared by `execute_create_with_context`'s node-processing arm and
+    /// its relationship-processing arm (the latter calls this to create a
+    /// relationship's target/source node inline when it isn't already
+    /// bound — see the fix for
+    /// `phase0_fix-match-create-inline-node-rel-dropped`). Keeping node
+    /// creation in one place means both call sites stay identical in
+    /// label resolution, property resolution, FTS/spatial autopopulation
+    /// and label-index bookkeeping — the exact kind of divergence that
+    /// let the relationship-arm's inline-target case silently skip all of
+    /// this before.
+    #[allow(clippy::too_many_arguments)]
+    fn create_pattern_node_with_context(
+        &self,
+        node: &parser::NodePattern,
+        row: &std::collections::HashMap<String, Value>,
+        params: &std::collections::HashMap<String, Value>,
+        external_id: Option<&crate::storage::external_id::ExternalId>,
+        policy: crate::storage::external_id::ConflictPolicy,
+        tx: &mut crate::transaction::Transaction,
+        created_nodes_with_labels: &mut Vec<(u64, Vec<u32>)>,
+    ) -> Result<u64> {
+        let label_ids: Vec<u32> = node
+            .labels
+            .iter()
+            .filter_map(|l| self.catalog().get_or_create_label(l).ok())
+            .collect();
+
+        let mut label_bits = 0u64;
+        for label_id in &label_ids {
+            if *label_id < 64 {
+                label_bits |= 1u64 << label_id;
+            }
+        }
+
+        let properties = if let Some(props_map) = &node.properties {
+            let mut resolved = Map::with_capacity(props_map.properties.len());
+            for (k, v) in &props_map.properties {
+                let val = self.resolve_property_expr_for_create(v, row, params)?;
+                resolved.insert(k.clone(), val);
+            }
+            Value::Object(resolved)
+        } else {
+            Value::Object(Map::new())
+        };
+
+        let node_id = if let Some(ext) = external_id {
+            self.store_mut()
+                .create_node_with_label_bits_and_external_id(
+                    tx,
+                    label_bits,
+                    properties.clone(),
+                    Some(ext.clone()),
+                    policy,
+                    self.catalog(),
+                )?
+        } else {
+            self.store_mut()
+                .create_node_with_label_bits(tx, label_bits, properties.clone())?
+        };
+
+        self.fts_autopopulate_node(node_id, &label_ids, &properties);
+        self.spatial_autopopulate_node(node_id, &label_ids, &properties);
+        if !label_ids.is_empty() {
+            created_nodes_with_labels.push((node_id, label_ids));
+        }
+
+        Ok(node_id)
+    }
+
     #[tracing::instrument(skip_all, level = "debug")]
     pub(in crate::executor) fn execute_create_with_context(
         &self,
@@ -946,8 +1019,18 @@ impl Executor {
                 }
             }
 
-            // Now process the pattern elements to create new nodes and relationships
-            let mut last_node_var: Option<String> = None;
+            // Now process the pattern elements to create new nodes and
+            // relationships. `last_node_id` (not a variable-name lookup)
+            // tracks the most recently resolved node regardless of
+            // whether it carries a variable, mirroring
+            // `execute_create_pattern_internal`'s `last_node_id` above —
+            // this lets a relationship anchor on an anonymous node too.
+            // `skip_next_node` is set whenever the relationship arm below
+            // already resolved (bound-reuse) or created (inline) the
+            // node at `idx + 1`, so the following Node-arm iteration for
+            // that same element doesn't try to create it a second time.
+            let mut last_node_id: Option<u64> = None;
+            let mut skip_next_node = false;
 
             for (idx, element) in pattern.elements.iter().enumerate() {
                 match element {
@@ -959,6 +1042,15 @@ impl Executor {
                         ));
                     }
                     parser::PatternElement::Node(node) => {
+                        if skip_next_node {
+                            // Already resolved by the relationship arm
+                            // that precedes this element (bound-reuse or
+                            // inline creation) — `last_node_id` is
+                            // already up to date.
+                            skip_next_node = false;
+                            continue;
+                        }
+
                         // Skip the create when the variable is already
                         // bound by an upstream MATCH (existing-node
                         // reference). Otherwise create a fresh node —
@@ -972,67 +1064,29 @@ impl Executor {
                             .variable
                             .as_ref()
                             .is_some_and(|v| node_ids.contains_key(v));
-                        if !already_bound {
-                            // Resolve labels through the catalog,
-                            // converting any failure into a soft skip
-                            // (matches the legacy filter_map that this
-                            // arm used to do per node).
-                            let label_ids: Vec<u32> = node
-                                .labels
-                                .iter()
-                                .filter_map(|l| self.catalog().get_or_create_label(l).ok())
-                                .collect();
-
-                            let mut label_bits = 0u64;
-                            for label_id in &label_ids {
-                                if *label_id < 64 {
-                                    label_bits |= 1u64 << label_id;
-                                }
-                            }
-
-                            // Resolve property expressions against the
-                            // current row scope (via the row-aware
-                            // `expression_to_json_value_with_row` if
-                            // it's available, otherwise the static
-                            // `expression_to_json_value`). For inputs
-                            // like `CREATE (:T {x: i})` driven by an
-                            // `UNWIND … AS i` outer, the row-aware
-                            // resolver is what binds `i` to the
-                            // current row's value.
-                            let properties = if let Some(props_map) = &node.properties {
-                                let mut resolved =
-                                    serde_json::Map::with_capacity(props_map.properties.len());
-                                for (k, v) in &props_map.properties {
-                                    let val = self.resolve_property_expr_for_create(
-                                        v,
-                                        row,
-                                        &context.params,
-                                    )?;
-                                    resolved.insert(k.clone(), val);
-                                }
-                                JsonValue::Object(resolved)
-                            } else {
-                                JsonValue::Object(serde_json::Map::new())
-                            };
-
-                            // Phase 4.4: route through external-id path when present.
-                            let node_id = if let Some(ref ext) = external_id {
-                                self.store_mut()
-                                    .create_node_with_label_bits_and_external_id(
-                                        &mut tx,
-                                        label_bits,
-                                        properties.clone(),
-                                        Some(ext.clone()),
-                                        policy,
-                                        self.catalog(),
-                                    )?
-                            } else {
-                                self.store_mut().create_node_with_label_bits(
-                                    &mut tx,
-                                    label_bits,
-                                    properties.clone(),
-                                )?
-                            };
+                        let node_id = if already_bound {
+                            // `already_bound` guarantees the variable and
+                            // the node_ids entry both exist; the
+                            // `ok_or_else` only guards `?` ergonomics.
+                            node.variable
+                                .as_ref()
+                                .and_then(|v| node_ids.get(v).copied())
+                                .ok_or_else(|| {
+                                    Error::executor(
+                                        "CREATE: node marked already-bound but missing from \
+                                         node_ids (invariant violation)",
+                                    )
+                                })?
+                        } else {
+                            let new_id = self.create_pattern_node_with_context(
+                                node,
+                                row,
+                                &context.params,
+                                external_id.as_ref(),
+                                policy,
+                                &mut tx,
+                                &mut created_nodes_with_labels,
+                            )?;
                             // phase6_opencypher-subquery-transactions §3 —
                             // register the inverse op so a failing
                             // `CALL { … } IN TRANSACTIONS` batch can
@@ -1040,27 +1094,15 @@ impl Executor {
                             // executor is not running inside a
                             // batch attempt.
                             context.push_undo(
-                                super::super::context::CompensatingUndoOp::DeleteNode(node_id),
+                                super::super::context::CompensatingUndoOp::DeleteNode(new_id),
                             );
-                            self.fts_autopopulate_node(node_id, &label_ids, &properties);
-                            self.spatial_autopopulate_node(node_id, &label_ids, &properties);
-                            if !label_ids.is_empty() {
-                                created_nodes_with_labels.push((node_id, label_ids.clone()));
-                            }
                             if let Some(var) = &node.variable {
-                                node_ids.insert(var.clone(), node_id);
+                                node_ids.insert(var.clone(), new_id);
                             }
-                        }
+                            new_id
+                        };
 
-                        // Track this node as the last one for
-                        // relationship creation. Anonymous nodes can
-                        // still anchor a relationship — the rel arm
-                        // looks up the source via `last_node_var`
-                        // first and falls back to the most recently
-                        // created node id when no variable is bound.
-                        if let Some(var) = &node.variable {
-                            last_node_var = Some(var.clone());
-                        }
+                        last_node_id = Some(node_id);
                     }
                     parser::PatternElement::Relationship(rel) => {
                         // Create relationship between last_node and next_node
@@ -1084,104 +1126,129 @@ impl Executor {
                                 JsonValue::Object(serde_json::Map::new())
                             };
 
-                            // Source is the last_node_var, target will be the next node in pattern
-                            if let Some(source_var) = &last_node_var {
-                                if let Some(source_id) = node_ids.get(source_var) {
-                                    // Find target node (next element after this relationship)
-                                    if idx + 1 < pattern.elements.len() {
-                                        if let parser::PatternElement::Node(target_node) =
-                                            &pattern.elements[idx + 1]
-                                        {
-                                            if let Some(target_var) = &target_node.variable {
-                                                if let Some(target_id) = node_ids.get(target_var) {
-                                                    // PERFORMANCE OPTIMIZATION: Skip row-level locking when lock-free mode is enabled
-                                                    // The transaction manager mutex already provides serialization
-                                                    // Row locks are only needed for concurrent writers
-                                                    let _locks =
-                                                        if !self.config.enable_lock_free_structures
-                                                        {
-                                                            Some(self.acquire_relationship_locks(
-                                                                *source_id, *target_id,
-                                                            )?)
-                                                        } else {
-                                                            None
-                                                        };
+                            let Some(source_id) = last_node_id else {
+                                tracing::warn!(
+                                    "execute_create_with_context: relationship at pattern \
+                                     index {idx} has no preceding node"
+                                );
+                                continue;
+                            };
 
-                                                    // Create the relationship
-                                                    let rel_id =
-                                                        self.store_mut().create_relationship(
-                                                            &mut tx, *source_id, *target_id,
-                                                            type_id, properties,
-                                                        )?;
-                                                    context.push_undo(
-                                                        super::super::context::CompensatingUndoOp::DeleteRelationship(rel_id),
-                                                    );
-                                                    tracing::trace!(
-                                                        "execute_create_with_context: relationship created successfully, rel_id={}",
-                                                        rel_id
-                                                    );
+                            // Resolve the target node — reuse it if its
+                            // variable is already bound (existing-node
+                            // reference, the pre-existing working case),
+                            // otherwise create it INLINE right here
+                            // rather than deferring to the Node arm's
+                            // next iteration. This is the fix for
+                            // phase0_fix-match-create-inline-node-rel-dropped:
+                            // previously the target lookup only ever
+                            // checked `node_ids` (populated by the Node
+                            // arm on ITS OWN turn, which for a fresh
+                            // target runs strictly AFTER this
+                            // relationship's turn), so a target created
+                            // inline in the same CREATE clause
+                            // (`(bound)-[:T]->(new:Label {...})`) was
+                            // never found here — the relationship write
+                            // was silently skipped (a `tracing::warn!`
+                            // only) while the target node still got
+                            // created on the next loop iteration,
+                            // producing the reported silent data loss.
+                            let target_id = if idx + 1 < pattern.elements.len() {
+                                if let parser::PatternElement::Node(target_node) =
+                                    &pattern.elements[idx + 1]
+                                {
+                                    let bound_target_id = target_node
+                                        .variable
+                                        .as_ref()
+                                        .and_then(|var| node_ids.get(var).copied());
 
-                                                    // CRITICAL FIX: Populate relationship variable if specified
-                                                    // This ensures that queries like CREATE (a)-[r:KNOWS]->(b) RETURN r work correctly
-                                                    if let Some(rel_var) = &rel.variable {
-                                                        if !rel_var.is_empty() {
-                                                            let rel_info = RelationshipInfo {
-                                                                id: rel_id,
-                                                                source_id: *source_id,
-                                                                target_id: *target_id,
-                                                                type_id,
-                                                            };
-                                                            if let Ok(rel_value) = self
-                                                                .read_relationship_as_value(
-                                                                    &rel_info,
-                                                                )
-                                                            {
-                                                                // Store relationship in context for RETURN clause
-                                                                context.variables.insert(
-                                                                    rel_var.clone(),
-                                                                    rel_value,
-                                                                );
-                                                            }
-                                                        }
-                                                    }
-
-                                                    // Locks are released when guards are dropped
-
-                                                    // Relationship created successfully
-                                                } else {
-                                                    tracing::warn!(
-                                                        "execute_create_with_context: Target node not found: var={}, available node_ids: {:?}",
-                                                        target_var,
-                                                        node_ids.keys().collect::<Vec<_>>()
-                                                    );
-                                                }
-                                            } else {
-                                                tracing::warn!(
-                                                    "execute_create_with_context: Target node has no variable"
-                                                );
-                                            }
-                                        } else {
-                                            tracing::warn!(
-                                                "execute_create_with_context: Next element is not a Node"
-                                            );
-                                        }
+                                    if let Some(existing_id) = bound_target_id {
+                                        skip_next_node = true;
+                                        last_node_id = Some(existing_id);
+                                        Some(existing_id)
                                     } else {
-                                        tracing::warn!(
-                                            "execute_create_with_context: No next element after relationship"
+                                        let new_id = self.create_pattern_node_with_context(
+                                            target_node,
+                                            row,
+                                            &context.params,
+                                            external_id.as_ref(),
+                                            policy,
+                                            &mut tx,
+                                            &mut created_nodes_with_labels,
+                                        )?;
+                                        context.push_undo(
+                                            super::super::context::CompensatingUndoOp::DeleteNode(
+                                                new_id,
+                                            ),
                                         );
+                                        if let Some(var) = &target_node.variable {
+                                            node_ids.insert(var.clone(), new_id);
+                                        }
+                                        skip_next_node = true;
+                                        last_node_id = Some(new_id);
+                                        Some(new_id)
                                     }
                                 } else {
                                     tracing::warn!(
-                                        "execute_create_with_context: Source node not found: var={}, available node_ids: {:?}",
-                                        source_var,
-                                        node_ids.keys().collect::<Vec<_>>()
+                                        "execute_create_with_context: Next element is not a Node"
                                     );
+                                    None
                                 }
                             } else {
                                 tracing::warn!(
-                                    "execute_create_with_context: No last_node_var (no source node before relationship)"
+                                    "execute_create_with_context: No next element after relationship"
                                 );
+                                None
+                            };
+
+                            let Some(target_id) = target_id else {
+                                continue;
+                            };
+
+                            // PERFORMANCE OPTIMIZATION: Skip row-level locking when lock-free mode is enabled
+                            // The transaction manager mutex already provides serialization
+                            // Row locks are only needed for concurrent writers
+                            let _locks = if !self.config.enable_lock_free_structures {
+                                Some(self.acquire_relationship_locks(source_id, target_id)?)
+                            } else {
+                                None
+                            };
+
+                            // Create the relationship
+                            let rel_id = self.store_mut().create_relationship(
+                                &mut tx, source_id, target_id, type_id, properties,
+                            )?;
+                            context.push_undo(
+                                super::super::context::CompensatingUndoOp::DeleteRelationship(
+                                    rel_id,
+                                ),
+                            );
+                            tracing::trace!(
+                                "execute_create_with_context: relationship created successfully, rel_id={}",
+                                rel_id
+                            );
+
+                            // CRITICAL FIX: Populate relationship variable if specified
+                            // This ensures that queries like CREATE (a)-[r:KNOWS]->(b) RETURN r work correctly
+                            if let Some(rel_var) = &rel.variable {
+                                if !rel_var.is_empty() {
+                                    let rel_info = RelationshipInfo {
+                                        id: rel_id,
+                                        source_id,
+                                        target_id,
+                                        type_id,
+                                    };
+                                    if let Ok(rel_value) =
+                                        self.read_relationship_as_value(&rel_info)
+                                    {
+                                        // Store relationship in context for RETURN clause
+                                        context.variables.insert(rel_var.clone(), rel_value);
+                                    }
+                                }
                             }
+
+                            // Locks are released when guards are dropped
+                            // Relationship created successfully
                         }
                     }
                 }
