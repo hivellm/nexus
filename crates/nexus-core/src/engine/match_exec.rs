@@ -880,6 +880,15 @@ impl Engine {
                 }
             }
         }
+        // Left unconditional (conservative), but for a
+        // different reason than the aggregated transactions.rs sites: this
+        // loop calls `self.create_node` unconditionally for every `Node`
+        // pattern element in every `Create` clause (no ON CONFLICT MATCH
+        // branch, unlike `create_node_with_external_id`), and a `CREATE`
+        // clause always has at least one node element. The only caller
+        // (query_pipeline.rs's `has_dynamic_labels` dispatch) never invokes
+        // this with a CREATE-less AST, so this call always mutates in
+        // practice — a count-diff guard here would be dead code.
         self.refresh_executor()?;
         Ok(())
     }

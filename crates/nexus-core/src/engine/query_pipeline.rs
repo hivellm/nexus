@@ -585,7 +585,11 @@ impl Engine {
                     "DELETE requires an upstream MATCH, CREATE, or WITH".to_string(),
                 ));
             };
-            self.refresh_executor()?;
+            // `deleted_count` (from `execute_match_delete_query`)
+            // counts every relationship/node it actually deleted; `0` means
+            // the MATCH matched nothing and nothing was touched, so the
+            // executor's cloned state is unchanged.
+            self.refresh_executor_if_mutated(deleted_count != 0)?;
 
             // Check if there's a RETURN clause after DELETE
             let return_clause_opt = ast.clauses.iter().find_map(|c| {
@@ -738,7 +742,19 @@ impl Engine {
                         // CALL-subquery recursion) — there is no
                         // follow-up batched statement to defer the
                         // refresh to, so do it eagerly.
-                        self.refresh_executor()?;
+                        //
+                        // This branch is reached only for
+                        // MATCH...CREATE (has_merge/set/remove/foreach were
+                        // already routed to `execute_write_query` above), so
+                        // node/relationship creation is the *only* possible
+                        // mutation here. `execute_match_create_query` runs
+                        // CREATE once per matched row and skips entirely
+                        // when the MATCH matched nothing, so a node/rel
+                        // count delta against the pre-CREATE watermarks
+                        // reliably tells us whether it created anything.
+                        let mutated = self.storage.node_count() != pre_create_node_count
+                            || self.storage.relationship_count() != pre_create_rel_count;
+                        self.refresh_executor_if_mutated(mutated)?;
                     }
                 }
 
@@ -835,7 +851,17 @@ impl Engine {
             };
 
             if !in_transaction {
-                self.refresh_executor()?;
+                // This branch handles a standalone CREATE only
+                // (has_match is false and has_merge/set/remove/foreach were
+                // already routed to `execute_write_query` above), so a
+                // node/relationship count delta against the pre-CREATE
+                // watermarks captured above is a complete mutation signal —
+                // it also correctly reports "unmutated" for the `ON
+                // CONFLICT MATCH` corner case that resolves to an existing
+                // node instead of creating one.
+                let mutated = self.storage.node_count() != pre_create_node_count
+                    || self.storage.relationship_count() != pre_create_rel_count;
+                self.refresh_executor_if_mutated(mutated)?;
             }
 
             return Ok(result);

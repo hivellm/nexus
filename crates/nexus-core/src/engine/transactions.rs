@@ -70,7 +70,20 @@ impl Engine {
                     // Flush storage to ensure durability
                     self.storage.flush()?;
 
-                    // Refresh executor to see the updated indexes
+                    // Left unconditional (conservative): COMMIT
+                    // is the single consolidated refresh point for every
+                    // statement executed inside this transaction (each
+                    // per-statement write path skips its own refresh while
+                    // `in_transaction` — see the standalone-CREATE and
+                    // write-query dispatch sites), so an accurate "did the
+                    // whole transaction mutate anything" signal would have
+                    // to aggregate side effects across an arbitrary number
+                    // of prior `execute_cypher_*` calls. The node/rel-count
+                    // watermarks captured at BEGIN (`tx_begin_node_watermark`
+                    // / `tx_begin_rel_watermark`) cannot rule out a
+                    // property- or label-only transaction (no id-count
+                    // change), so they are not a complete signal either.
+                    // Refresh unconditionally rather than guess.
                     self.refresh_executor()?;
 
                     // Update session in manager
@@ -186,7 +199,15 @@ impl Engine {
                     // Note: We don't rebuild indexes here because we've already removed
                     // nodes from indexes manually above. Rebuilding would be redundant and
                     // could potentially reintroduce deleted nodes if there's a timing issue.
-                    self.refresh_executor()?;
+                    //
+                    // This ROLLBACK arm's only storage/index
+                    // mutation is the cleanup loop over `nodes_to_delete` /
+                    // `rels_to_delete` above (storage delete + label-index +
+                    // property-index removal); an empty transaction (`BEGIN;
+                    // ROLLBACK;` with no writes in between) leaves both
+                    // lists empty and this refresh has nothing to pick up.
+                    let mutated = !nodes_to_delete.is_empty() || !rels_to_delete.is_empty();
+                    self.refresh_executor_if_mutated(mutated)?;
                 }
                 // phase6_opencypher-advanced-types §5 — savepoint
                 // lifecycle statements. All three require an active

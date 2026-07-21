@@ -784,6 +784,41 @@ impl Engine {
         Ok(())
     }
 
+    /// Skip [`Self::refresh_executor`]'s ~500us executor
+    /// rebuild when a write demonstrably produced no effect (the classic
+    /// case: a `MERGE` that matched an existing node with no `ON MATCH
+    /// SET`). `refresh_executor` runs inside the engine's `&mut self`
+    /// write lock on every write query today, so on the `merge_singleton`
+    /// benchmark it dominates the write ceiling even though a no-op MERGE
+    /// changed nothing the executor's cloned state needs to see.
+    ///
+    /// `mutated` must be a locally, accurately computed "did *this* write
+    /// change anything" signal — see each call site for how it derives
+    /// one (a `deleted_count`/pattern-count diff, an explicit clause-kind
+    /// flag, ...). This deliberately takes a plain `bool` rather than
+    /// [`executor::types::SideEffects`]: today only
+    /// `SideEffects::nodes_created` is ever populated in this crate (it
+    /// is stitched in from [`crate::storage::RecordStore::nodes_created`]
+    /// at the outermost `execute_cypher_*` entry point) — every other
+    /// field (`relationships_created`, `properties_set`, `labels_added`,
+    /// ...) is declared but never written anywhere in the engine or
+    /// executor. Trusting a `SideEffects` snapshot at an inner call site
+    /// would silently treat every SET / REMOVE / relationship-CREATE as a
+    /// no-op and skip a refresh it actually needs.
+    ///
+    /// As a defense-in-depth belt-and-suspenders check, this also
+    /// consults `self.storage.nodes_created()` — the per-top-level-query
+    /// atomic counter reset in `execute_cypher_with_params` /
+    /// `execute_cypher_ast_with_params` — so a node creation that a
+    /// caller's local bookkeeping somehow missed still forces a refresh.
+    pub(crate) fn refresh_executor_if_mutated(&mut self, mutated: bool) -> Result<()> {
+        if mutated || self.storage.nodes_created() != 0 {
+            self.refresh_executor()
+        } else {
+            Ok(())
+        }
+    }
+
     /// Create a new engine with default configuration
     pub fn new_default() -> Result<Self> {
         Self::new()

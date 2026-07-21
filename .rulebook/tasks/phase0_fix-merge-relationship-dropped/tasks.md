@@ -15,6 +15,18 @@ MATCH (a:Person{name:'Alice'})-[r:KNOWS]->() RETURN r    -- 0 rows (edge never c
 `-[:KNOWS]->` (no relationship variable) is the ordinary, most common way to write
 a relationship MERGE, so this is not an edge case.
 
+**Independently re-confirmed 2026-07-21** while writing
+`tests/executor/write_refresh_visibility_test.rs`: with both endpoints
+pre-existing and pre-matched (`MATCH (a:C {n:'c'}), (b:D {n:'d'}) MERGE
+(a)-[:MMERGED]->(b)`), the relationship count afterwards is 0 — and stays 0
+even after a manual `engine.refresh_executor()`, ruling out executor
+staleness. The identical shape with an explicit relationship variable
+(`MERGE (a)-[r:GMERGED]->(b)`) works, as does `CREATE (a)-[:CMERGED]->(b)`,
+pinning the defect to the variable-less MERGE form exactly as described
+above. The visibility test suite deliberately uses the explicit-variable
+form (test `merge_relationship_between_existing_nodes_is_immediately_visible`)
+until this task lands — revert it to the variable-less form as part of §1.
+
 Order matters: prove the drop with a failing test (§1) before touching
 `process_merge_relationship`, because the fix must be verified against the exact
 anonymous-variable combinations that trigger the early-return — fixing the

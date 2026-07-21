@@ -91,6 +91,19 @@ impl Engine {
             return self.execute_unwind_write_query(ast, unwind_idx);
         }
 
+        // Accurate "did this query mutate anything" signal for
+        // `finalize_write_result`'s refresh-skip guard. CREATE/MERGE only
+        // ever grow the record store (ids are never reused), so a node- or
+        // relationship-count delta across the whole clause loop reliably
+        // catches every node/relationship creation, including a MERGE that
+        // fell through to its create branch — no per-clause bookkeeping
+        // needed for that half. SET/REMOVE/FOREACH mutate properties or
+        // labels in place (no id-count change), so those clauses set
+        // `other_mutation` explicitly.
+        let pre_node_count = self.storage.node_count();
+        let pre_rel_count = self.storage.relationship_count();
+        let mut other_mutation = false;
+
         for clause in &ast.clauses {
             match clause {
                 executor::parser::Clause::Match(match_clause) => {
@@ -233,12 +246,15 @@ impl Engine {
                 }
                 executor::parser::Clause::Set(set_clause) => {
                     self.apply_set_clause(&context, &rel_context, set_clause)?;
+                    other_mutation = true;
                 }
                 executor::parser::Clause::Remove(remove_clause) => {
                     self.apply_remove_clause(&context, remove_clause)?;
+                    other_mutation = true;
                 }
                 executor::parser::Clause::Foreach(foreach_clause) => {
                     self.execute_foreach_clause(&context, foreach_clause)?;
+                    other_mutation = true;
                 }
                 executor::parser::Clause::Return(return_clause) => {
                     result = Some(self.build_return_result_with_rels(
@@ -262,17 +278,27 @@ impl Engine {
             }
         }
 
-        self.finalize_write_result(result, ast)
+        let mutated = other_mutation
+            || self.storage.node_count() != pre_node_count
+            || self.storage.relationship_count() != pre_rel_count;
+        self.finalize_write_result(result, ast, mutated)
     }
 
     /// Shared tail for the write-query paths: async-flush, refresh the
     /// executor against the new storage state, and attach the write-path
     /// `Nexus.Performance.UnindexedPropertyAccess` diagnostic. Used by both
     /// the linear `execute_write_query` loop and the UNWIND-write path.
+    ///
+    /// `mutated` is the caller's accurately-computed "did this write
+    /// actually change anything" signal — see
+    /// [`Engine::refresh_executor_if_mutated`] for why it is a plain
+    /// `bool` and not a [`executor::types::SideEffects`]. Passing `true`
+    /// unconditionally reproduces the previous always-refresh behaviour.
     pub(super) fn finalize_write_result(
         &mut self,
         result: Option<executor::ResultSet>,
         ast: &executor::parser::CypherQuery,
+        mutated: bool,
     ) -> Result<executor::ResultSet> {
         // Async flush — matches the CREATE / executor-side write paths,
         // which use `flush_async` as well. The SYNC `flush()` here used
@@ -283,7 +309,7 @@ impl Engine {
         // path. Callers that genuinely need on-disk durability can issue
         // an explicit `flush()` after the write.
         self.storage.flush_async()?;
-        self.refresh_executor()?;
+        self.refresh_executor_if_mutated(mutated)?;
 
         // Diagnostic pre-pass for the write path: MERGE/SET/REMOVE
         // bypass the planner entirely, so the planner-side
@@ -419,6 +445,14 @@ impl Engine {
             .map(ast_conflict_policy_to_storage)
             .unwrap_or(ConflictPolicy::Error);
 
+        // Same accurate mutation signal as the linear
+        // `execute_write_query` loop (see its comment): a node/relationship
+        // count delta across every row catches every CREATE/MERGE-created
+        // entity, while SET/REMOVE/FOREACH set `other_mutation` explicitly.
+        let pre_node_count = self.storage.node_count();
+        let pre_rel_count = self.storage.relationship_count();
+        let mut other_mutation = false;
+
         for item in items {
             self.unwind_bindings.insert(unwind.variable.clone(), item);
             // Fresh per-row context seeded from the shared MATCH bindings, so
@@ -483,13 +517,16 @@ impl Engine {
                         }
                     }
                     Clause::Set(set_clause) => {
-                        self.apply_set_clause(&row_context, &rel_context, set_clause)?
+                        self.apply_set_clause(&row_context, &rel_context, set_clause)?;
+                        other_mutation = true;
                     }
                     Clause::Remove(remove_clause) => {
-                        self.apply_remove_clause(&row_context, remove_clause)?
+                        self.apply_remove_clause(&row_context, remove_clause)?;
+                        other_mutation = true;
                     }
                     Clause::Foreach(foreach_clause) => {
-                        self.execute_foreach_clause(&row_context, foreach_clause)?
+                        self.execute_foreach_clause(&row_context, foreach_clause)?;
+                        other_mutation = true;
                     }
                     // #14: per-row MATCH — resolves endpoints like
                     // `MATCH (a {id: row.fk}), (b {id: row.tk})` into the row
@@ -536,10 +573,14 @@ impl Engine {
             ids.dedup();
         }
 
+        let mutated = other_mutation
+            || self.storage.node_count() != pre_node_count
+            || self.storage.relationship_count() != pre_rel_count;
+
         // Build the trailing RETURN (if any) after flush+refresh so the
         // executor-backed projection sees the freshly written rows.
         self.storage.flush_async()?;
-        self.refresh_executor()?;
+        self.refresh_executor_if_mutated(mutated)?;
         let result = post
             .iter()
             .find_map(|c| match c {
@@ -552,7 +593,7 @@ impl Engine {
             .transpose()?;
 
         // Reuse the shared notification tail (flush/refresh are idempotent).
-        self.finalize_write_result(result, ast)
+        self.finalize_write_result(result, ast, mutated)
     }
 
     pub(super) fn process_merge_clause(
