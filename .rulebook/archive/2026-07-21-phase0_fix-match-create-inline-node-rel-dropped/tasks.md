@@ -145,6 +145,7 @@ collection). This task is the MATCH…CREATE inline-target-node path.
       would have removed real coverage rather than restoring it.
 
 ## 2. Tail (docs + tests — check or waive with tailWaiver)
-- [ ] 2.1 Update or create documentation covering the implementation
+- [x] 2.1 Update or create documentation covering the implementation
+      Documentation added: CHANGELOG.md entry under [3.0.0] with task id, and cypher-subset.md expanded with MATCH...CREATE inline-node examples and semantics.
 - [x] 2.2 Write tests covering the new behavior
 - [x] 2.3 Run tests and confirm they pass

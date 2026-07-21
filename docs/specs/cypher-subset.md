@@ -372,7 +372,25 @@ RETURN r
 -- Create multiple
 CREATE (a:Person {name: 'Alice'}), (b:Person {name: 'Bob'})
 CREATE (a)-[:KNOWS]->(b)
+
+-- Inline node creation in MATCH...CREATE patterns
+MATCH (a:Person {name: 'Alice'})
+CREATE (a)-[r:KNOWS]->(b:Person {name: 'Bob', age: 30})
+RETURN a, r, b
+
+-- Multi-hop chains with mixed bound and inline nodes
+MATCH (a:Person {name: 'Alice'})
+CREATE (a)-[:KNOWS]->(b:Person {name: 'Bob'})
+        -[:WORKS_AT]->(c:Company {name: 'Acme'})
+RETURN a, b, c
 ```
+
+**Inline node creation in relationship patterns (MATCH…CREATE).** When a node appears in a relationship
+pattern within a `CREATE` clause following a `MATCH`, it is created inline during the relationship
+write if the node's variable is unbound. The node is written immediately before the relationship,
+ensuring the full pattern (nodes and edges) persists atomically. Anonymous nodes (no explicit
+variable) can also anchor relationships. Multi-hop chains combine bound nodes (from the preceding
+`MATCH`) and inline-created nodes seamlessly.
 
 **Index and constraint maintenance (both CREATE forms).** A node created by a
 bare `CREATE` and one created by a `MATCH…CREATE` are treated identically:
