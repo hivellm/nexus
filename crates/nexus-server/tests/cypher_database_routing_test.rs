@@ -129,6 +129,39 @@ async fn query_against_unknown_database_is_rejected() {
     );
 }
 
+/// G2 — `GET /databases` must report the default database's REAL node count
+/// (from the primary engine that actually serves it), not the empty phantom
+/// engine's 0. Before the fix the manager opened a separate `neo4j` engine at
+/// `data_dir/neo4j` whose stats (0) were listed while the real default data
+/// lived in `server.engine`.
+#[tokio::test]
+async fn list_databases_reports_real_default_stats() {
+    let (server, _ctx) = build_server();
+    // Write 3 nodes via the default route (no `database` field).
+    let created = run(&server, "CREATE (:X),(:X),(:X)", None).await;
+    assert!(
+        created.error.is_none(),
+        "default create failed: {created:?}"
+    );
+
+    let resp = nexus_server::api::database::list_databases(State(server.clone())).await;
+    let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+        .await
+        .expect("read response body");
+    let parsed: serde_json::Value = serde_json::from_slice(&body).expect("parse JSON");
+    let dbs = parsed["databases"].as_array().expect("databases array");
+    let neo4j = dbs
+        .iter()
+        .find(|d| d["name"] == "neo4j")
+        .expect("the default database must be listed");
+    assert_eq!(
+        neo4j["node_count"].as_u64(),
+        Some(3),
+        "GET /databases must report the default's REAL node count from the primary \
+         engine, not the phantom's 0: {neo4j:?}"
+    );
+}
+
 /// A query with no `database` field must keep resolving to the default engine,
 /// so existing single-database clients are unaffected.
 #[tokio::test]

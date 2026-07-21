@@ -138,6 +138,16 @@ Only `POST /cypher` honors `database`. `POST /cypher/stream`, `POST /ingest`,
 `POST /knn_traverse`, `POST /graphql`, and the RPC `CYPHER` command do not accept
 a `database` field and operate on the **default database only**.
 
+**Persistence & management.** Databases are durable: on startup the server
+re-discovers every database directory created in a prior run, so a created
+database (and its data) survives a restart. The default database (`neo4j`) is
+served by the primary engine — it is always present, `SHOW DATABASES` / `GET
+/databases` list it and report its real node/relationship counts, but it cannot
+be dropped. Creating (`CREATE DATABASE` / `POST /databases`) and dropping
+(`DROP DATABASE` / `DELETE /databases/{name}`) a database require the calling key
+to hold `Admin` (or `Super`); listing and `USE DATABASE` are unrestricted. With
+authentication disabled these management operations are unrestricted (bootstrap).
+
 **Response**:
 ```json
 {

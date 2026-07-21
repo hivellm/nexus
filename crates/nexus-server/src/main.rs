@@ -779,18 +779,12 @@ async fn async_main(_worker_threads: usize) -> anyhow::Result<()> {
         // guards the case anyway).
         .route("/cluster/stats/self", get(api::cluster_stats::tenant_stats))
         // Database management endpoints
-        .route(
-            "/databases",
-            get({
-                let server = nexus_server.clone();
-                move || {
-                    let manager = server.database_manager.clone();
-                    async move {
-                        api::database::list_databases(axum::extract::State(api::database::DatabaseState { manager })).await
-                    }
-                }
-            }),
-        )
+        // phase0_fix-multi-database-persistence-and-default G2 — `list_databases`
+        // now reads both `database_manager` AND `engine` (for the default
+        // database's real stats), so it takes `State<Arc<NexusServer>>`
+        // directly like the `/cypher` handler, instead of the narrower
+        // `DatabaseState` closure wrapper the other `/databases*` routes use.
+        .route("/databases", get(api::database::list_databases))
         .route(
             "/databases",
             post({
@@ -806,18 +800,9 @@ async fn async_main(_worker_threads: usize) -> anyhow::Result<()> {
                 }
             }),
         )
-        .route(
-            "/databases/{name}",
-            get({
-                let server = nexus_server.clone();
-                move |path| {
-                    let manager = server.database_manager.clone();
-                    async move {
-                        api::database::get_database(axum::extract::State(api::database::DatabaseState { manager }), path).await
-                    }
-                }
-            }),
-        )
+        // Same reasoning as `/databases` above — `get_database` now also
+        // reads `engine` directly for the default database's stats.
+        .route("/databases/{name}", get(api::database::get_database))
         .route(
             "/databases/{name}",
             delete({

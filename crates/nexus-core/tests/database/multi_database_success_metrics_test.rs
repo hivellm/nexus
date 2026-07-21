@@ -32,9 +32,11 @@ fn test_create_and_manage_10_databases_concurrently() {
         assert!(manager.exists(&db_name));
     }
 
-    // List all databases
+    // List all databases. The default ("neo4j") is served by the primary engine
+    // and is not tracked by the manager (G2), so only the 10 named databases are
+    // listed.
     let databases = manager.list_databases();
-    assert!(databases.len() >= 11); // 10 + default (neo4j)
+    assert!(databases.len() >= 10);
 
     // Verify all databases are online
     for i in 1..=10 {
@@ -168,7 +170,9 @@ fn test_no_performance_regression_single_database() {
 
     // Test with single database (default)
     let manager_single = DatabaseManager::new(ctx1.path().to_path_buf()).unwrap();
-    let db_single = manager_single.get_default_database().unwrap();
+    // The default is served by the primary engine (G2); use a named database as
+    // the write target for this perf comparison.
+    let db_single = manager_single.create_database("primary").unwrap();
 
     let start = Instant::now();
     {
@@ -189,7 +193,7 @@ fn test_no_performance_regression_single_database() {
             .create_database(&format!("extra_db{}", i))
             .unwrap();
     }
-    let db_multi = manager_multi.get_default_database().unwrap();
+    let db_multi = manager_multi.create_database("primary").unwrap();
 
     let start = Instant::now();
     {

@@ -87,6 +87,11 @@ pub(crate) async fn execute_database_commands(
                 .await
                 .expect("spawn_blocking panicked");
 
+                // phase0_fix-multi-database-persistence-and-default G2 — the
+                // default database is implicit and no longer present in
+                // `list_databases()` (served by the primary engine, not a
+                // manager-owned one). Inject its row first.
+                rows.push(serde_json::json!([default_db.clone(), true]));
                 for db in databases {
                     rows.push(serde_json::json!([db.name.clone(), db.name == default_db]));
                 }

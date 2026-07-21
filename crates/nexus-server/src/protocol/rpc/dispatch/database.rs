@@ -35,10 +35,12 @@ async fn db_list(state: &RpcSession, args: &[NexusValue]) -> Result<NexusValue, 
     let dbm = state.server.database_manager.clone();
     let out = tokio::task::spawn_blocking(move || {
         let mgr = dbm.read();
-        mgr.list_databases()
-            .into_iter()
-            .map(|info| info.name)
-            .collect::<Vec<_>>()
+        // The default database is served by the primary engine and is not tracked
+        // by the manager (phase0_fix-multi-database-persistence-and-default G2),
+        // so list it explicitly ahead of the named databases.
+        let mut names = vec![mgr.default_database_name().to_string()];
+        names.extend(mgr.list_databases().into_iter().map(|info| info.name));
+        names
     })
     .await;
 

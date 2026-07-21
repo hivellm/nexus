@@ -237,29 +237,49 @@ impl Executor {
                 "constituents".to_string(),
             ];
 
-            let rows: Vec<Row> = databases
-                .iter()
-                .map(|db| {
-                    let is_default = db.name == default_db;
-                    Row {
-                        values: vec![
-                            Value::String(db.name.clone()),
-                            Value::String("standard".to_string()),
-                            Value::Array(vec![]),
-                            Value::String("read-write".to_string()),
-                            Value::String("localhost:7687".to_string()),
-                            Value::String("primary".to_string()),
-                            Value::Bool(true),
-                            Value::String("online".to_string()),
-                            Value::String("online".to_string()),
-                            Value::String("".to_string()),
-                            Value::Bool(is_default),
-                            Value::Bool(is_default),
-                            Value::Array(vec![]),
-                        ],
-                    }
-                })
-                .collect();
+            // phase0_fix-multi-database-persistence-and-default G2 — the
+            // default database is implicit and no longer present in
+            // `list_databases()` (it is served by the primary engine, not a
+            // manager-owned one). Prepend its row explicitly so `SHOW
+            // DATABASES` still lists it first.
+            let mut rows: Vec<Row> = vec![Row {
+                values: vec![
+                    Value::String(default_db.to_string()),
+                    Value::String("standard".to_string()),
+                    Value::Array(vec![]),
+                    Value::String("read-write".to_string()),
+                    Value::String("localhost:7687".to_string()),
+                    Value::String("primary".to_string()),
+                    Value::Bool(true),
+                    Value::String("online".to_string()),
+                    Value::String("online".to_string()),
+                    Value::String("".to_string()),
+                    Value::Bool(true),
+                    Value::Bool(true),
+                    Value::Array(vec![]),
+                ],
+            }];
+
+            rows.extend(databases.iter().map(|db| {
+                let is_default = db.name == default_db;
+                Row {
+                    values: vec![
+                        Value::String(db.name.clone()),
+                        Value::String("standard".to_string()),
+                        Value::Array(vec![]),
+                        Value::String("read-write".to_string()),
+                        Value::String("localhost:7687".to_string()),
+                        Value::String("primary".to_string()),
+                        Value::Bool(true),
+                        Value::String("online".to_string()),
+                        Value::String("online".to_string()),
+                        Value::String("".to_string()),
+                        Value::Bool(is_default),
+                        Value::Bool(is_default),
+                        Value::Array(vec![]),
+                    ],
+                }
+            }));
 
             Ok(ResultSet::new(columns, rows))
         } else {

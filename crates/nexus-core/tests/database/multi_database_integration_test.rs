@@ -37,13 +37,15 @@ fn test_create_and_drop_database() {
     manager.create_database("testdb").unwrap();
     assert!(manager.exists("testdb"));
 
-    // List databases should include both
+    // The default ("neo4j") is served by the primary engine and is NOT tracked
+    // by the manager (phase0_fix-multi-database-persistence-and-default G2), so
+    // `list_databases()` returns only the named databases; the default remains
+    // reachable via `exists`.
+    assert!(manager.exists("neo4j"));
     let databases = manager.list_databases();
-    assert!(databases.len() >= 2);
-
     let db_names: Vec<&str> = databases.iter().map(|d| d.name.as_str()).collect();
-    assert!(db_names.contains(&"neo4j"));
     assert!(db_names.contains(&"testdb"));
+    assert!(!db_names.contains(&"neo4j"));
 
     // Drop the database
     manager.drop_database("testdb", false).unwrap();
@@ -92,9 +94,14 @@ fn test_get_database() {
     let ctx = TestContext::new();
     let manager = DatabaseManager::new(ctx.path().to_path_buf()).unwrap();
 
-    // Get default database
-    let db = manager.get_database("neo4j");
-    assert!(db.is_ok());
+    // The default is served by the primary engine, not owned by the manager
+    // (G2): it "exists" but is not obtainable via `get_database`.
+    assert!(manager.exists("neo4j"));
+    assert!(manager.get_database("neo4j").is_err());
+
+    // A created named database is obtainable.
+    manager.create_database("realdb").unwrap();
+    assert!(manager.get_database("realdb").is_ok());
 
     // Get non-existent database
     let db = manager.get_database("nonexistent");
