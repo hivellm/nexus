@@ -152,10 +152,11 @@ case would leave the most common form still broken.
   identical, still an `Ok(None)` bailout on no type)
 
 ## 4. Tail (docs + tests — check or waive with tailWaiver)
-- [ ] 4.1 Update `docs/specs/cypher-subset.md` MERGE section to state that
+- [x] 4.1 Update `docs/specs/cypher-subset.md` MERGE section to state that
   relationship patterns with anonymous endpoints and/or an anonymous
   relationship are fully supported (create-or-match the whole pattern); add a
-  CHANGELOG entry
+  CHANGELOG entry. Updated MERGE section with examples and explanation of
+  anonymous patterns; added Fixed entry to CHANGELOG.md under [3.0.0].
 - [x] 4.2 Make the §1 tests pass; add coverage for the fully-anonymous form
   `MERGE (:Person{name:'Alice'})-[:KNOWS]->(:Person{name:'Bob'})` and for
   ON CREATE/ON MATCH SET still applying correctly when the relationship

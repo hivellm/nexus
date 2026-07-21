@@ -686,12 +686,26 @@ LIMIT 10
 ### MERGE Clause
 
 ```cypher
--- Match or create
+-- Match or create node
 MERGE (n:Person {email: 'alice@example.com'})
 ON CREATE SET n.created = true
 ON MATCH SET n.last_seen = datetime()
 RETURN n
+
+-- Relationship pattern with anonymous endpoints/relationship (creates or matches the whole pattern)
+MERGE (a:Person {name: 'Alice'})-[:KNOWS]->(b:Person {name: 'Bob'})
+ON CREATE SET a.joined = datetime()
+ON MATCH SET a.seen = datetime()
+
+-- ON CREATE/ON MATCH SET can target endpoint nodes even when relationship/endpoints are anonymous
+MERGE (:Person {name: 'Alice'})-[:KNOWS]->(:Person {name: 'Bob'})
+ON CREATE SET (a:Person {name: 'Alice'}).joined = datetime()  -- targets the endpoint by pattern
 ```
+
+Relationship MERGE patterns support fully anonymous forms:
+- **Anonymous relationship** (`-[:TYPE]->` with no variable `r`): the edge is created or matched as part of the whole pattern.
+- **Anonymous endpoints** (`(:Label {props})` with no variable): nodes are created or matched; ON CREATE/ON MATCH SET items targeting those nodes now apply (previously silently filtered out for anonymous endpoints).
+- **Mixed**: one or both endpoints may lack variables; the relationship may lack a variable; all three are supported independently. The whole pattern (all three elements) is created or matched as an atomic unit.
 
 ### WITH Clause
 

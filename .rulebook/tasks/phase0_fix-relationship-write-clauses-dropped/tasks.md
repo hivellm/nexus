@@ -1,5 +1,15 @@
 # Tasks: phase0_fix-relationship-write-clauses-dropped
 
+> **Status update 2026-07-21 (commit a047eade):** H-2's `apply_merge_rel_set`
+> no longer exists — the variable-less-relationship-MERGE fix replaced it with
+> `apply_merge_relationship_set`, which delegates to the general
+> `apply_set_clause`, so node-targeted SET items on relationship MERGE now
+> apply instead of being filtered to `target == rel_var`. Re-verify H-2's
+> remaining scope before implementing (SetItem::Label / MapMerge coverage may
+> already be handled by the delegation — confirm with tests, don't assume).
+> M-4 (`DELETE r` collection only looking at `PatternElement::Node`) is
+> untouched and remains the active defect.
+
 Two independent write-clause bugs share one root cause: the executor's write-clause dispatch for
 relationship patterns silently drops anything that isn't the exact case it was written for. H-2's
 `apply_merge_rel_set` (`engine/write_exec.rs:986-999`) filters every SET item to
