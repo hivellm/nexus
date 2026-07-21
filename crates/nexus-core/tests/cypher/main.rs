@@ -12,6 +12,7 @@ mod cypher_non_ascii_test;
 mod in_operator_tests;
 mod logical_operators_tests;
 mod mathematical_operators_test;
+mod merge_relationship_anonymous_variable_test;
 mod new_functions_test;
 mod null_comparison_tests;
 mod phase4_cypher_parity_quick_wins_test;

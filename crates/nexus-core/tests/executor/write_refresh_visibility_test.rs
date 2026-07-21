@@ -482,15 +482,11 @@ fn merge_relationship_between_existing_nodes_is_immediately_visible() {
 
     // Only a relationship is created here -- node_count is unchanged,
     // only relationship_count moves. This is the case a node-count-only
-    // signal would miss. Uses an explicit relationship variable (`r:`) --
-    // a bare `MERGE (a)-[:MERGED]->(b)` between two pre-matched nodes
-    // does not persist the relationship at all in this engine version
-    // (pre-existing, unrelated to the refresh-skip guard; see the test
-    // report for the isolated repro).
+    // signal would miss. Uses the variable-less relationship form
+    // (`-[:MERGED]->`, no `r:`) — the ordinary way to write a relationship
+    // MERGE.
     engine
-        .execute_cypher(
-            "MATCH (a:RelC {name: 'c'}), (b:RelD {name: 'd'}) MERGE (a)-[r:MERGED]->(b)",
-        )
+        .execute_cypher("MATCH (a:RelC {name: 'c'}), (b:RelD {name: 'd'}) MERGE (a)-[:MERGED]->(b)")
         .expect("MERGE relationship between existing nodes");
 
     let traversal = engine

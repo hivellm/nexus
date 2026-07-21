@@ -234,10 +234,15 @@ impl Engine {
                     if let Some((rel_var, rel_id, rel_type)) =
                         self.process_merge_relationship(&merge_clause, &mut context)?
                     {
-                        rel_context
-                            .entry(rel_var)
-                            .or_default()
-                            .push((rel_id, rel_type));
+                        // Empty `rel_var` is the anonymous-relationship
+                        // sentinel (see `process_merge_relationship`) — it
+                        // must never be bound into `rel_context`.
+                        if !rel_var.is_empty() {
+                            rel_context
+                                .entry(rel_var)
+                                .or_default()
+                                .push((rel_id, rel_type));
+                        }
                     } else {
                         // Fall back to node MERGE
                         let (variable, node_ids) = self.process_merge_clause(merge_clause)?;
@@ -464,10 +469,15 @@ impl Engine {
                         if let Some((rel_var, rel_id, rel_type)) =
                             self.process_merge_relationship(merge_clause, &mut row_context)?
                         {
-                            rel_context
-                                .entry(rel_var)
-                                .or_default()
-                                .push((rel_id, rel_type));
+                            // Empty `rel_var` is the anonymous-relationship
+                            // sentinel (see `process_merge_relationship`) —
+                            // it must never be bound into `rel_context`.
+                            if !rel_var.is_empty() {
+                                rel_context
+                                    .entry(rel_var)
+                                    .or_default()
+                                    .push((rel_id, rel_type));
+                            }
                         } else {
                             let (variable, node_ids) = self.process_merge_clause(merge_clause)?;
                             row_context.insert(variable.clone(), node_ids.clone());
@@ -925,6 +935,15 @@ impl Engine {
 
     /// Process MERGE with relationship pattern when nodes are already bound
     /// Returns Some((rel_variable, rel_id, rel_type)) if this is a relationship MERGE
+    ///
+    /// `rel_variable` is the empty string when the pattern's relationship has
+    /// no bound variable (e.g. `MERGE (a)-[:T]->(b)`) — callers MUST treat an
+    /// empty string as "do not bind", never insert it into `rel_context`
+    /// under that key. The empty string is a safe sentinel: the parser never
+    /// produces an empty identifier (`is_identifier_start` requires at least
+    /// one letter/underscore), so it can never collide with a real,
+    /// user-typed variable and can never be the `target` of a user `SET`
+    /// item either.
     pub(super) fn process_merge_relationship(
         &mut self,
         merge_clause: &executor::parser::MergeClause,
@@ -950,56 +969,67 @@ impl Engine {
             _ => return Ok(None),
         };
 
-        // Get source and destination variable names
-        let src_var = match &src_node.variable {
-            Some(v) => v.clone(),
-            None => return Ok(None),
-        };
-        let dst_var = match &dst_node.variable {
-            Some(v) => v.clone(),
-            None => return Ok(None),
-        };
-
-        // Get relationship variable and type
-        let rel_var = match &rel_pattern.variable {
-            Some(v) => v.clone(),
-            None => return Ok(None),
-        };
+        // The relationship type is still mandatory: `MERGE ()-[r]->()` with
+        // no type at all remains rejected here exactly as before — only the
+        // *variable*-presence checks below were relaxed by this fix.
         let rel_type = match rel_pattern.types.first() {
             Some(t) => t.clone(),
             None => return Ok(None),
         };
 
-        // G3 — resolve source/destination node ids. When an enclosing
-        // MATCH/UNWIND already bound the variable (existing contract:
-        // present in `context` with a non-empty id list), reuse it
-        // as-is. When the variable is bound but resolved to ZERO nodes
-        // (e.g. a MATCH that found nothing), preserve the prior
-        // behaviour of bailing out to the node-only MERGE fallback.
-        // When the variable is not in `context` at all, this is a
-        // STANDALONE relationship-MERGE pattern with no preceding MATCH
-        // (`MERGE (a:L1 {..})-[r:T]->(b:L2 {..})`, harness cases 10/11)
-        // — MERGE (find-or-create) the endpoint node inline and bind it,
-        // so the path pattern resolves its own endpoints instead of
-        // silently requiring an upstream MATCH.
-        let src_id = match context.get(&src_var) {
-            Some(ids) if !ids.is_empty() => ids[0],
-            Some(_) => return Ok(None),
-            None => {
-                let id = self.merge_single_node(src_node)?;
-                context.insert(src_var.clone(), vec![id]);
-                id
-            }
+        // G3 / anonymous-endpoint support — resolve source/destination node
+        // ids. When an enclosing MATCH/UNWIND already bound the variable
+        // (existing contract: present in `context` with a non-empty id
+        // list), reuse it as-is. When the variable is bound but resolved to
+        // ZERO nodes (e.g. a MATCH that found nothing), preserve the prior
+        // behaviour of bailing out to the node-only MERGE fallback. When the
+        // variable is not in `context` at all — including an ANONYMOUS
+        // endpoint, which has no variable to look up in the first place —
+        // this is a (partially or fully) standalone relationship-MERGE
+        // pattern with no preceding binding for that endpoint (`MERGE
+        // (a:L1 {..})-[r:T]->(b:L2 {..})`, harness cases 10/11, and the
+        // anonymous-endpoint forms `MERGE (:L1{..})-[:T]->(b)` /
+        // `MERGE (a)-[:T]->(:L2{..})` / fully-anonymous both sides) —
+        // MERGE (find-or-create) the endpoint node inline via
+        // `merge_single_node` (which also resolves per-node `_id` for
+        // anonymous endpoints, same as named ones).
+        //
+        // Anonymous endpoints are resolved WITHOUT ever writing into the
+        // shared `context` map: nothing in the query can reference a
+        // variable it never wrote, and some `context` consumers (e.g.
+        // `build_return_result_with_executor`'s `context.keys().next()`)
+        // assume every key is a real, single, user-visible binding — an
+        // extra synthesized key could be picked instead of the real one.
+        let src_id = match &src_node.variable {
+            Some(v) => match context.get(v) {
+                Some(ids) if !ids.is_empty() => ids[0],
+                Some(_) => return Ok(None),
+                None => {
+                    let id = self.merge_single_node(src_node)?;
+                    context.insert(v.clone(), vec![id]);
+                    id
+                }
+            },
+            None => self.merge_single_node(src_node)?,
         };
-        let dst_id = match context.get(&dst_var) {
-            Some(ids) if !ids.is_empty() => ids[0],
-            Some(_) => return Ok(None),
-            None => {
-                let id = self.merge_single_node(dst_node)?;
-                context.insert(dst_var.clone(), vec![id]);
-                id
-            }
+        let dst_id = match &dst_node.variable {
+            Some(v) => match context.get(v) {
+                Some(ids) if !ids.is_empty() => ids[0],
+                Some(_) => return Ok(None),
+                None => {
+                    let id = self.merge_single_node(dst_node)?;
+                    context.insert(v.clone(), vec![id]);
+                    id
+                }
+            },
+            None => self.merge_single_node(dst_node)?,
         };
+
+        // Relationship variable: the real name when the pattern bound one,
+        // otherwise the empty-string sentinel documented on this function.
+        // Never inserted anywhere the caller could confuse it for a real
+        // binding — see `apply_merge_relationship_set` and both call sites.
+        let rel_var = rel_pattern.variable.clone().unwrap_or_default();
 
         // Check if relationship already exists
         let existing_rel = self.find_relationship_between(src_id, dst_id, &rel_type)?;
@@ -1007,7 +1037,7 @@ impl Engine {
         let rel_id = if let Some(rid) = existing_rel {
             // Relationship exists — apply ON MATCH SET to its properties (#14).
             if let Some(on_match) = &merge_clause.on_match {
-                self.apply_merge_rel_set(&rel_var, rid, on_match)?;
+                self.apply_merge_relationship_set(context, &rel_var, rid, &rel_type, on_match)?;
             }
             rid
         } else {
@@ -1030,7 +1060,9 @@ impl Engine {
                 Value::Object(props_map),
             )?;
             if let Some(on_create) = &merge_clause.on_create {
-                self.apply_merge_rel_set(&rel_var, new_rel_id, on_create)?;
+                self.apply_merge_relationship_set(
+                    context, &rel_var, new_rel_id, &rel_type, on_create,
+                )?;
             }
             new_rel_id
         };
@@ -1038,54 +1070,35 @@ impl Engine {
         Ok(Some((rel_var, rel_id, rel_type)))
     }
 
-    /// Apply a MERGE `ON CREATE` / `ON MATCH SET` clause to a relationship's
-    /// properties (#14). Only `SetItem::Property` assignments whose target is
-    /// the relationship variable are applied; the RHS is evaluated with
-    /// `evaluate_set_expression`, which resolves UNWIND row bindings (e.g.
-    /// `SET r.w = row.w`) and `r.<prop>` self-references against the rel's
-    /// current properties. Other SET item kinds are ignored for relationships.
-    pub(super) fn apply_merge_rel_set(
+    /// Apply a MERGE `ON CREATE` / `ON MATCH SET` clause following a
+    /// relationship-MERGE (#14). Delegates to the general
+    /// [`Self::apply_set_clause`] so a `SET` item may target either the
+    /// relationship variable OR any node variable already visible in
+    /// `context` (the pattern's own src/dst node variables when real, or any
+    /// variable bound by an earlier clause in the same query) — e.g. `MERGE
+    /// (a)-[:KNOWS]->(b) ON CREATE SET a.since = date()` now actually
+    /// applies to `a`, which the old relationship-only SET application
+    /// silently dropped.
+    ///
+    /// `rel_var` may be the empty-string sentinel documented on
+    /// [`Self::process_merge_relationship`] for an anonymous relationship —
+    /// in that case it is deliberately left out of the local rel-context
+    /// below, so it can never be the `target` of a user `SET` item (matching
+    /// the fact that an anonymous relationship has no user-referenceable
+    /// name by construction).
+    pub(super) fn apply_merge_relationship_set(
         &mut self,
+        context: &HashMap<String, Vec<u64>>,
         rel_var: &str,
         rel_id: u64,
+        rel_type: &str,
         set_clause: &executor::parser::SetClause,
     ) -> Result<()> {
-        let mut props: Map<String, Value> = self
-            .storage
-            .load_relationship_properties(rel_id)?
-            .and_then(|v| match v {
-                Value::Object(m) => Some(m),
-                _ => None,
-            })
-            .unwrap_or_default();
-
-        let mut changed = false;
-        for item in &set_clause.items {
-            if let executor::parser::SetItem::Property {
-                target,
-                property,
-                value,
-            } = item
-            {
-                if target != rel_var {
-                    continue;
-                }
-                let v = self.evaluate_set_expression(value, rel_var, &props)?;
-                props.insert(property.clone(), v);
-                changed = true;
-            }
+        let mut local_rel_context: HashMap<String, Vec<(u64, String)>> = HashMap::new();
+        if !rel_var.is_empty() {
+            local_rel_context.insert(rel_var.to_string(), vec![(rel_id, rel_type.to_string())]);
         }
-
-        if changed {
-            let props_value = Value::Object(props);
-            // Register every property key with the catalog so
-            // `db.propertyKeys()` sees keys written via MERGE ON CREATE/ON
-            // MATCH SET on a relationship. See `Catalog::register_property_keys`.
-            self.catalog.register_property_keys(&props_value);
-            self.storage
-                .update_relationship_properties(rel_id, props_value)?;
-        }
-        Ok(())
+        self.apply_set_clause(context, &local_rel_context, set_clause)
     }
 
     /// Apply a single `SET <rel>.<property> = <value>` to one relationship
