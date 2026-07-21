@@ -1,8 +1,16 @@
 use nexus_core::Engine;
+use nexus_core::testing::TestContext;
 use serde_json::Value;
 
-fn create_engine() -> Engine {
-    Engine::new().expect("Failed to create engine")
+// Isolated per-test engine (same pattern as `side_effects.rs`): tests in
+// this binary run in parallel, and sharing the default on-disk catalog
+// makes `Engine::new()` race with another test's engine drop closing the
+// same LMDB env (`Database(DatabaseClosing)` flakes). The `TestContext`
+// must outlive the `Engine`, so both are returned together.
+fn create_engine() -> (TestContext, Engine) {
+    let ctx = TestContext::new();
+    let engine = Engine::with_isolated_catalog(ctx.path()).expect("Failed to create engine");
+    (ctx, engine)
 }
 
 fn extract_first_row_value(result: nexus_core::executor::ResultSet) -> Option<Value> {
@@ -14,7 +22,7 @@ fn extract_first_row_value(result: nexus_core::executor::ResultSet) -> Option<Va
 
 #[test]
 fn test_explain_simple_query() {
-    let mut engine = create_engine();
+    let (_ctx, mut engine) = create_engine();
 
     // Create some test data
     engine
@@ -45,7 +53,7 @@ fn test_explain_simple_query() {
 
 #[test]
 fn test_explain_with_where() {
-    let mut engine = create_engine();
+    let (_ctx, mut engine) = create_engine();
 
     // Create test data
     engine
@@ -72,7 +80,7 @@ fn test_explain_with_where() {
 
 #[test]
 fn test_profile_simple_query() {
-    let mut engine = create_engine();
+    let (_ctx, mut engine) = create_engine();
 
     // Create test data
     engine
@@ -107,7 +115,7 @@ fn test_profile_simple_query() {
 
 #[test]
 fn test_profile_with_where() {
-    let mut engine = create_engine();
+    let (_ctx, mut engine) = create_engine();
 
     // Create test data
     engine
@@ -138,7 +146,7 @@ fn test_profile_with_where() {
 
 #[test]
 fn test_explain_create_query() {
-    let mut engine = create_engine();
+    let (_ctx, mut engine) = create_engine();
 
     // Test EXPLAIN with CREATE - may not be fully implemented yet
     let query = "EXPLAIN CREATE (n:Person {name: 'Test'})";
@@ -162,7 +170,7 @@ fn test_explain_create_query() {
 
 #[test]
 fn test_profile_create_query() {
-    let mut engine = create_engine();
+    let (_ctx, mut engine) = create_engine();
 
     // Test PROFILE with CREATE - may not be fully implemented yet
     let query = "PROFILE CREATE (n:Person {name: 'ProfileTest'})";
