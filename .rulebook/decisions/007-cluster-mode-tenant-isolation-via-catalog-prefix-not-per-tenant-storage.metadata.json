@@ -1,0 +1,11 @@
+{
+  "id": 7,
+  "slug": "cluster-mode-tenant-isolation-via-catalog-prefix-not-per-tenant-storage",
+  "title": "Cluster-mode tenant isolation via catalog-prefix, not per-tenant storage",
+  "status": "proposed",
+  "date": "2026-04-19",
+  "relatedTasks": [
+    "phase5_implement-cluster-mode"
+  ],
+  "supersededBy": null
+}

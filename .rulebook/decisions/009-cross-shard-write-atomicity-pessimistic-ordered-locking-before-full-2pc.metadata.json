@@ -1,0 +1,11 @@
+{
+  "id": 9,
+  "slug": "cross-shard-write-atomicity-pessimistic-ordered-locking-before-full-2pc",
+  "title": "Cross-shard write atomicity: pessimistic ordered locking before full 2PC",
+  "status": "proposed",
+  "date": "2026-04-29",
+  "relatedTasks": [
+    "phase8_cross-shard-2pc"
+  ],
+  "supersededBy": null
+}

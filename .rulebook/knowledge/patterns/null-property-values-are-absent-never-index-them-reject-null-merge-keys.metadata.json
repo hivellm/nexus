@@ -1,0 +1,20 @@
+{
+  "id": "null-property-values-are-absent-never-index-them-reject-null-merge-keys",
+  "type": "pattern",
+  "title": "Null property values are absent — never index them, reject null MERGE keys",
+  "category": "architecture",
+  "description": "Neo4j treats a property whose value is null as absent. Mirror this: (1) never insert null into the typed property index (central no-op in PropertyIndex::add_property), so find_exact(..,Null) is always empty and null-keyed nodes can't be addressed/pollute seeks; (2) MERGE with a null property value errors \"Cannot merge node using null property value for {key}\", checked before match-or-create.",
+  "example": "// crates/nexus-core/src/index/mod.rs — add_property\nif value == PropertyValue::Null { return Ok(()); }\n\n// crates/nexus-core/src/engine/mod.rs — process_merge_clause (before find/create)\nif let Some(prop_map) = &node_pattern.properties {\n    for (key, expr) in &prop_map.properties {\n        if matches!(self.expression_to_json_value(expr)?, serde_json::Value::Null) {\n            return Err(Error::CypherExecution(format!(\n                \"Cannot merge node using null property value for {key}\")));\n        }\n    }\n}",
+  "whenToUse": "Any property-graph write/index path where Neo4j compatibility matters and null values could otherwise be stored or indexed.",
+  "whenNotToUse": "Stores that intentionally treat null as a first-class, queryable value (non-Neo4j semantics).",
+  "createdAt": "2026-06-07T09:08:28.894Z",
+  "tags": [
+    "null",
+    "index",
+    "merge",
+    "neo4j-compat",
+    "property-index",
+    "analysis:phase6_clean-graph-rebuild-null-ids"
+  ],
+  "source": "manual"
+}

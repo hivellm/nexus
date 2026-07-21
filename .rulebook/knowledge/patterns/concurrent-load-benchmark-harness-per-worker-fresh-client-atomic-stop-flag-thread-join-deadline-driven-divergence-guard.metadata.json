@@ -1,0 +1,19 @@
+{
+  "id": "concurrent-load-benchmark-harness-per-worker-fresh-client-atomic-stop-flag-thread-join-deadline-driven-divergence-guard",
+  "type": "pattern",
+  "title": "Concurrent-load benchmark harness: per-worker fresh client, atomic stop flag, thread join, deadline-driven, divergence guard",
+  "category": "benchmarking",
+  "description": "For a concurrent-load harness layered on top of a synchronous `BenchExecute` trait: spawn N worker threads, each with its own freshly built client (via a `ClientFactory` — never share clients across threads, because client-internal contention would surface as engine concurrency). Coordinate with `Arc<AtomicBool>` stop flag, `Arc<AtomicU64>` total iteration counter, and `Arc<Mutex<Option<HarnessError>>>` for the first error. Drive each worker through a deadline check rather than an iteration count so the wall clock is the only knob. Skip warmup samples by checking `Instant::now() < warmup_until` inside the loop and `continue` on warmup hits. Cross-engine row-count divergence kills every worker via the stop flag. Aggregate per-worker latency vectors after `handle.join()`; compute qps from the cross-worker total iteration count divided by post-warmup wall time.",
+  "example": "pub fn run_concurrent<F: ClientFactory + Sync>(\n    scenario: &Scenario, engine_label: &str, factory: &F, cfg: &ConcurrentRunConfig,\n) -> Result<ConcurrentResult, HarnessError> {\n    let stop = Arc::new(AtomicBool::new(false));\n    let total_iters = Arc::new(AtomicU64::new(0));\n    let measure_start = Instant::now();\n    let warmup_until = measure_start + cfg.warmup;\n    let deadline = warmup_until + cfg.duration;\n    let handles: Vec<_> = (0..cfg.workers).map(|w| {\n        let mut client = factory.build(w)?;\n        let stop = Arc::clone(&stop);\n        let total = Arc::clone(&total_iters);\n        thread::spawn(move || {\n            while !stop.load(Relaxed) && Instant::now() < deadline {\n                let in_warmup = Instant::now() < warmup_until;\n                let t = Instant::now();\n                let r = client.execute(&query, timeout)?;\n                if !in_warmup {\n                    samples.push(t.elapsed());\n                    total.fetch_add(1, Relaxed);\n                }\n            }\n        })\n    }).collect();\n    // park main, join all workers, summarise.\n}",
+  "whenToUse": "When the headline metric is system throughput under concurrency (qps + tail latency vs worker count), not single-call engine latency. Vector DBs, query engines, anything that has lock contention or async I/O under load.",
+  "whenNotToUse": "For pure-engine microbenchmarks (use Criterion). For latency-only single-call measurements (use the serial harness — concurrency adds variance).",
+  "createdAt": "2026-04-29T16:09:06.724Z",
+  "tags": [
+    "benchmarking",
+    "concurrency",
+    "rust",
+    "latency",
+    "throughput"
+  ],
+  "source": "manual"
+}

@@ -1,0 +1,12 @@
+{
+  "id": 12,
+  "slug": "rest-property-index-ddl-routes-through-the-engine-handler-so-the-api-populates-the-typed-index",
+  "title": "REST property-index DDL routes through the engine handler so the API populates the typed index",
+  "status": "proposed",
+  "date": "2026-06-07",
+  "relatedTasks": [
+    "phase6_fix-create-index-api-populate",
+    "phase6_fix-read-match-index-seek"
+  ],
+  "supersededBy": null
+}

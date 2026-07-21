@@ -1,0 +1,14 @@
+# WITH+RETURN: post-aggregation Project lives separately from aggregation planning
+**Source**: manual
+**Date**: 2026-04-20
+**Related Task**: phase6_nexus-bench-correctness-gaps
+**Tags**: cypher, planner, with-return, aggregation, post-projection, phase6
+When `WITH` carries an aggregation (`count`/`sum`/`max`/etc) and the following `RETURN` references the WITH aliases through a non-aggregate expression (`hi > 0.99`, `size(ids)`, `ids[0]`), Nexus's planner used to short-circuit: it kept WITH's items as `return_items` for the Aggregate operator's output shape, then discarded RETURN's items entirely. That collapsed the final result to the aggregation's raw shape (`[total, hi]`) instead of the projected shape (`[any_high]`).
+
+The fix needs two changes in `crates/nexus-core/src/executor/planner/queries.rs`:
+1. Add a `post_aggregation_return_items: Option<Vec<ReturnItem>>` that captures RETURN's items specifically for the `with_has_aggregation && !return_has_agg` branch.
+2. After `plan_execution_strategy` returns (which emits `Project -> Aggregate -> optional Filter for WITH WHERE`), append a final `Project` with those captured items. Insertion point: before any `Limit` operator, so `ORDER BY` / `LIMIT` still run against the projected shape.
+
+Key insight — the existing aggregation planner already emits a `post_agg_projection_items` path for wrappers around *nested* aggregates (`head(collect(x))`, `tail(collect(x))`) where the outer function isn't an aggregate but must evaluate after the Aggregate. The §5 case is the symmetric one where the outer expression isn't even in the same clause — it's in the RETURN. The two paths are NOT the same insertion site: the wrapper-of-aggregate path fires *inside* the aggregation branch (line ~1905 for the MATCH+RETURN path), while the §5 path has to fire *after* the whole `plan_execution_strategy` call — because for WITH-carries-aggregation, the RETURN's items were never fed into the aggregation branch at all.
+
+Counterexample to watch for on follow-up §5.3: `MATCH (n) WITH n.score AS s WHERE s > 0.1 RETURN count(*) AS c`. Here WITH has NO aggregation, RETURN has one. Current post_aggregation_return_items doesn't help because it's only captured when `with_has_aggregation` is true. That's a separate planner hole.

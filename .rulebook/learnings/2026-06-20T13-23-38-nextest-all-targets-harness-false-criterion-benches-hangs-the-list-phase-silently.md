@@ -1,0 +1,14 @@
+# nextest --all-targets + harness=false criterion benches hangs the list phase silently
+**Source**: manual
+**Date**: 2026-06-20
+**Related Task**: phase7_bound-target-dir-size
+**Tags**: ci, nextest, criterion, benches, harness-false, hang, list-phase, sigterm
+The Rust Tests CI job failed on every run since ~2.3.1 with SIGTERM (exit 143; sometimes OOM 137) after ~8 minutes of TOTAL silence right after compile finished — no "Starting" banner, no test output. Symptom signature: silence between "Finished compiling" and the kill means the hang is in nextest's LIST phase, not the run phase (the run phase prints a Starting banner immediately).
+
+Root cause: `cargo nextest run --workspace --all-targets`. `--all-targets` includes `--benches`. This repo has ~25 criterion benches (`harness = false`), including `v2_tcp_transport` which binds TCP sockets and launches a 3-node Raft cluster at startup. nextest's list phase invokes EVERY target binary with `--list` to enumerate tests; a harness=false bench that doesn't speak the libtest `--list` protocol (or does network/IO at startup) hangs, and nextest waits on it forever with no output. Reproduces on the Linux runner; on Windows the TCP bench happened not to hang, which is why local `cargo test --workspace` was always green (4716/0).
+
+Fix: drop `--all-targets` from the test run. `cargo nextest run --workspace` is the default test set = lib unit tests + bin unit tests + integration tests (4701 here), and EXCLUDES benches and examples — exactly what a "unit and integration tests" step should run. Benches stay compile-checked by the clippy `--all-targets` lint job. The `.config/nextest.toml` already excluded `tck_runner` (another harness=false binary) via `default-filter = 'not binary(tck_runner)'` for the same class of reason — the benches were simply never excluded because nobody passed `--all-targets` to clippy-only before.
+
+Diagnostic technique that localized it: run `cargo nextest list --workspace --profile ci` (no --all-targets) vs WITH --all-targets and compare. Without: 158 binaries, 4701 tests, starts in <1s, exit 0. The delta is the bench binaries.
+
+General rule: never pass `--all-targets`/`--benches` to a nextest RUN in CI when the workspace has harness=false benches. Compile-check benches via clippy; never enumerate/run them as tests.

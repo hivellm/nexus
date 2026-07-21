@@ -1,0 +1,10 @@
+{
+  "id": "parking-lot-rwlock-does-not-allow-recursive-acquire",
+  "type": "anti-pattern",
+  "title": "parking_lot::RwLock does not allow recursive acquire",
+  "category": "concurrency",
+  "description": "parking_lot::RwLock is NOT reentrant — chained write/read acquisitions in a single expression deadlock",
+  "createdAt": "2026-04-22T07:30:50.073Z",
+  "tags": [],
+  "source": "manual"
+}

@@ -1,0 +1,6 @@
+# WAL encryption: trailing AEAD failure must be EOF-aligned to count as truncation
+**Source**: manual
+**Date**: 2026-04-30
+**Related Task**: phase8_encryption-at-rest-wal
+**Tags**: encryption-at-rest, wal, aead, replay-tolerance
+When wiring AES-256-GCM into the WAL replay path, the obvious bug is to treat every AEAD failure as a truncation point — that turns wrong-key replay into "zero entries returned, no error", which silently masks tampering and key drift.\n\nThe fix is to only treat AEAD failure as truncation when the failing frame's end offset equals the current file length (the kill-9-mid-write shape). If the frame is followed by more bytes, the failure is necessarily mid-WAL and surfaces `ERR_WAL_AEAD` so the operator notices.\n\nSee `Wal::decode_v3_frame` at `crates/nexus-core/src/wal/mod.rs`. The boundary check is:\n```\nlet after = frame_offset + V3_HEADER_LEN + ct_len as u64;\nlet file_len = self.file.metadata()?.len();\nif after == file_len { return Ok(V3FrameOutcome::TruncatedTrailing); }\nreturn Err(Error::wal(format!(\"ERR_WAL_AEAD: ...\")));\n```\n\nThis preserves the proposal's "treat AEAD failure on trailing frame as truncated (parity with CRC mismatch)" while keeping the guarantee that wrong-key replay always raises.

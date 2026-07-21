@@ -1,0 +1,6 @@
+# block_on shim for sync KeyProvider boot path crossing async KMS SDKs
+**Source**: manual
+**Date**: 2026-04-30
+**Related Task**: phase8_encryption-at-rest-kms
+**Tags**: encryption-at-rest, kms, tokio, async-sync-bridge
+The `KeyProvider::master_key` trait is sync (it has to be — the storage hot path calls it without `.await`), but every cloud-KMS SDK is async. The shim in `crates/nexus-core/src/storage/crypto/kms/mod.rs` `block_on()` is the only safe way to drive the async unwrap from a sync constructor when a tokio runtime may or may not already be active:\n\n- If a runtime IS active (server boot inside `#[tokio::main]`), `Handle::block_on` would deadlock the caller's worker. Solution: hand the future to a fresh OS thread via `std::thread::scope` and call `handle.block_on(fut)` there.\n- If no runtime is active (CLI smoke test, an integration test that doesn't `#[tokio::main]`), build a single-thread runtime on the spot and drive the future on it.\n\nThe shim is gated behind `any(feature = "kms-aws", "kms-gcp", "kms-vault")` so default builds don't carry it. Future KMS adapters reuse the shim verbatim — keeping the runtime-bridging logic in one place is what makes adding a fourth provider a 200-line file and not a re-think.

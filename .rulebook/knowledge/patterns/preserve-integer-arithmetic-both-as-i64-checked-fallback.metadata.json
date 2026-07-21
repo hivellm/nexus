@@ -1,0 +1,18 @@
+{
+  "id": "preserve-integer-arithmetic-both-as-i64-checked-fallback",
+  "type": "pattern",
+  "title": "Preserve integer arithmetic: both_as_i64 + checked_* fallback",
+  "category": "code",
+  "description": "When implementing Cypher-style arithmetic on JSON-backed values, check \"both operands are pure integers\" first and run the i64 path with overflow-checked arithmetic; only fall through to f64 when either operand is a float or the i64 op would overflow. This matches openCypher's \"integer stays integer until a float operand is introduced\" rule and avoids spurious `7.0` results for `1 + 2 * 3`.",
+  "example": "fn both_as_i64(left: &Value, right: &Value) -> Option<(i64, i64)> {\n    let l = left.as_i64()?;\n    let r = right.as_i64()?;\n    if left.as_f64()?.fract() != 0.0 || right.as_f64()?.fract() != 0.0 { return None; }\n    if matches!(left, Value::Number(n) if n.is_f64())\n        || matches!(right, Value::Number(n) if n.is_f64()) { return None; }\n    Some((l, r))\n}\n\n// ...inside add_values:\nif let Some((li, ri)) = both_as_i64(left, right) {\n    if let Some(sum) = li.checked_add(ri) {\n        return Ok(Value::Number(serde_json::Number::from(sum)));\n    }\n    // overflow — fall through to f64 path\n}\n// ...f64 path unchanged",
+  "whenToUse": "Any numeric op evaluator that defaults to f64 but needs to respect the language's integer-preservation contract.",
+  "whenNotToUse": "Ops that are intrinsically float (power `^`, trig, log, sqrt) — those should always return float even for integer inputs, matching Cypher semantics.",
+  "createdAt": "2026-04-20T16:38:16.072Z",
+  "tags": [
+    "cypher",
+    "arithmetic",
+    "type-preservation",
+    "json-value"
+  ],
+  "source": "manual"
+}

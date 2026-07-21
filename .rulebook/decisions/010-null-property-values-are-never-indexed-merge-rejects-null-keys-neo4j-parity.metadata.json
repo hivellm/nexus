@@ -1,0 +1,11 @@
+{
+  "id": 10,
+  "slug": "null-property-values-are-never-indexed-merge-rejects-null-keys-neo4j-parity",
+  "title": "Null property values are never indexed; MERGE rejects null keys (Neo4j parity)",
+  "status": "proposed",
+  "date": "2026-06-07",
+  "relatedTasks": [
+    "phase6_clean-graph-rebuild-null-ids"
+  ],
+  "supersededBy": null
+}

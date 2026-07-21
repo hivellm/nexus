@@ -1,0 +1,13 @@
+{
+  "id": 14,
+  "slug": "property-index-definitions-are-persisted-in-the-lmdb-catalog-and-rebuilt-at-startup",
+  "title": "Property-index definitions are persisted in the LMDB catalog and rebuilt at startup",
+  "status": "proposed",
+  "date": "2026-06-08",
+  "relatedTasks": [
+    "phase6_fix-index-durability-restart",
+    "phase6_fix-read-match-index-seek",
+    "phase6_fix-create-index-api-populate"
+  ],
+  "supersededBy": null
+}

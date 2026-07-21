@@ -1,0 +1,11 @@
+{
+  "id": 11,
+  "slug": "read-side-match-uses-a-nodeindexseek-operator-seeded-from-the-typed-propertyindex",
+  "title": "Read-side MATCH uses a NodeIndexSeek operator seeded from the typed PropertyIndex",
+  "status": "proposed",
+  "date": "2026-06-07",
+  "relatedTasks": [
+    "phase6_fix-read-match-index-seek"
+  ],
+  "supersededBy": null
+}

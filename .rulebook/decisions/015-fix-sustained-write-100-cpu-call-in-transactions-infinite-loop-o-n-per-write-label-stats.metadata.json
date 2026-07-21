@@ -1,0 +1,12 @@
+{
+  "id": 15,
+  "slug": "fix-sustained-write-100-cpu-call-in-transactions-infinite-loop-o-n-per-write-label-stats",
+  "title": "Fix sustained-write 100% CPU: CALL IN TRANSACTIONS infinite loop + O(N)-per-write label stats",
+  "status": "proposed",
+  "date": "2026-06-08",
+  "relatedTasks": [
+    "phase6_fix-sustained-write-busyloop",
+    "phase6_fix-unwind-write-persists"
+  ],
+  "supersededBy": null
+}

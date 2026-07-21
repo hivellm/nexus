@@ -1,0 +1,9 @@
+{
+  "id": 8,
+  "slug": "delete-the-unused-jit-scaffold-rather-than-finish-the-cranelift-codegen",
+  "title": "Delete the unused JIT scaffold rather than finish the Cranelift codegen",
+  "status": "proposed",
+  "date": "2026-04-28",
+  "relatedTasks": [],
+  "supersededBy": null
+}

@@ -1,0 +1,6 @@
+# Subagents stall at ~25-27 tool uses; line-count metrics diverge (Measure-Object vs wc -l)
+**Source**: manual
+**Date**: 2026-06-09
+**Related Task**: phase5_split-oversized-files
+**Tags**: multi-agent, tooling, metrics, testing
+Two operational learnings from phase5_split-oversized-files: (1) Implementer subagents consistently stopped mid-task at ~25-27 tool uses regardless of instructions ("do not stop before check is clean" did not prevent it). Effective remedy: treat agent completion as a checkpoint, inspect the working tree (ls + cargo check error counts), and resume the SAME agent via SendMessage with a precise delta instruction ("old file still exists -> E0761; delete and verify"). Each split of a 2-5k-line file took 2-3 resume legs. Budget for this in wall-clock estimates. (2) PowerShell `Measure-Object -Line` does NOT count blank lines; `wc -l` does. A ">1500 lines" scan via Measure-Object missed 10 files that exceed 1500 raw lines (1520-1797). Always state which metric a size threshold uses; prefer wc -l for reproducibility (created wave2 task for the stragglers). Also: cargo test piped through tail loses the real exit code ($? is tail's) — but doctests run last, so "all doctests ran" in the tail proves every prior test binary passed without --no-fail-fast.

@@ -1,0 +1,12 @@
+{
+  "id": 2,
+  "slug": "sdk-default-transport-is-nexus-rpc-with-auto-downgrade-to-http",
+  "title": "SDK default transport is Nexus RPC with auto-downgrade to HTTP",
+  "status": "proposed",
+  "date": "2026-04-18",
+  "relatedTasks": [
+    "phase2_sdk-rpc-transport-default",
+    "phase3_rpc-protocol-docs-benchmarks"
+  ],
+  "supersededBy": null
+}
