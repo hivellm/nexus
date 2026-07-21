@@ -18,8 +18,6 @@ identical `Catalog` API; harness-confirmed vs Neo4j (5 labels / 1 type vs 0).
 - [ ] 2.3 Verify the serial-benchmark schema-procedure scenarios pass the harness content check (nexus content == neo4j content), then re-measure the <=1.2x latency gate that is currently blocked (phase9_store-lock-read-concurrency §4.1)
 
 ## 3. Tail (docs + tests — check or waive with tailWaiver)
-- [ ] 3.1 Update or create documentation covering the implementation
-- [ ] 3.2 Write tests covering the new behavior (server-level integration:
-      non-empty correct results for all three procedures after writes, on the
-      default and a freshly created database)
-- [ ] 3.3 Run tests and confirm they pass
+- [x] 3.1 Update or create documentation covering the implementation — done (2026-07-21): CHANGELOG [3.0.0] Fixed entry (schema procedures + database routing + propertyKeys registration) and Performance entry (no-mutation refresh skip, example corrected in review: `ON MATCH SET x = x` still counts as a mutation, only the truly effect-free forms skip); `docs/specs/cypher-subset.md` gained a "Schema Introspection Procedures" section with the 18 read-only procedures verified from `routing.rs::READ_ONLY_PROCEDURES` and the per-request `database` routing note; ARCHITECTURE/USER_GUIDE/api-protocols audited — no stale claims
+- [x] 3.2 Write tests covering the new behavior — done in §2.1: `crates/nexus-server/src/api/cypher/schema_procedures_test.rs` (default DB + named DB, seeded via CREATE, asserts labels/types/keys non-empty and correct; confirmed to fail without the routing fix)
+- [x] 3.3 Run tests and confirm they pass — cypher 348 / executor 172 / nexus-server 662, clippy 0 warnings, fmt clean (see §2.2)

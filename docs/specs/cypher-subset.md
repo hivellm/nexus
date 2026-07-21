@@ -1701,6 +1701,64 @@ RETURN coefficient
 
 **Total: 19 GDS procedures implemented**
 
+### Schema Introspection Procedures
+
+Nexus provides a suite of read-only schema procedures for inspecting catalog metadata, index/constraint definitions, and property keys. These procedures honor the per-request `database` field on `/cypher` — a `CALL db.labels()` on `database:"alpha"` queries the `alpha` database's catalog, not the default.
+
+| Procedure | Returns | Description |
+|-----------|---------|-------------|
+| `db.labels()` | List of label names | All node labels currently in use (single column: `label`). |
+| `db.propertyKeys()` | List of property key names | All properties observed on writes (single column: `propertyKey`). Keys are registered at every property write via engine CRUD, executor CREATE, SET/MERGE on relationships, and bulk loaders — not only at DDL. |
+| `db.relationshipTypes()` | List of relationship type names | All relationship types currently in use (single column: `relationshipType`). |
+| `db.schema()` | `nodes` array, `relationships` array | Combined schema: nested JSON objects with `name` fields, useful for schema inspection in a single query. |
+| `db.info()` | id, name, creationDate | Database info: `id` (usually `"db-1"`), `name` (database name), `creationDate` (ISO 8601 timestamp). Single row. |
+| `db.indexes()` | Index metadata | All indexes (label bitmaps, composite B-tree, KNN, full-text, R-tree): columns `id, name, state, populationPercent, uniqueness, type, entityType, labelsOrTypes, properties, indexProvider, options`. Filterable via `YIELD` clause. |
+| `db.indexDetails(indexName)` | Single index metadata | Same columns as `db.indexes()`, filtered to a specific index by name (useful for detailed inspection of one index). |
+| `db.constraints()` | Constraint metadata | All constraints (UNIQUENESS, NODE_PROPERTY_EXISTENCE): columns `id, name, type, entityType, labelsOrTypes, properties, ownedIndex`. |
+
+**Examples:**
+
+```cypher
+-- List all labels in the current database
+CALL db.labels() YIELD label
+RETURN label
+ORDER BY label
+
+-- List all property keys (includes keys from live writes)
+CALL db.propertyKeys() YIELD propertyKey
+RETURN propertyKey
+
+-- Get full schema in one call
+CALL db.schema() YIELD nodes, relationships
+RETURN nodes, relationships
+
+-- Inspect a specific index
+CALL db.indexDetails('index_label_Person') YIELD name, type, properties
+RETURN name, type, properties
+
+-- Query a different database's schema
+POST /cypher
+{
+  "query": "CALL db.labels() YIELD label RETURN label",
+  "database": "alpha"
+}
+```
+
+**Additional System Procedures:**
+
+| Procedure | Returns | Description |
+|-----------|---------|-------------|
+| `dbms.components()` | Component info | Nexus components/versions. |
+| `dbms.procedures()` | Procedure list | All built-in procedures with signatures. |
+| `dbms.functions()` | Function list | All built-in functions. |
+| `dbms.info()` | System info | Nexus system information. |
+| `dbms.listConfig(pattern?)` | Config parameters | Configuration keys matching an optional pattern. |
+| `dbms.showCurrentUser()` | User info | Current authenticated user (if auth enabled). |
+| `db.index.fulltext.queryNodes(indexName, query, limit?)` | Full-text results | Query a full-text node index by name. |
+| `db.index.fulltext.queryRelationships(indexName, query, limit?)` | Full-text results | Query a full-text relationship index by name. |
+| `db.index.fulltext.listAvailableAnalyzers()` | Analyzer list | Available Tantivy analyzers for full-text indexes. |
+| `spatial.nearest(label, property, point, limit?)` | Spatial results | K-nearest spatial neighbors from R-tree index. |
+
 ## Unsupported Features (Out of Scope)
 
 ### Not Currently Implemented
