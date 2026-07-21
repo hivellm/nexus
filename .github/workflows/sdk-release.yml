@@ -1,0 +1,309 @@
+name: SDK Release
+
+# phase13_sdk-release-trusted-publishing — one release train for the four
+# in-repo Nexus SDKs. Every registry publishes from ONE published GitHub
+# Release, in lockstep, so a wire/API-affecting change lands in every language
+# at the same version. Before this, releasing meant running four publish
+# commands by hand — which is how a PyPI/NuGet token ends up living in a product
+# repo. No credential belongs in a repository; every lane here authenticates by
+# OIDC **Trusted Publishing** (crates.io, npm, PyPI, NuGet), so there is NO
+# publishing secret to store, leak, or rotate — each registry verifies this
+# workflow's identity and mints a credential that lives minutes to an hour.
+#
+# Trigger: publishing a GitHub **Release** (not a bare tag push), mirroring
+# `release-server.yml`. The release's tag carries the version; the four SDK
+# manifests MUST already equal it (the gate enforces this and fails the whole
+# train otherwise — so publishing a release whose version does not match the SDK
+# manifests is caught, not shipped). `workflow_dispatch` accepts an explicit
+# `tag` for a manual re-run / dry run.
+#
+#   1. bump the four SDK manifests to X.Y.Z (see docs/releases/SDK_RELEASE.md)
+#   2. cut a GitHub Release whose tag resolves to version X.Y.Z
+#
+# The gate runs first and every publish job needs it: nothing reaches a registry
+# that has not passed fmt/lint/tests on the released commit. A registry publish
+# cannot be undone — crates.io and npm do not delete, PyPI will not let a version
+# be reused, NuGet only unlists — so the gate is the last place a mistake is
+# still cheap.
+#
+# The Go and PHP SDKs are OUT of scope (they are moving to their own
+# repositories, mirroring `thunder-go`/`thunder-php`); their per-PR test CI is
+# untouched and they do not appear here.
+#
+# ONE-TIME OWNER SETUP is required before the first release, or all four lanes
+# fail auth — see docs/releases/SDK_RELEASE.md for the exact registry
+# registrations and the four GitHub environments (`crates`, `npm`, `pypi`,
+# `nuget`). Do a `workflow_dispatch` dry run first: the gate should be green and
+# the publish lanes will no-op / fail-auth until registration is done.
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag / SDK version to publish (e.g. v2.5.0)"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+# Resolve the release tag once so every job sees the same value:
+#   - `release:published` → github.ref_name holds the tag
+#   - `workflow_dispatch`  → the free-form `tag` input above
+env:
+  RELEASE_TAG: ${{ github.event.inputs.tag || github.ref_name }}
+
+jobs:
+  # One gate for the whole train. If this is red, no registry is touched.
+  gate:
+    name: quality gate (blocks every publish)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.RELEASE_TAG }}
+      - uses: dtolnay/rust-toolchain@nightly
+        with:
+          components: rustfmt, clippy
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "8.0.x"
+      # The repo is nightly-based (edition 2024). The Rust SDK depends on the
+      # workspace crate `nexus-protocol` via a path dep, so it builds against the
+      # workspace here.
+      - name: Rust
+        working-directory: sdks/rust
+        run: |
+          cargo +nightly fmt --check
+          cargo +nightly clippy --lib --all-features -- -D warnings
+          cargo +nightly test --lib
+      - name: TypeScript
+        working-directory: sdks/typescript
+        run: |
+          npm ci
+          npm run typecheck
+          npm run lint
+          npm test
+      - name: Python
+        working-directory: sdks/python
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev]"
+          ruff check .
+          pytest
+      - name: C#
+        working-directory: sdks/csharp
+        run: |
+          dotnet build Nexus.SDK.csproj -c Release -warnaserror
+          dotnet test Tests/Nexus.SDK.Tests.csproj -c Release
+      # The release tag is the version. A tag that disagrees with the manifests
+      # would publish something other than what it claims — and the wrong version
+      # cannot be recalled from any of these registries. This is also what stops
+      # an unrelated (e.g. server-only) release from shipping a mismatched SDK.
+      - name: Tag must match the manifests
+        run: |
+          # Accept sdk-vX.Y.Z / vX.Y.Z / X.Y.Z.
+          VERSION="$(printf '%s' "$RELEASE_TAG" | sed -E 's/^(sdk-|server-)?v//')"
+          echo "release version: $VERSION"
+          fail=0
+          check() { # name expected
+            if [ "$2" != "$VERSION" ]; then
+              echo "::error::$1 is $2 but the release says $VERSION"; fail=1
+            else
+              echo "ok: $1 = $2"
+            fi
+          }
+          check "rust (nexus-graph-sdk)" "$(grep -m1 '^version' sdks/rust/Cargo.toml | cut -d'"' -f2)"
+          check "typescript (@hivehub/nexus-sdk)" "$(node -p "require('./sdks/typescript/package.json').version")"
+          check "python (hivehub-nexus-sdk)" "$(grep -m1 '^version' sdks/python/pyproject.toml | cut -d'"' -f2)"
+          check "csharp (Nexus.SDK)" "$(grep -oPm1 '(?<=<Version>)[^<]+' sdks/csharp/Nexus.SDK.csproj)"
+          exit $fail
+
+  crates:
+    name: crates.io (nexus-graph-sdk)
+    needs: gate
+    runs-on: ubuntu-latest
+    environment: crates
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.RELEASE_TAG }}
+      - uses: dtolnay/rust-toolchain@nightly
+      # Trusted Publishing: crates.io verifies this workflow's OIDC identity and
+      # mints a 30-minute token. No CARGO_REGISTRY_TOKEN to store or rotate.
+      #
+      # One-time owner setup at
+      #   https://crates.io/crates/nexus-graph-sdk/settings
+      #   owner: hivellm | repository: nexus | workflow: sdk-release.yml
+      #   environment: crates
+      #
+      # PREREQUISITE: `nexus-graph-sdk` depends on `nexus-protocol` via a path
+      # dep carrying `version = "<x>"`. `cargo publish` resolves that dep from
+      # crates.io, so `nexus-protocol <x>` must already be published there or this
+      # step fails ("no matching package named `nexus-protocol`"). Either publish
+      # `nexus-protocol` first (add a step above, or a separate release), or drop
+      # the path dep from sdks/rust/Cargo.toml. See docs/releases/SDK_RELEASE.md.
+      - name: Authenticate with crates.io
+        id: auth
+        uses: rust-lang/crates-io-auth-action@v1
+      - name: Publish
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token }}
+        run: cargo +nightly publish -p nexus-graph-sdk
+
+  npm:
+    name: npm (@hivehub/nexus-sdk)
+    needs: gate
+    runs-on: ubuntu-latest
+    environment: npm
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.RELEASE_TAG }}
+      # Node 22, and only here — trusted publishing needs Node >= 22.14 and
+      # npm >= 11.5.1. This is the *publisher's* version, not the consumer's
+      # (the test matrix still proves Node >= 16 support elsewhere).
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          registry-url: https://registry.npmjs.org
+      - name: Require an npm new enough for trusted publishing
+        working-directory: sdks/typescript
+        run: |
+          npm install -g npm@latest
+          npm --version
+      - name: Build
+        working-directory: sdks/typescript
+        run: |
+          npm ci
+          npm run build
+      # Trusted Publishing: npm verifies this workflow's OIDC identity and mints
+      # a short-lived credential itself. NO NODE_AUTH_TOKEN, and NO `--provenance`
+      # flag — provenance is attached automatically and passing the flag
+      # explicitly is not how this path works.
+      #
+      # One-time owner setup at
+      #   https://www.npmjs.com/package/@hivehub/nexus-sdk/access
+      #   organization: hivellm | repository: nexus | workflow: sdk-release.yml
+      #   environment: npm | allowed actions: npm publish
+      - name: Publish
+        working-directory: sdks/typescript
+        run: npm publish --access public
+
+  pypi:
+    name: PyPI (hivehub-nexus-sdk)
+    needs: gate
+    runs-on: ubuntu-latest
+    environment: pypi
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.RELEASE_TAG }}
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Build
+        working-directory: sdks/python
+        run: |
+          pip install build twine
+          python -m build
+          twine check dist/*
+      # Trusted Publishing: PyPI verifies this workflow's OIDC identity and mints
+      # a short-lived token itself. NO API token to store, leak, or rotate.
+      #
+      # One-time owner setup at
+      #   https://pypi.org/manage/project/hivehub-nexus-sdk/settings/publishing/
+      #   owner: hivellm | repo: nexus | workflow: sdk-release.yml | environment: pypi
+      - name: Publish
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          packages-dir: sdks/python/dist
+
+  nuget:
+    name: NuGet (Nexus.SDK)
+    needs: gate
+    runs-on: ubuntu-latest
+    environment: nuget
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.RELEASE_TAG }}
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "8.0.x"
+      - name: Pack
+        working-directory: sdks/csharp
+        run: dotnet pack Nexus.SDK.csproj -c Release
+      # Trusted Publishing: nuget.org verifies this workflow's OIDC identity and
+      # issues a key that lives one hour. There is no stored key to expire
+      # silently (NuGet API keys last at most a year and fail closed).
+      #
+      # One-time owner setup at https://www.nuget.org/account/trustedpublishing
+      #   repository owner: hivellm | repository: nexus
+      #   workflow file: sdk-release.yml (file name only, no path)
+      #   environment: nuget
+      #
+      # `user` is the nuget.org PROFILE NAME, not a credential — it lives in a
+      # repo secret only so the workflow needn't be edited if the account changes.
+      - name: NuGet login (OIDC to a one-hour key)
+        id: login
+        uses: NuGet/login@v1
+        with:
+          user: ${{ secrets.NUGET_USER }}
+      - name: Publish
+        working-directory: sdks/csharp
+        # The exact file, not a glob: a glob would also push any stale .nupkg
+        # that survived in bin/Release, and a registry publish cannot be undone.
+        run: |
+          VERSION="$(printf '%s' "$RELEASE_TAG" | sed -E 's/^(sdk-|server-)?v//')"
+          PACKAGE="bin/Release/Nexus.SDK.${VERSION}.nupkg"
+          test -f "$PACKAGE" || { echo "::error::$PACKAGE was not produced by dotnet pack"; exit 1; }
+          dotnet nuget push "$PACKAGE" \
+            -s https://api.nuget.org/v3/index.json \
+            -k "${{ steps.login.outputs.NUGET_API_KEY }}" \
+            --skip-duplicate
+
+  # The release is not done until every registry actually has it. A publish job
+  # can succeed and still leave the set inconsistent (a `--skip-duplicate` that
+  # skipped the wrong thing, a publish that landed under a different version), and
+  # nothing else asks whether the *set* agrees.
+  verify:
+    name: every registry has this release
+    needs: [crates, npm, pypi, nuget]
+    runs-on: ubuntu-latest
+    # `always()` so this still runs when a publish job failed — that is precisely
+    # when the report is worth having: it says which registries DID get the
+    # release, which is what someone finishing a publish by hand needs to know.
+    if: always()
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.RELEASE_TAG }}
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      # Registries are not instantly consistent after a publish.
+      - name: Let the registries settle
+        run: sleep 120
+      - name: Check published versions
+        run: python scripts/ci/check_published_sdk_versions.py tag "${RELEASE_TAG}"
