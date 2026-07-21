@@ -183,6 +183,13 @@ impl Engine {
             tracker.push(node_id);
         }
 
+        // Register every property key with the catalog so `db.propertyKeys()`
+        // (and any other catalog-driven key introspection) sees it — mirrors
+        // the label registration a few lines above. See
+        // `Catalog::register_property_keys` for why this can't just live in
+        // DDL.
+        self.catalog.register_property_keys(&properties);
+
         // For session transactions, defer index updates until commit (Phase 1 optimization)
         // For non-session transactions, update immediately
         if has_session_tx {

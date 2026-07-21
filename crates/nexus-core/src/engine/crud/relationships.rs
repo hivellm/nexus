@@ -50,6 +50,12 @@ impl Engine {
             .storage
             .create_relationship(tx, from, to, type_id, properties.clone())?;
 
+        // Register every property key with the catalog so `db.propertyKeys()`
+        // sees relationship-property keys too, not just node ones — mirrors
+        // the label/type registration above. See
+        // `Catalog::register_property_keys`.
+        self.catalog.register_property_keys(&properties);
+
         // Update relationship index for performance (Phase 3 optimization)
         if let Err(e) = self
             .cache

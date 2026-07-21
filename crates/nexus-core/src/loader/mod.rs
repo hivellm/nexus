@@ -531,6 +531,12 @@ impl BulkLoader {
                     .collect(),
             );
 
+            // Register every property key with the catalog so
+            // `db.propertyKeys()` sees bulk-loaded properties too, not just
+            // ones written through Cypher. See
+            // `Catalog::register_property_keys`.
+            self.catalog.register_property_keys(&properties);
+
             // Store node
             let mut storage = self.storage.write().await;
             let node_id = storage.create_node(&mut tx, labels.clone(), properties)?;
@@ -567,6 +573,11 @@ impl BulkLoader {
                     .map(|(k, v)| (k.clone(), v.clone()))
                     .collect(),
             );
+
+            // Register every property key with the catalog so
+            // `db.propertyKeys()` sees bulk-loaded relationship properties
+            // too. See `Catalog::register_property_keys`.
+            self.catalog.register_property_keys(&properties);
 
             // Store relationship
             let mut storage = self.storage.write().await;

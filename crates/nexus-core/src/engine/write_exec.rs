@@ -1077,8 +1077,13 @@ impl Engine {
         }
 
         if changed {
+            let props_value = Value::Object(props);
+            // Register every property key with the catalog so
+            // `db.propertyKeys()` sees keys written via MERGE ON CREATE/ON
+            // MATCH SET on a relationship. See `Catalog::register_property_keys`.
+            self.catalog.register_property_keys(&props_value);
             self.storage
-                .update_relationship_properties(rel_id, Value::Object(props))?;
+                .update_relationship_properties(rel_id, props_value)?;
         }
         Ok(())
     }
@@ -1109,8 +1114,13 @@ impl Engine {
         } else {
             props.insert(property.to_string(), v);
         }
+        let props_value = Value::Object(props);
+        // Register every property key with the catalog so `db.propertyKeys()`
+        // sees keys written via `SET <rel>.<property> = <value>`. See
+        // `Catalog::register_property_keys`.
+        self.catalog.register_property_keys(&props_value);
         self.storage
-            .update_relationship_properties(rel_id, Value::Object(props))?;
+            .update_relationship_properties(rel_id, props_value)?;
         Ok(())
     }
 
@@ -1148,8 +1158,13 @@ impl Engine {
                 )));
             }
         }
+        let props_value = Value::Object(props);
+        // Register every property key with the catalog so `db.propertyKeys()`
+        // sees keys written via `SET <rel> += <mapExpr>`. See
+        // `Catalog::register_property_keys`.
+        self.catalog.register_property_keys(&props_value);
         self.storage
-            .update_relationship_properties(rel_id, Value::Object(props))?;
+            .update_relationship_properties(rel_id, props_value)?;
         Ok(())
     }
 

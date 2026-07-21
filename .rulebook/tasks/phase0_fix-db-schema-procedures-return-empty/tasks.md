@@ -8,29 +8,14 @@ freshly created database; does NOT reproduce in a standalone binary using the
 identical `Catalog` API; harness-confirmed vs Neo4j (5 labels / 1 type vs 0).
 
 ## 1. Root cause (research-first — no fix until the divergence is located)
-- [ ] 1.1 Reproduce minimally against a spawned server: seed one label + one
-      typed relationship over HTTP `/cypher`, then call the three procedures
-      over HTTP and over RPC; record which transports are affected
-- [ ] 1.2 Trace which `Catalog` instance the procedure operator reads at call
-      time (path + env identity) vs the engine's write-path catalog; check the
-      executor clone installed by `refresh_executor` and the per-database
-      routing (default `neo4j` served by `server.engine` vs manager map).
-      Deliverable: "server does X at file:line, standalone does Y, difference
-      causes empty iteration" — not a hypothesis
-- [ ] 1.3 Determine regression window: `git log` on `db_schema.rs`, executor
-      shared-state wiring, and server dispatch to find when the procedures
-      last returned data on a live server (the serial sweep on 2026-07-13
-      recorded non-zero latencies AND correct content for these scenarios —
-      that run is the last known-good)
+- [x] 1.1 Reproduced live (2026-07-21, debug server, scratch data dir). Affected: HTTP `/cypher` (all databases — the `database` field is never consulted on this path) and RPC `CYPHER` (same fall-through, `protocol/rpc/dispatch/cypher.rs:364`). NOT affected: RESP3 (`protocol/resp3/command/cypher.rs:63-103` routes through `server.engine`)
+- [x] 1.2 **Mechanism proven** (differential experiment, no instrumentation): bare `CALL db.labels()` parses to `Clause::CallProcedure` only; `routing::needs_engine_interception` (`api/cypher/routing.rs:47-64`) matches only Match/Create/Delete/Merge/Set/Remove/Foreach → false → handler falls through to `server.executor` (`api/cypher/execute/handler.rs:795`), which is built at boot by `build_executor()` → `Executor::default()` (`api/cypher/mod.rs:37`) with a **throwaway temp-dir RecordStore + Catalog** (`executor/dispatch.rs:1443-1473`) — a detached, empty LMDB env. Proofs: (a) `CALL db.index.fulltext.createNodeIndex` on the live server errors `registry not configured on this executor` — only a bare `Executor::default()` lacks the registry; (b) relaunching the same binary with `CARGO=1` flips the catalog test-detection (`catalog/store.rs:238-240`) merging every catalog into one shared env — and `CALL db.labels()` immediately returns correct names; same binary without it returns zero. Engine exonerated: direct-run engine-level repro returns correct labels/types same-process and across reopen. The `READ_ONLY_PROCEDURES` carve-out from `ea2cba80` (routing.rs:187-206) is dead code for bare CALLs — it sits inside the never-entered interception block (handler.rs:639→656). Secondary gap: `db.propertyKeys` is empty even engine-level — `Catalog::get_or_create_key` is only called from DDL (`engine/ddl.rs:50,71,421`, `constraints.rs:45-146`), never from the property write path
+- [x] 1.3 Regression window: **premise falsified — there is no recent regression; the defect is structural** (present at least since the April 2026 state refactor `72fade04`/`efd790b9` that introduced `build_executor()`; the older string-heuristic routing had the same hole). The "known-good 2026-07-13 sweep" was already broken: `bench-out/run.log:291-299` records `db_labels nexus=3 vs neo4j=15`, `db_relationship_types nexus=0 vs neo4j=1` — nonzero counts were pollution from other fall-through CALLs writing into the detached catalog, and the scenario's `RETURN count(label)` always yields 1 row so `expected_rows(1)` passed. `12653c91` (refresh-skip) exonerated on four independent grounds (server.executor is untouched by refresh; Arc-shared env; repro had a forced refresh before the CALL; bug predates the commit)
 
 ## 2. Fix
-- [ ] 2.1 Fix the wiring so the procedures read the live catalog on every
-      database and both transports; no behavior change to procedure output
-      format
-- [ ] 2.2 Verify the serial-benchmark schema-procedure scenarios pass the
-      harness content check again (nexus content == neo4j content), then
-      re-measure the <=1.2x latency gate that is currently blocked
-      (phase9_store-lock-read-concurrency §4.1)
+- [x] 2.1 DONE (2026-07-21): `Clause::CallProcedure` + `Clause::CallSubquery` added to `is_engine_clause` (`routing.rs`) — bare CALLs now enter the interception block; read-only procedures run on the lock-free clone of the RESOLVED engine's executor (live catalog + all registries), writing/unknown ones take the engine-write path; per-request `database` routing honored; one predicate covers HTTP + RPC. Fall-through audit completed: every affected shape is a strict improvement (fulltext/spatial CALLs previously errored `registry not configured`; bare `CALL { subquery }` previously matched/wrote against the DISCONNECTED catalog — a silent data-loss class also closed by this change); `apoc.*`/registry-fallback neutral; non-CALL fallback queries unchanged. End-to-end sanity: default DB and freshly created named DB both return correct labels/types/keys with no cross-database leakage. Regression test `schema_procedures_test` (nexus-server) confirmed to FAIL without the routing fix (harness caveat handled: `build_test_server` uses `Engine::with_isolated_catalog` because the cargo-test catalog merge would otherwise mask the bug; the named-DB variant cannot fail under cargo test for the same reason — documented in-file)
+- [x] 2.2 DONE (2026-07-21): new `Catalog::register_property_keys` (`catalog/mappings.rs`, best-effort, cache-hit fast path via existing `get_or_create_key`) called at every property-persisting chokepoint — 12 sites / 7 files, mirroring the codebase's existing per-site `get_or_create_label`/`get_or_create_type` convention (a single lower chokepoint was investigated and rejected: `RecordStore` has no catalog reference by design and threading one through its public API is a larger blast radius). Coverage audit included the bulk loader (`loader/mod.rs`), a real gap the Cypher-only view would have missed. Suites: cypher 348, executor 172, nexus-server 662, all green; clippy 0 warnings
+- [ ] 2.3 Verify the serial-benchmark schema-procedure scenarios pass the harness content check (nexus content == neo4j content), then re-measure the <=1.2x latency gate that is currently blocked (phase9_store-lock-read-concurrency §4.1)
 
 ## 3. Tail (docs + tests — check or waive with tailWaiver)
 - [ ] 3.1 Update or create documentation covering the implementation

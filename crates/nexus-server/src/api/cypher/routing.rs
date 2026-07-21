@@ -50,6 +50,28 @@ pub(crate) fn needs_engine_interception(ast: &CypherQuery) -> bool {
 
 /// The clause variants [`needs_engine_interception`] treats as
 /// engine-only.
+///
+/// `Clause::CallProcedure` / `Clause::CallSubquery` (bare `CALL ...`,
+/// with no other write/match clause in the query) were added to close a
+/// P1: without them a standalone `CALL db.labels()` /
+/// `db.relationshipTypes()` / `db.propertyKeys()` never entered the
+/// interception block below and fell all the way through to
+/// `server.executor` — a boot-time `Executor::default()` backed by a
+/// throwaway, empty temp-dir `Catalog` (`executor::dispatch::Executor`'s
+/// `Default` impl) that can never see any label/type/key the live
+/// engine catalog has recorded, so the three procedures silently
+/// returned zero rows on every database. Routing them here instead
+/// means [`is_read_only`]'s `READ_ONLY_PROCEDURES` allow-list carve-out
+/// (see the interception block in `execute::handler` /
+/// `protocol::rpc::dispatch::cypher`) runs them on a clone of the
+/// resolved engine's own executor — which `Engine::refresh_executor`
+/// keeps pointed at the live catalog, and which additionally has the
+/// full-text/R-tree/property-index registries installed that
+/// `Executor::default()` never gets — while every other procedure
+/// (including anything the AST-only `READ_ONLY_PROCEDURES` predicate
+/// cannot classify as read-only, e.g. `apoc.*`/GDS-style calls) now
+/// takes the exclusive engine-write path, also on the correct catalog,
+/// instead of silently misfiring on the disconnected default executor.
 fn is_engine_clause(c: &Clause) -> bool {
     matches!(
         c,
@@ -60,6 +82,8 @@ fn is_engine_clause(c: &Clause) -> bool {
             | Clause::Set(_)
             | Clause::Remove(_)
             | Clause::Foreach(_)
+            | Clause::CallProcedure(_)
+            | Clause::CallSubquery(_)
     )
 }
 

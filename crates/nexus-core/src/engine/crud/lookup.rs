@@ -88,6 +88,10 @@ impl Engine {
             label_ids
         };
         let props_value = Value::Object(properties);
+        // Register every property key with the catalog so `db.propertyKeys()`
+        // sees keys written via SET / REMOVE / `update_node`, not just DDL.
+        // See `Catalog::register_property_keys`.
+        self.catalog.register_property_keys(&props_value);
         self.fts_refresh_node(node_id, &effective_label_ids, &props_value);
         // phase6_spatial-index-autopopulate §3 — refresh spatial indexes
         // after SET / REMOVE so the tree stays in sync with node state.

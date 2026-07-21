@@ -249,6 +249,12 @@ impl Executor {
                         serde_json::Value::Null
                     };
 
+                    // Register every property key with the catalog so
+                    // `db.propertyKeys()` sees it — mirrors the label
+                    // registration above. See
+                    // `Catalog::register_property_keys`.
+                    self.catalog().register_property_keys(&properties);
+
                     // Check constraints before creating node
                     self.check_constraints(&label_ids_for_update, &properties)?;
 
@@ -385,6 +391,11 @@ impl Executor {
                                     serde_json::Value::Null
                                 };
 
+                                // Register every property key with the
+                                // catalog so `db.propertyKeys()` sees it.
+                                // See `Catalog::register_property_keys`.
+                                self.catalog().register_property_keys(&target_properties);
+
                                 let tid = self.store_mut().create_node_with_label_bits(
                                     &mut tx,
                                     target_label_bits,
@@ -458,6 +469,11 @@ impl Executor {
                     } else {
                         serde_json::Value::Null
                     };
+
+                    // Register every property key with the catalog so
+                    // `db.propertyKeys()` sees relationship-property keys
+                    // too. See `Catalog::register_property_keys`.
+                    self.catalog().register_property_keys(&rel_properties);
 
                     // Clone properties for Phase 8 synchronization (before moving to create_relationship)
                     let rel_props_clone = rel_properties.clone();

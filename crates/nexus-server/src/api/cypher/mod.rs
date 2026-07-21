@@ -10,6 +10,8 @@ pub mod execute;
 pub(crate) mod routing;
 
 #[cfg(test)]
+mod schema_procedures_test;
+#[cfg(test)]
 mod tests;
 #[cfg(test)]
 mod write_path_parity;
