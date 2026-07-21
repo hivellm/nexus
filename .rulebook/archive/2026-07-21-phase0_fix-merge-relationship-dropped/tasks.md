@@ -152,7 +152,7 @@ case would leave the most common form still broken.
   identical, still an `Ok(None)` bailout on no type)
 
 ## 4. Tail (docs + tests — check or waive with tailWaiver)
-- [x] 4.1 Update `docs/specs/cypher-subset.md` MERGE section to state that
+- [x] 4.1 Update or create documentation covering the implementation — update `docs/specs/cypher-subset.md` MERGE section to state that
   relationship patterns with anonymous endpoints and/or an anonymous
   relationship are fully supported (create-or-match the whole pattern); add a
   CHANGELOG entry. Updated MERGE section with examples and explanation of
@@ -170,7 +170,7 @@ case would leave the most common form still broken.
   `on_create_set_referencing_a_nonexistent_relationship_alias_behaves_sanely`
   (confirmed: rejected with a clear `CypherExecution("Unknown variable 'r' in
   SET clause")` error, not a panic, not silent corruption)
-- [x] 4.3 Run `cargo +nightly fmt --all`,
+- [x] 4.3 Run tests and confirm they pass — `cargo +nightly fmt --all`,
   `cargo clippy --workspace --all-targets --all-features -- -D warnings`,
   `cargo +nightly test --workspace` — all green — done: fmt clean (0 diff on
   `--check` after running), clippy 0 warnings across the full workspace
