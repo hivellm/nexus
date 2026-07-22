@@ -422,7 +422,7 @@ impl<'a> QueryPlanner<'a> {
             where_clauses.len()
         );
         for (idx, (where_clause, optional_vars)) in where_clauses.iter().enumerate() {
-            let predicate = self.expression_to_string(where_clause)?;
+            let predicate = self.predicate_to_string(where_clause)?;
             if optional_vars.is_empty() {
                 tracing::debug!("  WHERE clause #{}: {} (regular Filter)", idx, predicate);
                 operators.push(Operator::Filter { predicate });
@@ -1048,7 +1048,7 @@ impl<'a> QueryPlanner<'a> {
 
                 // If WITH had a WHERE clause with aggregation, add Filter after Aggregate
                 if let Some(where_expression) = with_aggregation_where {
-                    let filter_str = self.expression_to_string(where_expression)?;
+                    let filter_str = self.predicate_to_string(where_expression)?;
                     tracing::debug!(
                         "WITH aggregation WHERE (pattern branch): Adding Filter '{}' after Aggregate",
                         filter_str

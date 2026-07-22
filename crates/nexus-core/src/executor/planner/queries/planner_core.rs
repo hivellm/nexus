@@ -756,7 +756,7 @@ impl<'a> QueryPlanner<'a> {
             // If WITH has a WHERE clause, insert a Filter operator AFTER the WITH operator
             // This ensures the WHERE clause filters the projected WITH variables, not the original variables
             if let Some(where_expression) = where_expr {
-                let filter_str = self.expression_to_string(where_expression)?;
+                let filter_str = self.predicate_to_string(where_expression)?;
                 tracing::debug!(
                     "WITH WHERE: Inserting Filter at position {} (after WITH at {})",
                     insert_pos + 1,
@@ -822,7 +822,7 @@ impl<'a> QueryPlanner<'a> {
             // Add filter operators for WHERE clauses (when there are no patterns)
             // This handles cases like: RETURN 42 WHERE false, RETURN 5 WHERE 5 > 10, etc.
             for (where_clause, optional_vars) in &where_clauses {
-                let predicate = self.expression_to_string(where_clause)?;
+                let predicate = self.predicate_to_string(where_clause)?;
                 if optional_vars.is_empty() {
                     operators.push(Operator::Filter { predicate });
                 } else {
@@ -1194,7 +1194,7 @@ impl<'a> QueryPlanner<'a> {
 
                     // If WITH had a WHERE clause with aggregation, add Filter after Aggregate
                     if let Some(ref where_expression) = with_aggregation_where {
-                        let filter_str = self.expression_to_string(where_expression)?;
+                        let filter_str = self.predicate_to_string(where_expression)?;
                         tracing::debug!(
                             "WITH aggregation WHERE: Adding Filter '{}' after Aggregate",
                             filter_str
