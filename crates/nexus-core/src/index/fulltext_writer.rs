@@ -252,15 +252,64 @@ fn writer_loop(
     }
 }
 
+/// Net outcome of every command queued for a single `node_id` within
+/// one batch, once earlier commands for that id are folded together.
+/// See [`apply_batch`] for why this coalescing exists.
+enum NodeOutcome {
+    /// The id's last command in the batch was a `Del` — no add
+    /// follows it, so the id only needs a delete.
+    Delete,
+    /// The id's last command in the batch was an `Add` with this
+    /// content. `needs_delete_first` is `true` when a `Del` was seen
+    /// for this id anywhere earlier in the batch (a refresh/replace
+    /// sequence): that earlier `Del` must still run as a physical
+    /// `remove_document` — clearing whatever Tantivy already holds
+    /// for the id, whether committed in a prior batch or superseded
+    /// within this one — *before* the add, or the id's stale doc
+    /// survives alongside the fresh one.
+    Set {
+        label_id: u32,
+        key_id: u32,
+        content: String,
+        needs_delete_first: bool,
+    },
+}
+
 fn apply_batch(
     index: &FullTextIndex,
     buffer: &mut Vec<WriterCommand>,
     pending: &Arc<RwLock<usize>>,
 ) {
-    // Split add / del into a single writer pass for efficiency.
+    // Coalesce per `node_id` down to its net outcome for this batch,
+    // then apply every delete *before* any add.
+    //
+    // Splitting the drained buffer into "every add" / "every del"
+    // and applying the two groups in that fixed order — the pre-fix
+    // behaviour — discarded arrival order: `fts_refresh_node`
+    // (`engine/crud/index_maintenance.rs`) enqueues `Del{id}` then
+    // `Add{id, content}` to refresh a node's fulltext doc on
+    // SET/REMOVE, and the old split re-ran the del *after* the add
+    // regardless of enqueue order, deleting the node's fresh content
+    // while the registry's `members` bookkeeping (updated
+    // synchronously, independent of this writer) still considered
+    // the node indexed.
+    //
+    // Coalescing to "last command wins" per id determines the
+    // correct *final* state, but `add_document` never deletes prior
+    // docs for the same id on its own (mirroring the synchronous
+    // writer path, which relies on callers to del-before-add) — so a
+    // `Del` folded away by a later `Add` in the same batch must still
+    // run physically, or a doc committed in an earlier batch for
+    // that id would survive as a duplicate alongside the fresh one.
+    // Tracking `needs_delete_first` per id and running the delete
+    // pass ahead of the add pass reproduces exactly the state a
+    // single ordered replay of the id's commands would leave behind,
+    // while still letting unrelated ids share one bulk-add call —
+    // cross-id batching throughput is unaffected.
     let drained = buffer.len();
-    let mut adds: Vec<(u64, u32, u32, String)> = Vec::with_capacity(drained);
-    let mut dels: Vec<u64> = Vec::new();
+    let mut order: Vec<u64> = Vec::with_capacity(drained);
+    let mut outcomes: std::collections::HashMap<u64, NodeOutcome> =
+        std::collections::HashMap::with_capacity(drained);
     for cmd in buffer.drain(..) {
         match cmd {
             WriterCommand::Add {
@@ -268,13 +317,67 @@ fn apply_batch(
                 label_id,
                 key_id,
                 content,
-            } => adds.push((node_id, label_id, key_id, content)),
-            WriterCommand::Del { node_id } => dels.push(node_id),
+            } => {
+                let needs_delete_first = matches!(
+                    outcomes.get(&node_id),
+                    Some(NodeOutcome::Delete)
+                        | Some(NodeOutcome::Set {
+                            needs_delete_first: true,
+                            ..
+                        })
+                );
+                if outcomes
+                    .insert(
+                        node_id,
+                        NodeOutcome::Set {
+                            label_id,
+                            key_id,
+                            content,
+                            needs_delete_first,
+                        },
+                    )
+                    .is_none()
+                {
+                    order.push(node_id);
+                }
+            }
+            WriterCommand::Del { node_id } => {
+                if outcomes.insert(node_id, NodeOutcome::Delete).is_none() {
+                    order.push(node_id);
+                }
+            }
             WriterCommand::Flush(ack) => {
                 // A stray flush inside a batch: ack it immediately;
                 // the subsequent commit will flush everything.
                 let _ = ack.send(());
             }
+        }
+    }
+    let mut adds: Vec<(u64, u32, u32, String)> = Vec::with_capacity(order.len());
+    let mut dels: Vec<u64> = Vec::new();
+    for node_id in order {
+        match outcomes.remove(&node_id) {
+            Some(NodeOutcome::Delete) => dels.push(node_id),
+            Some(NodeOutcome::Set {
+                label_id,
+                key_id,
+                content,
+                needs_delete_first,
+            }) => {
+                if needs_delete_first {
+                    dels.push(node_id);
+                }
+                adds.push((node_id, label_id, key_id, content));
+            }
+            None => {}
+        }
+    }
+    // Deletes first: clears any doc already committed for an id
+    // (from a prior batch) or superseded within this one before the
+    // add pass below re-inserts that id's final content.
+    for node_id in dels {
+        if let Err(e) = index.remove_document(node_id, 0, 0) {
+            tracing::warn!("FTS async-writer: remove failed for {node_id}: {e}");
         }
     }
     if !adds.is_empty() {
@@ -284,11 +387,6 @@ fn apply_batch(
             .collect();
         if let Err(e) = index.add_documents_bulk(&refs) {
             tracing::warn!("FTS async-writer: bulk add failed: {e}");
-        }
-    }
-    for node_id in dels {
-        if let Err(e) = index.remove_document(node_id, 0, 0) {
-            tracing::warn!("FTS async-writer: remove failed for {node_id}: {e}");
         }
     }
     // Decrement pending by the exact count of drained commands so
@@ -399,6 +497,74 @@ mod tests {
             thread::sleep(Duration::from_millis(20));
         }
         panic!("writer did not auto-flush after max_batch_size enqueues");
+    }
+
+    /// phase0_fix-fts-async-writer-ordering §2/§3 regression:
+    /// `apply_batch` must resolve a same-id Del{id} immediately
+    /// followed by an Add{id, content} to the *add* (arrival-order
+    /// semantics), even though pre-fix code grouped every add ahead
+    /// of every del regardless of enqueue order. Unrelated
+    /// Add-only / Del-only ids in the same batch must resolve
+    /// independently, proving the fix doesn't serialize or drop
+    /// cross-id batching.
+    #[test]
+    fn apply_batch_preserves_same_id_order_without_affecting_other_ids() {
+        let (idx, _dir) = open_index();
+        let handle = WriterHandle::spawn(idx.clone(), WriterConfig::default());
+
+        // Commit a stale doc for node 1 first so the Del in the next
+        // batch has something real to remove.
+        handle
+            .enqueue(WriterCommand::Add {
+                node_id: 1,
+                label_id: 0,
+                key_id: 0,
+                content: "stale one".to_string(),
+            })
+            .unwrap();
+        handle.flush_blocking().unwrap();
+
+        // One batch: same-id Del+Add for node 1, an unrelated
+        // Add-only for node 2, and an unrelated Del-only for node 3
+        // (nothing indexed under 3 — deleting a term with no
+        // matching docs is a no-op, exercising the del path without
+        // depending on prior state).
+        handle.enqueue(WriterCommand::Del { node_id: 1 }).unwrap();
+        handle
+            .enqueue(WriterCommand::Add {
+                node_id: 1,
+                label_id: 0,
+                key_id: 0,
+                content: "fresh one".to_string(),
+            })
+            .unwrap();
+        handle
+            .enqueue(WriterCommand::Add {
+                node_id: 2,
+                label_id: 0,
+                key_id: 0,
+                content: "unrelated two".to_string(),
+            })
+            .unwrap();
+        handle.enqueue(WriterCommand::Del { node_id: 3 }).unwrap();
+        handle.flush_blocking().unwrap();
+
+        let opts = crate::index::fulltext::SearchOptions::default();
+        let fresh = idx.search("fresh", opts.clone()).unwrap();
+        assert!(
+            fresh.iter().any(|h| h.node_id == 1),
+            "same-id Del+Add must net to the fresh add, got {fresh:?}"
+        );
+        let stale = idx.search("stale", opts.clone()).unwrap();
+        assert!(
+            !stale.iter().any(|h| h.node_id == 1),
+            "stale pre-batch content must not survive, got {stale:?}"
+        );
+        let unrelated = idx.search("unrelated", opts).unwrap();
+        assert!(
+            unrelated.iter().any(|h| h.node_id == 2),
+            "unrelated add-only entry in the same batch must be unaffected, got {unrelated:?}"
+        );
     }
 
     #[test]
