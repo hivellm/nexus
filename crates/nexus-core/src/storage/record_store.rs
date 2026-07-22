@@ -21,6 +21,7 @@ use super::records::{
     FILE_GROWTH_FACTOR, INITIAL_NODES_FILE_SIZE, INITIAL_RELS_FILE_SIZE, NODE_RECORD_SIZE,
     NodeRecord, REL_RECORD_SIZE, RecordStoreStats, RelationshipRecord,
 };
+use super::temp_guard::TempDirGuard;
 
 /// Record store for managing nodes and relationships
 pub struct RecordStore {
@@ -59,6 +60,21 @@ pub struct RecordStore {
     pub(super) nodes_file_size: usize,
     /// Current relationships file size
     pub(super) rels_file_size: usize,
+    /// Reference-counted cleanup guard for stores created via
+    /// [`Self::new_temporary`]. `None` for every persistent store (the
+    /// common case — a store must never auto-delete a caller-provided
+    /// data directory).
+    ///
+    /// Declared as the LAST field so the compiler-generated `Drop` glue
+    /// runs it after every other field — in particular after
+    /// `nodes_mmap`/`rels_mmap` (and, within the clone that ends up
+    /// holding the last reference, after `property_store` and
+    /// `adjacency_store` too). The guard's directory removal only fires
+    /// once the `Arc`'s strong count reaches zero, i.e. once the last
+    /// `RecordStore` clone sharing it is dropped — so a still-shared
+    /// mmap never races the directory removal, which matters on
+    /// Windows where a mapped file cannot be deleted.
+    pub(super) _cleanup: Option<Arc<TempDirGuard>>,
 }
 
 impl RecordStore {
@@ -208,6 +224,7 @@ impl RecordStore {
             next_rel_id: Arc::new(AtomicU64::new(next_rel_id)),
             nodes_file_size,
             rels_file_size,
+            _cleanup: None,
         };
 
         // phase0_fix-anonymous-node-lost-on-restart §2.2: one-time migration
@@ -281,6 +298,43 @@ impl RecordStore {
         }
 
         Ok(store)
+    }
+
+    /// Create a new, self-cleaning `RecordStore` rooted at a fresh
+    /// temporary directory.
+    ///
+    /// The returned store owns a [`TempDirGuard`] wrapped in `Arc`. Every
+    /// `.clone()` of this store shares that same `Arc`, so the directory
+    /// is removed exactly when the last live clone (and therefore the
+    /// last live memory-mapped handle onto `nodes.store`/`rels.store`) is
+    /// dropped — never on a timer, never assuming a single owner.
+    ///
+    /// Intended for ephemeral stores (tests, the default test-harness
+    /// executor, an in-memory-only engine) that need an isolated,
+    /// filesystem-backed store but must never accumulate directories on
+    /// disk across repeated calls. Persistent callers must keep using
+    /// [`Self::new`], whose stores never auto-delete their directory.
+    pub fn new_temporary() -> Result<Self> {
+        let temp_dir = tempfile::Builder::new()
+            .prefix("nexus-store-")
+            .tempdir()
+            .map_err(|e| Error::Storage(format!("failed to create temp directory: {}", e)))?;
+
+        // `keep()` disarms `TempDir`'s own destructor — but this is not
+        // a leak: ownership of removal transfers to the `TempDirGuard`
+        // below, which removes this SAME directory once every clone of
+        // the store built on it has dropped (see the `_cleanup` field).
+        let path = temp_dir.keep();
+
+        let mut store = Self::new(&path)?;
+        store._cleanup = Some(Arc::new(TempDirGuard::new(path)));
+        Ok(store)
+    }
+
+    /// Directory this store's files (`nodes.store`, `rels.store`, and the
+    /// sibling property/adjacency stores) live under.
+    pub fn path(&self) -> &Path {
+        &self.path
     }
 
     /// Allocate a new node ID
@@ -480,6 +534,10 @@ impl Clone for RecordStore {
             next_rel_id: Arc::clone(&self.next_rel_id),
             nodes_file_size: self.nodes_file_size,
             rels_file_size: self.rels_file_size,
+            // Share the same cleanup guard `Arc` — see the field doc on
+            // `_cleanup`: removal fires only once every clone (this one
+            // included) has been dropped.
+            _cleanup: self._cleanup.clone(),
         }
     }
 }

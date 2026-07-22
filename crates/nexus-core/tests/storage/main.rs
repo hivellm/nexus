@@ -7,6 +7,7 @@ mod edge_merge_index_test;
 mod graph_storage_engine_validation_test;
 mod merge_index_correctness_test;
 mod property_store_shrink_corruption_test;
+mod record_store_temp_guard_test;
 mod relationship_prop_ptr_test;
 mod relationship_traversal_test;
 mod test_index_consistency;

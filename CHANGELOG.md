@@ -160,6 +160,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **`MATCH (a)-[:R*1..2]->(b) WHERE b.name = 'x'` and similar queries now correctly apply WHERE filters instead of silently returning zero rows.** The query planner's cost-based operator-reordering pass was incorrectly reordering variable-binding operators — variable-length paths (`[:T*1..3]`), quantified path patterns (`((n)-[:T]->(m)){1,2}`), and spatial R-tree seeks — to be evaluated after the WHERE clauses that reference their newly-bound variables. Since unbound variables evaluate to null (falsy) in predicates, the WHERE filters were silently dropped, resulting in empty query results. Fixed by ensuring these binding operators are evaluated before the filters. Not a breaking change — corrects previously-incorrect query results.
 
+### Fixed — Executor and Engine temporary-directory leak
+
+- **Temporary directories created by `Executor::default()`, `Engine::new()`, and ephemeral test engines no longer accumulate on disk — test runs previously filled the filesystem with tens of thousands of leftover `.tmp*` directories consuming tens of gigabytes.** Root cause: these helpers created their temporary record store via `tempfile::tempdir().keep()`, which deliberately disarms the directory's auto-removal on drop. Called repeatedly throughout the test suite, each instantiation leaked a system temp directory containing record-store files (nodes.store, rels.store, etc.), and repeated `cargo test` runs accumulated over 21,000 directories (~100 GB observed). The fix ties each temporary directory to a reference-counted cleanup guard held by the `RecordStore` (dropped when the last store clone is dropped), ensuring directories are removed exactly when no longer needed — cross-platform and with no reliance on process exit or timers. Persistent data directories via `Engine::with_data_dir` are unaffected and continue to preserve their contents. Not a breaking change — behavior only becomes more correct.
+
 ## [2.6.0] — 2026-07-20
 
 > **Memory safety in Cartesian products.** Multi-pattern Cypher queries

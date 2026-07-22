@@ -16,6 +16,7 @@ pub mod record_store;
 pub mod record_store_ops;
 pub mod records;
 pub mod row_lock;
+mod temp_guard;
 pub mod write_buffer;
 
 pub use external_id::{ConflictPolicy, ExternalId};

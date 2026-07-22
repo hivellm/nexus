@@ -1450,28 +1450,22 @@ impl Default for Executor {
     /// Every call allocates its own `RecordStore`, `Catalog`,
     /// `LabelIndex`, and `KnnIndex`, so concurrent tests cannot see
     /// each other's nodes / relationships. The temp directory holding
-    /// the record store is deliberately leaked via
-    /// `TempDir::keep()` — test processes are short-lived and the leak
-    /// is bounded by the number of `default()` calls, but the record
-    /// store file descriptor stays valid for the whole process so
-    /// concurrent readers of the same `Executor` clone still work.
+    /// the record store is created via [`RecordStore::new_temporary`],
+    /// which attaches a reference-counted cleanup guard to the store:
+    /// the directory is removed once the last clone of the store (and
+    /// therefore the last live memory-mapped handle) is dropped, so
+    /// concurrent readers of the same `Executor` clone keep working
+    /// exactly as before, but the directory no longer accumulates on
+    /// disk once every clone goes away.
     ///
-    /// Before `phase3_remove-test-shared-state` this function returned
-    /// a `RecordStore` clone drawn from a process-wide `SHARED_STORE`
-    /// guarded by a `Once`. Every caller observed the same store, so
-    /// any test that created nodes polluted every other test. The
-    /// current implementation gives each caller its own isolated
-    /// state — tests that previously relied (even accidentally) on
-    /// cross-test state will need to be updated.
+    /// Historically this function returned a `RecordStore` clone drawn
+    /// from a single process-wide shared store. Every caller observed
+    /// the same store, so any test that created nodes polluted every
+    /// other test. The current implementation gives each caller its own
+    /// isolated state — tests that previously relied (even
+    /// accidentally) on cross-test state will need to be updated.
     fn default() -> Self {
-        let temp_dir = tempfile::tempdir().expect("Failed to create temp directory");
-        // `keep()` consumes the `TempDir` and returns the PathBuf,
-        // suppressing the destructor that would otherwise remove the
-        // directory when the binding goes out of scope. Equivalent in
-        // effect to the previous `mem::forget(temp_dir)` but uses the
-        // idiomatic API.
-        let path = temp_dir.keep();
-        let store = RecordStore::new(&path).expect("Failed to create record store");
+        let store = RecordStore::new_temporary().expect("Failed to create temporary record store");
         let catalog = Catalog::default();
         let label_index = LabelIndex::default();
         let knn_index = KnnIndex::new_default(crate::index::DEFAULT_VECTORIZER_DIMENSION)

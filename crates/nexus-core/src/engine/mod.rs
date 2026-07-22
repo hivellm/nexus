@@ -240,8 +240,6 @@ pub struct Engine {
     /// `warn` log instead of rejecting the write (§10). Default
     /// `false`; scheduled for removal at v1.5.
     pub(crate) relaxed_constraint_enforcement: bool,
-    /// Keeps temporary directory alive for Engine::new(). None for persistent storage.
-    _temp_dir: Option<tempfile::TempDir>,
     /// External-id reservations made during the current session write
     /// transaction.  Each entry is `(internal_id, external_id)` as recorded
     /// inside `create_node_inner` when `put_if_absent` succeeded.
@@ -260,12 +258,17 @@ impl Engine {
     /// The temporary directory will be automatically cleaned up when the Engine is dropped.
     /// For persistent storage, use `Engine::with_data_dir()` instead.
     pub fn new() -> Result<Self> {
-        // Create temporary directory for data
-        let temp_dir = tempfile::tempdir()?;
-        let data_dir = temp_dir.path().to_path_buf();
-        let mut engine = Self::with_data_dir(&data_dir)?;
-        engine._temp_dir = Some(temp_dir);
-        Ok(engine)
+        // Self-cleaning temp directory: `RecordStore::new_temporary()`
+        // attaches a reference-counted cleanup guard to the store (see
+        // its doc comment) that removes the directory once every clone
+        // of the store — including the one held by `self.executor` — has
+        // dropped, i.e. when this `Engine` itself drops. No dedicated
+        // `TempDir` field is needed on `Engine` anymore: removal is tied
+        // to the store's own lifetime, not to a timer, so a long-running
+        // server process is unaffected until shutdown.
+        let storage = storage::RecordStore::new_temporary()?;
+        let data_dir = storage.path().to_path_buf();
+        Self::bootstrap_with_storage(&data_dir, EngineConfig::default(), storage)
     }
 
     /// Create a new engine instance with a specific data directory, using
@@ -287,11 +290,24 @@ impl Engine {
         // Ensure data directory exists
         std::fs::create_dir_all(data_dir)?;
 
+        // Initialize record store (persistent — never auto-deletes `data_dir`)
+        let storage = storage::RecordStore::new(data_dir)?;
+
+        Self::bootstrap_with_storage(data_dir, config, storage)
+    }
+
+    /// Shared bootstrap tail for [`Self::new`] (temp-directory,
+    /// self-cleaning) and [`Self::with_data_dir_and_config`] (persistent):
+    /// builds the catalog, page cache, WAL, transaction/session managers,
+    /// indexes, executor, and cache system given an already-open
+    /// `storage`, so the two entry points cannot drift apart.
+    fn bootstrap_with_storage(
+        data_dir: &std::path::Path,
+        config: EngineConfig,
+        storage: storage::RecordStore,
+    ) -> Result<Self> {
         // Initialize catalog
         let catalog = catalog::Catalog::new(data_dir.join("catalog.mdb"))?;
-
-        // Initialize record stores
-        let storage = storage::RecordStore::new(data_dir)?;
 
         // Initialize page cache
         let page_cache = page_cache::PageCache::new(config.page_cache_capacity)?;
@@ -349,7 +365,6 @@ impl Engine {
             rel_not_null_constraints: Vec::new(),
             property_type_constraints: Vec::new(),
             relaxed_constraint_enforcement: false,
-            _temp_dir: None,
             pending_external_ids: Vec::new(),
         };
 
@@ -546,7 +561,6 @@ impl Engine {
             rel_not_null_constraints: Vec::new(),
             property_type_constraints: Vec::new(),
             relaxed_constraint_enforcement: false,
-            _temp_dir: None,
             pending_external_ids: Vec::new(),
         };
 
