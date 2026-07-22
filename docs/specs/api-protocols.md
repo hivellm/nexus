@@ -304,44 +304,50 @@ Content-Type: application/json
 }
 ```
 
-**Response**:
+**Semantics**:
+- **Correlation Keys**: The `id` field in each node object is honoured as a **request-scoped correlation key**. When a relationship's `src` or `dst` field references a node, it is resolved first against the `id` values supplied in the same request. If no match is found, the value is treated as a literal internal node ID, so relationships between pre-existing nodes continue to work without a `nodes` array in the request.
+- **Collision Caveat**: Because `src`/`dst` share the same u64 namespace as client-supplied correlation keys, if a request both creates a node with a client `id` AND references a pre-existing internal node, and those numbers collide, the reference resolves to the newly-created node. Guidance: within a single `/ingest` request, use correlation keys consistently; do not mix client-supplied `id` values with references to pre-existing internal IDs that could overlap.
+- **Batch Semantics**: The batch is **best-effort, not atomic**. Valid rows commit even if others fail. Every failure is surfaced in the response's `error` field (a flat string, not a structured array).
+
+**Response** (success):
 ```json
 {
   "nodes_ingested": 2,
   "relationships_ingested": 1,
+  "node_ids": [42, 43],
   "ingestion_time_ms": 15,
-  "throughput": {
-    "nodes_per_sec": 133,
-    "relationships_per_sec": 66
-  },
-  "errors": []
+  "error": null
 }
 ```
 
-**Error Response** (partial failure):
+**Response** (partial failure):
 ```json
 {
   "nodes_ingested": 1,
   "relationships_ingested": 0,
+  "node_ids": [42],
   "ingestion_time_ms": 10,
-  "errors": [
-    {
-      "type": "node",
-      "index": 1,
-      "id": 2,
-      "error": "Duplicate node ID: 2"
-    },
-    {
-      "type": "relationship",
-      "index": 0,
-      "error": "Source node not found: 1"
-    }
+  "error": "relationship at index 0: source node 2 not found"
+}
+```
+
+**Composition Example** (ingest nodes and their relationships in one request):
+```json
+{
+  "nodes": [
+    {"id": "user:1", "labels": ["User"], "properties": {"name": "Alice"}},
+    {"id": "user:2", "labels": ["User"], "properties": {"name": "Bob"}}
+  ],
+  "relationships": [
+    {"src": "user:1", "dst": "user:2", "type": "FOLLOWS", "properties": {}}
   ]
 }
 ```
 
+The response will include `node_ids: [42, 43]` (the internal IDs assigned to Alice and Bob). In the same request, the relationship's `src` and `dst` are resolved against the correlation keys `"user:1"` and `"user:2"`, creating the edge between the newly-created nodes.
+
 **Status Codes**:
-- `200 OK`: Ingestion completed (may have partial errors, check errors array)
+- `200 OK`: Ingestion completed (may have partial failures; check `error` field and counts)
 - `400 Bad Request`: Invalid input format
 - `500 Internal Server Error`: Ingestion failed completely
 
