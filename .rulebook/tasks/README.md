@@ -15,10 +15,10 @@
 | ⬚ | phase0_fix-relationship-publish-ordering | 0/13 | fix relationship publish ordering |
 | ⬚ | phase0_fix-relationship-write-clauses-dropped | 0/12 | fix relationship write clauses dropped |
 | ⬚ | phase0_fix-server-secure-defaults-and-dos | 0/24 | fix server secure defaults and dos |
+| ⬚ | phase0_fix-shortestpath-multi-reltype-dropped | 0/10 | fix shortestpath multi reltype dropped |
 | ⬚ | phase0_fix-skip-dropped-on-pattern-queries | 0/6 | fix skip dropped on pattern queries |
 | ⬚ | phase0_fix-storage-oob-panics | 0/22 | fix storage oob panics |
 | ⬚ | phase0_fix-store-size-per-clone-divergence | 0/14 | fix store size per clone divergence |
-| ⬚ | phase0_fix-varlength-multi-reltype-dropped | 0/14 | fix varlength multi reltype dropped |
 | ⬚ | phase0_fix-wal-durability-gaps | 0/15 | fix wal durability gaps |
 | ⬚ | phase0_fix-wal-torn-tail-recovery | 0/12 | fix wal torn tail recovery |
 | ⬚ | phase0_fix-where-clause-index-seek | 0/20 | fix where clause index seek |
