@@ -9,9 +9,9 @@
 | Status | Task | Progress | Description |
 |--------|------|----------|-------------|
 | ⬚ | phase0_fix-cypher-unbounded-alloc-oom | 0/22 | fix cypher unbounded alloc oom |
+| ⬚ | phase0_fix-loadcsv-reorder-drops-predicates | 0/12 | fix loadcsv reorder drops predicates |
 | ⬚ | phase0_fix-multi-hop-count-star-incorrect | 0/6 | fix multi hop count star incorrect |
 | ⬚ | phase0_fix-optional-match-var-scoping | 0/11 | fix optional match var scoping |
-| ⬚ | phase0_fix-plan-reorder-drops-predicates | 0/15 | fix plan reorder drops predicates |
 | ⬚ | phase0_fix-relationship-publish-ordering | 0/13 | fix relationship publish ordering |
 | ⬚ | phase0_fix-relationship-write-clauses-dropped | 0/12 | fix relationship write clauses dropped |
 | ⬚ | phase0_fix-server-secure-defaults-and-dos | 0/24 | fix server secure defaults and dos |
