@@ -247,6 +247,14 @@ SKIP 10
 SKIP 20 LIMIT 10  -- page 3, size 10
 ```
 
+**Supported and unsupported contexts.** SKIP is fully supported on pattern-less queries and procedure YIELD projections:
+- ✅ `CALL db.labels() YIELD label RETURN label SKIP 1 LIMIT 10` — SKIP works correctly
+- ✅ `RETURN 1 SKIP 1` — SKIP works correctly
+- ✅ `UNWIND [1, 2, 3] AS x RETURN x SKIP 1` — SKIP works correctly
+
+Known limitation: SKIP is **not yet applied** on pattern-driven `MATCH` queries:
+- ❌ `MATCH (n) RETURN n SKIP 1` — SKIP is silently ignored; use ORDER BY to get deterministic ordering (tracked separately as a system-wide gap)
+
 ### Aggregations
 
 ```cypher
@@ -1736,6 +1744,8 @@ RETURN coefficient
 ### Schema Introspection Procedures
 
 Nexus provides a suite of read-only schema procedures for inspecting catalog metadata, index/constraint definitions, and property keys. These procedures honor the per-request `database` field on `/cypher` — a `CALL db.labels()` on `database:"alpha"` queries the `alpha` database's catalog, not the default.
+
+**YIELD projection ordering (ORDER BY, SKIP, LIMIT).** Procedure YIELD projections support ORDER BY, SKIP, and LIMIT clauses in the standard openCypher order. For example, `CALL db.labels() YIELD label RETURN label ORDER BY label SKIP 1 LIMIT 10` will sort the labels alphabetically, skip the first result, and return the next 10 — all clauses now apply correctly to pattern-less YIELD outputs.
 
 | Procedure | Returns | Description |
 |-----------|---------|-------------|

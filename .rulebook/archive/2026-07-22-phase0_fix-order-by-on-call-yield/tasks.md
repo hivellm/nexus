@@ -126,6 +126,6 @@ rows on a live server (`B, A, C, D, E`; Neo4j sorts). Set content correct,
       strictly required to prove the fix.
 
 ## 2. Tail (docs + tests — check or waive with tailWaiver)
-- [ ] 2.1 Update or create documentation covering the implementation
+- [x] 2.1 Update or create documentation covering the implementation — Added CHANGELOG.md entry under [3.0.0]; updated docs/specs/cypher-subset.md with YIELD projection ORDER BY/SKIP/LIMIT support in Schema Introspection section; added SKIP limitation note in SKIP Clause section.
 - [x] 2.2 Write tests covering the new behavior
 - [x] 2.3 Run tests and confirm they pass
