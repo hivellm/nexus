@@ -278,6 +278,15 @@ impl<'a> QueryPlanner<'a> {
         let mut where_clauses: Vec<(Expression, Vec<String>)> = Vec::new();
         // Track variables from the most recent OPTIONAL MATCH
         let mut last_optional_vars: Vec<String> = Vec::new();
+        // Track every variable bound by a MATCH clause processed so far
+        // (both regular MATCH and OPTIONAL MATCH — an OPTIONAL MATCH's
+        // variables are still in scope for later clauses even though
+        // their values may be NULL). Used below to compute an OPTIONAL
+        // MATCH's nullable-variable set as
+        // `(pattern variables) - (already-bound variables)`, which is
+        // correct regardless of whether the already-bound anchor sits
+        // first, last, or nowhere in the pattern's textual order.
+        let mut bound_vars: std::collections::HashSet<String> = std::collections::HashSet::new();
         let mut return_items = Vec::new();
         let mut limit_count = None;
         // (phase0_fix-order-by-on-call-yield) Collected alongside
@@ -334,55 +343,42 @@ impl<'a> QueryPlanner<'a> {
                     // Store pattern with optional flag for LEFT OUTER JOIN semantics
                     patterns.push((match_clause.pattern.clone(), match_clause.optional));
 
+                    // Extract every variable this pattern introduces —
+                    // nodes, relationships, and quantified-group members —
+                    // with no positional skip.
+                    let pattern_vars = Self::collect_pattern_variables(&match_clause.pattern);
+
                     // Extract variables from this MATCH for optional context
                     if match_clause.optional {
-                        // Extract target and relationship variables from OPTIONAL MATCH pattern
-                        // IMPORTANT: Skip the first node as it's typically the "anchor" that's already bound
-                        // Only include variables from subsequent nodes and relationships
-                        last_optional_vars.clear();
-                        let mut is_first_node = true;
-                        for element in &match_clause.pattern.elements {
-                            match element {
-                                PatternElement::Node(node) => {
-                                    if is_first_node {
-                                        // Skip the first node - it's the anchor from previous MATCH
-                                        is_first_node = false;
-                                    } else if let Some(var) = &node.variable {
-                                        last_optional_vars.push(var.clone());
-                                    }
-                                }
-                                PatternElement::Relationship(rel) => {
-                                    if let Some(var) = &rel.variable {
-                                        last_optional_vars.push(var.clone());
-                                    }
-                                }
-                                PatternElement::QuantifiedGroup(group) => {
-                                    for inner in &group.inner {
-                                        match inner {
-                                            PatternElement::Node(n) => {
-                                                if let Some(var) = &n.variable {
-                                                    last_optional_vars.push(var.clone());
-                                                }
-                                            }
-                                            PatternElement::Relationship(r) => {
-                                                if let Some(var) = &r.variable {
-                                                    last_optional_vars.push(var.clone());
-                                                }
-                                            }
-                                            PatternElement::QuantifiedGroup(_) => {}
-                                        }
-                                    }
-                                }
-                            }
-                        }
+                        // The nullable-variable set is the pattern's
+                        // variables MINUS whatever prior clauses already
+                        // bound. This correctly identifies the anchor by
+                        // its BINDING STATE rather than by assuming it is
+                        // always the first node: it handles the forward
+                        // anchor (`(a)-[:KNOWS]->(b)` with `a` bound),
+                        // the reverse direction (`(b)-[:KNOWS]->(a)` with
+                        // `a` bound), and the standalone case (no prior
+                        // binding at all, so every pattern variable is
+                        // nullable) uniformly.
+                        last_optional_vars = pattern_vars
+                            .iter()
+                            .filter(|var| !bound_vars.contains(*var))
+                            .cloned()
+                            .collect();
                         tracing::debug!(
-                            "PLANNER: OPTIONAL MATCH detected, tracking NEW vars (excluding anchor): {:?}",
+                            "PLANNER: OPTIONAL MATCH detected, tracking NEW vars (not already bound): {:?}",
                             last_optional_vars
                         );
                     } else {
                         // Regular MATCH clears optional context
                         last_optional_vars.clear();
                     }
+
+                    // This pattern's variables are now in scope for
+                    // subsequent clauses — including a later OPTIONAL
+                    // MATCH's own binding-state diff — regardless of
+                    // whether this MATCH was optional.
+                    bound_vars.extend(pattern_vars);
 
                     if let Some(where_clause) = &match_clause.where_clause {
                         // WHERE inside MATCH clause inherits the optional context from this MATCH
@@ -1302,5 +1298,50 @@ impl<'a> QueryPlanner<'a> {
             .put(query_hash, operators.clone(), estimated_cost);
 
         Ok(operators)
+    }
+
+    /// Collect every variable a pattern introduces — node variables,
+    /// relationship variables, and the variables of any quantified-group
+    /// members — with no positional skip. Used to compute an OPTIONAL
+    /// MATCH's nullable-variable set as a set difference against
+    /// variables already bound by prior clauses, instead of assuming the
+    /// pattern's first node is always the already-bound anchor (that
+    /// assumption breaks for reverse-direction patterns like
+    /// `(b)-[:KNOWS]->(a)` where `a` is the bound anchor, and for
+    /// standalone patterns with no bound anchor at all).
+    fn collect_pattern_variables(pattern: &Pattern) -> Vec<String> {
+        let mut vars = Vec::new();
+        for element in &pattern.elements {
+            match element {
+                PatternElement::Node(node) => {
+                    if let Some(var) = &node.variable {
+                        vars.push(var.clone());
+                    }
+                }
+                PatternElement::Relationship(rel) => {
+                    if let Some(var) = &rel.variable {
+                        vars.push(var.clone());
+                    }
+                }
+                PatternElement::QuantifiedGroup(group) => {
+                    for inner in &group.inner {
+                        match inner {
+                            PatternElement::Node(n) => {
+                                if let Some(var) = &n.variable {
+                                    vars.push(var.clone());
+                                }
+                            }
+                            PatternElement::Relationship(r) => {
+                                if let Some(var) = &r.variable {
+                                    vars.push(var.clone());
+                                }
+                            }
+                            PatternElement::QuantifiedGroup(_) => {}
+                        }
+                    }
+                }
+            }
+        }
+        vars
     }
 }

@@ -14,6 +14,7 @@ mod node_key_delete_reuse_test;
 mod oom_budget_verification_test;
 mod optional_match_binding_leak_test;
 mod optional_match_empty_driver_test;
+mod optional_match_var_scoping_test;
 mod plan_binding_operator_order_test;
 mod query_analysis_test;
 mod relationship_delete_test;
