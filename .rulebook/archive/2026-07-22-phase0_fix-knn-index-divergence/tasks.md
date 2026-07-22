@@ -69,6 +69,13 @@ lands, so it must be settled before implementation.
   `cargo clippy --workspace --all-targets --all-features -- -D warnings`,
   `cargo +nightly test --workspace` — all green
 
+## 6. Tail (docs + tests — check or waive with tailWaiver)
+- [x] 6.1 Update or create documentation covering the implementation — docs/specs/knn-integration.md
+  (single-HNSW-entry-per-node re-insert/evict contract) + CHANGELOG entry.
+- [x] 6.2 Write tests covering the new behavior — reinsert-no-leak, remove-after-reinsert-no-phantom,
+  knn_evict_node clears both mappings + no-op for absent node.
+- [x] 6.3 Run tests and confirm they pass — nexus-core suite green (KNN tests pass); clippy + fmt clean.
+
 ## Related
 - None of the other write-path tasks in this audit touch the KNN index; this is the only
   vector-index defect found
