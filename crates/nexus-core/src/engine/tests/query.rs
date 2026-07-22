@@ -1272,3 +1272,81 @@ fn point_property_accessors_match_neo4j() {
         .expect("query must succeed");
     assert_eq!(rs.rows.len(), 0, "empty MATCH stays empty through WITH");
 }
+
+/// Parity regression for the `[:R1|R2*m..n]` multi-type fix: the same
+/// query must return the same rows on BOTH the default legacy
+/// `VariableLengthPath` operator and the opt-in `QuantifiedExpand`
+/// rewrite path (`NEXUS_QPP_REWRITE_LEGACY=1`), which already threaded
+/// the full `type_ids` list through `QppHopSpec` before this fix.
+///
+/// This test flips the process-wide rewrite flag via
+/// `set_qpp_legacy_rewrite_enabled` rather than `std::env::set_var`.
+/// `qpp_legacy_rewrite_flag` (`executor/planner/queries/qpp.rs`) reads
+/// `NEXUS_QPP_REWRITE_LEGACY` exactly once per process into a
+/// `OnceLock<AtomicBool>` — by the time any test in this shared test
+/// binary runs, an earlier test may already have forced that first
+/// read (with the env var unset), permanently freezing the flag at
+/// `false` for the rest of the process. Setting the env var at this
+/// point would therefore be a no-op more often than not. The in-crate
+/// setter is the sanctioned test-only toggle for exactly this reason
+/// (see its doc comment); `#[serial_test::serial]` keeps this test
+/// from racing the other flag-flipping test in
+/// `executor::planner::tests`.
+#[test]
+#[serial_test::serial(qpp_legacy_rewrite_flag)]
+fn variable_length_multi_type_matches_between_legacy_and_qpp_rewrite_paths() {
+    use crate::executor::planner::queries::{
+        qpp_legacy_rewrite_enabled, set_qpp_legacy_rewrite_enabled,
+    };
+
+    let previous = qpp_legacy_rewrite_enabled();
+
+    let ctx = crate::testing::TestContext::new();
+    let mut engine = Engine::with_data_dir(ctx.path()).unwrap();
+    engine
+        .execute_cypher(
+            "CREATE (:Person {name: 'Alice'})-[:KNOWS]->(:Person {name: 'Bob'})\
+             -[:FOLLOWS]->(:Person {name: 'Dave'})",
+        )
+        .expect("seed a mixed-type chain");
+
+    let query = "MATCH (a:Person {name: 'Alice'})-[:KNOWS|FOLLOWS*1..3]->(b:Person) \
+                 RETURN b.name AS name ORDER BY name";
+
+    set_qpp_legacy_rewrite_enabled(false);
+    let legacy_result = engine.execute_cypher(query).expect("legacy path query");
+    let mut legacy_names: Vec<String> = legacy_result
+        .rows
+        .iter()
+        .filter_map(|row| row.values.first().and_then(|v| v.as_str()))
+        .map(str::to_string)
+        .collect();
+    legacy_names.sort();
+
+    set_qpp_legacy_rewrite_enabled(true);
+    let qpp_result = engine
+        .execute_cypher(query)
+        .expect("QPP-rewrite path query");
+    let mut qpp_names: Vec<String> = qpp_result
+        .rows
+        .iter()
+        .filter_map(|row| row.values.first().and_then(|v| v.as_str()))
+        .map(str::to_string)
+        .collect();
+    qpp_names.sort();
+
+    set_qpp_legacy_rewrite_enabled(previous);
+
+    assert_eq!(
+        legacy_names,
+        vec!["Bob".to_string(), "Dave".to_string()],
+        "the default legacy VariableLengthPath operator must return both \
+         nodes reachable via the two named types"
+    );
+    assert_eq!(
+        legacy_names, qpp_names,
+        "the legacy VariableLengthPath operator and the opt-in \
+         QuantifiedExpand rewrite must return identical rows for the same \
+         multi-type variable-length query"
+    );
+}

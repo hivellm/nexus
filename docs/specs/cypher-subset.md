@@ -89,7 +89,7 @@ Quantifier ::= '*' Int? ('..' Int?)?  -- legacy *m..n shorthand
              | '+' | '*' | '?'          -- shorthand desugars
 
 Variable ::= Identifier
-Type ::= Identifier
+Type ::= Identifier ( '|' Identifier )*  -- single type or union (e.g. :R, :R1|R2|R3)
 ```
 
 ### WHERE Clause

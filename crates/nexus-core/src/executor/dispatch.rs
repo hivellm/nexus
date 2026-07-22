@@ -783,7 +783,7 @@ impl Executor {
                     self.execute_unwind(&mut context, expression, variable)?;
                 }
                 Operator::VariableLengthPath {
-                    type_id,
+                    type_ids,
                     direction,
                     source_var,
                     target_var,
@@ -793,7 +793,7 @@ impl Executor {
                 } => {
                     self.execute_variable_length_path(
                         &mut context,
-                        *type_id,
+                        type_ids,
                         *direction,
                         source_var,
                         target_var,

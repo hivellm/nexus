@@ -302,7 +302,7 @@ impl Executor {
                 self.execute_unwind(context, expression, variable)?;
             }
             Operator::VariableLengthPath {
-                type_id,
+                type_ids,
                 direction,
                 source_var,
                 target_var,
@@ -311,7 +311,7 @@ impl Executor {
                 quantifier,
             } => {
                 self.execute_variable_length_path(
-                    context, *type_id, *direction, source_var, target_var, rel_var, path_var,
+                    context, type_ids, *direction, source_var, target_var, rel_var, path_var,
                     quantifier,
                 )?;
             }

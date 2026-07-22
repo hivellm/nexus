@@ -731,7 +731,9 @@ struct VariableLengthPathVisitor {
     start_node: u64,
     min_length: usize,
     max_length: usize,
-    type_filter: Option<u32>,
+    /// Type IDs to match (empty = match every type), mirroring the
+    /// `find_relationships` matching rule.
+    type_filter: Vec<u32>,
     direction: Direction,
     paths: Vec<(Vec<u64>, Vec<u64>)>, // (path_nodes, path_relationships)
     current_path_nodes: Vec<u64>,
@@ -743,7 +745,7 @@ impl VariableLengthPathVisitor {
         start_node: u64,
         min_length: usize,
         max_length: usize,
-        type_filter: Option<u32>,
+        type_filter: Vec<u32>,
         direction: Direction,
     ) -> Self {
         Self {
@@ -802,11 +804,9 @@ impl TraversalVisitor for VariableLengthPathVisitor {
     }
 
     fn visit_relationship(&mut self, rel_id: u64, source: u64, target: u64, type_id: u32) -> bool {
-        // Filter by type if specified
-        if let Some(filter_type) = self.type_filter {
-            if type_id != filter_type {
-                return false;
-            }
+        // Filter by type if specified (empty = match every type)
+        if !self.type_filter.is_empty() && !self.type_filter.contains(&type_id) {
+            return false;
         }
 
         // Update current path - find which node is the next in the path
@@ -842,7 +842,7 @@ impl Executor {
     pub(in crate::executor) fn execute_variable_length_path(
         &self,
         context: &mut ExecutionContext,
-        type_id: Option<u32>,
+        type_ids: &[u32],
         direction: Direction,
         source_var: &str,
         target_var: &str,
@@ -900,7 +900,11 @@ impl Executor {
             if use_optimized_traversal {
                 if let Some(ref traversal_engine) = self.shared.traversal_engine {
                     let mut visitor = VariableLengthPathVisitor::new(
-                        source_id, min_length, max_length, type_id, direction,
+                        source_id,
+                        min_length,
+                        max_length,
+                        type_ids.to_vec(),
+                        direction,
                     );
 
                     if let Ok(result) = traversal_engine.traverse_bfs_optimized(
@@ -1058,10 +1062,8 @@ impl Executor {
 
                 // Continue expanding if we haven't reached max length
                 if path_length < max_length {
-                    // Find neighbors (convert Option<u32> to slice)
-                    let type_ids_slice: Vec<u32> = type_id.into_iter().collect();
                     let neighbors =
-                        self.find_relationships(current_node, &type_ids_slice, direction, None)?;
+                        self.find_relationships(current_node, type_ids, direction, None)?;
 
                     for rel_info in neighbors {
                         let next_node = match direction {

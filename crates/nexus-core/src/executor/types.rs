@@ -469,8 +469,8 @@ pub enum Operator {
     },
     /// Variable-length path expansion
     VariableLengthPath {
-        /// Type ID (None = all types)
-        type_id: Option<u32>,
+        /// Type IDs (empty = all types, multiple types are OR'd together)
+        type_ids: Vec<u32>,
         /// Direction (Outgoing, Incoming, Both)
         direction: Direction,
         /// Source variable
