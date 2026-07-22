@@ -320,6 +320,20 @@ impl Executor {
                     last_node_id = Some(node_id);
                 }
                 parser::PatternElement::Relationship(rel) => {
+                    // Neo4j requires an explicit relationship direction in
+                    // CREATE; the undirected `-[:TYPE]-` form has no defined
+                    // write orientation and is rejected outright rather than
+                    // silently defaulting to one. Checked before either
+                    // endpoint node is resolved/created so an invalid
+                    // pattern never has partial side effects.
+                    if matches!(rel.direction, parser::RelationshipDirection::Both) {
+                        return Err(Error::CypherExecution(
+                            "CREATE requires an explicit relationship direction \
+                             (`->` or `<-`); undirected `-[:TYPE]-` is not supported"
+                                .to_string(),
+                        ));
+                    }
+
                     // Get source node (previous element should be a node)
                     let source_id = if i > 0 {
                         last_node_id.ok_or_else(|| {
@@ -438,6 +452,19 @@ impl Executor {
                         return Err(Error::CypherExecution(
                             "Pattern must end with a node".to_string(),
                         ));
+                    };
+
+                    // Honour the parsed arrow direction when choosing which
+                    // endpoint is the relationship's source vs. target.
+                    // `source_id`/`target_id` above are resolved in
+                    // pattern/array order (left element, right element),
+                    // which is only correct for `Outgoing` (`->`).
+                    // `(x)<-[:T]-(y)` must store the edge as y->x, so an
+                    // `Incoming` direction swaps the pair. `Both` was
+                    // already rejected above.
+                    let (source_id, target_id) = match rel.direction {
+                        parser::RelationshipDirection::Incoming => (target_id, source_id),
+                        _ => (source_id, target_id),
                     };
 
                     // Get relationship type
@@ -1134,6 +1161,23 @@ impl Executor {
                                 continue;
                             };
 
+                            // Neo4j requires an explicit relationship
+                            // direction in CREATE; the undirected
+                            // `-[:TYPE]-` form has no defined write
+                            // orientation and is rejected outright rather
+                            // than silently defaulting to one. Checked
+                            // before the target node is resolved/created so
+                            // an invalid pattern never has partial side
+                            // effects — mirrors the standalone-CREATE fix
+                            // in `execute_create_pattern_internal`.
+                            if matches!(rel.direction, parser::RelationshipDirection::Both) {
+                                return Err(Error::CypherExecution(
+                                    "CREATE requires an explicit relationship direction \
+                                     (`->` or `<-`); undirected `-[:TYPE]-` is not supported"
+                                        .to_string(),
+                                ));
+                            }
+
                             // Resolve the target node — reuse it if its
                             // variable is already bound (existing-node
                             // reference, the pre-existing working case),
@@ -1203,6 +1247,22 @@ impl Executor {
 
                             let Some(target_id) = target_id else {
                                 continue;
+                            };
+
+                            // Honour the parsed arrow direction when
+                            // choosing which endpoint is the relationship's
+                            // source vs. target — mirrors the fix in
+                            // `execute_create_pattern_internal`.
+                            // `source_id`/`target_id` above are resolved in
+                            // pattern/array order (preceding element,
+                            // following element), which is only correct
+                            // for `Outgoing` (`->`). `(x)<-[:T]-(y)` must
+                            // store the edge as y->x, so an `Incoming`
+                            // direction swaps the pair. `Both` was already
+                            // rejected above.
+                            let (source_id, target_id) = match rel.direction {
+                                parser::RelationshipDirection::Incoming => (target_id, source_id),
+                                _ => (source_id, target_id),
                             };
 
                             // PERFORMANCE OPTIMIZATION: Skip row-level locking when lock-free mode is enabled

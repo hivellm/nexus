@@ -1025,6 +1025,23 @@ impl Engine {
             None => self.merge_single_node(dst_node)?,
         };
 
+        // Honour the parsed arrow direction when writing/matching the
+        // relationship — mirrors the CREATE fix in
+        // `executor::operators::create`. `src_id`/`dst_id` above are
+        // resolved in pattern/array order (`elements[0]`, `elements[2]`),
+        // which is only correct for `Outgoing` (`->`). `MERGE
+        // (a)<-[:T]-(b)` must write/match the edge as b->a, so an
+        // `Incoming` direction swaps the pair. `Both` (`-[:T]-`) keeps
+        // Neo4j's documented default of treating the pattern as outgoing
+        // (`elements[0]` -> `elements[2]`) for both the existing-edge
+        // lookup and the create fallback — see openCypher TCK Merge5
+        // scenarios 11/12 ("use/match outgoing direction when
+        // unspecified").
+        let (src_id, dst_id) = match rel_pattern.direction {
+            executor::parser::RelationshipDirection::Incoming => (dst_id, src_id),
+            _ => (src_id, dst_id),
+        };
+
         // Relationship variable: the real name when the pattern bound one,
         // otherwise the empty-string sentinel documented on this function.
         // Never inserted anywhere the caller could confuse it for a real
