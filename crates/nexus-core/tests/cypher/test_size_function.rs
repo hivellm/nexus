@@ -1,9 +1,9 @@
 use nexus_core::Error;
-use nexus_core::testing::setup_test_engine;
+use nexus_core::testing::setup_isolated_test_engine;
 
 #[test]
 fn test_size_function_with_literal_array() -> Result<(), Error> {
-    let (mut engine, _ctx) = setup_test_engine()?;
+    let (mut engine, _ctx) = setup_isolated_test_engine()?;
 
     // Test size() with literal array
     let result = engine.execute_cypher("RETURN size(['a', 'b', 'c']) AS size")?;
@@ -20,7 +20,7 @@ fn test_size_function_with_literal_array() -> Result<(), Error> {
 
 #[test]
 fn test_size_function_with_empty_array() -> Result<(), Error> {
-    let (mut engine, _ctx) = setup_test_engine()?;
+    let (mut engine, _ctx) = setup_isolated_test_engine()?;
 
     // Test size() with empty array
     let result = engine.execute_cypher("RETURN size([]) AS size")?;
@@ -37,7 +37,7 @@ fn test_size_function_with_empty_array() -> Result<(), Error> {
 
 #[test]
 fn test_size_function_with_string() -> Result<(), Error> {
-    let (mut engine, _ctx) = setup_test_engine()?;
+    let (mut engine, _ctx) = setup_isolated_test_engine()?;
 
     // Test size() with string
     let result = engine.execute_cypher("RETURN size('hello') AS size")?;
@@ -54,7 +54,7 @@ fn test_size_function_with_string() -> Result<(), Error> {
 
 #[test]
 fn test_size_function_with_null() -> Result<(), Error> {
-    let (mut engine, _ctx) = setup_test_engine()?;
+    let (mut engine, _ctx) = setup_isolated_test_engine()?;
 
     // Test size() with null
     let result = engine.execute_cypher("RETURN size(null) AS size")?;
@@ -70,7 +70,7 @@ fn test_size_function_with_null() -> Result<(), Error> {
 
 #[test]
 fn test_size_function_with_nested_array() -> Result<(), Error> {
-    let (mut engine, _ctx) = setup_test_engine()?;
+    let (mut engine, _ctx) = setup_isolated_test_engine()?;
 
     // Test size() with nested array
     let result = engine.execute_cypher("RETURN size([[1, 2], [3, 4], [5]]) AS size")?;
@@ -87,7 +87,7 @@ fn test_size_function_with_nested_array() -> Result<(), Error> {
 
 #[test]
 fn test_size_with_array_indexing() -> Result<(), Error> {
-    let (mut engine, _ctx) = setup_test_engine()?;
+    let (mut engine, _ctx) = setup_isolated_test_engine()?;
 
     // Test combining size() with array indexing
     let result = engine.execute_cypher("RETURN size(['hello', 'world'][0]) AS size")?;

@@ -1,4 +1,4 @@
-use nexus_core::testing::{setup_isolated_test_engine, setup_test_engine};
+use nexus_core::testing::setup_isolated_test_engine;
 use nexus_core::{Engine, executor::ResultSet};
 
 fn execute_query(engine: &mut Engine, query: &str) -> ResultSet {
@@ -20,7 +20,7 @@ fn get_single_value(result: &ResultSet) -> &serde_json::Value {
 
 #[test]
 fn test_tolower_function() {
-    let (mut engine, _ctx) = setup_test_engine().unwrap();
+    let (mut engine, _ctx) = setup_isolated_test_engine().unwrap();
 
     let result = execute_query(&mut engine, "RETURN toLower('HELLO WORLD') AS lower");
     assert_eq!(get_single_value(&result), "hello world");
@@ -31,7 +31,7 @@ fn test_tolower_function() {
 
 #[test]
 fn test_toupper_function() {
-    let (mut engine, _ctx) = setup_test_engine().unwrap();
+    let (mut engine, _ctx) = setup_isolated_test_engine().unwrap();
 
     let result = execute_query(&mut engine, "RETURN toUpper('hello world') AS upper");
     assert_eq!(get_single_value(&result), "HELLO WORLD");
@@ -42,7 +42,7 @@ fn test_toupper_function() {
 
 #[test]
 fn test_substring_function() {
-    let (mut engine, _ctx) = setup_test_engine().unwrap();
+    let (mut engine, _ctx) = setup_isolated_test_engine().unwrap();
 
     // substring(string, start)
     let result = execute_query(&mut engine, "RETURN substring('hello world', 6) AS sub");
@@ -58,7 +58,7 @@ fn test_substring_function() {
 
 #[test]
 fn test_trim_functions() {
-    let (mut engine, _ctx) = setup_test_engine().unwrap();
+    let (mut engine, _ctx) = setup_isolated_test_engine().unwrap();
 
     let result = execute_query(&mut engine, "RETURN trim('  hello  ') AS trimmed");
     assert_eq!(get_single_value(&result), "hello");
@@ -72,7 +72,7 @@ fn test_trim_functions() {
 
 #[test]
 fn test_replace_function() {
-    let (mut engine, _ctx) = setup_test_engine().unwrap();
+    let (mut engine, _ctx) = setup_isolated_test_engine().unwrap();
 
     let result = execute_query(
         &mut engine,
@@ -89,7 +89,7 @@ fn test_replace_function() {
 
 #[test]
 fn test_split_function() {
-    let (mut engine, _ctx) = setup_test_engine().unwrap();
+    let (mut engine, _ctx) = setup_isolated_test_engine().unwrap();
 
     let result = execute_query(&mut engine, "RETURN split('a,b,c', ',') AS parts");
     let value = get_single_value(&result);
@@ -107,7 +107,7 @@ fn test_split_function() {
 
 #[test]
 fn test_floor_function() {
-    let (mut engine, _ctx) = setup_test_engine().unwrap();
+    let (mut engine, _ctx) = setup_isolated_test_engine().unwrap();
 
     let result = execute_query(&mut engine, "RETURN floor(3.9) AS floored");
     assert_eq!(get_single_value(&result), 3.0);
@@ -118,7 +118,7 @@ fn test_floor_function() {
 
 #[test]
 fn test_round_function() {
-    let (mut engine, _ctx) = setup_test_engine().unwrap();
+    let (mut engine, _ctx) = setup_isolated_test_engine().unwrap();
 
     let result = execute_query(&mut engine, "RETURN round(3.5) AS rounded");
     assert_eq!(get_single_value(&result), 4.0);
@@ -129,7 +129,7 @@ fn test_round_function() {
 
 #[test]
 fn test_sqrt_function() {
-    let (mut engine, _ctx) = setup_test_engine().unwrap();
+    let (mut engine, _ctx) = setup_isolated_test_engine().unwrap();
 
     let result = execute_query(&mut engine, "RETURN sqrt(16) AS square_root");
     assert_eq!(get_single_value(&result), 4.0);
@@ -140,7 +140,7 @@ fn test_sqrt_function() {
 
 #[test]
 fn test_pow_function() {
-    let (mut engine, _ctx) = setup_test_engine().unwrap();
+    let (mut engine, _ctx) = setup_isolated_test_engine().unwrap();
 
     let result = execute_query(&mut engine, "RETURN pow(2, 3) AS power");
     assert_eq!(get_single_value(&result), 8.0);
@@ -155,7 +155,7 @@ fn test_pow_function() {
 
 #[test]
 fn test_tointeger_function() {
-    let (mut engine, _ctx) = setup_test_engine().unwrap();
+    let (mut engine, _ctx) = setup_isolated_test_engine().unwrap();
 
     let result = execute_query(&mut engine, "RETURN toInteger('42') AS int");
     assert_eq!(get_single_value(&result), 42);
@@ -169,7 +169,7 @@ fn test_tointeger_function() {
 
 #[test]
 fn test_tofloat_function() {
-    let (mut engine, _ctx) = setup_test_engine().unwrap();
+    let (mut engine, _ctx) = setup_isolated_test_engine().unwrap();
 
     let result = execute_query(&mut engine, "RETURN toFloat('2.5') AS float");
     assert_eq!(get_single_value(&result), 2.5);
@@ -180,7 +180,7 @@ fn test_tofloat_function() {
 
 #[test]
 fn test_tostring_function() {
-    let (mut engine, _ctx) = setup_test_engine().unwrap();
+    let (mut engine, _ctx) = setup_isolated_test_engine().unwrap();
 
     let result = execute_query(&mut engine, "RETURN toString(42) AS str");
     assert_eq!(get_single_value(&result), "42");
@@ -194,7 +194,7 @@ fn test_tostring_function() {
 
 #[test]
 fn test_toboolean_function() {
-    let (mut engine, _ctx) = setup_test_engine().unwrap();
+    let (mut engine, _ctx) = setup_isolated_test_engine().unwrap();
 
     let result = execute_query(&mut engine, "RETURN toBoolean('true') AS bool");
     assert_eq!(get_single_value(&result), true);
@@ -215,7 +215,7 @@ fn test_toboolean_function() {
 
 #[test]
 fn test_size_function() {
-    let (mut engine, _ctx) = setup_test_engine().unwrap();
+    let (mut engine, _ctx) = setup_isolated_test_engine().unwrap();
 
     let result = execute_query(&mut engine, "RETURN size([1, 2, 3, 4, 5]) AS length");
     assert_eq!(get_single_value(&result), 5);
@@ -244,7 +244,7 @@ fn test_head_function() {
 
 #[test]
 fn test_tail_function() {
-    let (mut engine, _ctx) = setup_test_engine().unwrap();
+    let (mut engine, _ctx) = setup_isolated_test_engine().unwrap();
 
     let result = execute_query(&mut engine, "RETURN tail([1, 2, 3, 4]) AS rest");
     let arr = get_single_value(&result).as_array().unwrap();
@@ -260,7 +260,7 @@ fn test_tail_function() {
 
 #[test]
 fn test_last_function() {
-    let (mut engine, _ctx) = setup_test_engine().unwrap();
+    let (mut engine, _ctx) = setup_isolated_test_engine().unwrap();
 
     let result = execute_query(&mut engine, "RETURN last([1, 2, 3]) AS final");
     assert_eq!(get_single_value(&result), 3);
@@ -274,7 +274,7 @@ fn test_last_function() {
 
 #[test]
 fn test_range_function() {
-    let (mut engine, _ctx) = setup_test_engine().unwrap();
+    let (mut engine, _ctx) = setup_isolated_test_engine().unwrap();
 
     // range(start, end)
     let result = execute_query(&mut engine, "RETURN range(1, 5) AS numbers");
@@ -297,7 +297,7 @@ fn test_range_function() {
 
 #[test]
 fn test_reverse_function() {
-    let (mut engine, _ctx) = setup_test_engine().unwrap();
+    let (mut engine, _ctx) = setup_isolated_test_engine().unwrap();
 
     let result = execute_query(&mut engine, "RETURN reverse([1, 2, 3]) AS reversed");
     let arr = get_single_value(&result).as_array().unwrap();
@@ -321,7 +321,7 @@ fn test_reverse_function() {
 
 #[test]
 fn test_nested_string_functions() {
-    let (mut engine, _ctx) = setup_test_engine().unwrap();
+    let (mut engine, _ctx) = setup_isolated_test_engine().unwrap();
 
     let result = execute_query(&mut engine, "RETURN toUpper(trim('  hello  ')) AS result");
     assert_eq!(get_single_value(&result), "HELLO");
@@ -335,7 +335,7 @@ fn test_nested_string_functions() {
 
 #[test]
 fn test_functions_with_nodes() {
-    let (mut engine, _ctx) = setup_test_engine().unwrap();
+    let (mut engine, _ctx) = setup_isolated_test_engine().unwrap();
 
     // Create test node
     execute_query(&mut engine, "CREATE (p:Person {name: 'ALICE', age: 30})");
@@ -357,7 +357,7 @@ fn test_functions_with_nodes() {
 
 #[test]
 fn test_functions_in_where_clause() {
-    let (mut engine, _ctx) = setup_test_engine().unwrap();
+    let (mut engine, _ctx) = setup_isolated_test_engine().unwrap();
 
     execute_query(&mut engine, "CREATE (p:Person {name: 'Alice', score: 85})");
     execute_query(&mut engine, "CREATE (p:Person {name: 'bob', score: 92})");
@@ -397,7 +397,7 @@ fn test_functions_in_where_clause() {
 
 #[test]
 fn test_list_functions_with_unwind() {
-    let (mut engine, _ctx) = setup_test_engine().unwrap();
+    let (mut engine, _ctx) = setup_isolated_test_engine().unwrap();
 
     // Use range with UNWIND
     let result = execute_query(&mut engine, "UNWIND range(1, 3) AS num RETURN num");
@@ -409,7 +409,7 @@ fn test_list_functions_with_unwind() {
 
 #[test]
 fn test_type_conversion_chain() {
-    let (mut engine, _ctx) = setup_test_engine().unwrap();
+    let (mut engine, _ctx) = setup_isolated_test_engine().unwrap();
 
     // String -> Integer -> String
     let result = execute_query(&mut engine, "RETURN toString(toInteger('42')) AS result");
@@ -426,7 +426,7 @@ fn test_type_conversion_chain() {
 
 #[test]
 fn test_null_handling_in_functions() {
-    let (mut engine, _ctx) = setup_test_engine().unwrap();
+    let (mut engine, _ctx) = setup_isolated_test_engine().unwrap();
 
     // String functions with null
     let result = execute_query(&mut engine, "RETURN toLower(null) AS result");
@@ -447,7 +447,7 @@ fn test_null_handling_in_functions() {
 
 #[test]
 fn test_collect_basic() {
-    let (mut engine, _ctx) = setup_test_engine().unwrap();
+    let (mut engine, _ctx) = setup_isolated_test_engine().unwrap();
 
     // Create test nodes
     execute_query(&mut engine, "CREATE (p:Person {name: 'Alice', age: 30})");
@@ -469,7 +469,7 @@ fn test_collect_basic() {
 
 #[test]
 fn test_collect_with_group_by() {
-    let (mut engine, _ctx) = setup_test_engine().unwrap();
+    let (mut engine, _ctx) = setup_isolated_test_engine().unwrap();
 
     execute_query(
         &mut engine,
@@ -513,7 +513,7 @@ fn test_collect_with_group_by() {
 
 #[test]
 fn test_collect_distinct() {
-    let (mut engine, _ctx) = setup_test_engine().unwrap();
+    let (mut engine, _ctx) = setup_isolated_test_engine().unwrap();
 
     execute_query(&mut engine, "CREATE (p:Person {skill: 'Rust'})");
     execute_query(&mut engine, "CREATE (p:Person {skill: 'Python'})");
@@ -532,7 +532,7 @@ fn test_collect_distinct() {
 
 #[test]
 fn test_collect_empty_result() {
-    let (mut engine, _ctx) = setup_test_engine().unwrap();
+    let (mut engine, _ctx) = setup_isolated_test_engine().unwrap();
 
     // COLLECT on empty result set
     let result = execute_query(
@@ -545,7 +545,7 @@ fn test_collect_empty_result() {
 
 #[test]
 fn test_collect_with_nulls() {
-    let (mut engine, _ctx) = setup_test_engine().unwrap();
+    let (mut engine, _ctx) = setup_isolated_test_engine().unwrap();
 
     execute_query(&mut engine, "CREATE (p:Person {name: 'Alice', age: 30})");
     execute_query(&mut engine, "CREATE (p:Person {name: 'Bob'})"); // No age
@@ -563,7 +563,7 @@ fn test_collect_with_nulls() {
 
 #[test]
 fn test_collect_with_count() {
-    let (mut engine, _ctx) = setup_test_engine().unwrap();
+    let (mut engine, _ctx) = setup_isolated_test_engine().unwrap();
 
     execute_query(
         &mut engine,
@@ -626,7 +626,7 @@ fn test_collect_with_count() {
 
 #[test]
 fn test_date_function_current() {
-    let (mut engine, _ctx) = setup_test_engine().unwrap();
+    let (mut engine, _ctx) = setup_isolated_test_engine().unwrap();
 
     // Test current date
     let result = execute_query(&mut engine, "RETURN date() AS current_date");
@@ -642,7 +642,7 @@ fn test_date_function_current() {
 
 #[test]
 fn test_date_function_from_string() {
-    let (mut engine, _ctx) = setup_test_engine().unwrap();
+    let (mut engine, _ctx) = setup_isolated_test_engine().unwrap();
 
     // Parse ISO date string
     let result = execute_query(&mut engine, "RETURN date('2024-11-01') AS parsed_date");
@@ -655,7 +655,7 @@ fn test_date_function_from_string() {
 
 #[test]
 fn test_datetime_function_current() {
-    let (mut engine, _ctx) = setup_test_engine().unwrap();
+    let (mut engine, _ctx) = setup_isolated_test_engine().unwrap();
 
     // Test current datetime
     let result = execute_query(&mut engine, "RETURN datetime() AS current_datetime");
@@ -670,7 +670,7 @@ fn test_datetime_function_current() {
 
 #[test]
 fn test_datetime_function_from_string() {
-    let (mut engine, _ctx) = setup_test_engine().unwrap();
+    let (mut engine, _ctx) = setup_isolated_test_engine().unwrap();
 
     // Parse RFC3339 datetime
     let result = execute_query(
@@ -689,7 +689,7 @@ fn test_datetime_function_from_string() {
 
 #[test]
 fn test_time_function_current() {
-    let (mut engine, _ctx) = setup_test_engine().unwrap();
+    let (mut engine, _ctx) = setup_isolated_test_engine().unwrap();
 
     // Test current time
     let result = execute_query(&mut engine, "RETURN time() AS current_time");
@@ -705,7 +705,7 @@ fn test_time_function_current() {
 
 #[test]
 fn test_time_function_from_string() {
-    let (mut engine, _ctx) = setup_test_engine().unwrap();
+    let (mut engine, _ctx) = setup_isolated_test_engine().unwrap();
 
     // Parse time string HH:MM:SS
     let result = execute_query(&mut engine, "RETURN time('14:30:45') AS parsed_time");
@@ -722,7 +722,7 @@ fn test_time_function_from_string() {
 
 #[test]
 fn test_timestamp_function_current() {
-    let (mut engine, _ctx) = setup_test_engine().unwrap();
+    let (mut engine, _ctx) = setup_isolated_test_engine().unwrap();
 
     // Test current timestamp
     let result = execute_query(&mut engine, "RETURN timestamp() AS current_ts");
@@ -738,7 +738,7 @@ fn test_timestamp_function_current() {
 
 #[test]
 fn test_timestamp_function_from_string() {
-    let (mut engine, _ctx) = setup_test_engine().unwrap();
+    let (mut engine, _ctx) = setup_isolated_test_engine().unwrap();
 
     // Parse datetime string to timestamp
     let result = execute_query(
@@ -755,7 +755,7 @@ fn test_timestamp_function_from_string() {
 
 #[test]
 fn test_timestamp_function_passthrough() {
-    let (mut engine, _ctx) = setup_test_engine().unwrap();
+    let (mut engine, _ctx) = setup_isolated_test_engine().unwrap();
 
     // Should return number as-is
     let result = execute_query(&mut engine, "RETURN timestamp(1234567890000) AS ts");
@@ -764,7 +764,7 @@ fn test_timestamp_function_passthrough() {
 
 #[test]
 fn test_duration_function() {
-    let (mut engine, _ctx) = setup_test_engine().unwrap();
+    let (mut engine, _ctx) = setup_isolated_test_engine().unwrap();
 
     // Test duration creation - simplified test since we don't have full Cypher map syntax yet
     // For now, just verify the function exists and returns null for non-object input
@@ -811,7 +811,7 @@ fn test_temporal_functions_with_nodes() {
 
 #[test]
 fn test_temporal_null_handling() {
-    let (mut engine, _ctx) = setup_test_engine().unwrap();
+    let (mut engine, _ctx) = setup_isolated_test_engine().unwrap();
 
     // Temporal functions with null should return null
     let result = execute_query(&mut engine, "RETURN date(null) AS result");
@@ -829,7 +829,7 @@ fn test_temporal_null_handling() {
 
 #[test]
 fn test_temporal_in_return_clause() {
-    let (mut engine, _ctx) = setup_test_engine().unwrap();
+    let (mut engine, _ctx) = setup_isolated_test_engine().unwrap();
 
     // Multiple temporal functions in same RETURN
     let result = execute_query(
@@ -851,7 +851,7 @@ fn test_temporal_in_return_clause() {
 
 #[test]
 fn test_percentile_disc_basic() {
-    let (mut engine, _ctx) = setup_test_engine().unwrap();
+    let (mut engine, _ctx) = setup_isolated_test_engine().unwrap();
 
     // Create test data with known values
     execute_query(&mut engine, "CREATE (p:Person {score: 10})");
@@ -867,7 +867,7 @@ fn test_percentile_disc_basic() {
 
 #[test]
 fn test_percentile_cont_basic() {
-    let (mut engine, _ctx) = setup_test_engine().unwrap();
+    let (mut engine, _ctx) = setup_isolated_test_engine().unwrap();
 
     // Create test data
     execute_query(&mut engine, "CREATE (p:Person {score: 10})");
@@ -883,7 +883,7 @@ fn test_percentile_cont_basic() {
 
 #[test]
 fn test_stdev_basic() {
-    let (mut engine, _ctx) = setup_test_engine().unwrap();
+    let (mut engine, _ctx) = setup_isolated_test_engine().unwrap();
 
     // Create test data with known standard deviation
     execute_query(&mut engine, "CREATE (p:Person {value: 2})");
@@ -902,7 +902,7 @@ fn test_stdev_basic() {
 
 #[test]
 fn test_stdevp_basic() {
-    let (mut engine, _ctx) = setup_test_engine().unwrap();
+    let (mut engine, _ctx) = setup_isolated_test_engine().unwrap();
 
     // Create test data
     execute_query(&mut engine, "CREATE (p:Person {value: 2})");
@@ -925,7 +925,7 @@ fn test_stdevp_basic() {
 
 #[test]
 fn test_nodes_function_with_single_node() {
-    let (mut engine, _ctx) = setup_test_engine().unwrap();
+    let (mut engine, _ctx) = setup_isolated_test_engine().unwrap();
 
     // Create a node
     execute_query(&mut engine, "CREATE (p:Person {name: 'Alice'})");
@@ -951,7 +951,7 @@ fn test_nodes_function_with_single_node() {
 
 #[test]
 fn test_relationships_function_with_relationship() {
-    let (mut engine, _ctx) = setup_test_engine().unwrap();
+    let (mut engine, _ctx) = setup_isolated_test_engine().unwrap();
 
     // Create nodes and relationship
     execute_query(
@@ -974,7 +974,7 @@ fn test_relationships_function_with_relationship() {
 
 #[test]
 fn test_length_function_with_relationship() {
-    let (mut engine, _ctx) = setup_test_engine().unwrap();
+    let (mut engine, _ctx) = setup_isolated_test_engine().unwrap();
 
     // Create a path
     execute_query(
@@ -997,7 +997,7 @@ fn test_length_function_with_relationship() {
 #[test]
 #[ignore = "Known issue: length() on collected relationships returns null - needs investigation"]
 fn test_length_function_with_multiple_relationships() {
-    let (mut engine, _ctx) = setup_test_engine().unwrap();
+    let (mut engine, _ctx) = setup_isolated_test_engine().unwrap();
 
     // Create a longer path
     execute_query(
@@ -1019,7 +1019,7 @@ fn test_length_function_with_multiple_relationships() {
 
 #[test]
 fn test_nodes_function_empty_array() {
-    let (mut engine, _ctx) = setup_test_engine().unwrap();
+    let (mut engine, _ctx) = setup_isolated_test_engine().unwrap();
 
     // Test with empty array
     let result = execute_query(&mut engine, "RETURN nodes([]) AS node_list");
@@ -1030,7 +1030,7 @@ fn test_nodes_function_empty_array() {
 
 #[test]
 fn test_relationships_function_empty_array() {
-    let (mut engine, _ctx) = setup_test_engine().unwrap();
+    let (mut engine, _ctx) = setup_isolated_test_engine().unwrap();
 
     // Test with empty array
     let result = execute_query(&mut engine, "RETURN relationships([]) AS rel_list");
@@ -1041,7 +1041,7 @@ fn test_relationships_function_empty_array() {
 
 #[test]
 fn test_length_function_empty_array() {
-    let (mut engine, _ctx) = setup_test_engine().unwrap();
+    let (mut engine, _ctx) = setup_isolated_test_engine().unwrap();
 
     // Test with empty array
     let result = execute_query(&mut engine, "RETURN length([]) AS path_length");
@@ -1052,7 +1052,7 @@ fn test_length_function_empty_array() {
 
 #[test]
 fn test_path_functions_with_null() {
-    let (mut engine, _ctx) = setup_test_engine().unwrap();
+    let (mut engine, _ctx) = setup_isolated_test_engine().unwrap();
 
     // Test nodes with null
     let result = execute_query(&mut engine, "RETURN nodes(null) AS node_list");
@@ -1075,7 +1075,7 @@ fn test_path_functions_with_null() {
 
 #[test]
 fn test_path_functions_filter_correctly() {
-    let (mut engine, _ctx) = setup_test_engine().unwrap();
+    let (mut engine, _ctx) = setup_isolated_test_engine().unwrap();
 
     // Create nodes and relationship
     execute_query(

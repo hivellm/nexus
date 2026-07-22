@@ -3,6 +3,7 @@
 
 use nexus_core::Engine;
 use nexus_core::catalog::external_id::ExternalId;
+use nexus_core::testing::TestContext;
 use std::str::FromStr;
 
 const SHA256_ZEROS: &str =
@@ -10,7 +11,8 @@ const SHA256_ZEROS: &str =
 
 #[test]
 fn create_with_string_literal_id_assigns_external_id() {
-    let mut engine = Engine::new().expect("engine init");
+    let ctx = TestContext::new();
+    let mut engine = Engine::with_isolated_catalog(ctx.path()).expect("engine init");
     let q = format!(
         "CREATE (n:File {{_id: '{}', name: 'a.txt'}}) RETURN n",
         SHA256_ZEROS
@@ -33,7 +35,8 @@ fn create_with_string_literal_id_assigns_external_id() {
 
 #[test]
 fn create_on_conflict_match_returns_existing_node() {
-    let mut engine = Engine::new().expect("engine init");
+    let ctx = TestContext::new();
+    let mut engine = Engine::with_isolated_catalog(ctx.path()).expect("engine init");
     let uuid_id = "uuid:11111111-1111-1111-1111-111111111111";
     let q = format!("CREATE (n:File {{_id: '{}'}}) ON CONFLICT MATCH", uuid_id);
     engine.execute_cypher(&q).expect("first create");
@@ -45,18 +48,16 @@ fn create_on_conflict_match_returns_existing_node() {
     );
 }
 
-// `RETURN n._id` / `WHERE n._id = ...` projection (phase9 §4.7) is
-// deliberately NOT exercised in THIS file: `Engine::new()` uses a
-// process-wide shared catalog, and stale entries left behind by other
-// tests in this same binary collide across runs. Instead, that coverage
-// (plus the write-path forms fixed by issue #29 — MERGE, CREATE+SET,
-// UNWIND+CREATE) lives in `tests/cypher_external_id_write_paths.rs`,
-// which uses `Engine::with_isolated_catalog` + `testing::TestContext`
-// for a fresh, unshared catalog per test.
+// This file now builds each `Engine` with `Engine::with_isolated_catalog`
+// over a fresh `testing::TestContext` directory, giving every test its own
+// unshared catalog. Fuller `RETURN n._id` / `WHERE n._id = ...` projection
+// coverage (plus the write-path forms fixed by issue #29 — MERGE, CREATE+SET,
+// UNWIND+CREATE) lives in `tests/cypher_external_id_write_paths.rs`.
 
 #[test]
 fn create_on_conflict_default_errors_on_duplicate() {
-    let mut engine = Engine::new().expect("engine init");
+    let ctx = TestContext::new();
+    let mut engine = Engine::with_isolated_catalog(ctx.path()).expect("engine init");
     let uuid_id = "uuid:22222222-2222-2222-2222-222222222222";
     let q = format!("CREATE (n:File {{_id: '{}'}})", uuid_id);
     engine.execute_cypher(&q).expect("first create");

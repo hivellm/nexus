@@ -1,10 +1,10 @@
 /// Tests for complex logical operators (AND, OR, NOT combinations)
 use nexus_core::Error;
-use nexus_core::testing::setup_test_engine;
+use nexus_core::testing::setup_isolated_test_engine;
 
 #[test]
 fn test_or_operator() -> Result<(), Error> {
-    let (mut engine, _ctx) = setup_test_engine()?;
+    let (mut engine, _ctx) = setup_isolated_test_engine()?;
 
     // Create test data
     engine.execute_cypher("CREATE (n:Person {age: 25, city: 'NYC'})")?;
@@ -24,7 +24,7 @@ fn test_or_operator() -> Result<(), Error> {
 
 #[test]
 fn test_not_operator() -> Result<(), Error> {
-    let (mut engine, _ctx) = setup_test_engine()?;
+    let (mut engine, _ctx) = setup_isolated_test_engine()?;
 
     // Create test data with unique label to avoid conflicts
     engine.execute_cypher("CREATE (n:TestPerson {age: 25})")?;
@@ -43,7 +43,7 @@ fn test_not_operator() -> Result<(), Error> {
 
 #[test]
 fn test_nested_and_or() -> Result<(), Error> {
-    let (mut engine, _ctx) = setup_test_engine()?;
+    let (mut engine, _ctx) = setup_isolated_test_engine()?;
 
     // Create test data
     engine.execute_cypher("CREATE (n:Person {age: 25, city: 'NYC', active: true})")?;
@@ -64,7 +64,7 @@ fn test_nested_and_or() -> Result<(), Error> {
 
 #[test]
 fn test_not_with_complex_expression() -> Result<(), Error> {
-    let (mut engine, _ctx) = setup_test_engine()?;
+    let (mut engine, _ctx) = setup_isolated_test_engine()?;
 
     // Create test data with unique label - delete any existing first
     engine.execute_cypher("MATCH (n:TestPerson2) DELETE n")?;
@@ -126,7 +126,7 @@ fn test_not_with_complex_expression() -> Result<(), Error> {
 
 #[test]
 fn test_multiple_and_conditions() -> Result<(), Error> {
-    let (mut engine, _ctx) = setup_test_engine()?;
+    let (mut engine, _ctx) = setup_isolated_test_engine()?;
 
     // Create test data
     engine.execute_cypher("CREATE (n:Person {age: 25, city: 'NYC', active: true})")?;
@@ -146,7 +146,7 @@ fn test_multiple_and_conditions() -> Result<(), Error> {
 
 #[test]
 fn test_logical_operators_in_return() -> Result<(), Error> {
-    let (mut engine, _ctx) = setup_test_engine()?;
+    let (mut engine, _ctx) = setup_isolated_test_engine()?;
 
     // Test AND in RETURN clause - using numeric comparisons since boolean literals may not be supported
     let result = engine.execute_cypher("RETURN (5 > 3 AND 2 < 4) AS and_result")?;

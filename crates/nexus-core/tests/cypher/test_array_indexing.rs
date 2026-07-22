@@ -1,9 +1,9 @@
 ﻿use nexus_core::Error;
-use nexus_core::testing::setup_test_engine;
+use nexus_core::testing::setup_isolated_test_engine;
 
 #[test]
 fn test_array_property_index_first_element() -> Result<(), Error> {
-    let (mut engine, _ctx) = setup_test_engine()?;
+    let (mut engine, _ctx) = setup_isolated_test_engine()?;
 
     // Create node with array property using JSON-like syntax
     engine.execute_cypher("CREATE (:Person {name: 'Alice'})")?;
@@ -23,7 +23,7 @@ fn test_array_property_index_first_element() -> Result<(), Error> {
 
 #[test]
 fn test_array_property_index_last_element() -> Result<(), Error> {
-    let (mut engine, _ctx) = setup_test_engine()?;
+    let (mut engine, _ctx) = setup_isolated_test_engine()?;
 
     // Test accessing last element (index 1) with literal array
     let result = engine.execute_cypher("RETURN ['frontend', 'typescript'][1] AS last_tag")?;
@@ -40,7 +40,7 @@ fn test_array_property_index_last_element() -> Result<(), Error> {
 
 #[test]
 fn test_array_property_index_out_of_bounds() -> Result<(), Error> {
-    let (mut engine, _ctx) = setup_test_engine()?;
+    let (mut engine, _ctx) = setup_isolated_test_engine()?;
 
     // Test accessing out of bounds element
     let result = engine.execute_cypher("RETURN ['java'][5] AS tag")?;
@@ -56,7 +56,7 @@ fn test_array_property_index_out_of_bounds() -> Result<(), Error> {
 
 #[test]
 fn test_array_property_index_expression() -> Result<(), Error> {
-    let (mut engine, _ctx) = setup_test_engine()?;
+    let (mut engine, _ctx) = setup_isolated_test_engine()?;
 
     // Test accessing with expression index
     let result = engine.execute_cypher("RETURN ['a', 'b', 'c'][2] AS last")?;
@@ -73,7 +73,7 @@ fn test_array_property_index_expression() -> Result<(), Error> {
 
 #[test]
 fn test_array_negative_index() -> Result<(), Error> {
-    let (mut engine, _ctx) = setup_test_engine()?;
+    let (mut engine, _ctx) = setup_isolated_test_engine()?;
 
     // Test accessing with negative index (Python-style: -1 = last element)
     let result = engine.execute_cypher("RETURN ['a', 'b', 'c'][-1] AS last")?;
@@ -108,7 +108,7 @@ fn test_array_negative_index() -> Result<(), Error> {
 
 #[test]
 fn test_array_property_index_with_where() -> Result<(), Error> {
-    let (mut engine, _ctx) = setup_test_engine()?;
+    let (mut engine, _ctx) = setup_isolated_test_engine()?;
 
     // Create simple nodes for now
     engine.execute_cypher("CREATE (:Person {name: 'Alice'})")?;
@@ -131,7 +131,7 @@ fn test_array_property_index_with_where() -> Result<(), Error> {
 
 #[test]
 fn test_array_property_non_existent() -> Result<(), Error> {
-    let (mut engine, _ctx) = setup_test_engine()?;
+    let (mut engine, _ctx) = setup_isolated_test_engine()?;
 
     engine.execute_cypher("CREATE (:Person {name: 'Eve'})")?;
     engine.refresh_executor()?;
@@ -150,7 +150,7 @@ fn test_array_property_non_existent() -> Result<(), Error> {
 
 #[test]
 fn test_array_literal_indexing() -> Result<(), Error> {
-    let (mut engine, _ctx) = setup_test_engine()?;
+    let (mut engine, _ctx) = setup_isolated_test_engine()?;
 
     // Test indexing a literal array
     let result = engine.execute_cypher("RETURN ['a', 'b', 'c'][1] AS element")?;

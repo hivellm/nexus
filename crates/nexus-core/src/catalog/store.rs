@@ -95,6 +95,36 @@ fn env_closer_for(env: &Env) -> Arc<EnvCloser> {
     closer
 }
 
+/// Process-lived strong references to the shared per-process TEST catalog
+/// env's [`EnvCloser`], keeping it open for the whole test process.
+///
+/// In test mode every `Catalog::new` opens the SINGLE shared directory from
+/// the `TEST_CATALOG_DIR` pool (see [`Catalog::with_map_size`]). The only
+/// long-lived reference to that env's closer is a `Weak` in the global
+/// [`ENV_CLOSERS`] registry — each `Catalog` keeps its own strong
+/// `Arc<EnvCloser>` but drops it when the `Catalog` drops — so the shared
+/// env's strong count can transiently reach zero between two tests: one
+/// test's `Catalog` drop then runs
+/// `prepare_for_closing` while another test is mid-`open`, and the opener sees
+/// `Database(DatabaseClosing)`. That race is the intermittent, load-dependent
+/// flake seen across the `cypher`, `executor` and `regression` test binaries.
+/// Pinning one strong reference here holds the shared env open until process
+/// exit, so it is opened exactly once and never closed mid-run. Isolated
+/// catalogs (`with_isolated_path`) never enter this pool and keep their normal
+/// close-on-drop behaviour, so per-test `TempDir` cleanup is unaffected.
+static PINNED_TEST_ENVS: Mutex<Vec<Arc<EnvCloser>>> = Mutex::new(Vec::new());
+
+/// Pin the shared per-process test catalog env open for the whole process.
+/// Idempotent: there is a single shared env per process, so one strong
+/// reference is enough — further calls are no-ops.
+fn pin_shared_test_env(closer: &Arc<EnvCloser>) {
+    if let Ok(mut pinned) = PINNED_TEST_ENVS.lock() {
+        if pinned.is_empty() {
+            pinned.push(Arc::clone(closer));
+        }
+    }
+}
+
 /// Catalog for managing label/type/key mappings.
 ///
 /// Thread-safe via `RwLock` for concurrent reads.
@@ -291,7 +321,17 @@ impl Catalog {
             path.as_ref().to_path_buf()
         };
 
-        Self::open_at_path(&actual_path, actual_map_size)
+        let catalog = Self::open_at_path(&actual_path, actual_map_size)?;
+
+        // In test mode `actual_path` is always the single shared per-process
+        // catalog dir. Pin its env open for the whole process so one test's
+        // `Catalog` drop can never close it while another test is mid-open —
+        // the `Database(DatabaseClosing)` flake. See [`PINNED_TEST_ENVS`].
+        if is_test {
+            pin_shared_test_env(&catalog.env_closer);
+        }
+
+        Ok(catalog)
     }
 
     /// Create a catalog with an isolated path (bypasses test sharing).

@@ -1,4 +1,4 @@
-use nexus_core::testing::{setup_isolated_test_engine, setup_test_engine};
+use nexus_core::testing::setup_isolated_test_engine;
 use nexus_core::{Engine, Error, executor::ResultSet};
 use serde_json::json;
 
@@ -17,7 +17,7 @@ fn result_to_json(result: &ResultSet) -> serde_json::Value {
 
 #[test]
 fn test_unwind_basic_list_literal() {
-    let (mut engine, _ctx) = setup_test_engine().unwrap();
+    let (mut engine, _ctx) = setup_isolated_test_engine().unwrap();
 
     let result = execute_query(&mut engine, "UNWIND [1, 2, 3] AS x RETURN x").unwrap();
     let json_result = result_to_json(&result);
@@ -35,7 +35,7 @@ fn test_unwind_basic_list_literal() {
 
 #[test]
 fn test_unwind_with_strings() {
-    let (mut engine, _ctx) = setup_test_engine().unwrap();
+    let (mut engine, _ctx) = setup_isolated_test_engine().unwrap();
 
     let result = execute_query(
         &mut engine,
@@ -53,7 +53,7 @@ fn test_unwind_with_strings() {
 
 #[test]
 fn test_unwind_empty_list() {
-    let (mut engine, _ctx) = setup_test_engine().unwrap();
+    let (mut engine, _ctx) = setup_isolated_test_engine().unwrap();
 
     let result = execute_query(&mut engine, "UNWIND [] AS x RETURN x").unwrap();
     let json_result = result_to_json(&result);
@@ -64,7 +64,7 @@ fn test_unwind_empty_list() {
 
 #[test]
 fn test_unwind_null_list() {
-    let (mut engine, _ctx) = setup_test_engine().unwrap();
+    let (mut engine, _ctx) = setup_isolated_test_engine().unwrap();
 
     let result = execute_query(&mut engine, "UNWIND null AS x RETURN x").unwrap();
     let json_result = result_to_json(&result);
@@ -76,7 +76,7 @@ fn test_unwind_null_list() {
 #[test]
 #[ignore = "CREATE with array properties not yet supported"]
 fn test_unwind_with_variable_reference() {
-    let (mut engine, _ctx) = setup_test_engine().unwrap();
+    let (mut engine, _ctx) = setup_isolated_test_engine().unwrap();
 
     // Create nodes with list properties
     execute_query(
@@ -119,7 +119,7 @@ fn test_unwind_with_variable_reference() {
 
 #[test]
 fn test_unwind_with_where_filtering() {
-    let (mut engine, _ctx) = setup_test_engine().unwrap();
+    let (mut engine, _ctx) = setup_isolated_test_engine().unwrap();
 
     // `UNWIND … AS x WHERE …` bare-WHERE shorthand rejects post
     // phase3_unwind-where-neo4j-parity — insert an explicit `WITH num`
@@ -142,7 +142,7 @@ fn test_unwind_with_where_filtering() {
 #[test]
 #[ignore = "CREATE with array properties not yet supported"]
 fn test_unwind_with_match_and_where() {
-    let (mut engine, _ctx) = setup_test_engine().unwrap();
+    let (mut engine, _ctx) = setup_isolated_test_engine().unwrap();
 
     // Create test data
     execute_query(
@@ -176,7 +176,7 @@ fn test_unwind_with_match_and_where() {
 #[test]
 #[ignore = "CREATE with array properties not yet supported"]
 fn test_unwind_in_complex_query() {
-    let (mut engine, _ctx) = setup_test_engine().unwrap();
+    let (mut engine, _ctx) = setup_isolated_test_engine().unwrap();
 
     // Create test data
     execute_query(
@@ -230,7 +230,7 @@ fn test_unwind_in_complex_query() {
 
 #[test]
 fn test_unwind_nested_lists() {
-    let (mut engine, _ctx) = setup_test_engine().unwrap();
+    let (mut engine, _ctx) = setup_isolated_test_engine().unwrap();
 
     let result = execute_query(
         &mut engine,
@@ -251,7 +251,7 @@ fn test_unwind_nested_lists() {
 
 #[test]
 fn test_unwind_with_aggregation() {
-    let (mut engine, _ctx) = setup_test_engine().unwrap();
+    let (mut engine, _ctx) = setup_isolated_test_engine().unwrap();
 
     let result = execute_query(
         &mut engine,
@@ -350,7 +350,7 @@ fn test_unwind_with_null_in_list() {
     // before the predicate routes the filter through the same MATCH /
     // WITH / WHERE plumbing every other WHERE form uses, and the
     // existing operator graph handles it unchanged.
-    let (mut engine, _ctx) = setup_test_engine().unwrap();
+    let (mut engine, _ctx) = setup_isolated_test_engine().unwrap();
 
     let result = execute_query(
         &mut engine,

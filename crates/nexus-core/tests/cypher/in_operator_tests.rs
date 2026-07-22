@@ -1,10 +1,10 @@
 /// Tests for IN operator in WHERE and RETURN clauses
 use nexus_core::Error;
-use nexus_core::testing::setup_test_engine;
+use nexus_core::testing::setup_isolated_test_engine;
 
 #[test]
 fn test_in_operator_in_return() -> Result<(), Error> {
-    let (mut engine, _ctx) = setup_test_engine()?;
+    let (mut engine, _ctx) = setup_isolated_test_engine()?;
 
     // Test IN operator in RETURN clause
     let result = engine.execute_cypher("RETURN 5 IN [1, 2, 5] AS in_list")?;
@@ -26,7 +26,7 @@ fn test_in_operator_in_return() -> Result<(), Error> {
 
 #[test]
 fn test_in_operator_in_where() -> Result<(), Error> {
-    let (mut engine, _ctx) = setup_test_engine()?;
+    let (mut engine, _ctx) = setup_isolated_test_engine()?;
 
     // Create test data
     engine.execute_cypher("CREATE (n:Node {id: 1, name: 'Alice'})")?;
@@ -67,7 +67,7 @@ fn test_in_operator_in_where() -> Result<(), Error> {
 
 #[test]
 fn test_in_operator_with_null() -> Result<(), Error> {
-    let (mut engine, _ctx) = setup_test_engine()?;
+    let (mut engine, _ctx) = setup_isolated_test_engine()?;
 
     // Test IN operator with null value
     let result = engine.execute_cypher("RETURN null IN [1, 2, 3] AS null_in")?;
@@ -88,7 +88,7 @@ fn test_in_operator_with_null() -> Result<(), Error> {
 
 #[test]
 fn test_in_operator_with_empty_list() -> Result<(), Error> {
-    let (mut engine, _ctx) = setup_test_engine()?;
+    let (mut engine, _ctx) = setup_isolated_test_engine()?;
 
     // Test IN operator with empty list
     let result = engine.execute_cypher("RETURN 5 IN [] AS in_empty")?;
@@ -100,7 +100,7 @@ fn test_in_operator_with_empty_list() -> Result<(), Error> {
 
 #[test]
 fn test_in_operator_complex_where() -> Result<(), Error> {
-    let (mut engine, _ctx) = setup_test_engine()?;
+    let (mut engine, _ctx) = setup_isolated_test_engine()?;
 
     // Create test data
     engine.execute_cypher("CREATE (n:Person {age: 25, city: 'NYC'})")?;

@@ -9,7 +9,7 @@
 
 use nexus_core::Engine;
 use nexus_core::executor::ResultSet;
-use nexus_core::testing::setup_test_engine;
+use nexus_core::testing::setup_isolated_test_engine;
 
 fn execute_query(engine: &mut Engine, query: &str) -> ResultSet {
     engine.execute_cypher(query).expect("Query should succeed")
@@ -30,7 +30,7 @@ fn get_single_value(result: &ResultSet) -> &serde_json::Value {
 
 #[test]
 fn test_datetime_plus_duration_days() {
-    let (mut engine, _ctx) = setup_test_engine().unwrap();
+    let (mut engine, _ctx) = setup_isolated_test_engine().unwrap();
 
     // Add 1 day to a datetime
     let result = execute_query(
@@ -49,7 +49,7 @@ fn test_datetime_plus_duration_days() {
 
 #[test]
 fn test_datetime_plus_duration_months() {
-    let (mut engine, _ctx) = setup_test_engine().unwrap();
+    let (mut engine, _ctx) = setup_isolated_test_engine().unwrap();
 
     // Add 2 months to a datetime
     let result = execute_query(
@@ -67,7 +67,7 @@ fn test_datetime_plus_duration_months() {
 
 #[test]
 fn test_datetime_plus_duration_years() {
-    let (mut engine, _ctx) = setup_test_engine().unwrap();
+    let (mut engine, _ctx) = setup_isolated_test_engine().unwrap();
 
     // Add 1 year to a datetime
     let result = execute_query(
@@ -89,7 +89,7 @@ fn test_datetime_plus_duration_years() {
 
 #[test]
 fn test_datetime_minus_duration_days() {
-    let (mut engine, _ctx) = setup_test_engine().unwrap();
+    let (mut engine, _ctx) = setup_isolated_test_engine().unwrap();
 
     // Subtract 5 days from a datetime
     let result = execute_query(
@@ -107,7 +107,7 @@ fn test_datetime_minus_duration_days() {
 
 #[test]
 fn test_datetime_minus_duration_months() {
-    let (mut engine, _ctx) = setup_test_engine().unwrap();
+    let (mut engine, _ctx) = setup_isolated_test_engine().unwrap();
 
     // Subtract 2 months from a datetime
     let result = execute_query(
@@ -129,7 +129,7 @@ fn test_datetime_minus_duration_months() {
 
 #[test]
 fn test_datetime_difference_days() {
-    let (mut engine, _ctx) = setup_test_engine().unwrap();
+    let (mut engine, _ctx) = setup_isolated_test_engine().unwrap();
 
     // Get duration between two datetimes
     let result = execute_query(
@@ -154,7 +154,7 @@ fn test_datetime_difference_days() {
 
 #[test]
 fn test_duration_plus_duration() {
-    let (mut engine, _ctx) = setup_test_engine().unwrap();
+    let (mut engine, _ctx) = setup_isolated_test_engine().unwrap();
 
     // Add two durations
     let result = execute_query(
@@ -174,7 +174,7 @@ fn test_duration_plus_duration() {
 
 #[test]
 fn test_duration_plus_duration_mixed_units() {
-    let (mut engine, _ctx) = setup_test_engine().unwrap();
+    let (mut engine, _ctx) = setup_isolated_test_engine().unwrap();
 
     // Add durations with different units
     let result = execute_query(
@@ -202,7 +202,7 @@ fn test_duration_plus_duration_mixed_units() {
 
 #[test]
 fn test_duration_minus_duration() {
-    let (mut engine, _ctx) = setup_test_engine().unwrap();
+    let (mut engine, _ctx) = setup_isolated_test_engine().unwrap();
 
     // Subtract two durations
     let result = execute_query(
@@ -222,7 +222,7 @@ fn test_duration_minus_duration() {
 
 #[test]
 fn test_duration_negative_result() {
-    let (mut engine, _ctx) = setup_test_engine().unwrap();
+    let (mut engine, _ctx) = setup_isolated_test_engine().unwrap();
 
     // Subtract larger duration from smaller (should handle negative)
     let result = execute_query(
@@ -246,7 +246,7 @@ fn test_duration_negative_result() {
 
 #[test]
 fn test_chained_temporal_operations() {
-    let (mut engine, _ctx) = setup_test_engine().unwrap();
+    let (mut engine, _ctx) = setup_isolated_test_engine().unwrap();
 
     // Chain multiple operations: datetime + duration - duration
     let result = execute_query(
@@ -264,7 +264,7 @@ fn test_chained_temporal_operations() {
 
 #[test]
 fn test_date_plus_duration() {
-    let (mut engine, _ctx) = setup_test_engine().unwrap();
+    let (mut engine, _ctx) = setup_isolated_test_engine().unwrap();
 
     // Add duration to date (not datetime)
     let result = execute_query(
@@ -282,7 +282,7 @@ fn test_date_plus_duration() {
 
 #[test]
 fn test_duration_creation() {
-    let (mut engine, _ctx) = setup_test_engine().unwrap();
+    let (mut engine, _ctx) = setup_isolated_test_engine().unwrap();
 
     // Basic duration creation
     let result = execute_query(
@@ -309,7 +309,7 @@ fn test_duration_creation() {
 
 #[test]
 fn test_duration_with_weeks() {
-    let (mut engine, _ctx) = setup_test_engine().unwrap();
+    let (mut engine, _ctx) = setup_isolated_test_engine().unwrap();
 
     // Duration with weeks
     let result = execute_query(&mut engine, "RETURN duration({weeks: 2}) AS result");
@@ -327,7 +327,7 @@ fn test_duration_with_weeks() {
 
 #[test]
 fn test_datetime_arithmetic_preserves_time() {
-    let (mut engine, _ctx) = setup_test_engine().unwrap();
+    let (mut engine, _ctx) = setup_isolated_test_engine().unwrap();
 
     // Adding days should not change the time component
     let result = execute_query(
@@ -353,7 +353,7 @@ fn test_datetime_arithmetic_preserves_time() {
 
 #[test]
 fn test_datetime_year_crossover() {
-    let (mut engine, _ctx) = setup_test_engine().unwrap();
+    let (mut engine, _ctx) = setup_isolated_test_engine().unwrap();
 
     // Adding months that cross year boundary
     let result = execute_query(
@@ -373,7 +373,7 @@ fn test_datetime_year_crossover() {
 
 #[test]
 fn test_datetime_month_crossover() {
-    let (mut engine, _ctx) = setup_test_engine().unwrap();
+    let (mut engine, _ctx) = setup_isolated_test_engine().unwrap();
 
     // Adding days that cross month boundary
     let result = execute_query(
@@ -398,7 +398,7 @@ fn test_datetime_month_crossover() {
 
 #[test]
 fn test_date_plus_duration_days_overflow_errors() {
-    let (mut engine, _ctx) = setup_test_engine().unwrap();
+    let (mut engine, _ctx) = setup_isolated_test_engine().unwrap();
     let result =
         engine.execute_cypher("RETURN date('2020-01-01') + duration({days: 999999999}) AS result");
     assert!(
@@ -410,7 +410,7 @@ fn test_date_plus_duration_days_overflow_errors() {
 
 #[test]
 fn test_datetime_plus_duration_days_overflow_errors() {
-    let (mut engine, _ctx) = setup_test_engine().unwrap();
+    let (mut engine, _ctx) = setup_isolated_test_engine().unwrap();
     let result = engine.execute_cypher(
         "RETURN datetime('2020-01-01T00:00:00Z') + duration({days: 100000000}) AS result",
     );
@@ -423,7 +423,7 @@ fn test_datetime_plus_duration_days_overflow_errors() {
 
 #[test]
 fn test_date_minus_duration_days_overflow_errors() {
-    let (mut engine, _ctx) = setup_test_engine().unwrap();
+    let (mut engine, _ctx) = setup_isolated_test_engine().unwrap();
     let result =
         engine.execute_cypher("RETURN date('2020-01-01') - duration({days: 999999999}) AS result");
     assert!(
@@ -435,7 +435,7 @@ fn test_date_minus_duration_days_overflow_errors() {
 
 #[test]
 fn test_datetime_minus_duration_days_overflow_errors() {
-    let (mut engine, _ctx) = setup_test_engine().unwrap();
+    let (mut engine, _ctx) = setup_isolated_test_engine().unwrap();
     let result = engine.execute_cypher(
         "RETURN datetime('2020-01-01T00:00:00Z') - duration({days: 100000000}) AS result",
     );
@@ -448,7 +448,7 @@ fn test_datetime_minus_duration_days_overflow_errors() {
 
 #[test]
 fn test_naive_datetime_plus_duration_days_overflow_errors() {
-    let (mut engine, _ctx) = setup_test_engine().unwrap();
+    let (mut engine, _ctx) = setup_isolated_test_engine().unwrap();
     // No trailing 'Z'/offset — covers the offset-less datetime literal form
     // (may resolve via either the RFC3339 or NaiveDateTime parse branch
     // depending on chrono's leniency; both must be overflow-safe).
@@ -464,7 +464,7 @@ fn test_naive_datetime_plus_duration_days_overflow_errors() {
 
 #[test]
 fn test_date_plus_duration_large_but_in_range_succeeds() {
-    let (mut engine, _ctx) = setup_test_engine().unwrap();
+    let (mut engine, _ctx) = setup_isolated_test_engine().unwrap();
     // ~2,739 years — comfortably inside chrono's representable range
     // (roughly +/-262,000 years) — this must still work after the fix.
     let result =
@@ -478,7 +478,7 @@ fn test_date_plus_duration_large_but_in_range_succeeds() {
 
 #[test]
 fn test_duration_plus_duration_years_overflow_errors() {
-    let (mut engine, _ctx) = setup_test_engine().unwrap();
+    let (mut engine, _ctx) = setup_isolated_test_engine().unwrap();
     let result = engine.execute_cypher(
         "RETURN duration({years: 9223372036854775807}) + duration({years: 1}) AS result",
     );
@@ -491,7 +491,7 @@ fn test_duration_plus_duration_years_overflow_errors() {
 
 #[test]
 fn test_duration_plus_duration_years_boundary_succeeds() {
-    let (mut engine, _ctx) = setup_test_engine().unwrap();
+    let (mut engine, _ctx) = setup_isolated_test_engine().unwrap();
     // i64::MAX - 1 + 1 == i64::MAX — no overflow, must succeed.
     let result = engine.execute_cypher(
         "RETURN duration({years: 9223372036854775806}) + duration({years: 1}) AS result",
@@ -505,7 +505,7 @@ fn test_duration_plus_duration_years_boundary_succeeds() {
 
 #[test]
 fn test_duration_minus_duration_years_underflow_errors() {
-    let (mut engine, _ctx) = setup_test_engine().unwrap();
+    let (mut engine, _ctx) = setup_isolated_test_engine().unwrap();
     let result = engine.execute_cypher(
         "RETURN duration({years: -9223372036854775808}) - duration({years: 1}) AS result",
     );

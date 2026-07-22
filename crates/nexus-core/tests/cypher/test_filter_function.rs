@@ -3,7 +3,7 @@
 //! This file tests the filter() function which filters list elements based on a predicate.
 //! Syntax: filter(variable IN list WHERE predicate)
 
-use nexus_core::testing::setup_test_engine;
+use nexus_core::testing::setup_isolated_test_engine;
 use nexus_core::{Engine, executor::ResultSet};
 
 fn execute_query(engine: &mut Engine, query: &str) -> ResultSet {
@@ -25,7 +25,7 @@ fn get_single_value(result: &ResultSet) -> &serde_json::Value {
 
 #[test]
 fn test_filter_basic() {
-    let (mut engine, _ctx) = setup_test_engine().unwrap();
+    let (mut engine, _ctx) = setup_isolated_test_engine().unwrap();
     let result = execute_query(
         &mut engine,
         "RETURN filter(x IN [1, 2, 3, 4, 5] WHERE x > 2) AS result",
@@ -39,7 +39,7 @@ fn test_filter_basic() {
 
 #[test]
 fn test_filter_less_than() {
-    let (mut engine, _ctx) = setup_test_engine().unwrap();
+    let (mut engine, _ctx) = setup_isolated_test_engine().unwrap();
     let result = execute_query(
         &mut engine,
         "RETURN filter(x IN [1, 2, 3, 4, 5] WHERE x < 3) AS result",
@@ -52,7 +52,7 @@ fn test_filter_less_than() {
 
 #[test]
 fn test_filter_equals() {
-    let (mut engine, _ctx) = setup_test_engine().unwrap();
+    let (mut engine, _ctx) = setup_isolated_test_engine().unwrap();
     let result = execute_query(
         &mut engine,
         "RETURN filter(x IN [1, 2, 3, 2, 1] WHERE x = 2) AS result",
@@ -65,7 +65,7 @@ fn test_filter_equals() {
 
 #[test]
 fn test_filter_modulo() {
-    let (mut engine, _ctx) = setup_test_engine().unwrap();
+    let (mut engine, _ctx) = setup_isolated_test_engine().unwrap();
     // Filter even numbers
     let result = execute_query(
         &mut engine,
@@ -84,7 +84,7 @@ fn test_filter_modulo() {
 
 #[test]
 fn test_filter_strings() {
-    let (mut engine, _ctx) = setup_test_engine().unwrap();
+    let (mut engine, _ctx) = setup_isolated_test_engine().unwrap();
     let result = execute_query(
         &mut engine,
         "RETURN filter(s IN ['Alice', 'Bob', 'Charlie', 'David'] WHERE size(s) > 4) AS result",
@@ -103,7 +103,7 @@ fn test_filter_strings() {
 
 #[test]
 fn test_filter_empty_list() {
-    let (mut engine, _ctx) = setup_test_engine().unwrap();
+    let (mut engine, _ctx) = setup_isolated_test_engine().unwrap();
     let result = execute_query(&mut engine, "RETURN filter(x IN [] WHERE x > 2) AS result");
     let arr = get_single_value(&result).as_array().unwrap();
     assert_eq!(arr.len(), 0);
@@ -111,7 +111,7 @@ fn test_filter_empty_list() {
 
 #[test]
 fn test_filter_none_match() {
-    let (mut engine, _ctx) = setup_test_engine().unwrap();
+    let (mut engine, _ctx) = setup_isolated_test_engine().unwrap();
     let result = execute_query(
         &mut engine,
         "RETURN filter(x IN [1, 2, 3] WHERE x > 10) AS result",
@@ -122,7 +122,7 @@ fn test_filter_none_match() {
 
 #[test]
 fn test_filter_all_match() {
-    let (mut engine, _ctx) = setup_test_engine().unwrap();
+    let (mut engine, _ctx) = setup_isolated_test_engine().unwrap();
     let result = execute_query(
         &mut engine,
         "RETURN filter(x IN [1, 2, 3] WHERE x > 0) AS result",
@@ -140,7 +140,7 @@ fn test_filter_all_match() {
 
 #[test]
 fn test_filter_complex_predicate() {
-    let (mut engine, _ctx) = setup_test_engine().unwrap();
+    let (mut engine, _ctx) = setup_isolated_test_engine().unwrap();
     // Filter numbers that are > 2 AND < 8
     let result = execute_query(
         &mut engine,
@@ -155,7 +155,7 @@ fn test_filter_complex_predicate() {
 
 #[test]
 fn test_filter_or_predicate() {
-    let (mut engine, _ctx) = setup_test_engine().unwrap();
+    let (mut engine, _ctx) = setup_isolated_test_engine().unwrap();
     // Filter numbers that are < 2 OR > 4
     let result = execute_query(
         &mut engine,
@@ -173,7 +173,7 @@ fn test_filter_or_predicate() {
 
 #[test]
 fn test_filter_with_range() {
-    let (mut engine, _ctx) = setup_test_engine().unwrap();
+    let (mut engine, _ctx) = setup_isolated_test_engine().unwrap();
     // Filter even numbers from range
     let result = execute_query(
         &mut engine,
@@ -190,7 +190,7 @@ fn test_filter_with_range() {
 
 #[test]
 fn test_filter_combined_with_size() {
-    let (mut engine, _ctx) = setup_test_engine().unwrap();
+    let (mut engine, _ctx) = setup_isolated_test_engine().unwrap();
     // Filter list and get size
     let result = execute_query(
         &mut engine,
@@ -205,7 +205,7 @@ fn test_filter_combined_with_size() {
 
 #[test]
 fn test_nested_filter() {
-    let (mut engine, _ctx) = setup_test_engine().unwrap();
+    let (mut engine, _ctx) = setup_isolated_test_engine().unwrap();
     // First filter > 2, then filter even numbers
     let result = execute_query(
         &mut engine,

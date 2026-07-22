@@ -12,7 +12,7 @@ use std::collections::HashMap;
 
 fn seed() -> (TestContext, Engine) {
     let ctx = TestContext::new();
-    let mut engine = Engine::with_data_dir(ctx.path()).unwrap();
+    let mut engine = Engine::with_isolated_catalog(ctx.path()).unwrap();
     engine
         .execute_cypher(
             "CREATE (:Person {kind:'a'}), (:Person {kind:'a'}), \
@@ -101,7 +101,7 @@ fn function_postfix_index_returns_scalar_element() {
     // The parser fix: `labels(n)[0]` must index into the function result, not
     // drop the `[0]` and return the whole `labels(n)` array.
     let ctx = TestContext::new();
-    let mut engine = Engine::with_data_dir(ctx.path()).unwrap();
+    let mut engine = Engine::with_isolated_catalog(ctx.path()).unwrap();
     engine
         .execute_cypher("CREATE (:Person {name:'Alice'})")
         .unwrap();

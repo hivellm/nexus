@@ -18,11 +18,11 @@
 //! that the old shape still rejects with an actionable message.
 
 use nexus_core::Error;
-use nexus_core::testing::setup_test_engine;
+use nexus_core::testing::setup_isolated_test_engine;
 
 #[test]
 fn test_with_where_simple_comparison() -> Result<(), Error> {
-    let (mut engine, _ctx) = setup_test_engine()?;
+    let (mut engine, _ctx) = setup_isolated_test_engine()?;
 
     // Condition true → one row
     let result = engine.execute_cypher("UNWIND [5] AS val WITH val WHERE val > 3 RETURN val")?;
@@ -46,7 +46,7 @@ fn test_with_where_simple_comparison() -> Result<(), Error> {
 
 #[test]
 fn test_with_where_boolean_literal() -> Result<(), Error> {
-    let (mut engine, _ctx) = setup_test_engine()?;
+    let (mut engine, _ctx) = setup_isolated_test_engine()?;
 
     let result = engine.execute_cypher("UNWIND [42] AS val WITH val WHERE true RETURN val")?;
     assert_eq!(result.rows.len(), 1);
@@ -60,7 +60,7 @@ fn test_with_where_boolean_literal() -> Result<(), Error> {
 
 #[test]
 fn test_with_where_is_null() -> Result<(), Error> {
-    let (mut engine, _ctx) = setup_test_engine()?;
+    let (mut engine, _ctx) = setup_isolated_test_engine()?;
 
     let result =
         engine.execute_cypher("UNWIND [42] AS val WITH val WHERE null IS NULL RETURN val")?;
@@ -75,7 +75,7 @@ fn test_with_where_is_null() -> Result<(), Error> {
 
 #[test]
 fn test_with_where_in_operator() -> Result<(), Error> {
-    let (mut engine, _ctx) = setup_test_engine()?;
+    let (mut engine, _ctx) = setup_isolated_test_engine()?;
 
     let result =
         engine.execute_cypher("UNWIND [5] AS val WITH val WHERE val IN [1, 2, 5] RETURN val")?;
@@ -91,7 +91,7 @@ fn test_with_where_in_operator() -> Result<(), Error> {
 
 #[test]
 fn test_with_where_string_operators() -> Result<(), Error> {
-    let (mut engine, _ctx) = setup_test_engine()?;
+    let (mut engine, _ctx) = setup_isolated_test_engine()?;
 
     let result = engine
         .execute_cypher("UNWIND ['hello'] AS val WITH val WHERE val STARTS WITH 'he' RETURN val")?;
@@ -110,7 +110,7 @@ fn test_with_where_string_operators() -> Result<(), Error> {
 
 #[test]
 fn test_with_where_logical_operators() -> Result<(), Error> {
-    let (mut engine, _ctx) = setup_test_engine()?;
+    let (mut engine, _ctx) = setup_isolated_test_engine()?;
 
     let result =
         engine.execute_cypher("UNWIND [5] AS val WITH val WHERE val > 3 AND 2 < 4 RETURN val")?;
@@ -129,7 +129,7 @@ fn test_with_where_logical_operators() -> Result<(), Error> {
 
 #[test]
 fn test_with_where_complex_expression() -> Result<(), Error> {
-    let (mut engine, _ctx) = setup_test_engine()?;
+    let (mut engine, _ctx) = setup_isolated_test_engine()?;
 
     let result = engine.execute_cypher(
         "UNWIND [42] AS val WITH val WHERE (val > 3 AND 2 < 4) OR (10 > 20) RETURN val",
@@ -146,7 +146,7 @@ fn test_with_where_complex_expression() -> Result<(), Error> {
 /// reach 300/300 compat.
 #[test]
 fn test_return_where_rejected_with_neo4j_error() -> Result<(), Error> {
-    let (mut engine, _ctx) = setup_test_engine()?;
+    let (mut engine, _ctx) = setup_isolated_test_engine()?;
 
     let err = engine
         .execute_cypher("RETURN 5 AS val WHERE 5 > 3")

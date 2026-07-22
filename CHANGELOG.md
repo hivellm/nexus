@@ -122,6 +122,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **`MERGE` patterns with relationships now allow each endpoint node to carry its own `_id`.** Previously, `_id` was not supported in MERGE patterns at all; now `MERGE (a:Person {_id:'uuid:alice'})-[r:KNOWS]->(b:Person {_id:'uuid:bob'})` creates or matches both endpoints by external ID independently, and the relationship is created or matched by the full endpoint-type tuple. Each endpoint's external-id index is consulted first (no property-pattern search needed for those endpoints); only one endpoint need carry `_id` (the other resolves by label + properties as before), and relationships themselves do not carry external IDs. See `docs/specs/cypher-subset.md` for examples.
 
+### Fixed — test-suite `DatabaseClosing` intermittent flake under parallel runs
+
+- **Eliminated an intermittent `Database(DatabaseClosing)` failure that surfaced under parallel `cargo test --workspace` runs across the `cypher`, `executor`, and `regression` test binaries.** Root cause: all test catalogs share a single per-process LMDB environment (a shared test-catalog pool); a finishing test could close that environment while another test was opening it. The fix pins the shared per-process test-catalog environment open for the lifetime of the test process — it is opened once and never closed mid-run (crates/nexus-core/src/catalog/store.rs). Production and isolated-catalog behavior are unchanged.
+- **Additionally, the 19 modules in the `cypher` test binary were converted to per-test isolated catalogs** (`Engine::with_isolated_catalog` / `setup_isolated_test_engine`) for cleaner test isolation and to eliminate the pool entirely for those tests.
+- Verification: full workspace suite run 3× in parallel with zero `DatabaseClosing` occurrences (5041 tests passing per run). No user-facing API or behavior change.
+
 ## [2.6.0] — 2026-07-20
 
 > **Memory safety in Cartesian products.** Multi-pattern Cypher queries

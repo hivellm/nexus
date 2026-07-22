@@ -1,6 +1,6 @@
 //! Tests for newly implemented functions: sin, cos, tan, reduce, extract, all, any, none, single, toDate
 
-use nexus_core::testing::{setup_isolated_test_engine, setup_test_engine};
+use nexus_core::testing::setup_isolated_test_engine;
 use nexus_core::{Engine, executor::ResultSet};
 
 fn execute_query(engine: &mut Engine, query: &str) -> ResultSet {
@@ -22,7 +22,7 @@ fn get_single_value(result: &ResultSet) -> &serde_json::Value {
 
 #[test]
 fn test_sin_function() {
-    let (mut engine, _ctx) = setup_test_engine().unwrap();
+    let (mut engine, _ctx) = setup_isolated_test_engine().unwrap();
 
     // sin(0) = 0
     let result = execute_query(&mut engine, "RETURN sin(0) AS s");
@@ -39,7 +39,7 @@ fn test_sin_function() {
 
 #[test]
 fn test_cos_function() {
-    let (mut engine, _ctx) = setup_test_engine().unwrap();
+    let (mut engine, _ctx) = setup_isolated_test_engine().unwrap();
 
     // cos(0) = 1
     let result = execute_query(&mut engine, "RETURN cos(0) AS c");
@@ -56,7 +56,7 @@ fn test_cos_function() {
 
 #[test]
 fn test_tan_function() {
-    let (mut engine, _ctx) = setup_test_engine().unwrap();
+    let (mut engine, _ctx) = setup_isolated_test_engine().unwrap();
 
     // tan(0) = 0
     let result = execute_query(&mut engine, "RETURN tan(0) AS t");
@@ -69,7 +69,7 @@ fn test_tan_function() {
 
 #[test]
 fn test_trigonometric_functions_with_null() {
-    let (mut engine, _ctx) = setup_test_engine().unwrap();
+    let (mut engine, _ctx) = setup_isolated_test_engine().unwrap();
 
     // NULL input should return NULL
     let result = execute_query(&mut engine, "RETURN sin(null) AS s");
@@ -93,7 +93,7 @@ fn test_trigonometric_functions_with_null() {
 
 #[test]
 fn test_reduce_function_null() {
-    let (mut engine, _ctx) = setup_test_engine().unwrap();
+    let (mut engine, _ctx) = setup_isolated_test_engine().unwrap();
 
     // reduce with NULL should return NULL
     let result = execute_query(&mut engine, "RETURN reduce(null, null, null, null) AS r");
@@ -102,7 +102,7 @@ fn test_reduce_function_null() {
 
 #[test]
 fn test_extract_function_null() {
-    let (mut engine, _ctx) = setup_test_engine().unwrap();
+    let (mut engine, _ctx) = setup_isolated_test_engine().unwrap();
 
     // extract with NULL should return NULL
     let result = execute_query(&mut engine, "RETURN extract(null, null, null) AS e");
@@ -115,7 +115,7 @@ fn test_extract_function_null() {
 
 #[test]
 fn test_all_function_null() {
-    let (mut engine, _ctx) = setup_test_engine().unwrap();
+    let (mut engine, _ctx) = setup_isolated_test_engine().unwrap();
 
     // all with NULL should return false
     let result = execute_query(&mut engine, "RETURN all(null, null, null) AS a");
@@ -124,7 +124,7 @@ fn test_all_function_null() {
 
 #[test]
 fn test_any_function_null() {
-    let (mut engine, _ctx) = setup_test_engine().unwrap();
+    let (mut engine, _ctx) = setup_isolated_test_engine().unwrap();
 
     // any with NULL should return false
     let result = execute_query(&mut engine, "RETURN any(null, null, null) AS a");
@@ -133,7 +133,7 @@ fn test_any_function_null() {
 
 #[test]
 fn test_none_function_null() {
-    let (mut engine, _ctx) = setup_test_engine().unwrap();
+    let (mut engine, _ctx) = setup_isolated_test_engine().unwrap();
 
     // none with NULL should return true (empty list)
     let result = execute_query(&mut engine, "RETURN none(null, null, null) AS n");
@@ -142,7 +142,7 @@ fn test_none_function_null() {
 
 #[test]
 fn test_single_function_null() {
-    let (mut engine, _ctx) = setup_test_engine().unwrap();
+    let (mut engine, _ctx) = setup_isolated_test_engine().unwrap();
 
     // single with NULL should return false
     let result = execute_query(&mut engine, "RETURN single(null, null, null) AS s");
@@ -155,7 +155,7 @@ fn test_single_function_null() {
 
 #[test]
 fn test_todate_function() {
-    let (mut engine, _ctx) = setup_test_engine().unwrap();
+    let (mut engine, _ctx) = setup_isolated_test_engine().unwrap();
 
     // toDate('2025-11-12') should return '2025-11-12'
     let result = execute_query(&mut engine, "RETURN toDate('2025-11-12') AS d");
@@ -175,7 +175,7 @@ fn test_todate_function() {
 
 #[test]
 fn test_todate_with_null() {
-    let (mut engine, _ctx) = setup_test_engine().unwrap();
+    let (mut engine, _ctx) = setup_isolated_test_engine().unwrap();
 
     // NULL input should return NULL
     let result = execute_query(&mut engine, "RETURN toDate(null) AS d");
@@ -229,7 +229,7 @@ fn test_trigonometric_in_expressions() {
 
 #[test]
 fn test_functions_combined() {
-    let (mut engine, _ctx) = setup_test_engine().unwrap();
+    let (mut engine, _ctx) = setup_isolated_test_engine().unwrap();
 
     // Test multiple functions in one query
     let result = execute_query(

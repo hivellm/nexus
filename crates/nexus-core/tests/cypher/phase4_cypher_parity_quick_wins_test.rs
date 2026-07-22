@@ -4,7 +4,7 @@
 //! `shuffle()`, the `elementId()` opaque-string format, percentile/stDev
 //! aggregate verification, and multi-pattern `CREATE`.
 
-use nexus_core::testing::setup_test_engine;
+use nexus_core::testing::setup_isolated_test_engine;
 use nexus_core::{Engine, executor::ResultSet};
 
 fn execute_query(engine: &mut Engine, query: &str) -> ResultSet {
@@ -26,7 +26,7 @@ fn get_single_value(result: &ResultSet) -> &serde_json::Value {
 
 #[test]
 fn test_random_uuid_is_valid_v4() {
-    let (mut engine, _ctx) = setup_test_engine().unwrap();
+    let (mut engine, _ctx) = setup_isolated_test_engine().unwrap();
     let result = execute_query(&mut engine, "RETURN randomUUID() AS u");
     let v = get_single_value(&result);
     let s = v.as_str().expect("randomUUID() must return a string");
@@ -40,7 +40,7 @@ fn test_random_uuid_is_valid_v4() {
 
 #[test]
 fn test_random_uuid_is_unique_per_call() {
-    let (mut engine, _ctx) = setup_test_engine().unwrap();
+    let (mut engine, _ctx) = setup_isolated_test_engine().unwrap();
     let a = get_single_value(&execute_query(&mut engine, "RETURN randomUUID() AS u"))
         .as_str()
         .unwrap()
@@ -58,7 +58,7 @@ fn test_random_uuid_is_unique_per_call() {
 
 #[test]
 fn test_ascii_function() {
-    let (mut engine, _ctx) = setup_test_engine().unwrap();
+    let (mut engine, _ctx) = setup_isolated_test_engine().unwrap();
     let result = execute_query(&mut engine, "RETURN ascii('A') AS a");
     assert_eq!(get_single_value(&result).as_i64().unwrap(), 65);
 
@@ -69,7 +69,7 @@ fn test_ascii_function() {
 
 #[test]
 fn test_ascii_function_null_and_empty() {
-    let (mut engine, _ctx) = setup_test_engine().unwrap();
+    let (mut engine, _ctx) = setup_isolated_test_engine().unwrap();
     let result = execute_query(&mut engine, "RETURN ascii(null) AS a");
     assert!(get_single_value(&result).is_null());
 
@@ -79,21 +79,21 @@ fn test_ascii_function_null_and_empty() {
 
 #[test]
 fn test_ascii_function_type_error_returns_null() {
-    let (mut engine, _ctx) = setup_test_engine().unwrap();
+    let (mut engine, _ctx) = setup_isolated_test_engine().unwrap();
     let result = execute_query(&mut engine, "RETURN ascii(42) AS a");
     assert!(get_single_value(&result).is_null());
 }
 
 #[test]
 fn test_chr_function() {
-    let (mut engine, _ctx) = setup_test_engine().unwrap();
+    let (mut engine, _ctx) = setup_isolated_test_engine().unwrap();
     let result = execute_query(&mut engine, "RETURN chr(65) AS c");
     assert_eq!(get_single_value(&result).as_str().unwrap(), "A");
 }
 
 #[test]
 fn test_chr_function_null_and_invalid() {
-    let (mut engine, _ctx) = setup_test_engine().unwrap();
+    let (mut engine, _ctx) = setup_isolated_test_engine().unwrap();
     let result = execute_query(&mut engine, "RETURN chr(null) AS c");
     assert!(get_single_value(&result).is_null());
 
@@ -108,49 +108,49 @@ fn test_chr_function_null_and_invalid() {
 
 #[test]
 fn test_lpad_default_space_padding() {
-    let (mut engine, _ctx) = setup_test_engine().unwrap();
+    let (mut engine, _ctx) = setup_isolated_test_engine().unwrap();
     let result = execute_query(&mut engine, "RETURN lpad('abc', 6) AS s");
     assert_eq!(get_single_value(&result).as_str().unwrap(), "   abc");
 }
 
 #[test]
 fn test_lpad_custom_padding() {
-    let (mut engine, _ctx) = setup_test_engine().unwrap();
+    let (mut engine, _ctx) = setup_isolated_test_engine().unwrap();
     let result = execute_query(&mut engine, "RETURN lpad('abc', 6, 'x') AS s");
     assert_eq!(get_single_value(&result).as_str().unwrap(), "xxxabc");
 }
 
 #[test]
 fn test_lpad_truncates_when_length_shorter() {
-    let (mut engine, _ctx) = setup_test_engine().unwrap();
+    let (mut engine, _ctx) = setup_isolated_test_engine().unwrap();
     let result = execute_query(&mut engine, "RETURN lpad('abcdef', 3, 'x') AS s");
     assert_eq!(get_single_value(&result).as_str().unwrap(), "abc");
 }
 
 #[test]
 fn test_lpad_null_propagation() {
-    let (mut engine, _ctx) = setup_test_engine().unwrap();
+    let (mut engine, _ctx) = setup_isolated_test_engine().unwrap();
     let result = execute_query(&mut engine, "RETURN lpad(null, 6, 'x') AS s");
     assert!(get_single_value(&result).is_null());
 }
 
 #[test]
 fn test_rpad_default_space_padding() {
-    let (mut engine, _ctx) = setup_test_engine().unwrap();
+    let (mut engine, _ctx) = setup_isolated_test_engine().unwrap();
     let result = execute_query(&mut engine, "RETURN rpad('abc', 6) AS s");
     assert_eq!(get_single_value(&result).as_str().unwrap(), "abc   ");
 }
 
 #[test]
 fn test_rpad_custom_padding() {
-    let (mut engine, _ctx) = setup_test_engine().unwrap();
+    let (mut engine, _ctx) = setup_isolated_test_engine().unwrap();
     let result = execute_query(&mut engine, "RETURN rpad('abc', 6, 'x') AS s");
     assert_eq!(get_single_value(&result).as_str().unwrap(), "abcxxx");
 }
 
 #[test]
 fn test_rpad_truncates_when_length_shorter() {
-    let (mut engine, _ctx) = setup_test_engine().unwrap();
+    let (mut engine, _ctx) = setup_isolated_test_engine().unwrap();
     let result = execute_query(&mut engine, "RETURN rpad('abcdef', 3, 'x') AS s");
     assert_eq!(get_single_value(&result).as_str().unwrap(), "abc");
 }
@@ -161,7 +161,7 @@ fn test_rpad_truncates_when_length_shorter() {
 
 #[test]
 fn test_normalize_default_nfc() {
-    let (mut engine, _ctx) = setup_test_engine().unwrap();
+    let (mut engine, _ctx) = setup_isolated_test_engine().unwrap();
     // "e" + combining acute accent (U+0065 U+0301) normalizes to U+00E9 (é) under NFC.
     let result = execute_query(&mut engine, "RETURN normalize('e\u{0301}') AS s");
     let s = get_single_value(&result).as_str().unwrap().to_string();
@@ -170,7 +170,7 @@ fn test_normalize_default_nfc() {
 
 #[test]
 fn test_normalize_nfd_decomposes() {
-    let (mut engine, _ctx) = setup_test_engine().unwrap();
+    let (mut engine, _ctx) = setup_isolated_test_engine().unwrap();
     let result = execute_query(&mut engine, "RETURN normalize('\u{00e9}', 'NFD') AS s");
     let s = get_single_value(&result).as_str().unwrap().to_string();
     assert_eq!(s, "e\u{0301}");
@@ -178,7 +178,7 @@ fn test_normalize_nfd_decomposes() {
 
 #[test]
 fn test_normalize_nfkc_and_nfkd() {
-    let (mut engine, _ctx) = setup_test_engine().unwrap();
+    let (mut engine, _ctx) = setup_isolated_test_engine().unwrap();
     // U+FB01 (ﬁ ligature) -> "fi" under compatibility decomposition (NFKC/NFKD).
     let result = execute_query(&mut engine, "RETURN normalize('\u{fb01}', 'NFKC') AS s");
     assert_eq!(get_single_value(&result).as_str().unwrap(), "fi");
@@ -189,14 +189,14 @@ fn test_normalize_nfkc_and_nfkd() {
 
 #[test]
 fn test_normalize_null_propagation() {
-    let (mut engine, _ctx) = setup_test_engine().unwrap();
+    let (mut engine, _ctx) = setup_isolated_test_engine().unwrap();
     let result = execute_query(&mut engine, "RETURN normalize(null) AS s");
     assert!(get_single_value(&result).is_null());
 }
 
 #[test]
 fn test_normalize_invalid_form_errors() {
-    let (mut engine, _ctx) = setup_test_engine().unwrap();
+    let (mut engine, _ctx) = setup_isolated_test_engine().unwrap();
     let err = engine.execute_cypher("RETURN normalize('abc', 'BOGUS') AS s");
     assert!(err.is_err(), "an invalid normal form must be a query error");
 }
@@ -207,14 +207,14 @@ fn test_normalize_invalid_form_errors() {
 
 #[test]
 fn test_log_one_arg_is_natural_log() {
-    let (mut engine, _ctx) = setup_test_engine().unwrap();
+    let (mut engine, _ctx) = setup_isolated_test_engine().unwrap();
     let result = execute_query(&mut engine, "RETURN log(2.718281828459045) AS l");
     assert!((get_single_value(&result).as_f64().unwrap() - 1.0).abs() < 0.0001);
 }
 
 #[test]
 fn test_log_two_arg_base() {
-    let (mut engine, _ctx) = setup_test_engine().unwrap();
+    let (mut engine, _ctx) = setup_isolated_test_engine().unwrap();
     // log base 2 of 8 = 3
     let result = execute_query(&mut engine, "RETURN log(8, 2) AS l");
     assert!((get_single_value(&result).as_f64().unwrap() - 3.0).abs() < 0.0001);
@@ -226,7 +226,7 @@ fn test_log_two_arg_base() {
 
 #[test]
 fn test_log_two_arg_null_propagation() {
-    let (mut engine, _ctx) = setup_test_engine().unwrap();
+    let (mut engine, _ctx) = setup_isolated_test_engine().unwrap();
     let result = execute_query(&mut engine, "RETURN log(null, 2) AS l");
     assert!(get_single_value(&result).is_null());
     let result = execute_query(&mut engine, "RETURN log(8, null) AS l");
@@ -235,7 +235,7 @@ fn test_log_two_arg_null_propagation() {
 
 #[test]
 fn test_is_nan_function() {
-    let (mut engine, _ctx) = setup_test_engine().unwrap();
+    let (mut engine, _ctx) = setup_isolated_test_engine().unwrap();
     // serde_json's Number cannot represent a live NaN (from_f64 rejects
     // non-finite values), so arithmetic like `0.0 / 0.0` errors out as
     // "division by zero" before a NaN value could ever reach isNaN().
@@ -252,7 +252,7 @@ fn test_is_nan_function() {
 
 #[test]
 fn test_is_nan_null_propagation() {
-    let (mut engine, _ctx) = setup_test_engine().unwrap();
+    let (mut engine, _ctx) = setup_isolated_test_engine().unwrap();
     let result = execute_query(&mut engine, "RETURN isNaN(null) AS n");
     assert!(get_single_value(&result).is_null());
 }
@@ -263,7 +263,7 @@ fn test_is_nan_null_propagation() {
 
 #[test]
 fn test_shuffle_preserves_multiset() {
-    let (mut engine, _ctx) = setup_test_engine().unwrap();
+    let (mut engine, _ctx) = setup_isolated_test_engine().unwrap();
     let result = execute_query(&mut engine, "RETURN shuffle([1, 2, 3, 4, 5]) AS s");
     let arr = get_single_value(&result)
         .as_array()
@@ -276,14 +276,14 @@ fn test_shuffle_preserves_multiset() {
 
 #[test]
 fn test_shuffle_null_propagation() {
-    let (mut engine, _ctx) = setup_test_engine().unwrap();
+    let (mut engine, _ctx) = setup_isolated_test_engine().unwrap();
     let result = execute_query(&mut engine, "RETURN shuffle(null) AS s");
     assert!(get_single_value(&result).is_null());
 }
 
 #[test]
 fn test_shuffle_empty_list() {
-    let (mut engine, _ctx) = setup_test_engine().unwrap();
+    let (mut engine, _ctx) = setup_isolated_test_engine().unwrap();
     let result = execute_query(&mut engine, "RETURN shuffle([]) AS s");
     assert_eq!(get_single_value(&result).as_array().unwrap().len(), 0);
 }
@@ -294,7 +294,7 @@ fn test_shuffle_empty_list() {
 
 #[test]
 fn test_element_id_node_format() {
-    let (mut engine, _ctx) = setup_test_engine().unwrap();
+    let (mut engine, _ctx) = setup_isolated_test_engine().unwrap();
     engine
         .execute_cypher("CREATE (n:EidNode {name:'x'})")
         .unwrap();
@@ -309,7 +309,7 @@ fn test_element_id_node_format() {
 
 #[test]
 fn test_element_id_relationship_format() {
-    let (mut engine, _ctx) = setup_test_engine().unwrap();
+    let (mut engine, _ctx) = setup_isolated_test_engine().unwrap();
     engine
         .execute_cypher("CREATE (a:EidA)-[r:EIDREL]->(b:EidB)")
         .unwrap();
@@ -324,7 +324,7 @@ fn test_element_id_relationship_format() {
 
 #[test]
 fn test_element_id_null_propagation() {
-    let (mut engine, _ctx) = setup_test_engine().unwrap();
+    let (mut engine, _ctx) = setup_isolated_test_engine().unwrap();
     let result = execute_query(&mut engine, "RETURN elementId(null) AS eid");
     assert!(get_single_value(&result).is_null());
 }
@@ -336,7 +336,7 @@ fn test_element_id_null_propagation() {
 
 #[test]
 fn test_stdev_and_stdevp_hand_computed() {
-    let (mut engine, _ctx) = setup_test_engine().unwrap();
+    let (mut engine, _ctx) = setup_isolated_test_engine().unwrap();
     engine
         .execute_cypher("CREATE (:StatN {v: 1}), (:StatN {v: 2}), (:StatN {v: 3}), (:StatN {v: 4})")
         .unwrap();
@@ -350,7 +350,7 @@ fn test_stdev_and_stdevp_hand_computed() {
 
 #[test]
 fn test_percentile_disc_and_cont_hand_computed() {
-    let (mut engine, _ctx) = setup_test_engine().unwrap();
+    let (mut engine, _ctx) = setup_isolated_test_engine().unwrap();
     engine
         .execute_cypher(
             "CREATE (:StatM {v: 1}), (:StatM {v: 2}), (:StatM {v: 3}), (:StatM {v: 4}), (:StatM {v: 5})",
@@ -378,7 +378,7 @@ fn test_percentile_disc_and_cont_hand_computed() {
 
 #[test]
 fn test_percentile_cont_out_of_range_high_errors() {
-    let (mut engine, _ctx) = setup_test_engine().unwrap();
+    let (mut engine, _ctx) = setup_isolated_test_engine().unwrap();
     engine
         .execute_cypher("CREATE (:StatP {v: 1.0}), (:StatP {v: 2.0}), (:StatP {v: 3.0})")
         .unwrap();
@@ -401,7 +401,7 @@ fn test_percentile_cont_out_of_range_high_errors() {
 
 #[test]
 fn test_percentile_cont_boundary_values_succeed() {
-    let (mut engine, _ctx) = setup_test_engine().unwrap();
+    let (mut engine, _ctx) = setup_isolated_test_engine().unwrap();
     engine
         .execute_cypher("CREATE (:StatP {v: 1.0}), (:StatP {v: 2.0}), (:StatP {v: 3.0})")
         .unwrap();
@@ -419,7 +419,7 @@ fn test_percentile_cont_boundary_values_succeed() {
 
 #[test]
 fn test_percentile_cont_just_past_boundary_errors() {
-    let (mut engine, _ctx) = setup_test_engine().unwrap();
+    let (mut engine, _ctx) = setup_isolated_test_engine().unwrap();
     engine
         .execute_cypher("CREATE (:StatP {v: 1.0}), (:StatP {v: 2.0}), (:StatP {v: 3.0})")
         .unwrap();
@@ -437,7 +437,7 @@ fn test_percentile_cont_just_past_boundary_errors() {
 
 #[test]
 fn test_create_multiple_disconnected_patterns() {
-    let (mut engine, _ctx) = setup_test_engine().unwrap();
+    let (mut engine, _ctx) = setup_isolated_test_engine().unwrap();
     engine
         .execute_cypher("CREATE (a:MpA {name:'A'}), (b:MpB {name:'B'})")
         .unwrap();
@@ -451,7 +451,7 @@ fn test_create_multiple_disconnected_patterns() {
 
 #[test]
 fn test_create_multiple_patterns_with_relationship_between_them() {
-    let (mut engine, _ctx) = setup_test_engine().unwrap();
+    let (mut engine, _ctx) = setup_isolated_test_engine().unwrap();
     engine
         .execute_cypher("CREATE (a:MpC {name:'A'}), (b:MpD {name:'B'}), (a)-[r:MPREL]->(b)")
         .unwrap();
@@ -470,7 +470,7 @@ fn test_create_multiple_patterns_with_relationship_between_them() {
 #[test]
 fn test_create_via_execute_cypher_with_params_multi_pattern() {
     use std::collections::HashMap;
-    let (mut engine, _ctx) = setup_test_engine().unwrap();
+    let (mut engine, _ctx) = setup_isolated_test_engine().unwrap();
     let params: HashMap<String, serde_json::Value> = HashMap::new();
     engine
         .execute_cypher_with_params("CREATE (a:MpE {name:'A'}), (b:MpF {name:'B'})", params)

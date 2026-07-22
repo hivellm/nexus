@@ -11,7 +11,7 @@ use nexus_core::testing::TestContext;
 
 fn engine() -> (TestContext, Engine) {
     let ctx = TestContext::new();
-    let e = Engine::with_data_dir(ctx.path()).unwrap();
+    let e = Engine::with_isolated_catalog(ctx.path()).unwrap();
     (ctx, e)
 }
 

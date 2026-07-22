@@ -4,7 +4,7 @@ use nexus_core::{Engine, Error};
 #[test]
 fn test_where_in_operator() -> Result<(), Error> {
     let temp_dir = tempfile::tempdir().map_err(Error::Io)?;
-    let mut engine = Engine::with_data_dir(temp_dir.path())?;
+    let mut engine = Engine::with_isolated_catalog(temp_dir.path())?;
 
     // Create exactly 3 nodes
     engine.execute_cypher("CREATE (:Person {name: 'Alice'})")?;
@@ -25,7 +25,7 @@ fn test_where_in_operator() -> Result<(), Error> {
 #[test]
 fn test_where_in_empty_list() -> Result<(), Error> {
     let temp_dir = tempfile::tempdir().map_err(Error::Io)?;
-    let mut engine = Engine::with_data_dir(temp_dir.path())?;
+    let mut engine = Engine::with_isolated_catalog(temp_dir.path())?;
 
     engine.execute_cypher("CREATE (:Person {name: 'Alice'})")?;
     engine.execute_cypher("CREATE (:Person {name: 'Bob'})")?;
