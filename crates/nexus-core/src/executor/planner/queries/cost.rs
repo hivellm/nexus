@@ -578,11 +578,16 @@ impl<'a> QueryPlanner<'a> {
                 // ends up reordered after a `Filter` that references the
                 // variable it binds. See
                 // phase0_fix-correlated-predicate-index-seek.
+                //
+                // A spatial R-tree seek (`SpatialSeek`) belongs here for the
+                // same reason: it generates fresh node rows independent of
+                // upstream input, exactly like a label scan.
                 Operator::NodeByLabel { .. }
                 | Operator::AllNodesScan { .. }
                 | Operator::IndexScan { .. }
                 | Operator::NodeIndexSeek { .. }
-                | Operator::CompositeBtreeSeek { .. } => {
+                | Operator::CompositeBtreeSeek { .. }
+                | Operator::SpatialSeek { .. } => {
                     if seen_unwind {
                         unwind_before_scan = true;
                         break;
@@ -600,25 +605,45 @@ impl<'a> QueryPlanner<'a> {
         let mut unwinds = Vec::new();
         let mut others = Vec::new();
 
+        // INVARIANT: every variable-BINDING operator (any operator that
+        // introduces a NEW row-scoped binding for a pattern variable —
+        // a node from a scan/seek, or a relationship-traversal target)
+        // must land in a bucket that is recombined BEFORE `filters`
+        // (`scans` or `expansions` below). A `Filter` referencing a
+        // variable that has not been bound yet evaluates that variable
+        // as `Null`, which is always falsy, so the predicate silently
+        // drops every row instead of raising an error. The `_ => others`
+        // catch-all is recombined AFTER `filters` in both branches, so it
+        // must never receive a binding operator — any new binding
+        // operator variant added to `Operator` must be added to `scans`
+        // or `expansions` here, not left to fall through to `others`.
         for operator in operators {
             match &operator {
-                // Index seeks bind a node variable exactly like a label
-                // scan — they must be ordered with the scans, before any
-                // `Filter`/`Expand` that references the variable they bind,
-                // or the residual predicate runs against unbound input and
-                // is silently dropped. See
+                // Index seeks and spatial seeks bind a node variable
+                // exactly like a label scan — they must be ordered with
+                // the scans, before any `Filter`/`Expand` that references
+                // the variable they bind, or the residual predicate runs
+                // against unbound input and is silently dropped. See
                 // phase0_fix-correlated-predicate-index-seek.
                 Operator::NodeByLabel { .. }
                 | Operator::AllNodesScan { .. }
                 | Operator::IndexScan { .. }
                 | Operator::NodeIndexSeek { .. }
-                | Operator::CompositeBtreeSeek { .. } => {
+                | Operator::CompositeBtreeSeek { .. }
+                | Operator::SpatialSeek { .. } => {
                     scans.push(operator);
                 }
                 Operator::Filter { .. } => {
                     filters.push(operator);
                 }
-                Operator::Expand { .. } => {
+                // `VariableLengthPath` and `QuantifiedExpand` are
+                // relationship-traversal operators that consume a source
+                // variable and bind a target variable, exactly like
+                // `Expand`, so they must recombine before any `Filter`
+                // that references the variable they bind.
+                Operator::Expand { .. }
+                | Operator::VariableLengthPath { .. }
+                | Operator::QuantifiedExpand { .. } => {
                     expansions.push(operator);
                 }
                 Operator::Join { .. } => {

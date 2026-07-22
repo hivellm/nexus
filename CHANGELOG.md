@@ -152,6 +152,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Additionally, the 19 modules in the `cypher` test binary were converted to per-test isolated catalogs** (`Engine::with_isolated_catalog` / `setup_isolated_test_engine`) for cleaner test isolation and to eliminate the pool entirely for those tests.
 - Verification: full workspace suite run 3× in parallel with zero `DatabaseClosing` occurrences (5041 tests passing per run). No user-facing API or behavior change.
 
+### Fixed — WHERE predicates after variable-length paths no longer silently drop
+
+- **`MATCH (a)-[:R*1..2]->(b) WHERE b.name = 'x'` and similar queries now correctly apply WHERE filters instead of silently returning zero rows.** The query planner's cost-based operator-reordering pass was incorrectly reordering variable-binding operators — variable-length paths (`[:T*1..3]`), quantified path patterns (`((n)-[:T]->(m)){1,2}`), and spatial R-tree seeks — to be evaluated after the WHERE clauses that reference their newly-bound variables. Since unbound variables evaluate to null (falsy) in predicates, the WHERE filters were silently dropped, resulting in empty query results. Fixed by ensuring these binding operators are evaluated before the filters. Not a breaking change — corrects previously-incorrect query results.
+
 ## [2.6.0] — 2026-07-20
 
 > **Memory safety in Cartesian products.** Multi-pattern Cypher queries
