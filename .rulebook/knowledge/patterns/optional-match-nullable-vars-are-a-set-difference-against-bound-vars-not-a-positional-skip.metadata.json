@@ -1,0 +1,19 @@
+{
+  "id": "optional-match-nullable-vars-are-a-set-difference-against-bound-vars-not-a-positional-skip",
+  "type": "pattern",
+  "title": "OPTIONAL MATCH nullable-variable set is a set difference against bound vars, not a positional skip",
+  "category": "code",
+  "description": "When a planner walks an OPTIONAL MATCH pattern to decide which variables are \"new\" (and therefore must be nulled out by the LEFT OUTER JOIN fallback when nothing matches), never assume the already-bound anchor sits at a fixed textual position (e.g. \"the first node\"). That breaks for reverse-direction patterns (`OPTIONAL MATCH (b)-[:KNOWS]->(a)` where `a`, not `b`, is the bound anchor) and for standalone patterns with no anchor at all (`OPTIONAL MATCH (c:Company)` — skipping \"the first node\" positionally leaves the nullable set empty, so a subsequent WHERE gets lowered as a plain `Filter` instead of an `OptionalFilter`, silently dropping driver rows instead of preserving them with `c = NULL`). Compute the nullable set as `(all variables in the pattern) - (variables already bound by prior clauses)` instead, via a `HashSet<String>` accumulator threaded through the clause-walking loop, populated by every regular MATCH's pattern vars AND every OPTIONAL MATCH's own pattern vars (immediately after computing that clause's nullable set) — the latter is required so chained OPTIONAL MATCH clauses don't re-treat an already-resolved variable as new. Check for an existing bound-variable accumulator in scope at the walk site before introducing one; a similarly-named accumulator in a different function, built for a different purpose, is not reusable.",
+  "example": "fn collect_pattern_variables(pattern: &Pattern) -> Vec<String> { /* node + rel + quantified-group vars, no positional skip */ }\n\nlet mut bound_vars: HashSet<String> = HashSet::new();\nfor clause in &query.clauses {\n    if let Clause::Match(m) = clause {\n        let pattern_vars = collect_pattern_variables(&m.pattern);\n        if m.optional {\n            let nullable: Vec<String> = pattern_vars.iter()\n                .filter(|v| !bound_vars.contains(*v)).cloned().collect();\n            // nullable -> Operator::OptionalFilter { optional_vars: nullable, .. }\n        }\n        bound_vars.extend(pattern_vars); // in scope for every clause after this one\n    }\n}",
+  "whenToUse": "Any planner/compiler pass that needs to classify a pattern's variables as \"new\" vs \"already bound\" to drive LEFT OUTER JOIN / OPTIONAL nullability semantics — not just Cypher OPTIONAL MATCH.",
+  "whenNotToUse": "Don't reach for this when the anchor position genuinely IS guaranteed by grammar (no such guarantee exists in openCypher's OPTIONAL MATCH — direction and anchor placement are caller-controlled).",
+  "createdAt": "2026-07-22T00:00:00.000Z",
+  "tags": [
+    "cypher",
+    "optional-match",
+    "planner",
+    "left-outer-join",
+    "variable-scoping"
+  ],
+  "source": "manual"
+}
