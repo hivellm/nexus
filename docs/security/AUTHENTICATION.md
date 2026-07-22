@@ -147,6 +147,30 @@ Authorization: Bearer <token>
 DROP USER alice
 ```
 
+### Password Storage
+
+User passwords are hashed with **Argon2id** and a fresh, random per-password
+salt (the same KDF and default configuration already used for API-key
+hashing). Two users with the same password never produce the same stored
+hash, and verification is constant-time by construction — never a plain
+`==` comparison on hash bytes.
+
+- **Migration from the legacy scheme.** Accounts created before this
+  hardening stored an unsalted, single-round SHA-512 hex digest. Login
+  (`POST /auth/login`) still accepts a legacy hash for verification, then
+  transparently rewrites it to a fresh Argon2id hash the moment the correct
+  password is confirmed ("rehash-on-next-login") — no forced password reset
+  is required, and no account is left unable to log in during the
+  migration window.
+- **Login error contract.** `POST /auth/login` never distinguishes "no such
+  user" from "wrong password" in either the response body or response
+  timing: both return the same generic `401 {"error": "Invalid username or
+  password"}`, and the unknown-username path performs an equivalent-cost
+  dummy password verification so it cannot be used to enumerate valid
+  usernames by timing. JWT-generation failures likewise return a generic
+  `500 {"error": "Login failed"}` to the client; the underlying error is
+  recorded server-side in the audit log only.
+
 ### Granting Permissions
 
 **REST API:**
@@ -185,7 +209,17 @@ REVOKE ADMIN FROM alice
 
 ## API Keys
 
-API keys are long-lived credentials for programmatic access. They are hashed using Argon2 before storage.
+API keys are long-lived credentials for programmatic access. They are hashed using Argon2id before storage.
+
+### Key Format and Verification Cost
+
+An issued key has the form `nx_{key_id}_{secret}`, where `key_id` is the
+key's own UUID. Embedding the ID lets `verify_api_key` look the matching
+stored key up directly (O(1)) and run exactly one Argon2 verification per
+request, instead of verifying against every stored key — so authentication
+throughput no longer degrades, and cannot be driven to exhaust CPU, as the
+number of active keys grows. Keys issued before this change (`nx_{secret}`,
+no embedded ID) keep working unchanged via a linear-scan fallback.
 
 ### Creating API Keys
 
@@ -314,6 +348,11 @@ Content-Type: application/json
   "token_type": "Bearer"
 }
 ```
+
+Every credential failure — unknown username, wrong password, or a
+JWT-generation error — returns a generic `401`/`500` with a fixed message
+and equalized timing; see [Password Storage](#password-storage) for the
+full error and timing contract.
 
 ### Using JWT Tokens
 

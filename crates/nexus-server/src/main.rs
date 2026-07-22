@@ -264,7 +264,7 @@ async fn async_main(_worker_threads: usize) -> anyhow::Result<()> {
 
     // Create root user if enabled in config
     if config.root_user.enabled {
-        // Hash password with SHA512
+        // Hash password with Argon2id (per-user random salt)
         let password_hash = nexus_core::auth::hash_password(&config.root_user.password);
 
         if let Err(e) = rbac.create_root_user(config.root_user.username.clone(), password_hash) {

@@ -333,7 +333,9 @@ fn test_api_key_enumeration_prevention() {
 
 #[test]
 fn test_password_hashing_security() {
-    // Passwords should be hashed with secure algorithm (Argon2)
+    // Passwords are hashed with Argon2id and a fresh per-password random
+    // salt (`phase0_fix-password-hashing` H3) — a rainbow-table-crackable
+    // unsalted SHA-512 digest is no longer produced.
 
     let password = "test_password_123";
     let hash = nexus_core::auth::hash_password(password);
@@ -348,53 +350,97 @@ fn test_password_hashing_security() {
     // Note: Actual hash length depends on Argon2 configuration
     assert!(hash.len() > 20, "Hash should be reasonably long");
 
-    // Note: Current implementation uses SHA512 without salt
-    // Same password produces same hash (deterministic)
-    // In production, Argon2 should be used for better security
-    let hash2 = nexus_core::auth::hash_password(password);
-    assert_eq!(
-        hash, hash2,
-        "SHA512 produces deterministic hashes (no salt)"
+    // Argon2id PHC-format hashes are self-describing.
+    assert!(
+        hash.starts_with("$argon2id$"),
+        "hash should be an Argon2id PHC string, got: {hash}"
     );
 
-    // Both should verify correctly
+    // Security property: hashing the SAME password twice must produce
+    // DIFFERENT stored hashes (a fresh random salt each call) — the exact
+    // defect this task fixes (two users with the same password used to
+    // get an identical, rainbow-table-crackable SHA-512 digest).
+    let hash2 = nexus_core::auth::hash_password(password);
+    assert_ne!(
+        hash, hash2,
+        "same password must produce different stored hashes (per-password salt)"
+    );
+
+    // Despite the differing salts/hashes, both must still verify the
+    // correct password...
     assert!(
         nexus_core::auth::verify_password(password, &hash),
-        "Hash should verify"
+        "hash should verify against the correct password"
     );
     assert!(
         nexus_core::auth::verify_password(password, &hash2),
-        "Hash should verify"
+        "hash2 should verify against the correct password"
+    );
+    // ...and both must reject the wrong one.
+    assert!(
+        !nexus_core::auth::verify_password("wrong_password", &hash),
+        "hash must reject an incorrect password"
+    );
+    assert!(
+        !nexus_core::auth::verify_password("wrong_password", &hash2),
+        "hash2 must reject an incorrect password"
     );
 }
 
 #[test]
 fn test_api_key_format_security() {
-    // API keys should have consistent format and be hard to guess
+    // API keys should have consistent format and be hard to guess.
+    //
+    // `phase0_fix-password-hashing` M1: the raw key now embeds its own key
+    // ID (`nx_{uuid}_{secret}`) right after the prefix, so `verify_api_key`
+    // can look the candidate up in O(1) instead of running Argon2 against
+    // every stored key. Pre-migration keys without an embedded ID
+    // (`nx_{secret}`, 35 chars) are still accepted via a linear-scan
+    // fallback — covered by
+    // `auth::tests::test_verify_api_key_legacy_format_without_embedded_id_still_verifies`
+    // in `nexus-core/src/auth/mod.rs`.
 
     let config = nexus_core::auth::AuthConfig::default();
     let auth_manager = AuthManager::new(config);
 
     // Generate multiple keys
     let mut keys = Vec::new();
+    let mut ids = Vec::new();
     for i in 0..10 {
-        let (_, full_key) = auth_manager
+        let (api_key, full_key) = auth_manager
             .generate_api_key(format!("key-{}", i), vec![Permission::Read])
             .unwrap();
         keys.push(full_key);
+        ids.push(api_key.id);
     }
 
-    // All keys should start with "nx_"
-    for key in &keys {
+    // All keys should start with "nx_", embed their own key ID as the
+    // segment immediately after the prefix, and be exactly
+    // `nx_` + 36-char UUID + `_` + 32-char hex secret = 72 characters.
+    for (key, id) in keys.iter().zip(ids.iter()) {
         assert!(
             key.starts_with("nx_"),
             "All keys should start with 'nx_' prefix"
         );
         assert_eq!(
             key.len(),
-            35,
-            "Keys should be 35 characters (nx_ + 32 chars)"
+            3 + 36 + 1 + 32,
+            "Keys should be nx_ + 36-char uuid + _ + 32-char secret (72 chars)"
         );
+
+        let rest = key.strip_prefix("nx_").expect("checked starts_with above");
+        let (embedded_id, secret) = rest
+            .split_once('_')
+            .expect("current-format key must have an id/secret separator");
+        assert_eq!(
+            embedded_id, id,
+            "the id segment embedded in the key must match the ApiKey's own id"
+        );
+        assert!(
+            uuid::Uuid::parse_str(embedded_id).is_ok(),
+            "embedded id segment must be a valid UUID, got: {embedded_id}"
+        );
+        assert_eq!(secret.len(), 32, "secret segment should be 32 hex chars");
     }
 
     // Keys should be unique

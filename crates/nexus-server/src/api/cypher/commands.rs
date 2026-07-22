@@ -322,7 +322,7 @@ pub(crate) async fn execute_user_commands(
                 if existing_user.is_none() {
                     let user_id = uuid::Uuid::new_v4().to_string();
                     let user = if let Some(password) = &create_user.password {
-                        // Hash password with SHA512
+                        // Hash password with Argon2id (per-user random salt)
                         let password_hash = nexus_core::auth::hash_password(password);
                         nexus_core::auth::User::with_password_hash(
                             user_id.clone(),

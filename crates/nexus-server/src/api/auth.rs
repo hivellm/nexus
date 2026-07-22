@@ -5,7 +5,10 @@ use axum::extract::{Extension, Path, Query, State};
 use axum::http::StatusCode;
 use axum::response::Json;
 use nexus_core::auth::middleware::AuthContext;
-use nexus_core::auth::{Permission, PermissionSet, User, verify_password};
+use nexus_core::auth::{
+    Permission, PermissionSet, User, hash_password, needs_rehash, verify_dummy_password,
+    verify_password,
+};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -151,7 +154,7 @@ pub async fn create_user(
 
     let user_id = uuid::Uuid::new_v4().to_string();
     let user = if let Some(password) = &request.password {
-        // Hash password with SHA512
+        // Hash password with Argon2id (per-user random salt)
         let password_hash = nexus_core::auth::hash_password(password);
 
         let mut user =
@@ -664,119 +667,43 @@ pub struct RefreshTokenResponse {
     pub expires_in: u64,
 }
 
+/// Build the generic "invalid credentials" response shared by every
+/// credential-related login failure (unknown username, wrong password).
+/// Returning identical content for both cases is half of the L2 fix — the
+/// other half is equalizing their timing, see [`login`].
+fn invalid_credentials() -> (StatusCode, Json<serde_json::Value>) {
+    (
+        StatusCode::UNAUTHORIZED,
+        Json(serde_json::json!({
+            "error": "Invalid username or password"
+        })),
+    )
+}
+
 /// Authenticate user and return JWT tokens
 /// POST /auth/login
 pub async fn login(
     State(server): State<Arc<NexusServer>>,
     Json(request): Json<LoginRequest>,
 ) -> Result<Json<LoginResponse>, (StatusCode, Json<serde_json::Value>)> {
-    // Find user by username
-    let rbac = server.rbac.read().await;
-    let users = rbac.list_users();
-    let user = users.iter().find(|u| u.username == request.username);
+    // Find user by username. Snapshot as an owned value: the read lock is
+    // released here so a legacy-hash rehash below (which needs a write
+    // lock) never has to upgrade a held lock.
+    let user: Option<User> = {
+        let rbac = server.rbac.read().await;
+        rbac.list_users()
+            .into_iter()
+            .find(|u| u.username == request.username)
+            .cloned()
+    };
 
-    if let Some(user) = user {
-        // Check if user is active
-        if !user.is_active {
-            // Log authentication failure - user disabled
-            let _ = server
-                .audit_logger
-                .log_authentication_failed(
-                    Some(request.username.clone()),
-                    "User account is disabled".to_string(),
-                    None,
-                )
-                .await;
+    let Some(user) = user else {
+        // L2: equalize timing against the "known username, wrong password"
+        // branch below by paying the same Argon2 cost here — otherwise the
+        // response latency alone would tell a caller whether `username`
+        // exists, without ever needing the right password.
+        verify_dummy_password(&request.password);
 
-            return Err((
-                StatusCode::FORBIDDEN,
-                Json(serde_json::json!({
-                    "error": "User account is disabled"
-                })),
-            ));
-        }
-
-        // Verify password
-        if let Some(ref password_hash) = user.password_hash {
-            if !verify_password(&request.password, password_hash) {
-                // Log authentication failure - invalid password
-                let _ = server
-                    .audit_logger
-                    .log_authentication_failed(
-                        Some(request.username.clone()),
-                        "Invalid password".to_string(),
-                        None,
-                    )
-                    .await;
-
-                return Err((
-                    StatusCode::UNAUTHORIZED,
-                    Json(serde_json::json!({
-                        "error": "Invalid username or password"
-                    })),
-                ));
-            }
-        } else {
-            // User has no password set
-            // Log authentication failure - no password set
-            let _ = server
-                .audit_logger
-                .log_authentication_failed(
-                    Some(request.username.clone()),
-                    "User has no password set".to_string(),
-                    None,
-                )
-                .await;
-
-            return Err((
-                StatusCode::UNAUTHORIZED,
-                Json(serde_json::json!({
-                    "error": "User has no password set"
-                })),
-            ));
-        }
-
-        // Generate JWT tokens
-        match server.jwt_manager.generate_token_pair(user) {
-            Ok(token_pair) => {
-                // Log successful authentication
-                let _ = server
-                    .audit_logger
-                    .log_authentication_success(
-                        user.username.clone(),
-                        user.id.clone(),
-                        "password".to_string(),
-                    )
-                    .await;
-
-                Ok(Json(LoginResponse {
-                    access_token: token_pair.access_token,
-                    refresh_token: token_pair.refresh_token,
-                    token_type: token_pair.token_type,
-                    expires_in: token_pair.expires_in,
-                }))
-            }
-            Err(e) => {
-                // Log authentication failure - token generation error
-                let _ = server
-                    .audit_logger
-                    .log_authentication_failed(
-                        Some(request.username.clone()),
-                        format!("Failed to generate tokens: {}", e),
-                        None,
-                    )
-                    .await;
-
-                Err((
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    Json(serde_json::json!({
-                        "error": format!("Failed to generate tokens: {}", e)
-                    })),
-                ))
-            }
-        }
-    } else {
-        // Log authentication failure - user not found
         let _ = server
             .audit_logger
             .log_authentication_failed(
@@ -786,12 +713,113 @@ pub async fn login(
             )
             .await;
 
-        Err((
+        return Err(invalid_credentials());
+    };
+
+    // Check if user is active
+    if !user.is_active {
+        let _ = server
+            .audit_logger
+            .log_authentication_failed(
+                Some(request.username.clone()),
+                "User account is disabled".to_string(),
+                None,
+            )
+            .await;
+
+        return Err((
+            StatusCode::FORBIDDEN,
+            Json(serde_json::json!({
+                "error": "User account is disabled"
+            })),
+        ));
+    }
+
+    // Verify password
+    let Some(ref password_hash) = user.password_hash else {
+        let _ = server
+            .audit_logger
+            .log_authentication_failed(
+                Some(request.username.clone()),
+                "User has no password set".to_string(),
+                None,
+            )
+            .await;
+
+        return Err((
             StatusCode::UNAUTHORIZED,
             Json(serde_json::json!({
-                "error": "Invalid username or password"
+                "error": "User has no password set"
             })),
-        ))
+        ));
+    };
+
+    if !verify_password(&request.password, password_hash) {
+        let _ = server
+            .audit_logger
+            .log_authentication_failed(
+                Some(request.username.clone()),
+                "Invalid password".to_string(),
+                None,
+            )
+            .await;
+
+        return Err(invalid_credentials());
+    }
+
+    // H3 migration: the plaintext password just verified correctly against
+    // a legacy (pre-Argon2id) hash — now that it is known, transparently
+    // upgrade the stored hash to Argon2id so this account is off the
+    // legacy scheme after this login. New/already-migrated accounts hash
+    // to an Argon2id PHC string and skip this branch entirely.
+    if needs_rehash(password_hash) {
+        let rehashed = hash_password(&request.password);
+        let mut rbac = server.rbac.write().await;
+        if let Some(stored) = rbac.get_user_mut(&user.id) {
+            stored.password_hash = Some(rehashed);
+        }
+    }
+
+    // Generate JWT tokens
+    match server.jwt_manager.generate_token_pair(&user) {
+        Ok(token_pair) => {
+            // Log successful authentication
+            let _ = server
+                .audit_logger
+                .log_authentication_success(
+                    user.username.clone(),
+                    user.id.clone(),
+                    "password".to_string(),
+                )
+                .await;
+
+            Ok(Json(LoginResponse {
+                access_token: token_pair.access_token,
+                refresh_token: token_pair.refresh_token,
+                token_type: token_pair.token_type,
+                expires_in: token_pair.expires_in,
+            }))
+        }
+        Err(e) => {
+            // L2: the real error is logged server-side only (audit log);
+            // the client gets a generic message so JWT-manager internals
+            // are never leaked over the wire.
+            let _ = server
+                .audit_logger
+                .log_authentication_failed(
+                    Some(request.username.clone()),
+                    format!("Failed to generate tokens: {}", e),
+                    None,
+                )
+                .await;
+
+            Err((
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({
+                    "error": "Login failed"
+                })),
+            ))
+        }
     }
 }
 
