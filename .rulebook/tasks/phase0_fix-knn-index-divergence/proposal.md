@@ -40,6 +40,35 @@ index — which is a stated project direction (native vector search is a core fe
 `docs/specs/knn-integration.md`), so this is a defect to fix before that wiring lands, not one to
 leave for whoever adds the wiring to discover.
 
+## Decision (§1.1)
+
+**(b)** — fix the two mapping bugs in isolation behind the existing
+test/bench-only callers (`add_vector`/`remove_vector`/the new
+`knn_evict_node`), and leave full write-path wiring (calling `add_vector`
+from CREATE/SET for KNN-indexed labels, and calling `knn_evict_node` from
+`delete_node`) as an explicit, separate follow-up task.
+
+Rationale: wiring `add_vector` into the CREATE/SET path is a real feature
+addition (deciding which labels/properties get vectorized, embedding
+extraction, dimension configuration per label) — a larger, separate scope
+than a defect fix, and out of scope for a task whose stated impact is
+"no breaking change, no observable behavior change." `knn_evict_node` is
+added as a standalone function (mirroring `fts_evict_node` /
+`spatial_evict_node`'s shape) so the eviction primitive exists,
+fully tested, and ready for that follow-up to call — but it is not called
+from `delete_node` in this task.
+
+## Related — follow-up task pointer
+
+**Not yet filed as a separate task.** When KNN write-path maintenance is
+wired up, it needs: (1) `add_vector` called from the CREATE/SET path for
+whichever labels are configured for vector indexing (a design question this
+task does not answer — no such configuration surface exists yet), and
+(2) a `self.knn_evict_node(id);` call added to `Engine::delete_node`
+(`crates/nexus-core/src/engine/crud/nodes.rs`, alongside the existing
+`self.fts_evict_node(id); self.spatial_evict_node(id);` call site) — trivial
+once (1) lands, since `knn_evict_node` already exists and is tested.
+
 ## What Changes
 
 - Decide (see tasks.md §1) whether to (a) wire a minimal KNN write-path maintenance hook now

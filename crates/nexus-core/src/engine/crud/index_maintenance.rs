@@ -428,6 +428,33 @@ impl Engine {
         }
     }
 
+    /// phase0_fix-knn-index-divergence §4.2 — evict `node_id`'s vector
+    /// from the KNN (HNSW) index, mirroring `fts_evict_node` /
+    /// `spatial_evict_node`. Unlike those two, the KNN index is not a
+    /// named per-label registry (`self.indexes.knn_index` is a single
+    /// global index — see `index/mod.rs::IndexManager`), so there is no
+    /// `indexes_containing` lookup: `KnnIndex::remove_vector` is already
+    /// a no-op, not an error, for a node id with no vector.
+    ///
+    /// **Standalone per the §1.1(b) scope decision**: `add_vector` /
+    /// `remove_vector` have no production caller yet (no CREATE/SET path
+    /// maintains the KNN index), so this is not wired into `delete_node`
+    /// — wiring full KNN write-path maintenance (`add_vector` on
+    /// CREATE/SET plus this call from `delete_node`) is an explicit
+    /// follow-up task; see `proposal.md` "Related". This function exists
+    /// so that follow-up has a correct, already-tested eviction primitive
+    /// to call.
+    ///
+    /// Best-effort like its FTS/spatial siblings: `remove_vector`'s
+    /// `Result` can only carry a dimension-mismatch style error, which
+    /// eviction (no embedding argument) cannot trigger; a failure is
+    /// logged via `tracing::warn!`, never escalated.
+    pub(super) fn knn_evict_node(&mut self, node_id: u64) {
+        if let Err(e) = self.indexes.knn_index.remove_vector(node_id) {
+            tracing::warn!("KNN: remove_vector for node {node_id} failed: {e}");
+        }
+    }
+
     /// Index node properties for WHERE clause optimization (Phase 5).
     ///
     /// Indexes node properties in the property index manager to enable
@@ -880,5 +907,41 @@ impl Engine {
         }
 
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod knn_evict_node_tests {
+    use super::super::super::Engine;
+    use crate::index::DEFAULT_VECTORIZER_DIMENSION;
+    use crate::testing::TestContext;
+
+    // ── phase0_fix-knn-index-divergence §4.3 ──────────────────────────
+
+    #[test]
+    fn knn_evict_node_clears_both_mappings() {
+        let ctx = TestContext::new();
+        let mut engine = Engine::with_isolated_catalog(ctx.path()).unwrap();
+
+        let embedding = vec![1.0_f32; DEFAULT_VECTORIZER_DIMENSION];
+        engine.indexes.knn_index.add_vector(42, embedding).unwrap();
+        assert!(engine.indexes.knn_index.has_vector(42));
+        assert_eq!(engine.indexes.knn_index.get_stats().total_vectors, 1);
+
+        engine.knn_evict_node(42);
+
+        assert!(!engine.indexes.knn_index.has_vector(42));
+        assert!(engine.indexes.knn_index.get_all_nodes().is_empty());
+        assert_eq!(engine.indexes.knn_index.get_stats().total_vectors, 0);
+    }
+
+    #[test]
+    fn knn_evict_node_is_a_noop_for_a_node_with_no_vector() {
+        let ctx = TestContext::new();
+        let mut engine = Engine::with_isolated_catalog(ctx.path()).unwrap();
+
+        // Must not panic / error when the node never had a vector.
+        engine.knn_evict_node(999);
+        assert!(!engine.indexes.knn_index.has_vector(999));
     }
 }

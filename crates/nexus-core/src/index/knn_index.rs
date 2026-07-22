@@ -133,7 +133,19 @@ impl KnnIndex {
         Self::new(dimension)
     }
 
-    /// Add a vector for a node
+    /// Add a vector for a node, or replace its vector if one already exists.
+    ///
+    /// `hnsw_rs` 0.3.x has no in-place update or delete API — a vector, once
+    /// `insert`ed, stays physically resident in the HNSW graph forever. Re-
+    /// inserting for a `node_id` that already has an entry therefore cannot
+    /// remove the OLD vector from the graph; instead this evicts the old
+    /// entry's `index_to_node` mapping BEFORE inserting the new vector; a
+    /// "tombstone by unmapping" strategy. `search_knn_with_ef` only ever
+    /// resolves a hit through `index_to_node` (see its loop below), so once
+    /// the old slot's mapping is gone, the old vector is permanently
+    /// unreachable through the public API even though its raw data is still
+    /// inside the graph — exactly one HNSW entry maps to `node_id` at all
+    /// times, and `total_vectors` counts nodes, not physical graph slots.
     pub fn add_vector(&self, node_id: u64, embedding: Vec<f32>) -> Result<()> {
         if embedding.len() != self.dimension {
             return Err(Error::InvalidId(format!(
@@ -148,10 +160,12 @@ impl KnnIndex {
         let mut index_to_node = self.index_to_node.write();
         let mut next_index = self.next_index.write();
 
-        // Check if node already exists
-        if let Some(&_existing_index) = node_to_index.get(&node_id) {
-            // Update existing vector - HNSW doesn't support updates, so we'll just add new
-            // In a production system, you might want to implement a more sophisticated update mechanism
+        // Re-insert for an existing node id: evict the stale HNSW entry's
+        // forward mapping first so it can never again be resolved back to a
+        // node id, before the new vector takes its place.
+        let previous_index = node_to_index.remove(&node_id);
+        if let Some(old_index) = previous_index {
+            index_to_node.remove(&old_index);
         }
 
         // Add new vector to HNSW using insert method
@@ -163,14 +177,25 @@ impl KnnIndex {
         index_to_node.insert(vector_index, node_id);
         *next_index += 1;
 
-        // Update statistics
-        let mut stats = self.stats.write();
-        stats.total_vectors += 1;
+        // A re-insert replaces the node's vector; it must not be counted as
+        // a second, distinct vector.
+        if previous_index.is_none() {
+            let mut stats = self.stats.write();
+            stats.total_vectors += 1;
+        }
 
         Ok(())
     }
 
-    /// Remove a vector for a node
+    /// Remove a vector for a node.
+    ///
+    /// Evicts `node_id`'s CURRENT `node_to_index`/`index_to_node` mapping —
+    /// the only entry that can exist per node id once [`KnnIndex::add_vector`]
+    /// maintains its single-entry invariant on re-insert, so this alone is
+    /// sufficient to make the node's vector permanently unreachable through
+    /// [`KnnIndex::search_knn_with_ef`] (same tombstone-by-unmapping strategy;
+    /// see `add_vector`'s docs). A no-op, not an error, when `node_id` has no
+    /// vector.
     pub fn remove_vector(&self, node_id: u64) -> Result<()> {
         let mut node_to_index = self.node_to_index.write();
         let mut index_to_node = self.index_to_node.write();
@@ -565,5 +590,76 @@ mod tests {
 
         let stats = index.get_stats();
         assert_eq!(stats.total_vectors, 0);
+    }
+
+    // ── phase0_fix-knn-index-divergence §2.1/§3.2 ─────────────────────
+
+    #[test]
+    fn test_add_vector_reinsert_does_not_leak_stale_entry() {
+        let index = KnnIndex::new(3).unwrap();
+
+        // Re-insert the same node id with a very different vector — before
+        // the fix this leaves BOTH the old and new HNSW entries reachable.
+        index.add_vector(1, vec![1.0, 0.0, 0.0]).unwrap();
+        index.add_vector(1, vec![0.0, 1.0, 0.0]).unwrap();
+
+        // A re-insert updates the existing node's vector; it must not be
+        // counted as a second, distinct vector.
+        let stats = index.get_stats();
+        assert_eq!(
+            stats.total_vectors, 1,
+            "re-insert for an existing node id must not double-count"
+        );
+
+        // A broad-radius query wide enough to surface both the stale and
+        // current HNSW entries must return node 1 exactly once.
+        let query = vec![0.5, 0.5, 0.0];
+        let results = index.search_knn_with_ef(&query, 10, 200).unwrap();
+        let hits: Vec<_> = results.iter().filter(|(id, _)| *id == 1).collect();
+        assert_eq!(
+            hits.len(),
+            1,
+            "the stale HNSW entry left by a re-insert must not be reachable, got {results:?}"
+        );
+
+        // The single reachable entry must reflect the CURRENT vector
+        // ([0,1,0]), not the stale one ([1,0,0]) — a query identical to
+        // the current vector must score near-perfect similarity.
+        let current_query = vec![0.0, 1.0, 0.0];
+        let current_results = index.search_knn_with_ef(&current_query, 10, 200).unwrap();
+        let (_, score) = current_results
+            .iter()
+            .find(|(id, _)| *id == 1)
+            .expect("node 1 must be reachable via its current vector");
+        assert!(
+            *score > 0.99,
+            "surviving entry must match the current vector, got score {score}"
+        );
+    }
+
+    // ── phase0_fix-knn-index-divergence §2.2/§3.3 ─────────────────────
+
+    #[test]
+    fn test_remove_vector_after_reinsert_leaves_no_phantom_entry() {
+        let index = KnnIndex::new(3).unwrap();
+
+        // Trigger the §2.1 leak scenario, then remove the node entirely.
+        index.add_vector(1, vec![1.0, 0.0, 0.0]).unwrap();
+        index.add_vector(1, vec![0.0, 1.0, 0.0]).unwrap();
+        index.remove_vector(1).unwrap();
+
+        assert!(!index.has_vector(1));
+        assert_eq!(index.get_stats().total_vectors, 0);
+
+        // Before the fix, `remove_vector` can only ever drop the CURRENT
+        // mapping — the orphan left by the earlier re-insert stays
+        // reachable in the HNSW graph, producing a phantom hit here.
+        let query = vec![0.5, 0.5, 0.0];
+        let results = index.search_knn_with_ef(&query, 10, 200).unwrap();
+        assert!(
+            results.iter().all(|(id, _)| *id != 1),
+            "no entry for node 1 (old or new) should be reachable after \
+             remove following a re-insert, got {results:?}"
+        );
     }
 }

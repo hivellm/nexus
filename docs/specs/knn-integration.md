@@ -380,6 +380,56 @@ fn normalize_vector(v: &[f32]) -> Vec<f32> {
 }
 ```
 
+### Update & Eviction Contract
+
+The pseudocode above illustrates the intended design; the actual implementation
+(`crates/nexus-core/src/index/knn_index.rs`) enforces one additional invariant that
+is easy to get wrong: **exactly one HNSW entry maps to a given `node_id` at all
+times**, across both re-insertion (update) and removal (delete).
+
+`hnsw_rs` (0.3.x, the crate `KnnIndex` is built on) has **no in-place update or
+delete API** — once a vector is `insert`ed, its data stays physically resident
+in the HNSW graph for the lifetime of the index. `KnnIndex` therefore cannot
+implement "update" or "delete" by removing data from the graph itself. Instead
+it uses a **tombstone-by-unmapping** strategy over the `node_id ↔ vector_index`
+mapping tables:
+
+- **`search_knn_with_ef`** only ever resolves an HNSW hit back to a `node_id`
+  through the `index_to_node` map (`knn_index.rs:263`); a raw HNSW graph slot
+  with no `index_to_node` entry is silently skipped and never appears in a
+  result set, even though its vector payload is still inside the graph.
+- **`add_vector(node_id, embedding)`** on a `node_id` that already has an
+  entry evicts the OLD entry's `index_to_node` mapping BEFORE inserting the
+  new vector as a fresh HNSW slot and remapping `node_id` to it. This makes
+  the old vector permanently unreachable through the public search API from
+  that point on, and keeps `KnnIndexStats::total_vectors` counting nodes
+  (not physical graph slots) — a re-insert is a logical update, not an
+  addition.
+- **`remove_vector(node_id)`** evicts `node_id`'s current mapping from both
+  `node_to_index` and `index_to_node`. Because `add_vector` maintains the
+  one-entry-per-node invariant on every re-insert, there is never more than
+  one mapping to evict — `remove_vector` cannot be asked to reach an orphan
+  left by an earlier re-insert, because no such orphan can exist.
+- **`knn_evict_node(node_id)`** (`engine/crud/index_maintenance.rs`) is the
+  engine-level maintenance hook that calls `remove_vector`, mirroring the
+  `fts_evict_node` / `spatial_evict_node` pattern used by the full-text and
+  spatial indexes. Unlike those two, the KNN index is a single global
+  instance rather than a named per-label registry, so eviction needs no
+  `indexes_containing` lookup. As of this writing it has no production
+  caller — no CREATE/SET write path maintains the KNN index yet (see
+  `.rulebook/tasks/phase0_fix-knn-index-divergence/proposal.md` "Related")
+  — wiring `add_vector` into CREATE/SET and calling `knn_evict_node` from
+  `delete_node` is tracked as a follow-up task.
+
+Consequence for callers: a caller that re-inserts a vector for the same node
+id (an "update"), or that deletes a node and calls `knn_evict_node`, is
+guaranteed the old vector is unreachable via `search_knn`/`search_knn_with_ef`
+immediately afterward — no rebuild or compaction step is required. The
+trade-off is that the underlying `Hnsw` graph itself only ever grows (tombstoned
+slots are never physically reclaimed); a full index rebuild (`clear()` +
+re-`add_vector` every live node) is the only way to reclaim that memory, and is
+out of scope for this contract.
+
 ### Searching
 
 ```rust
