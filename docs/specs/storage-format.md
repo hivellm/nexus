@@ -663,6 +663,30 @@ so a damaged old store recovers its later entities rather than dropping them.
 Caveat: an entry whose header was already overwritten by a pre-fix mis-scan is
 unrecoverable.
 
+### Dead Record Tombstoning (`phase0_fix-deleted-properties-resurrected-on-rebuild`)
+
+When a property entry is logically deleted via `PropertyStore::delete_properties`,
+the on-disk entry is marked with a reserved `entity_type` tombstone marker
+(`ENTITY_TYPE_TOMBSTONE = 0xFF`, outside the valid range 0=Node/1=Relationship)
+instead of being erased. This ensures that on rebuild:
+
+1. **Shared scanner skip**: The rebuild scanner (`scan_entry_at`) recognizes the
+   tombstone byte at offset 8 and strides over the entry without re-indexing,
+   preserving the entry's physical footprint so the next entry is landed correctly.
+
+2. **Backward compatibility**: Existing stores written by pre-fix code hold
+   un-tombstoned deleted entries (fully parseable blobs with valid entity_type).
+   On rebuild, each entry is reconciled against the authoritative node/relationship
+   record stores (`nodes.store`/`rels.store`) via a `RecordLiveness` check: if the
+   owning record is deleted or absent, the property blob is tombstoned-in-place
+   (overwriting the entity_type byte to `0xFF`) instead of being resurrected.
+   This reconciliation runs once per rebuild (on every startup-reopen, O(1) per
+   entry); a future format-version-stamp optimization can track whether a store
+   is already fully tombstoned and skip the pass entirely.
+
+3. **Durability**: A logical delete is now durable across restart — a property
+   blob cannot be resurrected by a reopen's full index rebuild scan.
+
 ## Advanced-type Wire Encodings (v1.5)
 
 phase6_opencypher-advanced-types introduces scalar shapes that ride
