@@ -591,6 +591,9 @@ impl Executor {
                 Operator::Limit { count } => {
                     self.execute_limit(&mut context, *count)?;
                 }
+                Operator::Skip { count } => {
+                    self.execute_skip(&mut context, *count)?;
+                }
                 Operator::Sort { columns, ascending } => {
                     self.execute_sort(&mut context, columns, ascending)?;
                 }

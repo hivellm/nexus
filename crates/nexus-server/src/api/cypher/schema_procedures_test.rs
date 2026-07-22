@@ -221,3 +221,64 @@ async fn schema_procedures_see_seeded_data_on_named_database() {
     )
     .await;
 }
+
+/// Regression coverage for a distinct bug from the P1 above: set content
+/// was correct (this file's other tests already pinned that), but
+/// `ORDER BY` on a procedure `YIELD` projection was silently dropped —
+/// `CALL db.labels() YIELD label RETURN label ORDER BY label` returned
+/// rows in procedure-native order instead of sorted. Root cause:
+/// `QueryPlanner::plan_query`'s no-pattern branch (no `MATCH` in the
+/// query) built `Project`/`Limit` operators but never consumed the
+/// already-collected `order_by_clause` — only `plan_execution_strategy`
+/// (gated on `!patterns.is_empty()`) did that conversion. See
+/// `crates/nexus-core/src/executor/planner/queries/planner_core.rs`.
+///
+/// Exercises the exact request shape from the bug report — through the
+/// PUBLIC `/cypher` HTTP handler, same harness as the rest of this file —
+/// with uniquely-named marker labels seeded in deliberately
+/// non-alphabetical insertion order so the assertion cannot pass by an
+/// accidental insertion-order coincidence.
+#[tokio::test]
+async fn schema_procedures_yield_projection_honours_order_by_via_http_handler() {
+    let ctx = TestContext::new();
+    let server = build_test_server(&ctx);
+
+    // Non-alphabetical insertion order: Z, W, X, Y.
+    for label in [
+        "SchemaProcOrderByZ",
+        "SchemaProcOrderByW",
+        "SchemaProcOrderByX",
+        "SchemaProcOrderByY",
+    ] {
+        let seed_resp = run_query_on(&server, &format!("CREATE (:{label})"), None).await;
+        assert_no_error(&seed_resp, "seed CREATE for ORDER BY marker");
+    }
+
+    let resp = run_query_on(
+        &server,
+        "CALL db.labels() YIELD label RETURN label ORDER BY label",
+        None,
+    )
+    .await;
+    assert_no_error(
+        &resp,
+        "CALL db.labels() YIELD label RETURN label ORDER BY label",
+    );
+
+    let markers: Vec<String> = string_column(&resp)
+        .into_iter()
+        .filter(|l| l.starts_with("SchemaProcOrderBy"))
+        .collect();
+    assert_eq!(
+        markers,
+        vec![
+            "SchemaProcOrderByW".to_string(),
+            "SchemaProcOrderByX".to_string(),
+            "SchemaProcOrderByY".to_string(),
+            "SchemaProcOrderByZ".to_string(),
+        ],
+        "ORDER BY on the YIELD projection must sort ascending through the \
+         HTTP handler, not return procedure-native (insertion) order; got {:?}",
+        resp.rows
+    );
+}

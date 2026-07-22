@@ -45,6 +45,10 @@ impl<'a> QueryPlanner<'a> {
                     // Limit reduces cost
                     total_cost *= (*count as f64) / 1000.0;
                 }
+                Operator::Skip { .. } => {
+                    // Skip is cheap — a single pass drain, no re-sort.
+                    total_cost += 1.0;
+                }
                 Operator::Sort { .. } => {
                     // Sorting is moderately expensive
                     total_cost += 50.0;

@@ -108,6 +108,9 @@ impl Executor {
             Operator::Limit { count } => {
                 self.execute_limit(context, *count)?;
             }
+            Operator::Skip { count } => {
+                self.execute_skip(context, *count)?;
+            }
             Operator::Sort { columns, ascending } => {
                 self.execute_sort(context, columns, ascending)?;
             }

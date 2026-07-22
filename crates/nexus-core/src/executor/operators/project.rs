@@ -522,6 +522,31 @@ impl Executor {
         Ok(())
     }
 
+    /// Execute Skip operator — drop the first `count` rows of the current
+    /// result set. Mirrors [`Self::execute_limit`]'s materialize-then-slice
+    /// shape so a bare `RETURN`/`YIELD` projection with no prior `Sort`
+    /// still has rows to skip from.
+    pub(in crate::executor) fn execute_skip(
+        &self,
+        context: &mut ExecutionContext,
+        count: usize,
+    ) -> Result<()> {
+        if context.result_set.rows.is_empty() {
+            let rows = self.materialize_rows_from_variables(context);
+            self.update_result_set_from_rows(context, &rows);
+        }
+
+        if count >= context.result_set.rows.len() {
+            context.result_set.rows.clear();
+        } else {
+            context.result_set.rows.drain(0..count);
+        }
+
+        let row_maps = self.result_set_as_rows(context);
+        self.update_variables_from_rows(context, &row_maps);
+        Ok(())
+    }
+
     /// Execute Sort operator with LIMIT optimization (Phase 5)
     pub(in crate::executor) fn execute_sort(
         &self,

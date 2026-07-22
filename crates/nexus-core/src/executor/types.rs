@@ -322,6 +322,13 @@ pub enum Operator {
         /// Maximum rows
         count: usize,
     },
+    /// Skip the first `count` rows of the current result set. Standard
+    /// openCypher `SKIP` semantics: applied after `ORDER BY`/projection
+    /// and before `LIMIT` (`ORDER BY, SKIP, LIMIT` order in the pipeline).
+    Skip {
+        /// Number of leading rows to drop.
+        count: usize,
+    },
     /// Sort results by columns
     Sort {
         /// Columns to sort by

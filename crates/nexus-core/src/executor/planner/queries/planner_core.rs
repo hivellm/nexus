@@ -280,6 +280,13 @@ impl<'a> QueryPlanner<'a> {
         let mut last_optional_vars: Vec<String> = Vec::new();
         let mut return_items = Vec::new();
         let mut limit_count = None;
+        // (phase0_fix-order-by-on-call-yield) Collected alongside
+        // `limit_count` but, unlike it, only ever consumed by the
+        // no-pattern branch below (`CALL ... YIELD ... RETURN` / bare
+        // `RETURN` with no `MATCH`) — see that branch for why the
+        // pattern-based `plan_execution_strategy` path is intentionally
+        // left untouched.
+        let mut skip_count: Option<usize> = None;
         let mut return_distinct = false;
         let mut unwind_operators = Vec::new(); // Collect UNWIND to insert after MATCH
         let mut create_patterns: Vec<(
@@ -499,6 +506,11 @@ impl<'a> QueryPlanner<'a> {
                 Clause::Limit(limit_clause) => {
                     if let Expression::Literal(Literal::Integer(count)) = &limit_clause.count {
                         limit_count = Some(*count as usize);
+                    }
+                }
+                Clause::Skip(skip_clause) => {
+                    if let Expression::Literal(Literal::Integer(count)) = &skip_clause.count {
+                        skip_count = Some(*count as usize);
                     }
                 }
                 Clause::OrderBy(order_by_clause_parsed) => {
@@ -1225,6 +1237,22 @@ impl<'a> QueryPlanner<'a> {
                 }
             }
 
+            // (phase0_fix-order-by-on-call-yield) This branch has no
+            // `patterns`, so `plan_execution_strategy` — the only other
+            // place `order_by_clause`/SKIP get turned into `Sort`/`Skip`
+            // operators — never runs. Without this, `CALL proc() YIELD
+            // col RETURN col ORDER BY col` (and any other no-MATCH
+            // `RETURN`, e.g. `UNWIND ... RETURN ... ORDER BY`) silently
+            // dropped its ORDER BY/SKIP: `order_by_clause`/`skip_count`
+            // were collected above but never consumed on this path.
+            // Standard openCypher pipeline order: ORDER BY, then SKIP,
+            // then LIMIT.
+            if let Some((columns, ascending)) = order_by_clause.clone() {
+                operators.push(Operator::Sort { columns, ascending });
+            }
+            if let Some(skip) = skip_count {
+                operators.push(Operator::Skip { count: skip });
+            }
             if let Some(limit) = limit_count {
                 operators.push(Operator::Limit { count: limit });
             }
@@ -1242,7 +1270,16 @@ impl<'a> QueryPlanner<'a> {
                 ));
             }
 
-            // Apply LIMIT if specified
+            // Apply ORDER BY / SKIP / LIMIT, in that order, over the raw
+            // procedure output columns — same rationale as the sibling
+            // branch above; this is the shape with no RETURN at all
+            // (e.g. `CALL db.labels() YIELD label ORDER BY label`).
+            if let Some((columns, ascending)) = order_by_clause.clone() {
+                operators.push(Operator::Sort { columns, ascending });
+            }
+            if let Some(skip) = skip_count {
+                operators.push(Operator::Skip { count: skip });
+            }
             if let Some(limit) = limit_count {
                 operators.push(Operator::Limit { count: limit });
             }
