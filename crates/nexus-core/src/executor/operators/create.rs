@@ -928,7 +928,7 @@ impl Executor {
                 }
             } else {
                 // Slow path: use full materialization for array variables
-                let materialized = self.materialize_rows_from_variables(context);
+                let materialized = self.materialize_rows_from_variables(context)?;
 
                 // Verify materialized rows have node objects with _nexus_id
                 let has_node_ids = materialized.iter().any(|row| {

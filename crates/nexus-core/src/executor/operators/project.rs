@@ -74,7 +74,7 @@ impl Executor {
                 // Filter already processed and removed all rows, don't create new ones
                 vec![]
             } else {
-                let materialized = self.materialize_rows_from_variables(context);
+                let materialized = self.materialize_rows_from_variables(context)?;
 
                 // CRITICAL FIX: If we have variables but materialized is empty,
                 // check if variables contain empty arrays (MATCH found nothing)
@@ -105,7 +105,8 @@ impl Executor {
                             // We have multi-element arrays - materialize_rows_from_variables should have
                             // created rows from them. If it didn't, there's a bug. But let's try again
                             // in case variables changed:
-                            let retry_materialized = self.materialize_rows_from_variables(context);
+                            let retry_materialized =
+                                self.materialize_rows_from_variables(context)?;
                             if !retry_materialized.is_empty() {
                                 tracing::trace!(
                                     "Project: retry materialization succeeded, got {} rows",
@@ -409,7 +410,7 @@ impl Executor {
                 .map(|row| self.row_to_map(row, &existing_columns))
                 .collect::<Vec<_>>()
         } else {
-            self.materialize_rows_from_variables(context)
+            self.materialize_rows_from_variables(context)?
         };
 
         tracing::trace!("execute_with: processing {} input rows", rows.len());
@@ -509,7 +510,7 @@ impl Executor {
         count: usize,
     ) -> Result<()> {
         if context.result_set.rows.is_empty() {
-            let rows = self.materialize_rows_from_variables(context);
+            let rows = self.materialize_rows_from_variables(context)?;
             self.update_result_set_from_rows(context, &rows);
         }
 
@@ -532,7 +533,7 @@ impl Executor {
         count: usize,
     ) -> Result<()> {
         if context.result_set.rows.is_empty() {
-            let rows = self.materialize_rows_from_variables(context);
+            let rows = self.materialize_rows_from_variables(context)?;
             self.update_result_set_from_rows(context, &rows);
         }
 
@@ -555,7 +556,7 @@ impl Executor {
         ascending: &[bool],
     ) -> Result<()> {
         if context.result_set.rows.is_empty() && !context.variables.is_empty() {
-            let rows = self.materialize_rows_from_variables(context);
+            let rows = self.materialize_rows_from_variables(context)?;
             self.update_result_set_from_rows(context, &rows);
         }
 

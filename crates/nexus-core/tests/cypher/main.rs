@@ -37,4 +37,5 @@ mod test_substring_negative;
 mod test_sum_empty_match;
 mod test_temporal_arithmetic;
 mod test_where_in;
+mod unbounded_alloc_guard_test;
 mod unwind_tests;

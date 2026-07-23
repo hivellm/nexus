@@ -22,6 +22,17 @@ pub(in crate::executor) struct Path {
     pub(in crate::executor) relationships: Vec<u64>,
 }
 
+/// Per-query safety cap on the BFS depth `execute_variable_length_path`
+/// will explore for an unbounded quantifier (`*` / `+`) or a `{m,}` /
+/// `{m,n}` quantifier whose upper bound is very large. Mirrors
+/// `quantified_expand.rs`'s `MAX_QPP_DEPTH = 64` (same rationale: keeps
+/// per-frame memory and traversal fan-out tractable on a dense graph;
+/// a sibling constant rather than a shared import since this legacy
+/// BFS operator and the `QuantifiedExpand` operator have independent
+/// state shapes). A legitimate bounded quantifier like `[*1..5]` stays
+/// well under this cap and is unaffected.
+const MAX_VAR_LENGTH_PATH_DEPTH: usize = 64;
+
 impl Executor {
     pub(in crate::executor) fn find_relationships(
         &self,
@@ -856,14 +867,22 @@ impl Executor {
         let rows = if !context.result_set.rows.is_empty() {
             self.result_set_as_rows(context)
         } else {
-            self.materialize_rows_from_variables(context)
+            self.materialize_rows_from_variables(context)?
         };
 
         if rows.is_empty() {
             return Ok(());
         }
 
-        // Determine min and max path lengths from quantifier
+        // Determine min and max path lengths from quantifier. `*` / `+`
+        // request an unbounded upper length (`usize::MAX`); `{m,n}` /
+        // `{m}` upper bounds come straight from the user's literal and
+        // can be arbitrarily large too. Either way, clamp to
+        // `MAX_VAR_LENGTH_PATH_DEPTH` so the BFS below can never expand
+        // an unbounded number of hops (the pre-fix `usize::MAX` case
+        // made the `path_length < max_length` continuation condition
+        // effectively never false, looping until the graph or the
+        // process's memory ran out).
         let (min_length, max_length) = match quantifier {
             parser::RelationshipQuantifier::ZeroOrMore => (0, usize::MAX),
             parser::RelationshipQuantifier::OneOrMore => (1, usize::MAX),
@@ -871,6 +890,7 @@ impl Executor {
             parser::RelationshipQuantifier::Exact(n) => (*n, *n),
             parser::RelationshipQuantifier::Range(min, max) => (*min, *max),
         };
+        let max_length = max_length.min(MAX_VAR_LENGTH_PATH_DEPTH);
 
         let mut expanded_rows = Vec::new();
 

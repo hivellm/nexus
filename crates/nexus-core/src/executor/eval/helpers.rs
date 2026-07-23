@@ -177,7 +177,7 @@ impl Executor {
     pub(in crate::executor) fn materialize_rows_from_variables(
         &self,
         context: &ExecutionContext,
-    ) -> Vec<HashMap<String, Value>> {
+    ) -> Result<Vec<HashMap<String, Value>>> {
         // TRACE: Log variables before creating cartesian product
         let mut has_relationships = false;
         let mut var_types: Vec<(String, String)> = Vec::new();
@@ -241,7 +241,7 @@ impl Executor {
         }
 
         if arrays.is_empty() {
-            return Vec::new();
+            return Ok(Vec::new());
         }
 
         // CRITICAL FIX: Implement true cartesian product instead of zip
@@ -266,10 +266,56 @@ impl Executor {
             let array_values: Vec<Vec<Value>> =
                 var_names.iter().map(|k| arrays[k].clone()).collect();
 
-            // Calculate total number of combinations
-            let total_combinations: usize = array_values.iter().map(|arr| arr.len()).product();
+            // Calculate total number of combinations with CHECKED
+            // arithmetic — the unguarded `.product()` this replaced
+            // wraps silently on overflow in a release build (overflow
+            // checks are off) and panics in debug, neither of which is
+            // a Cypher error. Mirrors the same checked-multiplication +
+            // byte-budget precheck `apply_cartesian_product` (above,
+            // same file) already applies, so both cross-product sources
+            // in this module share one budget contract. Do NOT change
+            // `apply_cartesian_product`'s own guard/message — this is a
+            // parallel check, not a shared call, because the two
+            // functions size their `columns` differently (`var_names.len()`
+            // here vs. `context.variables.len() + 1` there).
+            let mut total_combinations: usize = 1;
+            for arr in &array_values {
+                total_combinations =
+                    total_combinations.checked_mul(arr.len()).ok_or_else(|| {
+                        Error::OutOfMemory(format!(
+                            "materialize_rows_from_variables: cartesian product across {} \
+                         variables overflows usize; add LIMIT or narrow the query",
+                            array_values.len()
+                        ))
+                    })?;
+            }
 
-            let mut rows = Vec::new();
+            let columns = var_names.len();
+            let est_bytes = total_combinations
+                .checked_mul(columns)
+                .and_then(|cells| cells.checked_mul(std::mem::size_of::<Value>()));
+
+            let budget = self.config.cartesian_product_max_bytes;
+            match est_bytes {
+                Some(bytes) if bytes <= budget => {}
+                Some(bytes) => {
+                    return Err(Error::OutOfMemory(format!(
+                        "materialize_rows_from_variables would produce {total_combinations} \
+                         rows across {columns} columns (~{bytes} bytes), exceeding the \
+                         configured budget of {budget} bytes; add LIMIT or narrow the query"
+                    )));
+                }
+                None => {
+                    return Err(Error::OutOfMemory(format!(
+                        "materialize_rows_from_variables would produce {total_combinations} \
+                         rows across {columns} columns, and the estimated byte size overflows \
+                         usize, far exceeding the configured budget of {budget} bytes; add \
+                         LIMIT or narrow the query"
+                    )));
+                }
+            }
+
+            let mut rows = Vec::with_capacity(total_combinations);
 
             // Generate all combinations using nested iteration
             let mut indices = vec![0usize; array_values.len()];
@@ -302,10 +348,12 @@ impl Executor {
                 }
             }
 
-            return rows;
+            return Ok(rows);
         }
 
-        // FALLBACK: Old zip-based logic for single arrays or mixed sizes
+        // FALLBACK: Old zip-based logic for single arrays or mixed sizes.
+        // Bounded by `max_len` (not a product of array lengths), so no
+        // cartesian-style guard is needed here.
         let max_len = arrays
             .values()
             .map(|values| values.len())
@@ -313,7 +361,7 @@ impl Executor {
             .unwrap_or(0);
 
         if max_len == 0 {
-            return Vec::new();
+            return Ok(Vec::new());
         }
 
         let mut rows = Vec::new();
@@ -381,7 +429,7 @@ impl Executor {
             }
         }
 
-        rows
+        Ok(rows)
     }
 
     /// Materialises rows by ZIPPING already-aligned column variables — the
@@ -1186,7 +1234,9 @@ mod tests {
 
         // The general materialiser RE-crosses the aligned columns: 4 x 4 = 16.
         // This is the over-production the fix avoids (documented, not desired).
-        let recrossed = executor.materialize_rows_from_variables(&context);
+        let recrossed = executor
+            .materialize_rows_from_variables(&context)
+            .expect("materialize should succeed for this small aligned context");
         assert_eq!(
             recrossed.len(),
             16,
@@ -1217,6 +1267,33 @@ mod tests {
             pairs,
             vec![(1, 3), (1, 4), (2, 3), (2, 4)],
             "zipped rows must be the exact index-aligned (a, b) pairs"
+        );
+    }
+
+    /// The cartesian-materialisation path inside
+    /// `materialize_rows_from_variables` (two-plus same-length,
+    /// multi-element arrays) must reject with `Error::OutOfMemory` when
+    /// the estimated product exceeds the configured byte budget, instead
+    /// of building the full row set — the same contract
+    /// `apply_cartesian_product` enforces.
+    #[test]
+    fn materialize_rows_rejects_cartesian_product_over_budget() {
+        let (mut executor, _ctx) = create_test_executor();
+        // A 1-byte budget rejects any real product (each row is >= a few
+        // dozen bytes even for one column).
+        executor.set_cartesian_product_max_bytes(1);
+
+        let mut context = ExecutionContext::new(HashMap::new(), None);
+        // Two same-length, multi-element arrays => the cartesian branch.
+        context.set_variable("a", Value::Array(vec![json!(1), json!(2), json!(3)]));
+        context.set_variable("b", Value::Array(vec![json!(4), json!(5), json!(6)]));
+
+        let err = executor
+            .materialize_rows_from_variables(&context)
+            .expect_err("a cartesian materialisation over the byte budget must error");
+        assert!(
+            matches!(err, crate::Error::OutOfMemory(_)),
+            "expected Error::OutOfMemory, got {err:?}"
         );
     }
 }

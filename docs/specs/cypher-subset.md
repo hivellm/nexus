@@ -28,12 +28,14 @@ MATCH (n:Person)-[r:KNOWS]->(m:Person)
 -- Undirected relationship
 MATCH (n:Person)-[r:KNOWS]-(m:Person)
 
--- Variable-length path ✅ IMPLEMENTED
+-- Variable-length path ✅ IMPLEMENTED (with bounded-depth protection)
 MATCH (n:Person)-[:KNOWS*1..3]->(m:Person)
 MATCH (n:Person)-[:KNOWS*5]->(m:Person)  -- Fixed length
-MATCH (n:Person)-[:KNOWS*]->(m:Person)   -- Unbounded
-MATCH (n:Person)-[:KNOWS+]->(m:Person)   -- One or more
+MATCH (n:Person)-[:KNOWS*]->(m:Person)   -- Unbounded (max 64 hops)
+MATCH (n:Person)-[:KNOWS+]->(m:Person)   -- One or more (max 64 hops)
 MATCH (n:Person)-[:KNOWS?]->(m:Person)   -- Zero or one
+
+**Variable-length path bounded depth:** Unbounded quantifiers (`[*]`, `[+]`) and quantified path patterns with large bounds are clamped to a maximum **64-hop BFS depth**, preventing exhaustion on dense or cyclic graphs. Bounded quantifiers (e.g. `[*1..5]`) operate normally within their specified range. The limit applies per traversal start point; see `docs/specs/cypher-subset.md` § "Variable-Length Paths" for traversal semantics.
 
 -- Quantified Path Patterns (Cypher 25 / GQL) ✅ FULLY IMPLEMENTED
 -- Anonymous-body shape collapses to legacy *m..n at parse time;
@@ -1201,10 +1203,12 @@ RETURN length('hello') AS len
 -- 2.5.0 additions
 RETURN ascii('A') AS code            -- 65
 RETURN chr(65) AS ch                 -- 'A'
-RETURN lpad('7', 3, '0') AS padded   -- '007'
-RETURN rpad('ab', 4, '.') AS padded  -- 'ab..'
+RETURN lpad('7', 3, '0') AS padded   -- '007' (bounded allocation)
+RETURN rpad('ab', 4, '.') AS padded  -- 'ab..' (bounded allocation)
 RETURN normalize('café') AS nfc      -- NFC default; NFD/NFKC/NFKD via 2nd arg
 RETURN randomUUID() AS uuid          -- v4 UUID string
+
+**`lpad()` and `rpad()` bounded allocation:** Both functions cap the target length to **1,000,000 characters**, rejecting larger requests with a Cypher error before string allocation. Typical padding operations remain unaffected.
 ```
 
 ### Regex Functions ✅ IMPLEMENTED
@@ -1428,10 +1432,13 @@ RETURN head([1, 2, 3]) AS first
 RETURN tail([1, 2, 3]) AS rest
 RETURN last([1, 2, 3]) AS last_item
 RETURN range(1, 10) AS numbers
+RETURN range(0, 1000000, 2) AS step_range  -- bounded allocation
 RETURN reverse([1, 2, 3]) AS reversed
 RETURN reduce(acc = 0, x IN [1, 2, 3] | acc + x) AS sum
 RETURN [x IN [1, 2, 3] | x * 2] AS doubled
 ```
+
+**`range()` bounded allocation:** `range(start, end [, step])` rejects queries whose element count exceeds **2,000,000** with a Cypher error. Checked arithmetic prevents wraparound on huge step values, so `range(0, 9223372036854775807, 3)` returns an error instead of looping. Well-formed ranges within 2M elements are unaffected.
 
 ### Path Functions
 
@@ -2062,7 +2069,7 @@ available in every expression position:
 | Function                              | Result                                    |
 |---------------------------------------|-------------------------------------------|
 | `bytes(str)`                          | UTF-8 encode a STRING to BYTES            |
-| `bytesFromBase64(str)`                | Decode a base64 STRING to BYTES           |
+| `bytesFromBase64(str)`                | Decode a base64 STRING to BYTES (bounded) |
 | `bytesToBase64(b)`                    | Encode BYTES as a base64 STRING           |
 | `bytesToHex(b)`                       | Lowercase hex of the bytes                |
 | `bytesLength(b)`                      | Length in bytes (INTEGER)                 |
@@ -2070,6 +2077,8 @@ available in every expression position:
 
 NULL in → NULL out across every entry point. The per-property cap
 is 64 MiB; exceeding it raises `ERR_BYTES_TOO_LARGE`.
+
+**Base64 payload bounded allocation:** Base64-encoded BYTES literals and `$parameter` values are validated on their **encoded length** before decoding (before per-property size checks apply), rejecting oversized inputs with a Cypher error. This prevents a query from allocating multi-gigabyte buffers via a large base64 string in a literal or parameter binding.
 
 ### Dynamic labels on writes
 

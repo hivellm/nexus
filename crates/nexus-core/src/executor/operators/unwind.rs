@@ -20,7 +20,7 @@ impl Executor {
     ) -> Result<()> {
         // Materialize rows from variables if needed (like execute_distinct does)
         if context.result_set.rows.is_empty() && !context.variables.is_empty() {
-            let rows = self.materialize_rows_from_variables(context);
+            let rows = self.materialize_rows_from_variables(context)?;
             self.update_result_set_from_rows(context, &rows);
         }
 

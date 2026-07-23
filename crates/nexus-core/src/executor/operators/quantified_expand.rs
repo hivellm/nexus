@@ -84,7 +84,7 @@ impl Executor {
         let rows = if !context.result_set.rows.is_empty() {
             self.result_set_as_rows(context)
         } else {
-            self.materialize_rows_from_variables(context)
+            self.materialize_rows_from_variables(context)?
         };
 
         if rows.is_empty() {

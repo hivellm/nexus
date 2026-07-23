@@ -164,7 +164,7 @@ impl Executor {
         let driving_rows: Vec<HashMap<String, Value>> = if !context.variables.is_empty() {
             // Case A: columnar variables (e.g. after a prior MATCH/WITH).
             context.variables.remove(variable);
-            self.materialize_rows_from_variables(context)
+            self.materialize_rows_from_variables(context)?
         } else if !context.result_set.rows.is_empty() {
             // Case B: fresh UNWIND — rows live in `result_set`, variables
             // are still empty.

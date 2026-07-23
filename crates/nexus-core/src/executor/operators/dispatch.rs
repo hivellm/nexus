@@ -74,7 +74,7 @@ impl Executor {
                 }
 
                 // CRITICAL FIX: Materialize rows from variables so Project can process them
-                let rows = self.materialize_rows_from_variables(context);
+                let rows = self.materialize_rows_from_variables(context)?;
                 self.update_result_set_from_rows(context, &rows);
             }
             Operator::Filter { predicate } => {
@@ -546,7 +546,7 @@ impl Executor {
         }
 
         // CRITICAL FIX: Materialize rows from variables so Project can process them
-        let rows = self.materialize_rows_from_variables(context);
+        let rows = self.materialize_rows_from_variables(context)?;
         self.update_result_set_from_rows(context, &rows);
         Ok(())
     }

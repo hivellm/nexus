@@ -57,7 +57,7 @@ impl Executor {
                 // Get label ID
                 if let Ok(label_id) = self.catalog().get_label_id(&label_name) {
                     // Filter rows where variable has this label
-                    let rows = self.materialize_rows_from_variables(context);
+                    let rows = self.materialize_rows_from_variables(context)?;
                     let mut filtered_rows = Vec::new();
 
                     for row in rows {
@@ -124,7 +124,7 @@ impl Executor {
         } else if !context.variables.is_empty() {
             // No existing rows - materialize from variables (source of truth)
             // This ensures we have full node/relationship objects with all properties accessible for filtering
-            self.materialize_rows_from_variables(context)
+            self.materialize_rows_from_variables(context)?
         } else {
             // No variables and no existing rows
             Vec::new()
@@ -372,7 +372,7 @@ impl Executor {
                 .map(|row| self.row_to_map(row, &existing_columns))
                 .collect()
         } else if !context.variables.is_empty() {
-            self.materialize_rows_from_variables(context)
+            self.materialize_rows_from_variables(context)?
         } else {
             Vec::new()
         };

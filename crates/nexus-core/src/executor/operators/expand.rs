@@ -62,8 +62,7 @@ impl Executor {
             // Only use rows_from_result_set directly - don't filter yet
             rows_from_result_set
         } else {
-            let materialized = self.materialize_rows_from_variables(context);
-            materialized
+            self.materialize_rows_from_variables(context)?
         };
 
         // DEBUG: Log number of input rows for debugging relationship expansion issues

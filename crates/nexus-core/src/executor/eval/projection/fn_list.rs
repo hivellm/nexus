@@ -16,7 +16,96 @@ use crate::{Error, Result};
 use serde_json::Value;
 use std::collections::HashMap;
 
+/// Hard cap on the number of elements `range()` may materialise into a
+/// `Vec<Value>`. `serde_json::Value` is roughly 32-48 bytes on 64-bit
+/// targets (Number/Bool/Null are inline, String/Array/Object are
+/// pointer-sized), so `2_000_000 * 48 = 96 MB` — comfortably under the
+/// ~256 MB "well clear of trouble" target even with allocator/Vec
+/// overhead, since the element count is validated before the single
+/// `Vec::with_capacity` call (no doubling growth).
+const MAX_RANGE_ELEMENTS: usize = 2_000_000;
+
 impl Executor {
+    /// Computes how many elements `range(start, end, step)` would
+    /// produce, using checked arithmetic throughout so a pathological
+    /// span (e.g. `end` near `i64::MAX`) is rejected as a Cypher error
+    /// instead of overflowing. Returns `Ok(0)` for an empty range.
+    /// `step` must be non-zero — callers special-case `step == 0`
+    /// before reaching here.
+    fn range_element_count(start: i64, end: i64, step: i64) -> Result<usize> {
+        debug_assert_ne!(step, 0, "range_element_count requires a non-zero step");
+        // Normalise so `hi >= lo` is the "non-empty" test regardless of
+        // step direction — `step.unsigned_abs()` handles `step ==
+        // i64::MIN` correctly (`i64::MIN.abs()` itself would overflow).
+        let (lo, hi, abs_step) = if step > 0 {
+            (start, end, step as u64)
+        } else {
+            (end, start, step.unsigned_abs())
+        };
+        if hi < lo {
+            return Ok(0);
+        }
+        // `hi >= lo` here, so the subtraction cannot go negative; it can
+        // only fail to fit in i64 when `lo` is very negative and `hi` is
+        // very positive (e.g. `range(i64::MIN, i64::MAX)`).
+        let diff = hi.checked_sub(lo).ok_or_else(|| {
+            Error::CypherExecution(format!(
+                "ERR_RANGE_TOO_LARGE: range({start}, {end}, {step}) span overflows i64"
+            ))
+        })?;
+        let steps = (diff as u64).checked_div(abs_step).ok_or_else(|| {
+            Error::CypherExecution(format!(
+                "ERR_RANGE_TOO_LARGE: range({start}, {end}, {step}) step computation overflowed"
+            ))
+        })?;
+        let count = steps.checked_add(1).ok_or_else(|| {
+            Error::CypherExecution(format!(
+                "ERR_RANGE_TOO_LARGE: range({start}, {end}, {step}) element count overflowed"
+            ))
+        })?;
+        usize::try_from(count).map_err(|_| {
+            Error::CypherExecution(format!(
+                "ERR_RANGE_TOO_LARGE: range({start}, {end}, {step}) element count \
+                 ({count}) does not fit in usize"
+            ))
+        })
+    }
+
+    /// Builds the `Vec<Value>` for `range(start, end, step)`. Rejects the
+    /// query with `Err` BEFORE allocating when the element count exceeds
+    /// [`MAX_RANGE_ELEMENTS`]. The generation loop still uses
+    /// `checked_add` for the `i += step` update (rather than the bare
+    /// `+=` the unfixed code used) so it can never silently wrap past
+    /// `i64::MAX`/`i64::MIN` even in a release build with overflow
+    /// checks disabled — belt-and-suspenders alongside the upfront
+    /// count check, which should make this branch unreachable in
+    /// practice.
+    fn build_range(start: i64, end: i64, step: i64) -> Result<Vec<Value>> {
+        debug_assert_ne!(step, 0, "build_range requires a non-zero step");
+        let count = Self::range_element_count(start, end, step)?;
+        if count > MAX_RANGE_ELEMENTS {
+            return Err(Error::CypherExecution(format!(
+                "ERR_RANGE_TOO_LARGE: range({start}, {end}, {step}) would produce {count} \
+                 elements, exceeding the {MAX_RANGE_ELEMENTS}-element cap; narrow the range \
+                 or add LIMIT"
+            )));
+        }
+        let mut result = Vec::with_capacity(count);
+        let mut i = start;
+        loop {
+            let in_range = if step > 0 { i <= end } else { i >= end };
+            if !in_range {
+                break;
+            }
+            result.push(Value::Number(i.into()));
+            i = match i.checked_add(step) {
+                Some(next) => next,
+                None => break,
+            };
+        }
+        Ok(result)
+    }
+
     /// Evaluate list, type-check, type-coerce, and collection-predicate
     /// built-in functions.
     ///
@@ -128,21 +217,10 @@ impl Executor {
                             return Some(Ok(Value::Array(Vec::new())));
                         }
 
-                        let mut result = Vec::new();
-                        if step > 0 {
-                            let mut i = start;
-                            while i <= end {
-                                result.push(Value::Number(i.into()));
-                                i += step;
-                            }
-                        } else {
-                            let mut i = start;
-                            while i >= end {
-                                result.push(Value::Number(i.into()));
-                                i += step;
-                            }
-                        }
-                        return Some(Ok(Value::Array(result)));
+                        return Some(match Self::build_range(start, end, step) {
+                            Ok(result) => Ok(Value::Array(result)),
+                            Err(e) => Err(e),
+                        });
                     }
                 }
                 Some(Ok(Value::Null))

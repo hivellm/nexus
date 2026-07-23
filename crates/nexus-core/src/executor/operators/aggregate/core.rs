@@ -58,7 +58,7 @@ impl Executor {
             // Only skip materialization if we don't have GROUP BY and have match columns (MATCH returned empty)
             // If we have GROUP BY, we need rows to create groups, so materialize even with match columns
             if !has_match_columns || !group_by.is_empty() {
-                let rows = self.materialize_rows_from_variables(context);
+                let rows = self.materialize_rows_from_variables(context)?;
                 self.update_result_set_from_rows(context, &rows);
             }
         }
@@ -170,7 +170,7 @@ impl Executor {
         } else if rows.is_empty() && !group_by.is_empty() && !context.variables.is_empty() {
             // GROUP BY but no rows - materialize from variables if Project was deferred
             // This happens when Project is deferred until after Aggregate
-            let materialized_rows = self.materialize_rows_from_variables(context);
+            let materialized_rows = self.materialize_rows_from_variables(context)?;
             if !materialized_rows.is_empty() {
                 // Convert to Row format for grouping
                 let columns = context.result_set.columns.clone();

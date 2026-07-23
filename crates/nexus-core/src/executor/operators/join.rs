@@ -185,7 +185,7 @@ impl Executor {
 
         // Set the results in the context
         context.set_variable(variable, Value::Array(results));
-        let rows = self.materialize_rows_from_variables(context);
+        let rows = self.materialize_rows_from_variables(context)?;
         self.update_result_set_from_rows(context, &rows);
 
         Ok(())
@@ -635,7 +635,7 @@ impl Executor {
         columns: &[String],
     ) -> Result<()> {
         if context.result_set.rows.is_empty() && !context.variables.is_empty() {
-            let rows = self.materialize_rows_from_variables(context);
+            let rows = self.materialize_rows_from_variables(context)?;
             self.update_result_set_from_rows(context, &rows);
         }
 

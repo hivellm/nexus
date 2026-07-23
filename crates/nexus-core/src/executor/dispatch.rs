@@ -123,7 +123,7 @@ impl Executor {
 
         // Only materialize and update if we didn't already handle cross-product above
         if !handled_cross_product {
-            let rows = self.materialize_rows_from_variables(context);
+            let rows = self.materialize_rows_from_variables(context)?;
             self.update_result_set_from_rows(context, &rows);
         }
         Ok(())
@@ -300,7 +300,7 @@ impl Executor {
                 None
             };
             let policy = operators::create::ast_conflict_policy_to_storage(*conflict_policy);
-            let existing_rows = self.materialize_rows_from_variables(&context);
+            let existing_rows = self.materialize_rows_from_variables(&context)?;
             if existing_rows.is_empty() {
                 // CREATE standalone - create nodes and relationships directly
                 let (mut created_node_ids, mut created_rel_ids) = self
@@ -529,7 +529,7 @@ impl Executor {
                     } else {
                         context.set_variable(variable, Value::Array(nodes));
                     }
-                    let rows = self.materialize_rows_from_variables(&context);
+                    let rows = self.materialize_rows_from_variables(&context)?;
                     self.update_result_set_from_rows(&mut context, &rows);
                 }
                 Operator::Filter { predicate } => {
@@ -713,14 +713,14 @@ impl Executor {
                             tracing::trace!(
                                 "CREATE operator: result_set.rows has no node variables, materializing from variables"
                             );
-                            self.materialize_rows_from_variables(&context)
+                            self.materialize_rows_from_variables(&context)?
                         }
                     } else {
                         // No rows in result_set - materialize from variables
                         tracing::trace!(
                             "CREATE operator: result_set.rows is empty, materializing from variables"
                         );
-                        let materialized = self.materialize_rows_from_variables(&context);
+                        let materialized = self.materialize_rows_from_variables(&context)?;
                         tracing::trace!(
                             "CREATE operator: materialized {} rows from variables",
                             materialized.len()
