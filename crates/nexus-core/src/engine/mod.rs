@@ -249,6 +249,24 @@ pub struct Engine {
     /// no dangling forward/reverse entries are left behind.  The field is
     /// cleared (drained) by both the commit and abort paths.
     pub(crate) pending_external_ids: Vec<(u64, crate::storage::external_id::ExternalId)>,
+    /// Deferred temporary-directory cleanup guard.
+    ///
+    /// For an engine built on a self-cleaning temporary store
+    /// ([`Self::new`]) this holds an independent clone of the store's
+    /// `Arc<TempDirGuard>`. Declared LAST so the compiler-generated drop
+    /// glue runs it after every other field — `catalog` (LMDB), `wal`,
+    /// `indexes` (Tantivy full-text), `executor` (which holds its own
+    /// store/index clones), and `page_cache` — has dropped and released
+    /// every file handle inside the temp directory. The guard's
+    /// `remove_dir_all` only fires when its last `Arc` clone drops, so
+    /// tying that last clone to Engine's final field guarantees removal
+    /// runs with no open handles left in the tree — required on Windows,
+    /// where a still-open catalog/WAL/index handle blocked removal and left
+    /// a small residual of temp dirs behind (the tail of
+    /// `phase0_fix-tempdir-record-store-leak`). `None` for persistent
+    /// engines ([`Self::with_data_dir`], [`Self::with_isolated_catalog`]),
+    /// which must never auto-delete a caller-provided data directory.
+    _temp_dir_cleanup: Option<Arc<storage::TempDirGuard>>,
 }
 
 impl Engine {
@@ -343,6 +361,11 @@ impl Engine {
         // This prevents performance regression on engine startup
         // Cache will warm up naturally during query execution
 
+        // Capture the store's temp-dir cleanup guard (an `Arc` clone; `None`
+        // for a persistent store) BEFORE `storage` is moved into the struct,
+        // so it can be stashed as Engine's last-dropped field and the
+        // directory removed only after catalog/WAL/index handles close.
+        let temp_dir_cleanup = storage.temp_dir_guard();
         // Engine shares the same TransactionManager Arc with SessionManager
         let mut engine = Engine {
             catalog,
@@ -366,6 +389,7 @@ impl Engine {
             property_type_constraints: Vec::new(),
             relaxed_constraint_enforcement: false,
             pending_external_ids: Vec::new(),
+            _temp_dir_cleanup: temp_dir_cleanup,
         };
 
         // Configure cache in executor for relationship index access
@@ -540,6 +564,10 @@ impl Engine {
         let cache_config = cache::CacheConfig::default();
         let cache = cache::MultiLayerCache::new(cache_config)?;
 
+        // Persistent store — this yields `None`; captured before `storage`
+        // is moved so the last-dropped `_temp_dir_cleanup` field is always
+        // populated from the store's actual guard.
+        let temp_dir_cleanup = storage.temp_dir_guard();
         let mut engine = Engine {
             catalog,
             storage,
@@ -562,6 +590,7 @@ impl Engine {
             property_type_constraints: Vec::new(),
             relaxed_constraint_enforcement: false,
             pending_external_ids: Vec::new(),
+            _temp_dir_cleanup: temp_dir_cleanup,
         };
 
         engine.rebuild_indexes_from_storage()?;

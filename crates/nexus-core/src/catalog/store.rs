@@ -203,6 +203,15 @@ pub struct Catalog {
 
     /// External node id index (forward + reverse LMDB sub-databases).
     pub(super) external_id_index: Arc<ExternalIdIndex>,
+
+    /// Self-cleaning guard for a catalog created via [`Self::default`],
+    /// which roots its LMDB environment in a fresh temp directory. Shared
+    /// across clones (`Arc`) so the directory is removed once the last
+    /// `Catalog` clone sharing it drops — after `env_closer` (declared
+    /// earlier, so it drops first) has run `prepare_for_closing` and
+    /// released the LMDB file handles. `None` for persistent catalogs,
+    /// which must never auto-delete a caller-provided directory.
+    _cleanup: Option<Arc<crate::storage::TempDirGuard>>,
 }
 
 impl Catalog {
@@ -526,6 +535,7 @@ impl Catalog {
             key_name_cache,
             key_id_cache,
             external_id_index: Arc::new(external_id_index),
+            _cleanup: None,
         })
     }
 
@@ -604,8 +614,17 @@ impl Default for Catalog {
     /// [`Catalog::with_isolated_path`] directly instead of going
     /// through `default`.
     fn default() -> Self {
-        let temp_dir = tempfile::tempdir().expect("Failed to create default-catalog temp dir");
+        let temp_dir = tempfile::Builder::new()
+            .prefix("nexus-catalog-")
+            .tempdir()
+            .expect("Failed to create default-catalog temp dir");
+        // `keep()` disarms `TempDir`'s own destructor; ownership of removal
+        // transfers to the `TempDirGuard` attached below, which removes this
+        // SAME directory once the last clone of this catalog drops — instead
+        // of leaking it on disk for the process lifetime (the historical bug).
         let path = temp_dir.keep();
-        Self::new(&path).expect("Failed to create default catalog")
+        let mut catalog = Self::new(&path).expect("Failed to create default catalog");
+        catalog._cleanup = Some(Arc::new(crate::storage::TempDirGuard::new(path)));
+        catalog
     }
 }

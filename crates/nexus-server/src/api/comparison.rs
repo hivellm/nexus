@@ -12,6 +12,55 @@ use std::sync::Arc;
 
 use crate::NexusServer;
 
+/// A lazily-materialized comparison graph together with the temporary
+/// directory that backs it.
+///
+/// Field order is load-bearing: `graph` is declared first so it drops
+/// first — releasing the record-store mmaps and the LMDB catalog handles —
+/// and `_tempdir` drops last, removing the now handle-free directory (on
+/// Windows an open handle anywhere in the tree blocks removal). The
+/// directory is created only on first `/comparison/*` access and removed
+/// when the owning server drops, so a server that never touches a
+/// comparison endpoint allocates no temp directory at all.
+///
+/// `pub`, not `pub(crate)`: it is reachable through the `pub` fields
+/// `NexusServer::graph_a` / `graph_b`, so it must be at least as visible as
+/// those fields (a `pub(crate)` type there triggers `private_interfaces`).
+/// Its own fields stay private, so no internals leak beyond the type name.
+pub struct ComparisonGraph {
+    graph: nexus_core::Graph,
+    _tempdir: tempfile::TempDir,
+}
+
+/// Build an empty comparison graph rooted in a fresh, self-removing temp
+/// directory (prefix `nexus-cmp-<label>-`). Never leaks or panics: any
+/// failure is returned as an error for the caller to map to a 500.
+fn build_comparison_graph(label: &str) -> anyhow::Result<ComparisonGraph> {
+    let tempdir = tempfile::Builder::new()
+        .prefix(&format!("nexus-cmp-{label}-"))
+        .tempdir()?;
+    let store = nexus_core::storage::RecordStore::new(tempdir.path())?;
+    let catalog = Arc::new(nexus_core::catalog::Catalog::new(
+        tempdir.path().join("catalog"),
+    )?);
+    Ok(ComparisonGraph {
+        graph: nexus_core::Graph::new(store, catalog),
+        _tempdir: tempdir,
+    })
+}
+
+/// Lazily materialize `slot` on first use and return a shared reference to
+/// the contained graph; subsequent calls reuse the same graph.
+fn ensure_comparison_graph<'a>(
+    slot: &'a mut Option<ComparisonGraph>,
+    label: &str,
+) -> anyhow::Result<&'a nexus_core::Graph> {
+    if slot.is_none() {
+        *slot = Some(build_comparison_graph(label)?);
+    }
+    Ok(&slot.as_ref().expect("just materialized").graph)
+}
+
 /// Compare two graphs request
 #[derive(Debug, Deserialize)]
 pub struct CompareGraphsRequest {
@@ -103,16 +152,20 @@ pub async fn compare_graphs(
 ) -> std::result::Result<ResponseJson<CompareGraphsResponse>, StatusCode> {
     tracing::info!("Comparing graphs with options: {:?}", payload.options);
 
-    let graph_a_read = server
+    let mut guard_a = server
         .graph_a
         .lock()
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-    let graph_b_read = server
+    let mut guard_b = server
         .graph_b
         .lock()
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let graph_a_read = ensure_comparison_graph(&mut guard_a, "a")
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let graph_b_read = ensure_comparison_graph(&mut guard_b, "b")
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
-    match GraphComparator::compare_graphs(&graph_a_read, &graph_b_read, &payload.options) {
+    match GraphComparator::compare_graphs(graph_a_read, graph_b_read, &payload.options) {
         Ok(diff) => {
             tracing::info!(
                 "Graph comparison completed: {} nodes added, {} removed, {} modified",
@@ -148,16 +201,20 @@ pub async fn calculate_similarity(
         payload.options
     );
 
-    let graph_a_read = server
+    let mut guard_a = server
         .graph_a
         .lock()
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-    let graph_b_read = server
+    let mut guard_b = server
         .graph_b
         .lock()
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let graph_a_read = ensure_comparison_graph(&mut guard_a, "a")
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let graph_b_read = ensure_comparison_graph(&mut guard_b, "b")
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
-    match GraphComparator::calculate_similarity(&graph_a_read, &graph_b_read, &payload.options) {
+    match GraphComparator::calculate_similarity(graph_a_read, graph_b_read, &payload.options) {
         Ok(similarity) => {
             tracing::info!("Graph similarity calculated: {:.4}", similarity);
 
@@ -185,9 +242,9 @@ pub async fn get_graph_stats(
 ) -> std::result::Result<ResponseJson<GetGraphStatsResponse>, StatusCode> {
     tracing::info!("Getting stats for graph: {}", payload.graph_id);
 
-    let graph = match payload.graph_id.to_uppercase().as_str() {
-        "A" => Arc::clone(&server.graph_a),
-        "B" => Arc::clone(&server.graph_b),
+    let (graph, label) = match payload.graph_id.to_uppercase().as_str() {
+        "A" => (Arc::clone(&server.graph_a), "a"),
+        "B" => (Arc::clone(&server.graph_b), "b"),
         _ => {
             tracing::error!("Invalid graph ID: {}", payload.graph_id);
             return Ok(ResponseJson(GetGraphStatsResponse {
@@ -198,8 +255,10 @@ pub async fn get_graph_stats(
         }
     };
 
-    let graph_read = graph
+    let mut guard = graph
         .lock()
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let graph_read = ensure_comparison_graph(&mut guard, label)
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
     match graph_read.stats() {
@@ -394,16 +453,20 @@ pub async fn advanced_compare_graphs(
         payload.options
     );
 
-    let graph_a_read = server
+    let mut guard_a = server
         .graph_a
         .lock()
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-    let graph_b_read = server
+    let mut guard_b = server
         .graph_b
         .lock()
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let graph_a_read = ensure_comparison_graph(&mut guard_a, "a")
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let graph_b_read = ensure_comparison_graph(&mut guard_b, "b")
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
-    match GraphComparator::compare_graphs(&graph_a_read, &graph_b_read, &payload.options) {
+    match GraphComparator::compare_graphs(graph_a_read, graph_b_read, &payload.options) {
         Ok(diff) => {
             let detailed_analysis = if payload.include_detailed_analysis {
                 Some(DetailedAnalysis {

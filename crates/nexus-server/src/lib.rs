@@ -74,12 +74,15 @@ pub struct NexusServer {
     pub graph_correlation_manager:
         Arc<Mutex<nexus_core::graph::correlation::GraphCorrelationManager>>,
     /// First of the two graphs the `/comparison/*` endpoints diff.
-    /// Wrapped in `Arc<Mutex<Graph>>` because `Graph` contains a
-    /// `RefCell` internally (inherited from the record-store cache),
-    /// so it is not `Sync`.
-    pub graph_a: Arc<Mutex<nexus_core::Graph>>,
+    /// Wrapped in `Arc<Mutex<Option<ComparisonGraph>>>` because `Graph`
+    /// contains a `RefCell` internally (inherited from the record-store
+    /// cache), so it is not `Sync`. `None` until the first
+    /// `/comparison/*` request materializes it (see
+    /// `api::comparison::ensure_comparison_graph`), so an idle server
+    /// allocates no temp directory for it.
+    pub graph_a: Arc<Mutex<Option<crate::api::comparison::ComparisonGraph>>>,
     /// Second of the two graphs the `/comparison/*` endpoints diff.
-    pub graph_b: Arc<Mutex<nexus_core::Graph>>,
+    pub graph_b: Arc<Mutex<Option<crate::api::comparison::ComparisonGraph>>>,
     /// UMICP dispatcher used by `POST /umicp/graph` — routes JSON-RPC
     /// style requests (`graph.generate`, `graph.analyze`, ...) onto the
     /// shared correlation subsystem.
@@ -168,13 +171,11 @@ impl NexusServer {
 
         // Graph correlation / comparison / UMICP state (phase2d).
         //
-        // Each server owns two empty graphs rooted at fresh temp dirs;
-        // the comparison endpoints diff these until callers overwrite
-        // them. `new` stays infallible so test fixtures do not have to
-        // plumb `Result` through — if temp-dir creation fails we fall
-        // back to a fresh in-memory catalog that still produces a
-        // structurally valid empty graph.
-        let (graph_a, graph_b) = build_default_comparison_graphs();
+        // The two comparison graphs are created lazily on first
+        // `/comparison/*` access (each in its own self-removing temp dir),
+        // so an idle server allocates no temp directory for them.
+        let graph_a = Arc::new(Mutex::new(None));
+        let graph_b = Arc::new(Mutex::new(None));
 
         let graph_correlation_manager = Arc::new(Mutex::new(
             nexus_core::graph::correlation::GraphCorrelationManager::new(),
@@ -449,49 +450,4 @@ impl NexusServer {
             }
         });
     }
-}
-
-/// Build the two default comparison graphs the `/comparison/*` handlers
-/// operate against. Each is a freshly-allocated `Graph` rooted at its
-/// own `tempfile::tempdir` so the server starts with a well-defined
-/// empty state. If temp-dir creation fails for whatever reason (read
-/// only FS, exhausted handles, etc.) we fall back to a process-local
-/// path under `std::env::temp_dir()` suffixed with a monotonic id; the
-/// resulting graph is still structurally valid.
-fn build_default_comparison_graphs()
--> (Arc<Mutex<nexus_core::Graph>>, Arc<Mutex<nexus_core::Graph>>) {
-    fn build_one(label: &str) -> nexus_core::Graph {
-        let dir = match tempfile::tempdir() {
-            Ok(d) => d.keep(),
-            Err(e) => {
-                tracing::warn!(
-                    "comparison graph '{}': tempdir() failed ({}), falling back to env::temp_dir",
-                    label,
-                    e
-                );
-                let fallback = std::env::temp_dir().join(format!(
-                    "nexus-cmp-{}-{}",
-                    label,
-                    std::time::SystemTime::now()
-                        .duration_since(std::time::UNIX_EPOCH)
-                        .map(|d| d.as_nanos())
-                        .unwrap_or(0),
-                ));
-                std::fs::create_dir_all(&fallback).expect("fallback temp dir");
-                fallback
-            }
-        };
-        let store =
-            nexus_core::storage::RecordStore::new(&dir).expect("RecordStore on fresh temp dir");
-        let catalog = Arc::new(
-            nexus_core::catalog::Catalog::new(dir.join("catalog"))
-                .expect("Catalog on fresh temp dir"),
-        );
-        nexus_core::Graph::new(store, catalog)
-    }
-
-    (
-        Arc::new(Mutex::new(build_one("a"))),
-        Arc::new(Mutex::new(build_one("b"))),
-    )
 }

@@ -314,3 +314,29 @@ fn regression_engine_tempdir_lifecycle() {
     let node = engine.get_node(node_id).unwrap();
     assert!(node.is_some());
 }
+
+/// Regression: `Engine::new()`'s temporary directory must be removed once
+/// the engine drops. That directory also holds the LMDB catalog, WAL, and
+/// full-text index; the per-`Engine` cleanup guard (`_temp_dir_cleanup`,
+/// declared as Engine's last field) defers removal until every one of those
+/// subsystems has released its file handles, which on Windows is required
+/// before the directory can be deleted. Unlike `record_store_temp_guard`,
+/// this exercises the full catalog/WAL/index combination, not a bare
+/// `RecordStore`.
+#[test]
+fn regression_engine_tempdir_removed_after_drop() {
+    let engine = Engine::new().unwrap();
+    let data_dir = engine.storage.path().to_path_buf();
+    assert!(
+        data_dir.exists(),
+        "engine temp directory should exist while the engine is alive"
+    );
+
+    drop(engine);
+
+    assert!(
+        !data_dir.exists(),
+        "engine temp directory {} should be removed once the engine drops",
+        data_dir.display()
+    );
+}

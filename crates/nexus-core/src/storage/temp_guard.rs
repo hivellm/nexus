@@ -28,19 +28,37 @@ impl TempDirGuard {
 
 impl Drop for TempDirGuard {
     fn drop(&mut self) {
-        // Best-effort: `Drop::drop` cannot return a `Result`, and a
-        // cleanup failure must never panic during unwind. A missing
-        // directory is expected (another cleanup path may have already
-        // removed it) and silently ignored; anything else — e.g. a
-        // file still locked by another process on Windows — is logged
-        // so a persistent failure stays visible without aborting.
-        if let Err(e) = std::fs::remove_dir_all(&self.dir) {
-            if e.kind() != std::io::ErrorKind::NotFound {
-                tracing::warn!(
-                    "TempDirGuard: failed to remove temp directory {}: {}",
-                    self.dir.display(),
-                    e
-                );
+        // Best-effort: `Drop::drop` cannot return a `Result`, and a cleanup
+        // failure must never panic during unwind. A missing directory is
+        // expected (another cleanup path may have already removed it) and
+        // silently ignored.
+        //
+        // On Windows a file inside this directory whose handle a sibling
+        // subsystem is still releasing — an LMDB catalog, WAL, or Tantivy
+        // full-text index handle that briefly outlives the synchronous field
+        // drops — makes `remove_dir_all` fail (typically `PermissionDenied`)
+        // for a short window. Retry a few times with a short exponential
+        // backoff to absorb that window before giving up; the common case
+        // succeeds on the first attempt with no sleep.
+        const MAX_ATTEMPTS: u32 = 5;
+        let mut backoff = std::time::Duration::from_millis(10);
+        for attempt in 1..=MAX_ATTEMPTS {
+            match std::fs::remove_dir_all(&self.dir) {
+                Ok(()) => return,
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => return,
+                Err(e) => {
+                    if attempt == MAX_ATTEMPTS {
+                        tracing::warn!(
+                            "TempDirGuard: failed to remove temp directory {} after {} attempts: {}",
+                            self.dir.display(),
+                            MAX_ATTEMPTS,
+                            e
+                        );
+                        return;
+                    }
+                    std::thread::sleep(backoff);
+                    backoff = backoff.saturating_mul(2);
+                }
             }
         }
     }

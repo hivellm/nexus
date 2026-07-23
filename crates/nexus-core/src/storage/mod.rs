@@ -17,6 +17,7 @@ pub mod record_store_ops;
 pub mod records;
 pub mod row_lock;
 mod temp_guard;
+pub(crate) use temp_guard::TempDirGuard;
 pub mod write_buffer;
 
 pub use external_id::{ConflictPolicy, ExternalId};

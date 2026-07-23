@@ -151,6 +151,38 @@ fn run_healthcheck() -> ! {
     std::process::exit(1);
 }
 
+/// Best-effort removal of stale comparison-graph temp directories left by
+/// prior server processes that exited without running `Drop` (`kill -9`,
+/// crashes). Comparison graphs self-remove on graceful shutdown; this only
+/// reclaims orphans. A directory still open by a live process fails
+/// `remove_dir_all` and is skipped, and only entries older than one hour are
+/// considered so a concurrently-starting sibling server is never touched.
+fn sweep_stale_comparison_dirs() {
+    let base = std::env::temp_dir();
+    let Ok(entries) = std::fs::read_dir(&base) else {
+        return;
+    };
+    let now = std::time::SystemTime::now();
+    const STALE_AFTER: std::time::Duration = std::time::Duration::from_secs(3600);
+    for entry in entries.flatten() {
+        let name = entry.file_name();
+        let Some(name) = name.to_str() else {
+            continue;
+        };
+        if !name.starts_with("nexus-cmp-") {
+            continue;
+        }
+        let stale = entry
+            .metadata()
+            .and_then(|m| m.modified())
+            .map(|mtime| now.duration_since(mtime).unwrap_or_default() > STALE_AFTER)
+            .unwrap_or(false);
+        if stale {
+            let _ = std::fs::remove_dir_all(entry.path());
+        }
+    }
+}
+
 fn main() -> anyhow::Result<()> {
     // Parse CLI arguments
     let args = Args::parse();
@@ -225,6 +257,10 @@ async fn async_main(_worker_threads: usize) -> anyhow::Result<()> {
 
     // Load configuration (YAML file -> env vars -> defaults, env wins).
     let config = config::Config::from_env();
+
+    // Reclaim comparison-graph temp dirs orphaned by a prior process that
+    // exited without running `Drop` (crash / `kill -9`).
+    sweep_stale_comparison_dirs();
 
     // Initialize Engine (contains all core components)
     // `config.data_dir` already merges NEXUS_DATA_DIR / YAML / default, so

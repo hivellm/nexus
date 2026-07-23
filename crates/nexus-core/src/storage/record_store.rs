@@ -337,6 +337,16 @@ impl RecordStore {
         &self.path
     }
 
+    /// Clone of this store's temporary-directory cleanup guard, or `None`
+    /// for a persistent store. Lets an owner (e.g. [`crate::engine::Engine`])
+    /// hold an independent `Arc` clone so the temp directory is removed only
+    /// after every subsystem writing inside it (LMDB catalog, WAL, full-text
+    /// index) has dropped and released its file handles — required on Windows,
+    /// where a still-open handle in the tree blocks `remove_dir_all`.
+    pub(crate) fn temp_dir_guard(&self) -> Option<Arc<TempDirGuard>> {
+        self._cleanup.clone()
+    }
+
     /// Allocate a new node ID
     pub fn allocate_node_id(&mut self) -> u64 {
         self.next_node_id.fetch_add(1, Ordering::SeqCst)
