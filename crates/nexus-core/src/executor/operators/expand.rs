@@ -545,13 +545,20 @@ impl Executor {
             }
         }
 
-        // If no rows were expanded but we had input rows, preserve columns to indicate MATCH was executed but returned empty
-        if expanded_rows.is_empty() && !rows.is_empty() {
+        // If no rows were expanded, preserve columns to indicate the MATCH was
+        // executed but returned empty — INCLUDING when the input row set was
+        // itself already empty (a later hop of a multi-hop pattern whose
+        // earlier hop matched nothing). Falling through to the `else` branch in
+        // that case would call `update_result_set_from_rows(&[])`, which wipes
+        // `result_set.columns` and destroys the `has_match_columns` signal the
+        // Aggregate operator relies on — so `count(*)` over a 0-match multi-hop
+        // pattern would synthesize a phantom `1`.
+        if expanded_rows.is_empty() {
             // Preserve columns to indicate MATCH was executed but returned empty
             // This will be detected by Aggregate operator via has_match_columns check
             // Don't clear columns - they indicate that MATCH was executed
-            tracing::warn!(
-                "Expand: No expanded rows created from {} input rows - this may indicate a problem",
+            tracing::trace!(
+                "Expand: no expanded rows from {} input rows; preserving MATCH-executed column signal",
                 rows.len()
             );
             context.result_set.rows.clear();

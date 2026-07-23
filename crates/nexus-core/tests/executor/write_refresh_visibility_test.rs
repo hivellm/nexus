@@ -608,10 +608,22 @@ fn match_create_bound_source_with_two_chained_inline_targets_creates_all_relatio
         "both inline nodes in the chain must be persisted"
     );
 
-    // Assert each hop directly (rather than a single 2-hop `count(*)`
-    // pattern match, which has an unrelated pre-existing correctness gap
-    // for multi-hop patterns -- out of scope here; single-hop counts are
-    // the unambiguous, already-covered-elsewhere way to check each edge).
+    // The direct 2-hop pattern count is now trustworthy
+    // (phase0_fix-multi-hop-count-star-incorrect fixed the phantom-count gap
+    // for multi-hop patterns; see multi_hop_count_test.rs): the whole chain
+    // `a-[:R1]->b-[:R2]->c` must count as exactly one match.
+    let two_hop = engine
+        .execute_cypher(
+            "MATCH (a:ChainAnchor)-[:R1]->(b:ChainMid)-[:R2]->(c:ChainEnd) RETURN count(*) AS c",
+        )
+        .expect("read back the full 2-hop chain");
+    assert_eq!(
+        two_hop.rows[0].values[0].as_i64(),
+        Some(1),
+        "the full bound-source -> inline -> inline chain must count as one 2-hop match"
+    );
+
+    // Per-hop counts kept as extra coverage (each edge persisted individually).
     let r1_only = engine
         .execute_cypher("MATCH (a:ChainAnchor)-[r1:R1]->(b:ChainMid) RETURN count(r1) AS c")
         .expect("read back R1 alone");

@@ -294,6 +294,12 @@ AggFunc ::= 'COUNT' '(' ('DISTINCT')? Expr ')'
           | 'COLLECT' '(' Expr ')'  // V1
 ```
 
+**Empty and multi-hop patterns.** An aggregation over a pattern with no matches
+returns one row with the identity value (`count(*)`/`count(x)` = 0). This holds
+for multi-hop relationship patterns too: `count(*)` over
+`MATCH (a)-[:R1]->(b)-[:R2]->(c)` reports the true number of matching paths — `0`
+when any hop is absent — never a phantom count.
+
 **Argument-domain & overflow errors.** These operations return a bounded Cypher
 error (never a panic or a silently wrapped value) on out-of-range input:
 
