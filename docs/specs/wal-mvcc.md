@@ -273,6 +273,30 @@ impl Wal {
 }
 ```
 
+#### Torn-tail recovery contract (`phase0_fix-wal-torn-tail-recovery`)
+
+Appends are un-fsynced until the async batch flush, so a crash mid-append is
+**expected** to leave a partial trailing frame on disk. `recover()` treats such
+crash residue as a normal end-of-log, not corruption:
+
+- **EOF mid-frame** — a body read (`type`/`len`/`payload`/`crc`) hits
+  `UnexpectedEof`, or a frame's declared length would run past EOF: the torn
+  trailing frame is **truncated away** and the successfully-parsed prefix is
+  returned. (The declared-length check also caps the recovery-time allocation,
+  so a torn length field can't request a huge buffer.)
+- **CRC mismatch on the last frame** — indistinguishable from a payload torn
+  mid-write: treated the same way (truncate + return the prefix).
+- **CRC mismatch on a non-trailing frame** — a bad frame *followed by more
+  bytes* is genuine mid-file corruption and remains a **hard error**; only the
+  trailing case is ambiguous with crash residue.
+
+All three frame formats (v1, v2 plaintext, v3 encrypted) now agree on this
+"truncated tail" definition. Because the torn residue is truncated, recovery is
+**idempotent** — a second boot returns the same prefix and does not re-scan or
+re-fail the torn bytes, so a single crash can no longer poison every future
+boot. `recover()`'s signature is unchanged (`Result<Vec<WalEntry>>`); only which
+cases return `Ok(prefix)` vs `Err` changed.
+
 ### Checkpoint
 
 ```rust

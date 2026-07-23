@@ -556,6 +556,9 @@ impl Wal {
     pub fn recover(&mut self) -> Result<Vec<WalEntry>> {
         let mut entries = Vec::new();
         let mut file_offset = self.frames_start;
+        // Captured once: the file is only shrunk (via `truncate_to`) on a path
+        // that immediately `break`s, so it does not change while scanning.
+        let file_len = self.file.metadata()?.len();
 
         // Seek past the optional EaR page header. For plaintext
         // WALs `frames_start = 0` and this is a no-op. For encrypted
@@ -612,43 +615,66 @@ impl Wal {
                     }
 
                     let mut type_buf = [0u8; 1];
-                    self.file.read_exact(&mut type_buf)?;
+                    if !self.read_frame_body(&mut type_buf, file_offset)? {
+                        break;
+                    }
 
                     let mut len_buf = [0u8; 4];
-                    self.file.read_exact(&mut len_buf)?;
+                    if !self.read_frame_body(&mut len_buf, file_offset)? {
+                        break;
+                    }
                     let payload_len = u32::from_le_bytes(len_buf) as usize;
 
+                    // magic + algo + type + length + payload + crc
+                    let frame_len = 1 + 1 + 1 + 4 + payload_len as u64 + 4;
+                    // A declared length that would run past EOF marks a torn
+                    // trailing frame (crash residue) — truncate and stop rather
+                    // than allocating a huge buffer or erroring on the tail.
+                    if file_offset + frame_len > file_len {
+                        self.truncate_to(file_offset)?;
+                        break;
+                    }
+
                     let mut payload = vec![0u8; payload_len];
-                    self.file.read_exact(&mut payload)?;
+                    if !self.read_frame_body(&mut payload, file_offset)? {
+                        break;
+                    }
 
                     let mut crc_buf = [0u8; 4];
-                    self.file.read_exact(&mut crc_buf)?;
+                    if !self.read_frame_body(&mut crc_buf, file_offset)? {
+                        break;
+                    }
                     let stored_crc = u32::from_le_bytes(crc_buf);
 
                     (
-                        algo_buf,
-                        type_buf,
-                        len_buf,
-                        payload,
-                        stored_crc,
-                        algo,
-                        // magic + algo + type + length + payload + crc
-                        1 + 1 + 1 + 4 + payload_len as u64 + 4,
-                        true,
+                        algo_buf, type_buf, len_buf, payload, stored_crc, algo, frame_len, true,
                     )
                 } else {
                     // v1 frame: the byte we already read is the type byte.
                     let type_buf = first;
 
                     let mut len_buf = [0u8; 4];
-                    self.file.read_exact(&mut len_buf)?;
+                    if !self.read_frame_body(&mut len_buf, file_offset)? {
+                        break;
+                    }
                     let payload_len = u32::from_le_bytes(len_buf) as usize;
 
+                    // type + length + payload + crc
+                    let frame_len = 1 + 4 + payload_len as u64 + 4;
+                    if file_offset + frame_len > file_len {
+                        self.truncate_to(file_offset)?;
+                        break;
+                    }
+
                     let mut payload = vec![0u8; payload_len];
-                    self.file.read_exact(&mut payload)?;
+                    if !self.read_frame_body(&mut payload, file_offset)? {
+                        break;
+                    }
 
                     let mut crc_buf = [0u8; 4];
-                    self.file.read_exact(&mut crc_buf)?;
+                    if !self.read_frame_body(&mut crc_buf, file_offset)? {
+                        break;
+                    }
                     let stored_crc = u32::from_le_bytes(crc_buf);
 
                     (
@@ -658,8 +684,7 @@ impl Wal {
                         payload,
                         stored_crc,
                         ChecksumAlgo::Crc32Fast,
-                        // type + length + payload + crc
-                        1 + 4 + payload_len as u64 + 4,
+                        frame_len,
                         false,
                     )
                 };
@@ -709,6 +734,17 @@ impl Wal {
             };
 
             if stored_crc != computed_crc {
+                // A CRC mismatch on the LAST frame in the file is
+                // indistinguishable from crash residue — a payload torn
+                // mid-write whose bytes no longer match its CRC. Truncate it
+                // and return the valid prefix, mirroring the v3
+                // `TruncatedTrailing` path. A mismatch on a frame FOLLOWED by
+                // more bytes is genuine mid-file corruption and stays a hard
+                // error.
+                if file_offset + frame_len >= file_len {
+                    self.truncate_to(file_offset)?;
+                    break;
+                }
                 return Err(Error::wal(format!(
                     "CRC mismatch at offset {} (algo={:?}): expected {:x}, got {:x}",
                     file_offset, algo, stored_crc, computed_crc
@@ -779,6 +815,28 @@ impl Wal {
         self.offset = offset;
         self.stats.file_size = offset;
         Ok(())
+    }
+
+    /// Read exactly `buf.len()` bytes of a frame body during recovery. On a
+    /// clean `UnexpectedEof` — crash residue: a partial trailing frame left by
+    /// an un-fsynced append that a crash interrupted — truncate the file to
+    /// `frame_start` (dropping the torn frame) and return `Ok(false)`, so the
+    /// caller `break`s and returns the valid prefix. Returns `Ok(true)` on a
+    /// full read; a non-EOF I/O error propagates.
+    ///
+    /// phase0_fix-wal-torn-tail-recovery: gives the v1/v2 plaintext body reads
+    /// the same torn-tail handling the v3 path already had, instead of the bare
+    /// `?` that turned normal crash residue into a hard error and poisoned every
+    /// subsequent boot.
+    fn read_frame_body(&mut self, buf: &mut [u8], frame_start: u64) -> Result<bool> {
+        match self.file.read_exact(buf) {
+            Ok(_) => Ok(true),
+            Err(e) if e.kind() == io::ErrorKind::UnexpectedEof => {
+                self.truncate_to(frame_start)?;
+                Ok(false)
+            }
+            Err(e) => Err(e.into()),
+        }
     }
 
     /// Decode an encrypted (v3) frame starting at `frame_offset`.
