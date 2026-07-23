@@ -20,6 +20,7 @@ mod optional_match_var_scoping_test;
 mod plan_binding_operator_order_test;
 mod query_analysis_test;
 mod relationship_delete_test;
+mod relationship_merge_set_dispatch_test;
 mod side_effects;
 mod statistics_driven_join_ordering_test;
 mod test_metadata_count_optimization;
