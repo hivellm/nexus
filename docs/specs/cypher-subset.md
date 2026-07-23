@@ -249,13 +249,16 @@ SKIP 10
 SKIP 20 LIMIT 10  -- page 3, size 10
 ```
 
-**Supported and unsupported contexts.** SKIP is fully supported on pattern-less queries and procedure YIELD projections:
-- ✅ `CALL db.labels() YIELD label RETURN label SKIP 1 LIMIT 10` — SKIP works correctly
-- ✅ `RETURN 1 SKIP 1` — SKIP works correctly
-- ✅ `UNWIND [1, 2, 3] AS x RETURN x SKIP 1` — SKIP works correctly
+**Supported contexts.** SKIP is applied in the standard openCypher `ORDER BY` → `SKIP` → `LIMIT` pipeline order on pattern-less queries, procedure YIELD projections, and pattern-driven `MATCH` queries (including aggregation projections, `WITH` pipelines, and post-`UNION` projections):
+- ✅ `CALL db.labels() YIELD label RETURN label SKIP 1 LIMIT 10`
+- ✅ `RETURN 1 SKIP 1`
+- ✅ `UNWIND [1, 2, 3] AS x RETURN x SKIP 1`
+- ✅ `MATCH (n) RETURN n.v AS v ORDER BY v SKIP 1` — drops the first sorted row
+- ✅ `MATCH (n) RETURN n.v AS v ORDER BY v SKIP 1 LIMIT 2` — pagination over the sorted set
+- ✅ `MATCH (n:N) RETURN n.v AS v, count(*) AS c ORDER BY v SKIP 2` — after an aggregation projection
+- ✅ `MATCH ... RETURN v UNION MATCH ... RETURN v ORDER BY v SKIP 2` — SKIP applies to the merged result
 
-Known limitation: SKIP is **not yet applied** on pattern-driven `MATCH` queries:
-- ❌ `MATCH (n) RETURN n SKIP 1` — SKIP is silently ignored; use ORDER BY to get deterministic ordering (tracked separately as a system-wide gap)
+Pair `SKIP` with `ORDER BY` for deterministic pagination — without an explicit ordering the rows dropped are implementation-defined. On a post-`UNION` projection, a `SKIP`/`LIMIT` written *without* an accompanying `ORDER BY` binds to the nearest `RETURN` (the right-hand UNION arm) rather than the merged result, matching openCypher clause attachment; add `ORDER BY` after the final `UNION` to page the combined output.
 
 ### Aggregations
 

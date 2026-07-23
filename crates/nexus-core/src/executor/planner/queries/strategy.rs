@@ -13,6 +13,7 @@ impl<'a> QueryPlanner<'a> {
         where_clauses: &[(Expression, Vec<String>)], // (expression, optional_vars)
         return_items: &[ReturnItem],
         limit_count: Option<usize>,
+        skip_count: Option<usize>,
         distinct: bool,
         unwind_operators: &[Operator],
         unwind_before_match: bool,
@@ -1302,6 +1303,14 @@ impl<'a> QueryPlanner<'a> {
                     operators.push(sort_op);
                 }
             }
+        }
+
+        // Add SKIP after ORDER BY and before LIMIT — the standard openCypher
+        // ORDER BY -> SKIP -> LIMIT pipeline order. Sort was appended above and
+        // Limit is appended below, so pushing here keeps that ordering. Mirrors
+        // the pattern-less branches in planner_core.rs.
+        if let Some(count) = skip_count {
+            operators.push(Operator::Skip { count });
         }
 
         // Add limit operator if specified

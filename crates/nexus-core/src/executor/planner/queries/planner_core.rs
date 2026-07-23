@@ -182,6 +182,7 @@ impl<'a> QueryPlanner<'a> {
                 // Extract ORDER BY and LIMIT clauses that come after UNION
                 let mut post_union_order_by: Option<(Vec<String>, Vec<bool>)> = None;
                 let mut post_union_limit: Option<usize> = None;
+                let mut post_union_skip: Option<usize> = None;
 
                 for clause in query.clauses.iter().skip(right_end_idx) {
                     match clause {
@@ -209,8 +210,14 @@ impl<'a> QueryPlanner<'a> {
                                 post_union_limit = Some(*count as usize);
                             }
                         }
+                        Clause::Skip(skip_clause) => {
+                            if let Expression::Literal(Literal::Integer(count)) = &skip_clause.count
+                            {
+                                post_union_skip = Some(*count as usize);
+                            }
+                        }
                         _ => {
-                            // Other clauses after UNION are not supported (e.g., SKIP, another UNION)
+                            // Other clauses after UNION are not supported (e.g., another UNION)
                             // For now, we'll skip them
                         }
                     }
@@ -267,6 +274,11 @@ impl<'a> QueryPlanner<'a> {
                     operators.push(Operator::Sort { columns, ascending });
                 }
 
+                // Add SKIP after UNION (and ORDER BY if present), before LIMIT
+                if let Some(count) = post_union_skip {
+                    operators.push(Operator::Skip { count });
+                }
+
                 // Add LIMIT after UNION (and ORDER BY if present) if present
                 if let Some(count) = post_union_limit {
                     operators.push(Operator::Limit { count });
@@ -307,12 +319,11 @@ impl<'a> QueryPlanner<'a> {
         let mut bound_vars: std::collections::HashSet<String> = std::collections::HashSet::new();
         let mut return_items = Vec::new();
         let mut limit_count = None;
-        // (phase0_fix-order-by-on-call-yield) Collected alongside
-        // `limit_count` but, unlike it, only ever consumed by the
+        // Collected alongside `limit_count`. Consumed both by the
         // no-pattern branch below (`CALL ... YIELD ... RETURN` / bare
-        // `RETURN` with no `MATCH`) — see that branch for why the
-        // pattern-based `plan_execution_strategy` path is intentionally
-        // left untouched.
+        // `RETURN` with no `MATCH`) and, via the `skip_count` parameter,
+        // by the pattern-based `plan_execution_strategy` path (see
+        // `strategy.rs`) for `MATCH`-driven queries.
         let mut skip_count: Option<usize> = None;
         let mut return_distinct = false;
         let mut unwind_operators = Vec::new(); // Collect UNWIND to insert after MATCH
@@ -647,6 +658,7 @@ impl<'a> QueryPlanner<'a> {
                 &where_clauses,
                 &return_items,
                 limit_count,
+                skip_count,
                 return_distinct,
                 &unwind_operators,
                 unwind_before_match,

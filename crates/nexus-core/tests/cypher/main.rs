@@ -18,6 +18,7 @@ mod new_functions_test;
 mod null_comparison_tests;
 mod phase4_cypher_parity_quick_wins_test;
 mod return_where_tests;
+mod skip_pattern_queries_test;
 mod test_aggregation_virtual_row;
 mod test_array_concatenation;
 mod test_array_indexing;
