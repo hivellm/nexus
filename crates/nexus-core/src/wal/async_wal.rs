@@ -74,6 +74,9 @@ pub struct AsyncWalStats {
     pub wal_errors: std::sync::atomic::AtomicU64,
     /// Number of `append` calls that had to block on a full channel (#19).
     pub backpressure_blocks: std::sync::atomic::AtomicU64,
+    /// Number of times the WAL was checkpoint-truncated for size
+    /// (phase0_fix-wal-checkpoint-truncate-production).
+    pub wal_checkpoints: std::sync::atomic::AtomicU64,
 }
 
 impl AsyncWalStats {
@@ -95,6 +98,7 @@ impl AsyncWalStats {
             max_queue_depth: self.max_queue_depth.load(Relaxed),
             wal_errors: self.wal_errors.load(Relaxed),
             backpressure_blocks: self.backpressure_blocks.load(Relaxed),
+            wal_checkpoints: self.wal_checkpoints.load(Relaxed),
         }
     }
 }
@@ -116,7 +120,12 @@ pub struct AsyncWalStatsSnapshot {
     pub max_queue_depth: u64,
     pub wal_errors: u64,
     pub backpressure_blocks: u64,
+    pub wal_checkpoints: u64,
 }
+
+/// Default WAL size (bytes) at which the async writer compacts the log:
+/// 64 MiB, far under `Wal::health_check`'s 1 GiB hard gate.
+pub const DEFAULT_WAL_CHECKPOINT_SIZE_BYTES: u64 = 64 * 1024 * 1024;
 
 /// Configuration for the async WAL writer
 #[derive(Debug, Clone)]
@@ -131,6 +140,14 @@ pub struct AsyncWalConfig {
     pub flush_interval: Duration,
     /// Channel buffer size
     pub channel_buffer_size: usize,
+    /// WAL size (bytes) at which the writer thread checkpoint-truncates the WAL
+    /// after a successful flush, keeping it bounded well under
+    /// `health_check`'s 1 GiB gate. The WAL is redundant for recovery —
+    /// external-ids are committed to the LMDB catalog *before* their WAL entry
+    /// is appended, and node/rel state lives in the fsynced record stores — so
+    /// a full truncate loses nothing recoverable. `u64::MAX` disables it.
+    /// See phase0_fix-wal-checkpoint-truncate-production.
+    pub checkpoint_size_bytes: u64,
     /// Test-only hook (`phase0_fix-async-wal-flush-durability` §1.2):
     /// when set, `writer_thread` blocks on this receiver immediately
     /// before running `flush_batch` for a `WalCommand::Flush`, so a test
@@ -157,6 +174,7 @@ impl Default for AsyncWalConfig {
             max_queue_depth: 10_000,                  // Block if queue gets too deep
             flush_interval: Duration::from_millis(5), // Background flush every 5ms
             channel_buffer_size: 1000,                // Channel buffer for commands
+            checkpoint_size_bytes: DEFAULT_WAL_CHECKPOINT_SIZE_BYTES,
             #[cfg(test)]
             flush_gate: None,
             #[cfg(test)]
@@ -636,6 +654,28 @@ impl AsyncWalWriter {
                                 retry_count
                             );
                         }
+
+                        // phase0_fix-wal-checkpoint-truncate-production: once the
+                        // freshly-flushed WAL exceeds the configured size, compact
+                        // it. The WAL is redundant for recovery — external-ids are
+                        // committed to the LMDB catalog BEFORE their WAL entry is
+                        // appended, and node/rel state lives in the fsynced record
+                        // stores — so a full truncate loses nothing recoverable and
+                        // keeps the file bounded well under health_check's 1 GiB
+                        // gate. A checkpoint marker is written for observability,
+                        // then the log is truncated to empty.
+                        if wal.file_size() >= config.checkpoint_size_bytes {
+                            let epoch = wal.stats().checkpoints + 1;
+                            match wal.checkpoint(epoch).and_then(|()| wal.truncate()) {
+                                Ok(()) => {
+                                    stats.wal_checkpoints.fetch_add(1, Relaxed);
+                                }
+                                Err(e) => {
+                                    tracing::warn!("WAL checkpoint/truncate failed: {e}");
+                                }
+                            }
+                        }
+
                         return Ok(());
                     }
                     Err(e) => {
@@ -720,6 +760,7 @@ mod tests {
             max_queue_depth: 100,
             flush_interval: Duration::from_millis(25),
             channel_buffer_size: 50,
+            checkpoint_size_bytes: u64::MAX,
             flush_gate: None,
             fail_flush: None,
         };
@@ -753,6 +794,7 @@ mod tests {
             max_queue_depth: 100,
             flush_interval: Duration::from_millis(25),
             channel_buffer_size: 50,
+            checkpoint_size_bytes: u64::MAX,
             flush_gate: None,
             fail_flush: Some(fail.clone()),
         };
@@ -782,6 +824,95 @@ mod tests {
                 }
             )),
             "an entry that hit the emergency path must be recoverable: {recovered:?}"
+        );
+    }
+
+    // ---- phase0_fix-wal-checkpoint-truncate-production ---------------------
+
+    fn checkpoint_test_config(checkpoint_size_bytes: u64) -> AsyncWalConfig {
+        AsyncWalConfig {
+            max_batch_size: 20,
+            max_batch_age: Duration::from_millis(20),
+            max_queue_depth: 2000,
+            flush_interval: Duration::from_millis(10),
+            channel_buffer_size: 1000,
+            checkpoint_size_bytes,
+            flush_gate: None,
+            fail_flush: None,
+        }
+    }
+
+    /// Baseline (§1): with the trigger disabled (`u64::MAX`), nothing ever
+    /// checkpoints — the WAL just grows, exactly as production did before this
+    /// fix (no checkpoint/truncate caller existed).
+    #[test]
+    fn wal_grows_without_a_checkpoint_trigger() {
+        let ctx = TestContext::new();
+        let wal_path = ctx.path().join("wal.log");
+        let wal = Wal::new(&wal_path).unwrap();
+        let mut writer = AsyncWalWriter::new(wal, checkpoint_test_config(u64::MAX)).unwrap();
+
+        for i in 0..500u64 {
+            writer
+                .append(WalEntry::CreateNode {
+                    node_id: i,
+                    label_bits: i,
+                })
+                .unwrap();
+        }
+        writer.flush().unwrap();
+
+        assert_eq!(
+            writer.stats().wal_checkpoints,
+            0,
+            "no checkpoint may fire when the trigger is disabled"
+        );
+        drop(writer);
+        let reopened = Wal::new(&wal_path).unwrap();
+        assert!(
+            reopened.file_size() > 1000,
+            "without a trigger the WAL grows unbounded, got {}",
+            reopened.file_size()
+        );
+    }
+
+    /// Fix (§3): once the WAL exceeds the size threshold, the writer thread
+    /// checkpoint-truncates it after the flush, so it stays bounded below the
+    /// threshold and never approaches health_check's 1 GiB gate.
+    #[test]
+    fn wal_is_checkpoint_truncated_past_the_size_threshold() {
+        const THRESHOLD: u64 = 512;
+        let ctx = TestContext::new();
+        let wal_path = ctx.path().join("wal.log");
+        let wal = Wal::new(&wal_path).unwrap();
+        let mut writer = AsyncWalWriter::new(wal, checkpoint_test_config(THRESHOLD)).unwrap();
+
+        // ~1000 frames far exceed the 512-byte threshold, so the WAL is
+        // compacted repeatedly along the way.
+        for i in 0..1000u64 {
+            writer
+                .append(WalEntry::CreateNode {
+                    node_id: i,
+                    label_bits: i,
+                })
+                .unwrap();
+        }
+        writer.flush().unwrap();
+
+        assert!(
+            writer.stats().wal_checkpoints >= 1,
+            "the WAL must have been checkpoint-truncated at least once"
+        );
+        drop(writer);
+
+        // Invariant: after every flushed batch the writer truncates once the
+        // file reaches the threshold, so a reopened WAL is always below it —
+        // never the ~30 KB the 1000 raw frames would occupy.
+        let reopened = Wal::new(&wal_path).unwrap();
+        assert!(
+            reopened.file_size() < THRESHOLD,
+            "the WAL must stay bounded below the threshold, got {}",
+            reopened.file_size()
         );
     }
 
@@ -856,6 +987,7 @@ mod tests {
             max_queue_depth: 16, // channel capacity = max(8, 16) = 16
             flush_interval: Duration::from_millis(10),
             channel_buffer_size: 8,
+            checkpoint_size_bytes: u64::MAX,
             flush_gate: None,
             fail_flush: None,
         };
@@ -911,6 +1043,7 @@ mod tests {
             max_queue_depth: 100,
             flush_interval: Duration::from_millis(50), // Short flush interval
             channel_buffer_size: 50,
+            checkpoint_size_bytes: u64::MAX,
             flush_gate: None,
             fail_flush: None,
         };
@@ -999,6 +1132,7 @@ mod tests {
             max_queue_depth: 100,
             flush_interval: Duration::from_secs(60), // no interval-based auto-flush
             channel_buffer_size: 50,
+            checkpoint_size_bytes: u64::MAX,
             flush_gate: Some(gate_rx),
             fail_flush: None,
         };
@@ -1081,6 +1215,7 @@ mod tests {
             max_queue_depth: 100,
             flush_interval: Duration::from_millis(10),
             channel_buffer_size: 50,
+            checkpoint_size_bytes: u64::MAX,
             flush_gate: None,
             fail_flush: Some(Arc::clone(&fail_flush)),
         };
@@ -1130,6 +1265,7 @@ mod tests {
             max_queue_depth: 100,
             flush_interval: Duration::from_millis(5),
             channel_buffer_size: 50,
+            checkpoint_size_bytes: u64::MAX,
             flush_gate: None,
             fail_flush: None,
         };

@@ -333,6 +333,33 @@ impl Wal {
 }
 ```
 
+#### Production checkpoint / compaction (`phase0_fix-wal-checkpoint-truncate-production`)
+
+`checkpoint`/`truncate` are actually driven in production by the async WAL
+writer thread: after a successful batch flush, if the WAL has grown past
+`AsyncWalConfig::checkpoint_size_bytes` (default 64 MiB, far below
+`health_check`'s 1 GiB hard gate), the thread writes a checkpoint marker and
+**`truncate()`s the log to empty**. This keeps the WAL bounded, keeps every
+boot's recovery scan proportional to recent writes (not lifetime writes), and
+means the 1 GiB availability cliff is never reached under normal operation.
+
+**A full truncate is safe here — the WAL is redundant for recovery.** The only
+production consumer of the WAL, `recover_external_ids_from_wal`, replays only
+`ExternalIdAssigned` entries via idempotent `put_if_absent`, and an external-id
+is committed to the LMDB catalog **before** its WAL entry is appended (write
+order: `catalog.put_if_absent → LMDB commit → WAL append`). So the LMDB catalog
+is always at least as current as the WAL; node/relationship state lives in the
+fsynced record stores, not the WAL. Truncating the WAL therefore loses nothing
+recoverable, which is why no checkpoint *marker offset* or resume-from-checkpoint
+machinery is needed — a truncated WAL is simply a shorter log that recovery
+reads normally (and the LMDB is authoritative for the entries it dropped).
+
+Because the compaction runs on the async writer thread (which owns the live
+`Wal`), it is coordinated with the batch flush by construction — the batch it
+just flushed is durable before the truncate. The rare synchronous fallback path
+(no async writer configured) does not compact; production always runs the async
+writer.
+
 ## MVCC Implementation
 
 ### Epoch-Based Snapshots
