@@ -21,7 +21,7 @@
 | ⬚ | phase0_fix-store-size-per-clone-divergence | 0/14 | fix store size per clone divergence |
 | ⬚ | phase0_fix-wal-durability-gaps | 0/15 | fix wal durability gaps |
 | ⬚ | phase0_fix-wal-torn-tail-recovery | 0/12 | fix wal torn tail recovery |
-| ⬚ | phase0_fix-where-clause-index-seek | 0/20 | fix where clause index seek |
+| ⬚ | phase0_fix-where-clause-index-seek-extensions | 0/11 | fix where clause index seek extensions |
 | ⬚ | phase0_fix-where-predicate-case-comprehension-lost | 0/14 | fix where predicate case comprehension lost |
 | ⬚ | phase0_perf-store-reverse-incoming-adjacency-index | 0/10 | perf store reverse incoming adjacency index |
 
