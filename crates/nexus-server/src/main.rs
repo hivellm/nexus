@@ -45,7 +45,7 @@ use parking_lot::RwLock;
 use std::sync::Arc;
 use std::thread;
 use tokio::sync::RwLock as TokioRwLock;
-use tower_http::{compression::CompressionLayer, cors::CorsLayer, trace::TraceLayer};
+use tower_http::{compression::CompressionLayer, trace::TraceLayer};
 use tracing::{info, warn};
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
@@ -257,6 +257,13 @@ async fn async_main(_worker_threads: usize) -> anyhow::Result<()> {
 
     // Load configuration (YAML file -> env vars -> defaults, env wins).
     let config = config::Config::from_env();
+
+    // Security preflight: refuse to boot in an unsafe posture (public bind with
+    // auth off; default root password with auth on). Intentional hard failure.
+    if let Err(msg) = config.security_preflight() {
+        tracing::error!("{msg}");
+        anyhow::bail!("{msg}");
+    }
 
     // Reclaim comparison-graph temp dirs orphaned by a prior process that
     // exited without running `Drop` (crash / `kill -9`).
@@ -515,8 +522,10 @@ async fn async_main(_worker_threads: usize) -> anyhow::Result<()> {
     // owned by NexusServer::new (phase2d), so the `init_graphs` /
     // `init_manager` scaffolding that used to live here is gone.
 
-    // Initialize rate limiter (for future use)
-    let _rate_limiter = RateLimiter::new();
+    // Initialize the per-IP rate limiter. Layered onto `app` below (H2);
+    // relies on `ConnectInfo<SocketAddr>` being available, which requires
+    // serving through `into_make_service_with_connect_info`.
+    let rate_limiter = RateLimiter::new();
 
     // Initialize authentication middleware if enabled
     // For now, we'll enable it based on config.auth.enabled
@@ -530,6 +539,7 @@ async fn async_main(_worker_threads: usize) -> anyhow::Result<()> {
         Some(create_auth_middleware(
             nexus_server.clone(),
             true,
+            config.auth.require_stats_auth,
             cluster_enabled,
         ))
     } else {
@@ -1091,6 +1101,12 @@ async fn async_main(_worker_threads: usize) -> anyhow::Result<()> {
     #[cfg(debug_assertions)]
     let app = app.route("/graphql/playground", get(api::graphql::graphql_playground));
 
+    // M4: build the CORS layer from the configured allow-list instead of
+    // `CorsLayer::permissive()` (which reflected any `Origin`, letting any
+    // website read API responses cross-origin). Empty list (default) => no
+    // cross-origin access; see `middleware::cors::build_cors_layer`.
+    let cors_layer = nexus_server::middleware::build_cors_layer(&config.cors_allowed_origins);
+
     // Apply middleware layers
     let app = app
         // Cap request body size. Without this, Axum allows bodies up to its
@@ -1100,8 +1116,23 @@ async fn async_main(_worker_threads: usize) -> anyhow::Result<()> {
         .layer(DefaultBodyLimit::max(config.max_body_size_bytes))
         // Compression for responses (gzip, deflate, br)
         .layer(CompressionLayer::new())
-        // CORS support
-        .layer(CorsLayer::permissive())
+        // CORS — restricted to the configured allow-list (M4).
+        .layer(cors_layer)
+        // H4: per-request wall-clock timeout, so a slowloris-style connection
+        // or a request that never completes cannot pin a worker indefinitely.
+        // Covers the HTTP/connection vector; CPU-bound statement cancellation
+        // inside the executor is a separate follow-up.
+        .layer(tower_http::timeout::TimeoutLayer::with_status_code(
+            axum::http::StatusCode::REQUEST_TIMEOUT,
+            std::time::Duration::from_secs(config.request_timeout_secs),
+        ))
+        // Per-IP rate limiting (H2). Reads `ConnectInfo<SocketAddr>`, which
+        // requires serving through `into_make_service_with_connect_info`
+        // below.
+        .layer(axum_middleware::from_fn_with_state(
+            rate_limiter.clone(),
+            nexus_server::middleware::rate_limit::rate_limit_middleware,
+        ))
         // Request/response tracing
         .layer(TraceLayer::new_for_http());
 
@@ -1127,8 +1158,13 @@ async fn async_main(_worker_threads: usize) -> anyhow::Result<()> {
 
     tracing::debug!("Starting optimized Axum server with high concurrency settings");
 
-    // Start server
-    axum::serve(listener, app).await?;
+    // Start server. `into_make_service_with_connect_info` is required so the
+    // rate-limit middleware's `ConnectInfo<SocketAddr>` extractor resolves.
+    axum::serve(
+        listener,
+        app.into_make_service_with_connect_info::<std::net::SocketAddr>(),
+    )
+    .await?;
 
     Ok(())
 }
@@ -1178,6 +1214,7 @@ async fn create_mcp_router(
         let auth_middleware = create_auth_middleware(
             nexus_server.clone(),
             true, // Require authentication for MCP
+            true, // MCP has no /stats route; keep the gated default
             cluster_enabled,
         );
 

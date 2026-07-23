@@ -22,13 +22,15 @@ use std::sync::Arc;
 pub fn create_auth_middleware(
     server: Arc<NexusServer>,
     require_auth: bool,
+    require_stats_auth: bool,
     cluster_enabled: bool,
 ) -> AuthMiddleware {
     let base = AuthMiddleware::with_audit_logger(
         server.auth_manager.clone(),
         require_auth,
         server.audit_logger.clone(),
-    );
+    )
+    .with_require_stats_auth(require_stats_auth);
     if cluster_enabled {
         base.with_cluster_mode()
     } else {

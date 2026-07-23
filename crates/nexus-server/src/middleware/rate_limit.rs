@@ -318,6 +318,47 @@ mod tests {
         }
     }
 
+    // H2 — exercises the limiter as it is now wired onto the HTTP server:
+    // default config (`RateLimiter::new()`), consumed to exhaustion for one
+    // key, confirming a different key is tracked independently. `oneshot`
+    // cannot supply a real `ConnectInfo<SocketAddr>`, so the middleware
+    // function itself is exercised at the integration level; this unit
+    // test proves the underlying token-bucket accounting the middleware
+    // relies on.
+    #[tokio::test]
+    async fn test_rate_limiter_default_budget_then_independent_key() {
+        let limiter = RateLimiter::new();
+        let config = RateLimitConfig::default();
+        let budget = config.max_requests + config.burst_capacity;
+
+        // Every request within the default budget must be allowed.
+        for _ in 0..budget {
+            match limiter.check_rate_limit("key-a").await {
+                RateLimitResult::Allowed { .. } => {}
+                RateLimitResult::RateLimited { .. } => {
+                    panic!("request within budget must not be rate limited")
+                }
+            }
+        }
+
+        // One more request over budget must be rate limited.
+        match limiter.check_rate_limit("key-a").await {
+            RateLimitResult::RateLimited { .. } => {}
+            RateLimitResult::Allowed { .. } => {
+                panic!("request beyond budget must be rate limited")
+            }
+        }
+
+        // A different key has its own bucket and is unaffected by key-a's
+        // exhaustion.
+        match limiter.check_rate_limit("key-b").await {
+            RateLimitResult::Allowed { .. } => {}
+            RateLimitResult::RateLimited { .. } => {
+                panic!("a different key must not inherit another key's rate limit")
+            }
+        }
+    }
+
     #[tokio::test]
     async fn test_cleanup_removes_old_entries() {
         let limiter = RateLimiter::new();

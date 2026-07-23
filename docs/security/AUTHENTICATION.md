@@ -70,7 +70,10 @@ Root user can be configured via:
 ### Default Values
 
 - **Username**: `root`
-- **Password**: `root` (⚠️ **CHANGE IN PRODUCTION**)
+- **Password**: `root` — ⚠️ **rejected at boot when authentication is enabled.** The
+  server refuses to start with the literal default password; set
+  `NEXUS_ROOT_PASSWORD` (or `NEXUS_ROOT_PASSWORD_FILE`) to a strong secret. See
+  [Secure Defaults & Server Hardening](#secure-defaults--server-hardening).
 - **Enabled**: `true`
 - **Disable After Setup**: `false`
 
@@ -85,6 +88,32 @@ When `NEXUS_DISABLE_ROOT_AFTER_SETUP=true`, the root user is automatically disab
 - Grant/revoke all permissions
 - Manage API keys
 - Cannot be deleted (only disabled)
+
+## Secure Defaults & Server Hardening
+
+The server enforces a set of secure-by-default behaviors (`phase0_fix-server-secure-defaults-and-dos`). Three are intentional breaking changes so an accidentally wide-open deployment fails loudly rather than silently serving the internet.
+
+### Boot-time preflight (hard failures)
+
+`Config::security_preflight()` runs at startup and refuses to boot in an unsafe posture:
+
+- **Public bind with auth disabled.** If the bind address is non-loopback (e.g. `NEXUS_ADDR=0.0.0.0:15474`) and `auth.enabled == false`, startup fails. The default bind is `127.0.0.1:15474` (loopback), so local/dev startup is unaffected. To deliberately serve an open instance, set `NEXUS_AUTH_REQUIRED_FOR_PUBLIC=false`.
+- **Default root password.** With auth enabled and the root account active, booting with the literal default `root` password is refused — set `NEXUS_ROOT_PASSWORD` / `NEXUS_ROOT_PASSWORD_FILE`.
+
+### Request-pipeline hardening
+
+| Concern | Default | Override |
+|---|---|---|
+| **Rate limiting** (per client IP) | on | `RateLimitConfig` budgets |
+| **Request timeout** | 30 s (HTTP layer) | `NEXUS_REQUEST_TIMEOUT_SECS` |
+| **`/stats` auth** (when auth enabled) | required | `NEXUS_REQUIRE_STATS_AUTH=false` to keep public |
+| **CORS** | no cross-origin access (empty allow-list) | `NEXUS_CORS_ALLOWED_ORIGINS` (comma-separated origins) |
+
+Notes:
+
+- The request timeout bounds the HTTP/slow-connection vector (a slowloris client or a request that never completes); CPU-bound cancellation of an already-executing Cypher statement is a separate follow-up.
+- `/health`, `/`, and `/openapi.json` remain public by default (`/health` gating is available via `NEXUS_REQUIRE_HEALTH_AUTH`). In cluster mode every path — including `/health` and `/stats` — requires authentication.
+- CORS defaults to granting no cross-origin access; a browser on another origin cannot read API responses unless its origin is on the allow-list.
 
 ## User Management
 

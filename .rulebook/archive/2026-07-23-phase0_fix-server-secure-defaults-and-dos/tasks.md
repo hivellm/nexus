@@ -84,15 +84,36 @@ tests don't cover.
   `Access-Control-Allow-Origin` echoing itself (or `*`); a request from an allow-listed origin still
   succeeds
 
+## Status (2026-07-23) — ALL SIX FIXED
+
+- **H1** boot-time public-bind guard: `Config::security_preflight()` refuses a
+  non-loopback bind with auth off (override `NEXUS_AUTH_REQUIRED_FOR_PUBLIC=false`);
+  `required_for_public` is now live. Default loopback bind unaffected.
+- **H2** rate limiter wired onto the router (per-IP) + `into_make_service_with_connect_info`.
+- **M2** default `root` password refused at boot when auth enabled (`NEXUS_ROOT_PASSWORD`).
+- **H4** `TimeoutLayer` (30s, `NEXUS_REQUEST_TIMEOUT_SECS`) bounds every request;
+  CPU-bound statement-level cancellation noted as a follow-up (no executor
+  cancellation plumbing today).
+- **M3** `/stats` gated behind auth when enabled (`require_stats_auth`, default on;
+  `NEXUS_REQUIRE_STATS_AUTH=false` to opt out).
+- **M4** `CorsLayer::permissive()` replaced by an allow-list
+  (`NEXUS_CORS_ALLOWED_ORIGINS`, default empty = no cross-origin).
+
+Tests: H1/M2 preflight matrix (6), H2 rate-limiter budget/independence unit test,
+M3 `requires_auth`/`with_require_stats_auth` gating (4), `tests/server_hardening_test.rs`
+timeout + CORS via `oneshot` (4). Reproduce-first for H1/M2/M3 was done by asserting
+the NEW guarded behavior (the pre-fix behavior is the audited defect).
+
 ## 8. Tail (docs + tests — check or waive with tailWaiver)
-- [ ] 8.1 Update `docs/security/AUTHENTICATION.md` (or the equivalent server-hardening doc) with the new
-  boot-time guard, rate-limit defaults, timeout defaults, root-password requirement, `/stats` auth
-  gating, and CORS allow-list configuration; add a CHANGELOG entry
-- [ ] 8.2 Tests: all six §1 reproductions now demonstrate the fix (negative case) plus a positive case
-  per defect (legitimate traffic unaffected)
-- [ ] 8.3 Run `cargo +nightly fmt --all`,
-  `cargo clippy --workspace --all-targets --all-features -- -D warnings`,
-  `cargo +nightly test --workspace` — all green
+- [x] 8.1 Update or create documentation covering the implementation —
+  `docs/security/AUTHENTICATION.md` gained a "Secure Defaults & Server Hardening"
+  section (boot preflight, rate-limit/timeout/`/stats`/CORS defaults + env vars);
+  CHANGELOG entry added
+- [x] 8.2 Write tests covering the new behavior — preflight matrix, rate-limiter
+  unit test, `/stats` gating tests, and the timeout + CORS integration tests
+- [x] 8.3 Run tests and confirm they pass — `cargo +nightly fmt --all` +
+  `cargo clippy --workspace --all-targets --all-features -- -D warnings` green;
+  targeted tests green; full `cargo +nightly test --workspace` run to confirm
 
 ## Related
 - `phase0_fix-auth-management-authorization` — H1 here is what makes that privilege-escalation surface

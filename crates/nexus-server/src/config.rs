@@ -4,6 +4,11 @@ use serde::Deserialize;
 use std::net::SocketAddr;
 use std::path::Path;
 
+/// Literal default root password shipped by [`RootUserConfig::default`].
+/// Lives in one place so the boot-time preflight ([`Config::security_preflight`])
+/// can compare against it without duplicating the string.
+const DEFAULT_ROOT_PASSWORD: &str = "root";
+
 /// Server configuration
 #[derive(Debug, Clone)]
 #[allow(dead_code)]
@@ -16,6 +21,18 @@ pub struct Config {
     /// `DefaultBodyLimit` layer to keep bulk ingest payloads from
     /// monopolising memory.
     pub max_body_size_bytes: usize,
+    /// Maximum wall-clock duration allowed for a single HTTP request,
+    /// enforced via `tower_http::timeout::TimeoutLayer`. Covers the
+    /// HTTP/slow-connection vector (a client that never finishes sending
+    /// or reading); it does not cancel CPU-bound work already in flight
+    /// inside the Cypher executor (see H4 follow-up in the server-hardening
+    /// report).
+    pub request_timeout_secs: u64,
+    /// CORS allow-list (M4). Empty (the default) grants no cross-origin
+    /// access — a browser on another origin cannot read API responses.
+    /// Populate via `NEXUS_CORS_ALLOWED_ORIGINS` (comma-separated origins)
+    /// for deployments that intentionally serve cross-origin clients.
+    pub cors_allowed_origins: Vec<String>,
     /// Engine-side tunables (page cache, etc.) propagated from YAML.
     pub engine: nexus_core::EngineConfig,
     /// Root user configuration
@@ -222,6 +239,12 @@ pub struct AuthConfig {
     pub required_for_public: bool,
     /// Whether /health endpoint requires authentication
     pub require_health_auth: bool,
+    /// Whether /stats requires authentication when auth is enabled (M3).
+    /// Default true: with auth enabled, node/relationship/storage stats sit
+    /// behind the same auth boundary as the rest of the API (closing the
+    /// historical `/stats` info-leak). Set `NEXUS_REQUIRE_STATS_AUTH=false`
+    /// to keep `/stats` public for operators who rely on scraping it.
+    pub require_stats_auth: bool,
 }
 
 /// Root user configuration
@@ -242,7 +265,7 @@ impl Default for RootUserConfig {
     fn default() -> Self {
         Self {
             username: "root".to_string(),
-            password: "root".to_string(),
+            password: DEFAULT_ROOT_PASSWORD.to_string(),
             enabled: true,
             disable_after_setup: false,
         }
@@ -255,6 +278,7 @@ impl Default for AuthConfig {
             enabled: false, // Disabled by default for development
             required_for_public: true,
             require_health_auth: false,
+            require_stats_auth: true,
         }
     }
 }
@@ -268,6 +292,8 @@ impl Default for Config {
             // ingest payloads, but bounded so a single oversized POST cannot
             // exhaust the server's allocator.
             max_body_size_bytes: 16 * 1024 * 1024,
+            request_timeout_secs: 30,
+            cors_allowed_origins: Vec::new(),
             engine: nexus_core::EngineConfig::default(),
             root_user: RootUserConfig::default(),
             auth: AuthConfig::default(),
@@ -946,6 +972,14 @@ impl Config {
                 .unwrap_or(auth.require_health_auth);
         }
 
+        if let Ok(v) = std::env::var("NEXUS_AUTH_REQUIRED_FOR_PUBLIC") {
+            auth.required_for_public = v.parse::<bool>().unwrap_or(auth.required_for_public);
+        }
+
+        if let Ok(v) = std::env::var("NEXUS_REQUIRE_STATS_AUTH") {
+            auth.require_stats_auth = v.parse::<bool>().unwrap_or(auth.require_stats_auth);
+        }
+
         // RESP3: disabled by default; `NEXUS_RESP3_ENABLED=true` opts in,
         // `NEXUS_RESP3_ADDR` overrides the bind address, and auth requirement
         // mirrors the top-level auth flag unless overridden.
@@ -990,10 +1024,30 @@ impl Config {
             .and_then(|v| v.parse::<u64>().ok())
             .unwrap_or(rpc_defaults.slow_threshold_ms);
 
+        // H4: per-request wall-clock timeout (default 30s).
+        let request_timeout_secs = std::env::var("NEXUS_REQUEST_TIMEOUT_SECS")
+            .ok()
+            .and_then(|v| v.parse::<u64>().ok())
+            .unwrap_or(30);
+
+        // M4: CORS allow-list, comma-separated origins. Empty (default) means
+        // no cross-origin access is granted.
+        let cors_allowed_origins = std::env::var("NEXUS_CORS_ALLOWED_ORIGINS")
+            .ok()
+            .map(|v| {
+                v.split(',')
+                    .map(|s| s.trim().to_string())
+                    .filter(|s| !s.is_empty())
+                    .collect::<Vec<String>>()
+            })
+            .unwrap_or_default();
+
         Self {
             addr,
             data_dir,
             max_body_size_bytes,
+            request_timeout_secs,
+            cors_allowed_origins,
             engine,
             root_user,
             auth,
@@ -1067,10 +1121,43 @@ impl Config {
         self.addr = addr;
         self
     }
+
+    /// Boot-time security preflight. Returns `Err(operator-facing message)` if
+    /// the current configuration is unsafe to serve. Called at startup before
+    /// binding; a hard failure is intentional (these are unsafe defaults).
+    pub fn security_preflight(&self) -> Result<(), String> {
+        // H1: refuse a non-loopback bind with auth disabled, unless the
+        // operator deliberately opts out via required_for_public = false.
+        if !self.auth.enabled && self.auth.required_for_public && !self.addr.ip().is_loopback() {
+            return Err(format!(
+                "refusing to start: bind address {} is not loopback but authentication is \
+                 disabled. Enable auth (NEXUS_AUTH_ENABLED=true), or to serve an open instance \
+                 deliberately set NEXUS_AUTH_REQUIRED_FOR_PUBLIC=false.",
+                self.addr
+            ));
+        }
+        // M2: refuse the literal default root password when auth is enabled and
+        // the root account is active.
+        if self.auth.enabled
+            && self.root_user.enabled
+            && self.root_user.password == DEFAULT_ROOT_PASSWORD
+        {
+            return Err(
+                "refusing to start: authentication is enabled but the root password is still the \
+                 default. Set NEXUS_ROOT_PASSWORD (or NEXUS_ROOT_PASSWORD_FILE) to a strong secret."
+                    .to_string(),
+            );
+        }
+        Ok(())
+    }
 }
 
 #[cfg(test)]
 mod tests {
+    // Tests build a `Config::default()` then set the few fields under test —
+    // clearer than spelling out every unrelated field via struct-update.
+    #![allow(clippy::field_reassign_with_default)]
+
     use super::*;
     use std::net::{IpAddr, Ipv4Addr};
 
@@ -1373,5 +1460,86 @@ storage:
         assert_eq!(overrides.max_body_size_mb, None);
         assert_eq!(overrides.data_dir, None);
         assert_eq!(overrides.page_cache_capacity, Some(500));
+    }
+
+    // ------------------------------------------------------------------
+    // H1 + M2 — boot-time security preflight
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn security_preflight_rejects_public_bind_with_auth_disabled() {
+        let mut config = Config::default();
+        config.addr = "0.0.0.0:15474".parse().unwrap();
+        config.auth.enabled = false;
+        config.auth.required_for_public = true;
+
+        let err = config
+            .security_preflight()
+            .expect_err("public bind + auth disabled must be rejected");
+        assert!(err.contains("not loopback"), "got {err}");
+    }
+
+    #[test]
+    fn security_preflight_allows_loopback_bind_with_auth_disabled() {
+        let mut config = Config::default();
+        config.addr = "127.0.0.1:15474".parse().unwrap();
+        config.auth.enabled = false;
+        config.auth.required_for_public = true;
+
+        config
+            .security_preflight()
+            .expect("loopback bind must be allowed even with auth disabled");
+    }
+
+    #[test]
+    fn security_preflight_allows_public_bind_when_operator_opts_out() {
+        let mut config = Config::default();
+        config.addr = "0.0.0.0:15474".parse().unwrap();
+        config.auth.enabled = false;
+        config.auth.required_for_public = false;
+
+        config
+            .security_preflight()
+            .expect("operator opt-out via required_for_public=false must be honored");
+    }
+
+    #[test]
+    fn security_preflight_rejects_default_root_password_when_auth_enabled() {
+        let mut config = Config::default();
+        config.addr = "127.0.0.1:15474".parse().unwrap();
+        config.auth.enabled = true;
+        config.root_user.enabled = true;
+        config.root_user.password = "root".to_string();
+
+        let err = config
+            .security_preflight()
+            .expect_err("default root password with auth enabled must be rejected");
+        assert!(err.contains("default"), "got {err}");
+    }
+
+    #[test]
+    fn security_preflight_allows_custom_root_password_when_auth_enabled() {
+        let mut config = Config::default();
+        config.addr = "127.0.0.1:15474".parse().unwrap();
+        config.auth.enabled = true;
+        config.root_user.enabled = true;
+        config.root_user.password = "a-strong-unique-secret".to_string();
+
+        config
+            .security_preflight()
+            .expect("custom root password with auth enabled must be allowed");
+    }
+
+    #[test]
+    fn security_preflight_allows_default_root_password_when_root_user_disabled() {
+        let mut config = Config::default();
+        config.addr = "127.0.0.1:15474".parse().unwrap();
+        config.auth.enabled = true;
+        config.root_user.enabled = false;
+        config.root_user.password = "root".to_string();
+
+        config
+            .security_preflight()
+            .expect("disabled root user must not trip the default-password guard");
     }
 }

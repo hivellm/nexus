@@ -2,8 +2,11 @@
 
 pub mod admission;
 pub mod auth;
+pub mod cors;
 pub mod mcp_auth;
 pub mod rate_limit;
+
+pub use cors::build_cors_layer;
 
 pub use admission::{
     AdmissionConfig, AdmissionError, AdmissionMetrics, AdmissionPermit, AdmissionQueue,
