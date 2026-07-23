@@ -31,6 +31,25 @@ fn json_value_to_property_value(value: &Value) -> Option<crate::index::PropertyV
     }
 }
 
+/// The cross-type twin of a numeric seek key. The property index keys
+/// `Integer(10)` and `Float(10.0)` as DIFFERENT B-tree entries, but Cypher
+/// compares them equal (`10 = 10.0` is true), so a point seek that only probed
+/// the literal's own type would silently miss nodes stored with the other one.
+/// Probing both keeps the seek exactly equivalent to the predicate it replaces
+/// — the planner drops the residual `Filter` when it lifts the conjunct, so a
+/// false negative here would be a wrong answer, not merely a slow one.
+fn numeric_alias(value: &crate::index::PropertyValue) -> Option<crate::index::PropertyValue> {
+    use crate::index::PropertyValue as PV;
+    match value {
+        PV::Integer(i) => Some(PV::Float(*i as f64)),
+        // Only an integral float has an integer twin — `10.5` has none.
+        PV::Float(f) if f.fract() == 0.0 && *f >= i64::MIN as f64 && *f <= i64::MAX as f64 => {
+            Some(PV::Integer(*f as i64))
+        }
+        _ => None,
+    }
+}
+
 impl Executor {
     pub(in crate::executor) fn execute_node_by_label(&self, label_id: u32) -> Result<Vec<Value>> {
         // Always use label_index - label_id 0 is valid (it's the first label)
@@ -106,29 +125,37 @@ impl Executor {
             return self.execute_node_by_label(label_id);
         };
         let bitmap = prop_idx.find_exact(label_id, key_id, value.clone())?;
+        self.materialize_seek_bitmap(&bitmap, "NodeIndexSeek")
+    }
+
+    /// Materialise a property-index seek's node-id bitmap into row values:
+    /// deduplicate ids, skip deleted nodes (`read_node_as_value_with_store`
+    /// yields `Value::Null` for those), and enforce `MAX_INTERMEDIATE_ROWS`
+    /// with an `operator`-named error. Acquires the store guard ONCE for the
+    /// whole bitmap (phase8_neo4j-concurrency-gaps §2) instead of once per
+    /// matched node. Shared by every seek operator so the row cap and the
+    /// deleted-node filter live in exactly one place.
+    pub(in crate::executor) fn materialize_seek_bitmap(
+        &self,
+        bitmap: &roaring::RoaringBitmap,
+        operator: &str,
+    ) -> Result<Vec<Value>> {
         use std::collections::HashSet;
         let cap_hint = (bitmap.len() as usize).min(MAX_INTERMEDIATE_ROWS);
         let mut seen = HashSet::new();
         let mut results = Vec::with_capacity(cap_hint);
-        // phase8_neo4j-concurrency-gaps §2 — same acquire-once pattern
-        // as `execute_node_by_label` above: one `store()` guard for the
-        // whole seek instead of one per matched node.
         let store = self.store();
         for node_id in bitmap.iter() {
             if results.len() >= MAX_INTERMEDIATE_ROWS {
                 return Err(Error::OutOfMemory(format!(
-                    "NodeIndexSeek would return more than {} rows \
-                     (MAX_INTERMEDIATE_ROWS); add LIMIT or narrow the predicate",
-                    MAX_INTERMEDIATE_ROWS
+                    "{operator} would return more than {MAX_INTERMEDIATE_ROWS} rows \
+                     (MAX_INTERMEDIATE_ROWS); add LIMIT or narrow the predicate"
                 )));
             }
             let node_id_u64 = node_id as u64;
             if !seen.insert(node_id_u64) {
                 continue;
             }
-            // phase8_neo4j-concurrency-gaps §2 — see the identical
-            // removal + rationale in `execute_node_by_label` above:
-            // `read_node_as_value` already filters deleted nodes.
             match self.read_node_as_value_with_store(&store, node_id_u64)? {
                 Value::Null => continue,
                 v => results.push(v),
@@ -136,6 +163,92 @@ impl Executor {
         }
         drop(store);
         Ok(results)
+    }
+
+    /// Execute an `IN`-list seek (`var.prop IN [a, b, c]`): one `find_exact`
+    /// point lookup per listed value, bitmap-OR'd into a single candidate set.
+    /// The union is exactly the predicate's match set — a node satisfies the
+    /// list predicate iff its indexed property equals one of the listed values
+    /// — so the planner is free to drop the residual `Filter`.
+    /// See phase0_fix-where-in-prefix-param-index-seek §1.
+    pub(in crate::executor) fn execute_node_index_in_seek(
+        &self,
+        label_id: u32,
+        key_id: u32,
+        values: &[crate::index::PropertyValue],
+    ) -> Result<Vec<Value>> {
+        let Some(prop_idx) = self.property_index() else {
+            return self.execute_node_by_label(label_id);
+        };
+        let mut bitmap = roaring::RoaringBitmap::new();
+        for value in values {
+            bitmap |= prop_idx.find_exact(label_id, key_id, value.clone())?;
+            if let Some(alias) = numeric_alias(value) {
+                bitmap |= prop_idx.find_exact(label_id, key_id, alias)?;
+            }
+        }
+        self.materialize_seek_bitmap(&bitmap, "NodeIndexInSeek")
+    }
+
+    /// Execute a `STARTS WITH` prefix seek (`var.prop STARTS WITH 'x'`): the
+    /// contiguous run of string keys sharing the prefix, straight off the
+    /// B-tree. Exactly the predicate's match set — `STARTS WITH` is false for
+    /// every non-string property value, which `find_prefix` never returns — so
+    /// the planner drops the consumed conjunct.
+    /// See phase0_fix-where-in-prefix-param-index-seek §2.
+    pub(in crate::executor) fn execute_node_index_prefix_seek(
+        &self,
+        label_id: u32,
+        key_id: u32,
+        prefix: &str,
+    ) -> Result<Vec<Value>> {
+        let Some(prop_idx) = self.property_index() else {
+            return self.execute_node_by_label(label_id);
+        };
+        let bitmap = prop_idx.find_prefix(label_id, key_id, prefix)?;
+        self.materialize_seek_bitmap(&bitmap, "NodeIndexPrefixSeek")
+    }
+
+    /// Execute a `$parameter` equality seek (`var.prop = $x`): resolve the
+    /// parameter from `context.params` and point-seek the index with it. No
+    /// driving rows are needed — the value comes from the query envelope, not
+    /// from an upstream binding — so this works as the FIRST scan of a query,
+    /// which is exactly where `WHERE n.prop = $x` lands.
+    ///
+    /// Three cases the seek cannot serve, all of them safe because the planner
+    /// keeps the predicate as a residual `Filter` for this operator:
+    ///   - parameter bound to a list/map: not a value the property index keys,
+    ///     so fall back to a full label scan and let the filter decide;
+    ///   - parameter missing from the envelope: same fallback, which keeps the
+    ///     pre-seek behaviour (label scan + filter) byte for byte;
+    ///   - parameter bound to `null`: `n.prop = null` is `null` for every node,
+    ///     so no node can match — an empty result, no scan needed.
+    /// See phase0_fix-where-in-prefix-param-index-seek §3.
+    pub(in crate::executor) fn execute_node_index_param_seek(
+        &self,
+        context: &ExecutionContext,
+        label_id: u32,
+        key_id: u32,
+        parameter: &str,
+    ) -> Result<Vec<Value>> {
+        let Some(prop_idx) = self.property_index() else {
+            return self.execute_node_by_label(label_id);
+        };
+        let Some(bound) = context.params.get(parameter) else {
+            return self.execute_node_by_label(label_id);
+        };
+        if bound.is_null() {
+            return Ok(Vec::new());
+        }
+        let Some(value) = json_value_to_property_value(bound) else {
+            // List / map parameter — the index cannot key it.
+            return self.execute_node_by_label(label_id);
+        };
+        let mut bitmap = prop_idx.find_exact(label_id, key_id, value.clone())?;
+        if let Some(alias) = numeric_alias(&value) {
+            bitmap |= prop_idx.find_exact(label_id, key_id, alias)?;
+        }
+        self.materialize_seek_bitmap(&bitmap, "NodeIndexParamSeek")
     }
 
     /// Execute a range seek (`var.prop > | >= | < | <= <literal>`) on a
@@ -166,30 +279,7 @@ impl Executor {
             bitmap -= &exact;
         }
 
-        use std::collections::HashSet;
-        let cap_hint = (bitmap.len() as usize).min(MAX_INTERMEDIATE_ROWS);
-        let mut seen = HashSet::new();
-        let mut results = Vec::with_capacity(cap_hint);
-        let store = self.store();
-        for node_id in bitmap.iter() {
-            if results.len() >= MAX_INTERMEDIATE_ROWS {
-                return Err(Error::OutOfMemory(format!(
-                    "NodeIndexRangeSeek would return more than {} rows \
-                     (MAX_INTERMEDIATE_ROWS); add LIMIT or narrow the predicate",
-                    MAX_INTERMEDIATE_ROWS
-                )));
-            }
-            let node_id_u64 = node_id as u64;
-            if !seen.insert(node_id_u64) {
-                continue;
-            }
-            match self.read_node_as_value_with_store(&store, node_id_u64)? {
-                Value::Null => continue,
-                v => results.push(v),
-            }
-        }
-        drop(store);
-        Ok(results)
+        self.materialize_seek_bitmap(&bitmap, "NodeIndexRangeSeek")
     }
 
     /// Execute a correlated `NodeIndexSeek` whose seek key is evaluated per

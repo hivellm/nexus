@@ -70,6 +70,34 @@ impl Executor {
                 let nodes = self.execute_node_index_range_seek(*label_id, *key_id, *op, value)?;
                 self.seed_scan_variable(context, variable, nodes)?;
             }
+            Operator::NodeIndexInSeek {
+                label_id,
+                key_id,
+                values,
+                variable,
+            } => {
+                let nodes = self.execute_node_index_in_seek(*label_id, *key_id, values)?;
+                self.seed_scan_variable(context, variable, nodes)?;
+            }
+            Operator::NodeIndexPrefixSeek {
+                label_id,
+                key_id,
+                prefix,
+                variable,
+            } => {
+                let nodes = self.execute_node_index_prefix_seek(*label_id, *key_id, prefix)?;
+                self.seed_scan_variable(context, variable, nodes)?;
+            }
+            Operator::NodeIndexParamSeek {
+                label_id,
+                key_id,
+                parameter,
+                variable,
+            } => {
+                let nodes =
+                    self.execute_node_index_param_seek(context, *label_id, *key_id, parameter)?;
+                self.seed_scan_variable(context, variable, nodes)?;
+            }
             Operator::AllNodesScan { variable } => {
                 let nodes = self.execute_all_nodes_scan()?;
 

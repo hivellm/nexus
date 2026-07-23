@@ -533,6 +533,41 @@ impl Executor {
                         self.execute_node_index_range_seek(*label_id, *key_id, *op, value)?;
                     self.seed_scan_main_loop(&mut context, variable, nodes)?;
                 }
+                Operator::NodeIndexInSeek {
+                    label_id,
+                    key_id,
+                    values,
+                    variable,
+                } => {
+                    // Read-side `IN`-list seek: a union of point lookups on the
+                    // single-property B-tree index, seeded exactly like the
+                    // other scans.
+                    let nodes = self.execute_node_index_in_seek(*label_id, *key_id, values)?;
+                    self.seed_scan_main_loop(&mut context, variable, nodes)?;
+                }
+                Operator::NodeIndexPrefixSeek {
+                    label_id,
+                    key_id,
+                    prefix,
+                    variable,
+                } => {
+                    // Read-side `STARTS WITH` seek: the contiguous prefix run
+                    // of the single-property B-tree index.
+                    let nodes = self.execute_node_index_prefix_seek(*label_id, *key_id, prefix)?;
+                    self.seed_scan_main_loop(&mut context, variable, nodes)?;
+                }
+                Operator::NodeIndexParamSeek {
+                    label_id,
+                    key_id,
+                    parameter,
+                    variable,
+                } => {
+                    // Read-side `$parameter` equality seek: the key comes from
+                    // the query envelope, so no driving rows are required.
+                    let nodes = self
+                        .execute_node_index_param_seek(&context, *label_id, *key_id, parameter)?;
+                    self.seed_scan_main_loop(&mut context, variable, nodes)?;
+                }
                 Operator::AllNodesScan { variable } => {
                     let nodes = self.execute_all_nodes_scan()?;
                     context.variables.remove(variable);

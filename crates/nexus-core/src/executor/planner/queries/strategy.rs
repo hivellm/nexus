@@ -4,6 +4,25 @@
 
 use super::*;
 
+/// Convert a plan-time expression into the `PropertyValue` the property
+/// index is keyed on, or `None` when it is not a scalar literal the planner
+/// can seek with. `$parameter`s, `null`, points, and computed expressions all
+/// return `None` — the seek-operand helpers treat that as "cannot lift, keep
+/// the scan". Single source of truth for every literal-keyed seek so the
+/// equality, range, and `IN` lifts can never drift apart on which literal
+/// types are indexable.
+fn literal_property_value(expr: &Expression) -> Option<crate::index::PropertyValue> {
+    match expr {
+        Expression::Literal(Literal::String(s)) => {
+            Some(crate::index::PropertyValue::String(s.clone()))
+        }
+        Expression::Literal(Literal::Integer(i)) => Some(crate::index::PropertyValue::Integer(*i)),
+        Expression::Literal(Literal::Float(f)) => Some(crate::index::PropertyValue::Float(*f)),
+        Expression::Literal(Literal::Boolean(b)) => Some(crate::index::PropertyValue::Boolean(*b)),
+        _ => None,
+    }
+}
+
 impl<'a> QueryPlanner<'a> {
     /// Plan execution strategy based on patterns and constraints
     #[allow(clippy::too_many_arguments)]
@@ -1618,8 +1637,27 @@ impl<'a> QueryPlanner<'a> {
                 if let Some(seek) = self
                     .where_equality_seek_operand(&conjuncts[i], variable, label_id)
                     .or_else(|| self.where_range_seek_operand(&conjuncts[i], variable, label_id))
+                    .or_else(|| self.where_in_seek_operand(&conjuncts[i], variable, label_id))
+                    .or_else(|| self.where_prefix_seek_operand(&conjuncts[i], variable, label_id))
                 {
                     conjuncts.remove(i);
+                    return Some(seek);
+                }
+            }
+        }
+        // Second pass, and only once no plan-time-literal conjunct anywhere in
+        // `residual` could be lifted: a `$parameter` equality seek. It ranks
+        // last because its key is unknown until execution, so it may still
+        // fall back to a scan — a literal seek is always the better plan.
+        // NOTE: the conjunct is deliberately NOT removed. `NodeIndexParamSeek`
+        // degrades to a full label scan for a list/map or missing parameter,
+        // and the retained `Filter` is what keeps that fallback correct.
+        for (conjuncts, optional_vars) in residual.iter() {
+            if !optional_vars.is_empty() {
+                continue;
+            }
+            for conjunct in conjuncts.iter() {
+                if let Some(seek) = self.where_param_seek_operand(conjunct, variable, label_id) {
                     return Some(seek);
                 }
             }
@@ -1632,8 +1670,8 @@ impl<'a> QueryPlanner<'a> {
     /// `(label_id, prop)` has a single-property index, return the
     /// `NodeIndexRangeSeek` to emit in its place. The B-tree supports range and
     /// prefix scans natively, so this only lifts the plan; results are
-    /// unchanged (residual `Filter`s still run). `$parameter`, `IN`, `STARTS
-    /// WITH`, and `CONTAINS` are still left to a follow-up.
+    /// unchanged. `CONTAINS` (an unanchored substring match, which no ordered
+    /// index can seek) still falls back to a full scan.
     fn where_range_seek_operand(
         &self,
         conjunct: &Expression,
@@ -1679,20 +1717,183 @@ impl<'a> QueryPlanner<'a> {
         if !prop_idx.has_index(label_id, key_id) {
             return None;
         }
-        let value = match value_expr {
-            Expression::Literal(Literal::String(s)) => {
-                crate::index::PropertyValue::String(s.clone())
-            }
-            Expression::Literal(Literal::Integer(i)) => crate::index::PropertyValue::Integer(*i),
-            Expression::Literal(Literal::Float(f)) => crate::index::PropertyValue::Float(*f),
-            Expression::Literal(Literal::Boolean(b)) => crate::index::PropertyValue::Boolean(*b),
-            _ => return None,
-        };
+        let value = literal_property_value(value_expr)?;
         Some(Operator::NodeIndexRangeSeek {
             label_id,
             key_id,
             op: seek_op,
             value,
+            variable: variable.to_string(),
+        })
+    }
+
+    /// If `conjunct` is a top-level `variable.prop IN [<literals>]` and
+    /// `(label_id, prop)` has a single-property index, return the
+    /// `NodeIndexInSeek` to emit in its place — one point seek per element,
+    /// bitmap-OR'd at execution time. The union is exactly the predicate's
+    /// match set (a node satisfies `prop IN list` iff its property equals one
+    /// of the listed values), so the caller drops the consumed conjunct.
+    ///
+    /// Bails out — leaving the full scan — when ANY element is not a plan-time
+    /// scalar literal: a `$parameter` or a computed element would make the
+    /// seek an UNDER-approximation, and the lifted conjunct is no longer
+    /// around to correct it. `NULL` elements are the one exception: a null
+    /// element can only ever make the comparison `null`, never `true`
+    /// (`1 IN [1, null]` is true only because of the `1`), so dropping them
+    /// preserves the match set exactly. A list that is empty — or all nulls —
+    /// lifts to a seek with no values, which correctly matches nothing.
+    fn where_in_seek_operand(
+        &self,
+        conjunct: &Expression,
+        variable: &str,
+        label_id: u32,
+    ) -> Option<Operator> {
+        let prop_idx = self.property_index?;
+        let Expression::BinaryOp {
+            left,
+            op: BinaryOperator::In,
+            right,
+        } = conjunct
+        else {
+            return None;
+        };
+        // Only `prop IN list` seeks — the mirrored `list IN prop` is a
+        // containment test on a list-valued property, a different predicate.
+        let Expression::PropertyAccess {
+            variable: v,
+            property,
+        } = left.as_ref()
+        else {
+            return None;
+        };
+        if v != variable {
+            return None;
+        }
+        let Expression::List(elements) = right.as_ref() else {
+            return None;
+        };
+        let key_id = self.catalog.get_key_id(property).ok()?;
+        if !prop_idx.has_index(label_id, key_id) {
+            return None;
+        }
+        let mut values = Vec::with_capacity(elements.len());
+        for element in elements {
+            if matches!(element, Expression::Literal(Literal::Null)) {
+                continue;
+            }
+            values.push(literal_property_value(element)?);
+        }
+        Some(Operator::NodeIndexInSeek {
+            label_id,
+            key_id,
+            values,
+            variable: variable.to_string(),
+        })
+    }
+
+    /// If `conjunct` is a top-level `variable.prop STARTS WITH '<literal>'`
+    /// and `(label_id, prop)` has a single-property index, return the
+    /// `NodeIndexPrefixSeek` to emit in its place — the contiguous run of
+    /// string keys sharing the prefix. `STARTS WITH` is false for every
+    /// non-string value, and `find_prefix` only ever returns string keys, so
+    /// the seek is exactly the predicate's match set and the caller drops the
+    /// consumed conjunct.
+    ///
+    /// Not mirrored: `'literal' STARTS WITH n.prop` asks whether the LITERAL
+    /// starts with the property, which no prefix run on `prop` can answer.
+    /// A `$parameter` prefix has no plan-time value and keeps the scan.
+    fn where_prefix_seek_operand(
+        &self,
+        conjunct: &Expression,
+        variable: &str,
+        label_id: u32,
+    ) -> Option<Operator> {
+        let prop_idx = self.property_index?;
+        let Expression::BinaryOp {
+            left,
+            op: BinaryOperator::StartsWith,
+            right,
+        } = conjunct
+        else {
+            return None;
+        };
+        let Expression::PropertyAccess {
+            variable: v,
+            property,
+        } = left.as_ref()
+        else {
+            return None;
+        };
+        if v != variable {
+            return None;
+        }
+        let Expression::Literal(Literal::String(prefix)) = right.as_ref() else {
+            return None;
+        };
+        let key_id = self.catalog.get_key_id(property).ok()?;
+        if !prop_idx.has_index(label_id, key_id) {
+            return None;
+        }
+        Some(Operator::NodeIndexPrefixSeek {
+            label_id,
+            key_id,
+            prefix: prefix.clone(),
+            variable: variable.to_string(),
+        })
+    }
+
+    /// If `conjunct` is a top-level equality between `variable.prop` and a
+    /// `$parameter` (either operand order) and `(label_id, prop)` has a
+    /// single-property index, return the `NodeIndexParamSeek` to emit in place
+    /// of the label scan. The seek key is resolved from the query envelope at
+    /// execution time, so — unlike `NodeIndexSeek`'s correlated
+    /// `key_expression` path — it needs no driving rows and works as the first
+    /// scan of the query, which is where `WHERE n.prop = $x` lands.
+    ///
+    /// The caller must KEEP the conjunct as a residual `Filter`: a parameter
+    /// bound to a list/map, or absent from the envelope, makes the operator
+    /// fall back to a full label scan, and only the retained predicate can
+    /// narrow that back down to the right rows.
+    fn where_param_seek_operand(
+        &self,
+        conjunct: &Expression,
+        variable: &str,
+        label_id: u32,
+    ) -> Option<Operator> {
+        let prop_idx = self.property_index?;
+        let Expression::BinaryOp {
+            left,
+            op: BinaryOperator::Equal,
+            right,
+        } = conjunct
+        else {
+            return None;
+        };
+        let (property, parameter) = match (left.as_ref(), right.as_ref()) {
+            (
+                Expression::PropertyAccess {
+                    variable: v,
+                    property,
+                },
+                Expression::Parameter(parameter),
+            )
+            | (
+                Expression::Parameter(parameter),
+                Expression::PropertyAccess {
+                    variable: v,
+                    property,
+                },
+            ) if v == variable => (property, parameter),
+            _ => return None,
+        };
+        let key_id = self.catalog.get_key_id(property).ok()?;
+        if !prop_idx.has_index(label_id, key_id) {
+            return None;
+        }
+        Some(Operator::NodeIndexParamSeek {
+            label_id,
+            key_id,
+            parameter: parameter.clone(),
             variable: variable.to_string(),
         })
     }
@@ -1710,12 +1911,16 @@ impl<'a> QueryPlanner<'a> {
     /// already exist in the pipeline — the common case a bare `WHERE
     /// n.prop = $x` lowers to is the FIRST scan of the query, where no
     /// driving rows exist yet, so routing a parameter through that path
-    /// would silently return zero rows instead of seeking. Lifting
-    /// `$parameter` equality is left to a follow-up.
+    /// would silently return zero rows instead of seeking. Parameter
+    /// equality is lifted by `where_param_seek_operand` instead, into a
+    /// `NodeIndexParamSeek` that resolves the key from the query envelope.
     ///
-    /// SCOPE: EQUALITY ONLY. Range (`>`, `<`, `>=`, `<=`), `IN`, `STARTS
-    /// WITH`, and `CONTAINS` predicates are never lifted here — they
-    /// remain full scans, made observable via the
+    /// SCOPE: LITERAL EQUALITY ONLY. The other lifted predicate shapes live
+    /// in sibling helpers — range in `where_range_seek_operand`, `IN` in
+    /// `where_in_seek_operand`, `STARTS WITH` in `where_prefix_seek_operand`,
+    /// `$parameter` equality in `where_param_seek_operand`. `CONTAINS` is
+    /// lifted by none of them (no ordered index can seek an unanchored
+    /// substring) and stays a full scan, made observable via the
     /// `Nexus.Performance.UnindexedPropertyAccess` notification
     /// (`unindexed.rs`).
     fn where_equality_seek_operand(
@@ -1757,17 +1962,9 @@ impl<'a> QueryPlanner<'a> {
         if !prop_idx.has_index(label_id, key_id) {
             return None;
         }
-        let value = match value_expr {
-            Expression::Literal(Literal::String(s)) => {
-                crate::index::PropertyValue::String(s.clone())
-            }
-            Expression::Literal(Literal::Integer(i)) => crate::index::PropertyValue::Integer(*i),
-            Expression::Literal(Literal::Float(f)) => crate::index::PropertyValue::Float(*f),
-            Expression::Literal(Literal::Boolean(b)) => crate::index::PropertyValue::Boolean(*b),
-            // null / point / parameter / non-literal: not indexable at
-            // plan time — see the doc comment above.
-            _ => return None,
-        };
+        // null / point / parameter / non-literal: not indexable at plan
+        // time — see the doc comment above.
+        let value = literal_property_value(value_expr)?;
         Some(Operator::NodeIndexSeek {
             label_id,
             key_id,

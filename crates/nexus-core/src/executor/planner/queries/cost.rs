@@ -26,6 +26,22 @@ impl<'a> QueryPlanner<'a> {
                     // label scan.
                     total_cost += 50.0;
                 }
+                Operator::NodeIndexInSeek { values, .. } => {
+                    // One point seek per listed value: the point-seek cost
+                    // scaled by the list length, still far below a label scan
+                    // for any realistic list.
+                    total_cost += 5.0 * values.len() as f64;
+                }
+                Operator::NodeIndexPrefixSeek { .. } => {
+                    // Anchored prefix run over the property B-tree: wider than
+                    // a point seek, narrower than an open-ended range.
+                    total_cost += 25.0;
+                }
+                Operator::NodeIndexParamSeek { .. } => {
+                    // Point lookup like `NodeIndexSeek`, just with the key
+                    // resolved at execution time.
+                    total_cost += 5.0;
+                }
                 Operator::AllNodesScan { .. } => {
                     // Scanning all nodes is more expensive than label scan
                     // Assume full scan of all nodes
@@ -606,6 +622,10 @@ impl<'a> QueryPlanner<'a> {
                 | Operator::AllNodesScan { .. }
                 | Operator::IndexScan { .. }
                 | Operator::NodeIndexSeek { .. }
+                | Operator::NodeIndexRangeSeek { .. }
+                | Operator::NodeIndexInSeek { .. }
+                | Operator::NodeIndexPrefixSeek { .. }
+                | Operator::NodeIndexParamSeek { .. }
                 | Operator::CompositeBtreeSeek { .. }
                 | Operator::SpatialSeek { .. } => {
                     if seen_unwind {
@@ -650,6 +670,10 @@ impl<'a> QueryPlanner<'a> {
                 | Operator::AllNodesScan { .. }
                 | Operator::IndexScan { .. }
                 | Operator::NodeIndexSeek { .. }
+                | Operator::NodeIndexRangeSeek { .. }
+                | Operator::NodeIndexInSeek { .. }
+                | Operator::NodeIndexPrefixSeek { .. }
+                | Operator::NodeIndexParamSeek { .. }
                 | Operator::CompositeBtreeSeek { .. }
                 | Operator::SpatialSeek { .. } => {
                     scans.push(operator);

@@ -194,37 +194,48 @@ fn emit_unindexed_for_where_into(
                     | BinaryOperator::StartsWith
                     | BinaryOperator::Contains
             ) {
-                // Range, `IN`, `STARTS WITH`, and `CONTAINS` predicates
-                // never seek in this pass — `where_equality_seek_operand`
-                // (`strategy.rs`) only lifts plain equality. Unlike the
-                // `Equal` branch above, this fires REGARDLESS of
-                // `has_index`: even a registered index does not help
-                // these predicate shapes yet, so the planner falls back
-                // to a full scan either way and the operator should know.
+                // Range and `IN` predicates DO seek on an indexed property
+                // (`where_range_seek_operand` / `where_in_seek_operand` in
+                // `strategy.rs`), provided the compared-against operand is a
+                // plan-time literal. `CONTAINS` — an unanchored substring
+                // match no ordered index can seek — still full scans even
+                // with an index, so it keeps firing regardless of
+                // `has_index`.
+                // `property_on_left` matters: `IN` and `STARTS WITH` only seek
+                // with the property on the LEFT (`'abc' STARTS WITH n.name`
+                // asks the opposite question), while a range comparison seeks
+                // either way because the planner mirrors the operator.
                 let candidate = match (left.as_ref(), right.as_ref()) {
-                    (Expression::PropertyAccess { variable, property }, _) => {
-                        Some((variable, property))
+                    (Expression::PropertyAccess { variable, property }, other) => {
+                        Some((variable, property, other, true))
                     }
-                    (_, Expression::PropertyAccess { variable, property }) => {
-                        Some((variable, property))
+                    (other, Expression::PropertyAccess { variable, property }) => {
+                        Some((variable, property, other, false))
                     }
                     _ => None,
                 };
-                if let Some((variable, property)) = candidate
+                if let Some((variable, property, other, property_on_left)) = candidate
                     && let Some(label_name) = var_label.get(variable)
                     && let Ok(label_id) = catalog.get_label_id(label_name)
                     && let Ok(key_id) = catalog.get_key_id(property)
                 {
                     let already_indexed = prop_idx.has_index(label_id, key_id);
-                    record_unindexed_predicate_shape_into(
-                        label_id,
-                        key_id,
-                        label_name,
-                        property,
-                        already_indexed,
-                        clause,
-                        out,
-                    );
+                    // An indexed pair whose predicate shape AND operand the
+                    // planner can lift produces a real seek — notifying there
+                    // would claim a full scan that does not happen.
+                    if !(already_indexed
+                        && seekable_predicate_operand(*op, other, property_on_left))
+                    {
+                        record_unindexed_predicate_shape_into(
+                            label_id,
+                            key_id,
+                            label_name,
+                            property,
+                            already_indexed,
+                            clause,
+                            out,
+                        );
+                    }
                 }
             }
             emit_unindexed_for_where_into(catalog, prop_idx, left, var_label, clause, out);
@@ -234,6 +245,53 @@ fn emit_unindexed_for_where_into(
             emit_unindexed_for_where_into(catalog, prop_idx, operand, var_label, clause, out);
         }
         _ => {}
+    }
+}
+
+/// Whether `(op, other)` is a predicate the planner actually lifts to an
+/// index seek when the `(label, property)` pair is indexed — the exact
+/// mirror of the `where_*_seek_operand` helpers in `strategy.rs`. Keeps the
+/// notification honest: it must fire when the query really full scans, and
+/// stay silent when it seeks.
+///
+/// Range comparisons seek against a scalar literal threshold in either
+/// operand order (the planner mirrors the operator); `IN` seeks a literal
+/// list and `STARTS WITH` a literal prefix, both only with the property on
+/// the left (`property_on_left`). `CONTAINS` is an unanchored substring match
+/// — no ordered index can seek it, so it is never seekable. A `$parameter`
+/// operand on any of these shapes has no plan-time value, so it still full
+/// scans.
+fn seekable_predicate_operand(
+    op: BinaryOperator,
+    other: &Expression,
+    property_on_left: bool,
+) -> bool {
+    let is_scalar_literal = |e: &Expression| {
+        matches!(
+            e,
+            Expression::Literal(
+                Literal::String(_) | Literal::Integer(_) | Literal::Float(_) | Literal::Boolean(_)
+            )
+        )
+    };
+    match op {
+        BinaryOperator::GreaterThan
+        | BinaryOperator::GreaterThanOrEqual
+        | BinaryOperator::LessThan
+        | BinaryOperator::LessThanOrEqual => is_scalar_literal(other),
+        BinaryOperator::In => match other {
+            Expression::List(elements) => {
+                property_on_left
+                    && elements.iter().all(|e| {
+                        is_scalar_literal(e) || matches!(e, Expression::Literal(Literal::Null))
+                    })
+            }
+            _ => false,
+        },
+        BinaryOperator::StartsWith => {
+            property_on_left && matches!(other, Expression::Literal(Literal::String(_)))
+        }
+        _ => false,
     }
 }
 
@@ -322,19 +380,17 @@ fn record_unindexed_into(
 }
 
 /// Records `Nexus.Performance.UnindexedPropertyAccess` for a WHERE
-/// predicate whose OPERATOR the planner never seeks in this pass — range
-/// (`>`, `<`, `>=`, `<=`), `IN`, `STARTS WITH`, `CONTAINS` — regardless of
-/// whether `(label_id, key_id)` currently has a registered index.
+/// predicate that still ends up on a full scan: either the pair has no index
+/// at all, or the predicate is one the planner cannot lift even with one —
+/// `CONTAINS` (an unanchored substring match no ordered index can seek), and
+/// any range / `IN` / `STARTS WITH` whose compared-against operand is not a
+/// plan-time literal. The caller (`emit_unindexed_for_where_into`) filters out
+/// the shapes that DO seek via `seekable_predicate_operand`, so reaching this
+/// function means a scan really happens.
 ///
-/// Unlike `record_unindexed_into` (the equality case, where a full scan
-/// only happens because NO index exists), these predicate shapes full
-/// scan even when an index IS registered, because the planner has no
-/// seek/range lowering for them yet — equality is the only predicate
-/// shape lifted to `NodeIndexSeek` in this pass (see
-/// `where_equality_seek_operand` in `strategy.rs`). `already_indexed`
-/// selects between the two message bodies so the notification never
-/// claims "no index" when one actually exists, and never suggests
-/// creating an index that would not change the plan.
+/// `already_indexed` selects between the two message bodies so the
+/// notification never claims "no index" when one actually exists, and never
+/// suggests creating an index that would not change the plan.
 fn record_unindexed_predicate_shape_into(
     label_id: u32,
     key_id: u32,
@@ -357,11 +413,13 @@ fn record_unindexed_predicate_shape_into(
     let description = if already_indexed {
         format!(
             "{clause} selects nodes by `:{label_name}` with a property predicate on \
-             `{property_name}` that the planner cannot yet seek through the \
-             existing index — only a plain equality predicate currently uses \
-             `:{label_name}({property_name})`'s index. The query falls back to a \
-             full label scan plus property comparison, which is O(N) over every \
-             `:{label_name}` node.",
+             `{property_name}` that cannot be served by the existing index — either \
+             an unanchored `CONTAINS` match, which no ordered index can seek, or a \
+             comparison against a value that is not known at plan time. Equality, \
+             range, `IN`, and `STARTS WITH` against a literal (and `=` against a \
+             `$parameter`) all seek `:{label_name}({property_name})`'s index. The \
+             query falls back to a full label scan plus property comparison, which \
+             is O(N) over every `:{label_name}` node.",
         )
     } else {
         let suggested_ddl = format!("CREATE INDEX FOR (n:{label_name}) ON (n.{property_name})");
@@ -405,7 +463,7 @@ fn record_unindexed_predicate_shape_into(
             clause = %clause,
             already_indexed = already_indexed,
             "unindexed-shaped property access on :{}({}) — planner cannot seek \
-             this predicate shape yet (equality-only in this pass)",
+             this predicate (unanchored CONTAINS, or a non-plan-time operand)",
             label_name,
             property_name,
         );

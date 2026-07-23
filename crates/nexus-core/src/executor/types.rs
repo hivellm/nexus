@@ -299,6 +299,57 @@ pub enum Operator {
         /// Pattern variable to bind the returned nodes to.
         variable: String,
     },
+    /// Point-seek union on a single-property B-tree index for a WHERE `IN`
+    /// list predicate (`var.prop IN [a, b, c]`): one `find_exact` per list
+    /// element, bitmap-OR'd. Yields the nodes whose indexed property equals
+    /// any listed value. See phase0_fix-where-in-prefix-param-index-seek.
+    NodeIndexInSeek {
+        /// Label ID the index was created on.
+        label_id: u32,
+        /// Property key ID.
+        key_id: u32,
+        /// Plan-time literal list elements to seek. `NULL` elements are
+        /// dropped by the planner (they can never make the comparison true),
+        /// so an empty vec means an empty / all-`NULL` list — which correctly
+        /// matches nothing.
+        values: Vec<crate::index::PropertyValue>,
+        /// Pattern variable to bind the returned nodes to.
+        variable: String,
+    },
+    /// Prefix seek on a single-property B-tree index for a WHERE `STARTS
+    /// WITH` predicate (`var.prop STARTS WITH '<literal>'`): the contiguous
+    /// run of string keys sharing the prefix. See
+    /// phase0_fix-where-in-prefix-param-index-seek §2.
+    NodeIndexPrefixSeek {
+        /// Label ID the index was created on.
+        label_id: u32,
+        /// Property key ID.
+        key_id: u32,
+        /// Plan-time literal string prefix (may be empty — every string
+        /// starts with `''`).
+        prefix: String,
+        /// Pattern variable to bind the returned nodes to.
+        variable: String,
+    },
+    /// Point seek on a single-property B-tree index whose key is a query
+    /// `$parameter` (`var.prop = $x`), resolved from `ExecutionContext::params`
+    /// at execution time — the planner has no bound value to seek with.
+    ///
+    /// Unlike every other seek, the planner KEEPS the predicate as a residual
+    /// `Filter`: a parameter can be bound to a list/map (which the property
+    /// index does not key) or be missing entirely, and in those cases the
+    /// operator falls back to a full label scan that only the retained filter
+    /// can narrow. See phase0_fix-where-in-prefix-param-index-seek §3.
+    NodeIndexParamSeek {
+        /// Label ID the index was created on.
+        label_id: u32,
+        /// Property key ID.
+        key_id: u32,
+        /// Parameter name (without the leading `$`).
+        parameter: String,
+        /// Pattern variable to bind the returned nodes to.
+        variable: String,
+    },
     /// Scan all nodes (no label filter)
     AllNodesScan {
         /// Variable name

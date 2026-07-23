@@ -1230,6 +1230,92 @@ fn where_range_predicate_without_index_stays_a_scan() {
     );
 }
 
+/// `IN`, `STARTS WITH`, and `= $param` on an indexed property each lift to
+/// their own seek operator; `CONTAINS` — unanchored, unseekable — does not.
+/// See phase0_fix-where-in-prefix-param-index-seek.
+#[test]
+fn where_in_prefix_and_param_predicates_lift_to_their_seeks() {
+    let (catalog, _ctx) = create_test_catalog();
+    let label_id = catalog.get_or_create_label("Person").expect("label");
+    let age_id = catalog.get_or_create_key("age").expect("key");
+    let name_id = catalog.get_or_create_key("name").expect("key");
+    let prop_idx = crate::index::PropertyIndex::new();
+    prop_idx.create_index(label_id, age_id).expect("index age");
+    prop_idx
+        .create_index(label_id, name_id)
+        .expect("index name");
+
+    let lifts = |cypher: &str| -> Vec<Operator> {
+        plan_with_property_index(cypher, &catalog, &prop_idx).expect("plan")
+    };
+
+    let ops = lifts("MATCH (n:Person) WHERE n.age IN [1, 2, 3] RETURN n");
+    assert!(
+        ops.iter()
+            .any(|op| matches!(op, Operator::NodeIndexInSeek { values, .. } if values.len() == 3)),
+        "`IN` must lift to a 3-value NodeIndexInSeek; plan = {ops:?}"
+    );
+
+    let ops = lifts("MATCH (n:Person) WHERE n.name STARTS WITH 'A' RETURN n");
+    assert!(
+        ops.iter()
+            .any(|op| matches!(op, Operator::NodeIndexPrefixSeek { prefix, .. } if prefix == "A")),
+        "`STARTS WITH` must lift to a NodeIndexPrefixSeek; plan = {ops:?}"
+    );
+
+    let ops = lifts("MATCH (n:Person) WHERE n.age = $age RETURN n");
+    assert!(
+        ops.iter().any(
+            |op| matches!(op, Operator::NodeIndexParamSeek { parameter, .. } if parameter == "age")
+        ),
+        "`= $param` must lift to a NodeIndexParamSeek; plan = {ops:?}"
+    );
+    assert!(
+        ops.iter().any(|op| matches!(op, Operator::Filter { .. })),
+        "the parameter predicate must survive as a residual Filter; plan = {ops:?}"
+    );
+
+    // CONTAINS is not seekable by any ordered index — it must stay a scan.
+    let ops = lifts("MATCH (n:Person) WHERE n.name CONTAINS 'A' RETURN n");
+    assert!(
+        ops.iter()
+            .any(|op| matches!(op, Operator::NodeByLabel { .. })),
+        "`CONTAINS` must stay a NodeByLabel scan; plan = {ops:?}"
+    );
+}
+
+/// A literal-keyed seek outranks the parameter seek: it cannot degrade to a
+/// scan at execution time, so it is always the better plan.
+#[test]
+fn literal_seek_wins_over_a_parameter_seek_in_the_same_where() {
+    let (catalog, _ctx) = create_test_catalog();
+    let label_id = catalog.get_or_create_label("Person").expect("label");
+    let age_id = catalog.get_or_create_key("age").expect("key");
+    let name_id = catalog.get_or_create_key("name").expect("key");
+    let prop_idx = crate::index::PropertyIndex::new();
+    prop_idx.create_index(label_id, age_id).expect("index age");
+    prop_idx
+        .create_index(label_id, name_id)
+        .expect("index name");
+
+    let ops = plan_with_property_index(
+        "MATCH (n:Person) WHERE n.age = $age AND n.name = 'Alice' RETURN n",
+        &catalog,
+        &prop_idx,
+    )
+    .expect("plan");
+    assert!(
+        ops.iter()
+            .any(|op| matches!(op, Operator::NodeIndexSeek { .. })),
+        "the literal equality must win the lift; plan = {ops:?}"
+    );
+    assert!(
+        !ops.iter()
+            .any(|op| matches!(op, Operator::NodeIndexParamSeek { .. })),
+        "only one seek seeds the scan; plan = {ops:?}"
+    );
+}
+
 fn plan_with_property_index(
     cypher: &str,
     catalog: &Catalog,

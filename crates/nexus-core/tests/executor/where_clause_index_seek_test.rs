@@ -15,17 +15,31 @@
 //! WHERE clause at PLAN TIME, in place of the equivalent inline-property
 //! seek, whenever `(label, prop)` has a registered single-property index —
 //! mirroring `node_index_seek_for`'s existing inline-property handling.
-//! Scope is EQUALITY ONLY: range (`>`, `<`, `>=`, `<=`), `IN`,
-//! `STARTS WITH`, and `CONTAINS` predicates remain full scans in this pass
-//! (their lack of an index seek is made observable by the
-//! `Nexus.Performance.UnindexedPropertyAccess` notification extension
-//! covered below).
+//!
+//! Follow-ups widened that scope: range (`>`, `<`, `>=`, `<=`) in
+//! `phase0_fix-where-clause-index-seek-extensions`, then `IN`,
+//! `STARTS WITH`, and `= $parameter` in
+//! `phase0_fix-where-in-prefix-param-index-seek`. What still full-scans —
+//! and therefore still raises `Nexus.Performance.UnindexedPropertyAccess`,
+//! covered below — is `CONTAINS` (an unanchored substring match no ordered
+//! index can seek) and any of the other shapes compared against a value
+//! that is not known at plan time.
 
 use nexus_core::Engine;
 use nexus_core::executor::types::Operator;
 use nexus_core::testing::TestContext;
 
 const UNINDEXED_CODE: &str = "Nexus.Performance.UnindexedPropertyAccess";
+
+/// A single-entry parameter envelope. The engine rejects a query whose
+/// `$parameter` is not supplied (`ERR_MISSING_PARAMETER`), so every
+/// parameterised case below has to bind its value.
+fn params(
+    name: &str,
+    value: serde_json::Value,
+) -> std::collections::HashMap<String, serde_json::Value> {
+    std::collections::HashMap::from([(name.to_string(), value)])
+}
 
 /// PLAN-SHAPE (fails pre-fix): a WHERE-form equality predicate on an
 /// indexed property must produce a `NodeIndexSeek`, not a `NodeByLabel`
@@ -211,12 +225,13 @@ fn where_form_equality_with_extra_conjunct_lifts_seek_and_keeps_residual_filter(
     );
 }
 
-/// `Nexus.Performance.UnindexedPropertyAccess` baseline: a range predicate
-/// on an indexed property full-scans (no seek exists for range predicates
-/// in this pass) and must surface the unindexed-access notification, since
-/// the scan gets none of the index's benefit.
+/// Range, `IN`, and `STARTS WITH` predicates against a plan-time literal all
+/// seek the index now, so the notification — which claims a full label scan —
+/// must NOT fire for them. Updated from the pre-seek contract by
+/// `phase0_fix-where-clause-index-seek-extensions` (range) and
+/// `phase0_fix-where-in-prefix-param-index-seek` (`IN` / `STARTS WITH`).
 #[test]
-fn range_predicate_on_indexed_property_emits_unindexed_notification() {
+fn seeking_predicates_on_an_indexed_property_emit_no_unindexed_notification() {
     let ctx = TestContext::new();
     let mut engine = Engine::with_isolated_catalog(ctx.path()).expect("engine init");
 
@@ -225,79 +240,80 @@ fn range_predicate_on_indexed_property_emits_unindexed_notification() {
         .expect("seed");
     engine
         .execute_cypher("CREATE INDEX FOR (n:Person) ON (n.age)")
-        .expect("create index");
-
-    let result = engine
-        .execute_cypher("MATCH (n:Person) WHERE n.age > 30 RETURN n")
-        .expect("query must succeed");
-
-    assert!(
-        result
-            .notifications
-            .iter()
-            .any(|n| n.code == UNINDEXED_CODE),
-        "a range predicate must full-scan and notify, even though the \
-         property is indexed; got {:?}",
-        result.notifications
-    );
-}
-
-/// `Nexus.Performance.UnindexedPropertyAccess`: `IN` predicates on an
-/// indexed property remain full scans and must notify.
-#[test]
-fn in_predicate_on_indexed_property_emits_unindexed_notification() {
-    let ctx = TestContext::new();
-    let mut engine = Engine::with_isolated_catalog(ctx.path()).expect("engine init");
-
-    engine
-        .execute_cypher("CREATE (:Person {name: 'Alice', age: 30})")
-        .expect("seed");
-    engine
-        .execute_cypher("CREATE INDEX FOR (n:Person) ON (n.age)")
-        .expect("create index");
-
-    let result = engine
-        .execute_cypher("MATCH (n:Person) WHERE n.age IN [30, 40] RETURN n")
-        .expect("query must succeed");
-
-    assert!(
-        result
-            .notifications
-            .iter()
-            .any(|n| n.code == UNINDEXED_CODE),
-        "an IN predicate must full-scan and notify, even though the \
-         property is indexed; got {:?}",
-        result.notifications
-    );
-}
-
-/// `Nexus.Performance.UnindexedPropertyAccess`: `STARTS WITH` predicates on
-/// an indexed property remain full scans and must notify.
-#[test]
-fn starts_with_predicate_on_indexed_property_emits_unindexed_notification() {
-    let ctx = TestContext::new();
-    let mut engine = Engine::with_isolated_catalog(ctx.path()).expect("engine init");
-
-    engine
-        .execute_cypher("CREATE (:Person {name: 'Alice', age: 30})")
-        .expect("seed");
+        .expect("create index on age");
     engine
         .execute_cypher("CREATE INDEX FOR (n:Person) ON (n.name)")
-        .expect("create index");
+        .expect("create index on name");
 
-    let result = engine
-        .execute_cypher("MATCH (n:Person) WHERE n.name STARTS WITH 'A' RETURN n")
-        .expect("query must succeed");
+    for cypher in [
+        "MATCH (n:Person) WHERE n.age > 30 RETURN n",
+        "MATCH (n:Person) WHERE n.age IN [30, 40] RETURN n",
+        "MATCH (n:Person) WHERE n.name STARTS WITH 'A' RETURN n",
+        "MATCH (n:Person) WHERE n.age = $age RETURN n",
+    ] {
+        let result = engine
+            .execute_cypher_with_params(cypher, params("age", serde_json::json!(30)))
+            .expect("query must succeed");
+        assert!(
+            !result
+                .notifications
+                .iter()
+                .any(|n| n.code == UNINDEXED_CODE),
+            "`{cypher}` seeks the index — it must not report a full scan; got {:?}",
+            result.notifications
+        );
+    }
+}
 
-    assert!(
-        result
-            .notifications
-            .iter()
-            .any(|n| n.code == UNINDEXED_CODE),
-        "a STARTS WITH predicate must full-scan and notify, even though \
-         the property is indexed; got {:?}",
-        result.notifications
-    );
+/// The notification still fires for the same predicate SHAPES when the
+/// compared-against operand is a `$parameter`: without a plan-time value
+/// there is nothing to seek with, so these really do full-scan. (Equality is
+/// the exception — `NodeIndexParamSeek` resolves its key at execution time.)
+#[test]
+fn seeking_shapes_with_a_parameter_operand_still_notify() {
+    let ctx = TestContext::new();
+    let mut engine = Engine::with_isolated_catalog(ctx.path()).expect("engine init");
+
+    engine
+        .execute_cypher("CREATE (:Person {name: 'Alice', age: 30})")
+        .expect("seed");
+    engine
+        .execute_cypher("CREATE INDEX FOR (n:Person) ON (n.age)")
+        .expect("create index on age");
+    engine
+        .execute_cypher("CREATE INDEX FOR (n:Person) ON (n.name)")
+        .expect("create index on name");
+
+    for (cypher, name, value) in [
+        (
+            "MATCH (n:Person) WHERE n.age > $age RETURN n",
+            "age",
+            serde_json::json!(10),
+        ),
+        (
+            "MATCH (n:Person) WHERE n.age IN $ages RETURN n",
+            "ages",
+            serde_json::json!([30, 40]),
+        ),
+        (
+            "MATCH (n:Person) WHERE n.name STARTS WITH $prefix RETURN n",
+            "prefix",
+            serde_json::json!("A"),
+        ),
+    ] {
+        let result = engine
+            .execute_cypher_with_params(cypher, params(name, value))
+            .expect("query must succeed");
+        assert!(
+            result
+                .notifications
+                .iter()
+                .any(|n| n.code == UNINDEXED_CODE),
+            "`{cypher}` has no plan-time seek key — the full scan must still be \
+             reported; got {:?}",
+            result.notifications
+        );
+    }
 }
 
 /// `Nexus.Performance.UnindexedPropertyAccess`: `CONTAINS` predicates on an

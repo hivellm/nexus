@@ -607,13 +607,14 @@ MATCH (a:Person {id: edge.from_id}), (b:Person {id: edge.to_id})
 CREATE (a)-[:KNOWS]->(b)
 ```
 
-**WHERE-clause predicates** (equality on literals now seekable):
+**WHERE-clause predicates** (every form below seeks when an index exists):
 ```cypher
 -- WHERE-clause equality with literal → index seek
 MATCH (n:Person) WHERE n.age = 30
 RETURN n
 
--- WHERE-clause equality with parameter → full-table filter (deferred optimization)
+-- WHERE-clause equality with parameter → index seek, key resolved at
+-- execution time (the predicate is kept as a residual filter)
 MATCH (n:Person) WHERE n.age = $age
 RETURN n
 
@@ -622,8 +623,17 @@ RETURN n
 MATCH (n:Person) WHERE n.age > 30
 RETURN n
 
--- $parameter equality, IN, and STARTS WITH → full-table filter (deferred)
+-- IN over a literal list → union of point seeks
+MATCH (n:Person) WHERE n.age IN [30, 40, 50]
+RETURN n
+
+-- STARTS WITH a literal prefix → index prefix seek
 MATCH (n:Person) WHERE n.name STARTS WITH 'A'
+RETURN n
+
+-- CONTAINS → full-table filter (an unanchored substring match cannot be
+-- served by an ordered index)
+MATCH (n:Person) WHERE n.name CONTAINS 'li'
 RETURN n
 ```
 
@@ -631,7 +641,11 @@ RETURN n
 - If no index exists on the `(label, property)` pair, both constant and correlated predicates fall back to a label scan followed by property filtering.
 - WHERE-clause equality comparisons with **literal values** (e.g., `WHERE n.property = 30`) now use index seeks when an index exists on the property.
 - WHERE-clause **range comparisons** with a literal (`>`, `>=`, `<`, `<=`, and the mirrored `30 < n.age`) now use an index **range seek** when an index exists (exclusive `>`/`<` exclude the threshold; residual filters still run). One bound lifts to the seek; a second bound (`age > 10 AND age < 40`) stays a residual filter.
-- WHERE-clause equality with **`$parameter`** values and the **`IN`** / **`STARTS WITH`** / **`CONTAINS`** operators currently evaluate the filter after a label scan (optimization deferred; `IN`/`STARTS WITH`/`$parameter` tracked in `phase0_fix-where-in-prefix-param-index-seek`).
+- WHERE-clause **`IN`** over a literal list uses a **union of point seeks** (one per element). `NULL` elements are dropped — they can never make the comparison true — so `IN []` and `IN [null]` correctly match nothing. A `$parameter` list (`IN $ages`) has no plan-time elements and stays a label scan.
+- WHERE-clause **`STARTS WITH`** a literal prefix uses an index **prefix seek** (the contiguous run of string keys sharing the prefix). Only `n.prop STARTS WITH 'x'` seeks; the reversed `'x' STARTS WITH n.prop` asks a different question and stays a scan.
+- WHERE-clause equality against a **`$parameter`** uses a **parameter seek** that resolves the key from the query envelope at execution time (no driving rows required). If the parameter is bound to a list/map, or is absent from the envelope, the operator falls back to a label scan — which is why this is the one seek that keeps its predicate as a residual filter.
+- Numeric seek keys probe both `Integer` and `Float` index entries, because Cypher compares `10` and `10.0` equal while the B-tree keys them separately.
+- **`CONTAINS`** still evaluates the filter after a label scan even with an index, and keeps emitting `Nexus.Performance.UnindexedPropertyAccess`.
 - Predicate values that are function calls or complex expressions are not index-eligible and trigger a label scan.
 
 **Performance impact**:

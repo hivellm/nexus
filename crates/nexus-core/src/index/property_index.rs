@@ -230,6 +230,31 @@ impl PropertyIndex {
         Ok(result)
     }
 
+    /// Find nodes whose indexed STRING property starts with `prefix`.
+    ///
+    /// Walks the B-tree from the first key `>= String(prefix)` and stops at
+    /// the first key that is not a string starting with it: strings sort
+    /// before every other `PropertyValue` variant (see the `Ord` impl above)
+    /// and lexicographically among themselves, so every match forms one
+    /// contiguous run starting at that bound. O(matching keys), never a full
+    /// tree walk, and — unlike a `prefix ..= prefix + char::MAX` range — exact
+    /// for every input, including strings that themselves contain `char::MAX`.
+    pub fn find_prefix(&self, label_id: u32, key_id: u32, prefix: &str) -> Result<RoaringBitmap> {
+        let trees = self.property_trees.read();
+        let mut result = RoaringBitmap::new();
+
+        if let Some(tree) = trees.get(&(label_id, key_id)) {
+            for (value, bitmap) in tree.range(PropertyValue::String(prefix.to_string())..) {
+                match value {
+                    PropertyValue::String(s) if s.starts_with(prefix) => result |= bitmap,
+                    _ => break,
+                }
+            }
+        }
+
+        Ok(result)
+    }
+
     /// Find nodes with property value greater than threshold
     pub fn find_greater_than(
         &self,
