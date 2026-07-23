@@ -4,6 +4,7 @@
 
 mod call_subquery_test;
 mod collect_subquery_test;
+mod composite_index_seek_test;
 mod correlated_index_seek_e2e_test;
 mod correlated_predicate_notification_e2e_test;
 mod create_path_index_and_constraints_test;

@@ -297,8 +297,16 @@ impl<'a> QueryPlanner<'a> {
                 join_type,
                 ..
             } => {
-                let left_cardinality = self.estimate_plan_cost(&[*left.clone()])?;
-                let right_cardinality = self.estimate_plan_cost(&[*right.clone()])?;
+                // Cardinality (expected ROW COUNT) of each side, not the
+                // cost of producing it — `estimate_plan_cost` returns a
+                // cost figure in abstract cost units, which is the wrong
+                // category to feed into a cartesian-product / output-row
+                // estimate below. Mirrors the `Union` arm's use of
+                // `estimate_operator_cardinality` for the same purpose.
+                let left_cardinality =
+                    self.estimate_operator_cardinality(std::slice::from_ref(left.as_ref()))?;
+                let right_cardinality =
+                    self.estimate_operator_cardinality(std::slice::from_ref(right.as_ref()))?;
 
                 let (join_cost, output_cardinality) = match join_type {
                     JoinType::Inner => {

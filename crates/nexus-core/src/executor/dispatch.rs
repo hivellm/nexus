@@ -1333,6 +1333,9 @@ impl Executor {
         if let Some(pi) = self.property_index() {
             planner = planner.with_property_index(pi);
         }
+        if let Some(ci) = self.composite_btree() {
+            planner = planner.with_composite_index(ci);
+        }
 
         let mut operators = planner.plan_query(ast)?;
 

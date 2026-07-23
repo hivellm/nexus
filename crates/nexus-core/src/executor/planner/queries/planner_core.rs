@@ -17,6 +17,7 @@ impl<'a> QueryPlanner<'a> {
             knn_index,
             rtree_registry: None,
             property_index: None,
+            composite_index: None,
             plan_cache: QueryPlanCache::new(1000, Duration::from_secs(300)), // 1000 plans, 5min TTL
             aggregation_cache: AggregationCache::new(500, Duration::from_secs(180)), // 500 results, 3min TTL
             notifications: Vec::new(),
@@ -55,6 +56,22 @@ impl<'a> QueryPlanner<'a> {
     /// tests, the standalone `Executor::parse_and_plan`).
     pub fn with_property_index(mut self, idx: &'a crate::index::PropertyIndex) -> Self {
         self.property_index = Some(idx);
+        self
+    }
+
+    /// Builder shim: install a composite B-tree index registry handle
+    /// so an inline multi-property selector (`MATCH (n:L {a: 1, b:
+    /// 2})`) can seek a registered composite index / NODE KEY
+    /// constraint instead of falling back to a single-property index
+    /// seek or a full label scan. Idiomatic call:
+    /// `QueryPlanner::new(...).with_composite_index(reg)`. Without a
+    /// handle the planner never emits `Operator::CompositeBtreeSeek`,
+    /// matching the legacy behaviour of callers with no index handle.
+    pub fn with_composite_index(
+        mut self,
+        registry: &'a crate::index::composite_btree::CompositeBtreeRegistry,
+    ) -> Self {
+        self.composite_index = Some(registry);
         self
     }
 
@@ -222,6 +239,7 @@ impl<'a> QueryPlanner<'a> {
                     knn_index: self.knn_index,
                     rtree_registry: self.rtree_registry.clone(),
                     property_index: self.property_index,
+                    composite_index: self.composite_index,
                     plan_cache: QueryPlanCache::new(0, std::time::Duration::from_secs(0)), // Empty cache
                     aggregation_cache: AggregationCache::new(
                         100,

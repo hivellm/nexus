@@ -243,6 +243,14 @@ pub struct QueryPlanner<'a> {
     /// pair has a registered property index and emits
     /// `ERR_USING_INDEX_NOT_FOUND` when it doesn't.
     property_index: Option<&'a crate::index::PropertyIndex>,
+    /// Composite B-tree index registry handle for inline multi-property
+    /// selector seeks (`MATCH (n:L {a: 1, b: 2})` against a registered
+    /// `(a, b)` composite index / NODE KEY constraint). Optional: when
+    /// `None` the planner never emits `Operator::CompositeBtreeSeek`,
+    /// matching the legacy behaviour of callers without an index handle
+    /// (planner unit tests, the standalone `Executor::parse_and_plan`
+    /// path before `with_composite_index` is threaded in).
+    composite_index: Option<&'a crate::index::composite_btree::CompositeBtreeRegistry>,
     /// Query plan cache for performance optimization
     plan_cache: QueryPlanCache,
     /// Aggregation result cache for intermediate results

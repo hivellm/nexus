@@ -596,9 +596,25 @@ MATCH (a:Person {id: edge.from_id}), (b:Person {id: edge.to_id})
 CREATE (a)-[:KNOWS]->(b)
 ```
 
+**WHERE-clause predicates** (equality on literals now seekable):
+```cypher
+-- WHERE-clause equality with literal → index seek
+MATCH (n:Person) WHERE n.age = 30
+RETURN n
+
+-- WHERE-clause equality with parameter → full-table filter (deferred optimization)
+MATCH (n:Person) WHERE n.age = $age
+RETURN n
+
+-- WHERE-clause range/string operators → full-table filter
+MATCH (n:Person) WHERE n.age > 30
+RETURN n
+```
+
 **Fallback and limitations**:
 - If no index exists on the `(label, property)` pair, both constant and correlated predicates fall back to a label scan followed by property filtering.
-- The WHERE-clause form `MATCH (n:Label) WHERE n.property = value` does **not** yet use index seeks (tracked separately; currently evaluates the filter after matching nodes).
+- WHERE-clause equality comparisons with **literal values** (e.g., `WHERE n.property = 30`) now use index seeks when an index exists on the property.
+- WHERE-clause equality with **`$parameter`** values, range operators (>, <, >=, <=), and string operations (IN, STARTS WITH, CONTAINS) currently evaluate the filter after a label scan (optimization deferred).
 - Predicate values that are function calls or complex expressions are not index-eligible and trigger a label scan.
 
 **Performance impact**:
