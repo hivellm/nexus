@@ -66,11 +66,20 @@ impl RecordStore {
             }
         }
 
-        let offset = (node_id as usize * NODE_RECORD_SIZE) as u64;
+        // Overflow-safe offset (see read_node); a write whose offset
+        // arithmetic overflows is rejected rather than wrapping past the map.
+        let offset = node_id
+            .checked_mul(NODE_RECORD_SIZE as u64)
+            .ok_or_else(|| Error::Storage(format!("node id {} offset overflow", node_id)))?;
+        let record_end = offset
+            .checked_add(NODE_RECORD_SIZE as u64)
+            .ok_or_else(|| Error::Storage(format!("node id {} offset overflow", node_id)))?;
 
-        // Phase 3 Optimization: Pre-check file size to avoid unnecessary grow check
-        if offset + NODE_RECORD_SIZE as u64 > self.nodes_file_size as u64 {
-            self.grow_nodes_file()?;
+        // Grow the file if the target record extends past it. #4: the grow is
+        // sized to at least `record_end`, so a sparse write far past EOF is
+        // covered by a single grow instead of slicing past the mapping.
+        if record_end > self.nodes_file_size as u64 {
+            self.grow_nodes_file(record_end)?;
         }
 
         // Phase 3 Optimization: Direct write without intermediate allocation
@@ -184,9 +193,18 @@ impl RecordStore {
         // Acquire is sufficient - pairs with Release barriers in write operations
         std::sync::atomic::fence(std::sync::atomic::Ordering::Acquire);
 
-        let offset = (node_id as usize * NODE_RECORD_SIZE) as u64;
-
-        if offset + NODE_RECORD_SIZE as u64 > self.nodes_file_size as u64 {
+        // Overflow-safe offset: compute `node_id * SIZE` and `offset + SIZE`
+        // with checked u64 arithmetic (never `id as usize`, which also
+        // truncates on 32-bit targets). A crafted/corrupt id can otherwise
+        // make the multiply overflow, or make `offset + SIZE` wrap to 0 and
+        // slip past the bounds check, then panic on the out-of-range slice.
+        let offset = node_id
+            .checked_mul(NODE_RECORD_SIZE as u64)
+            .ok_or_else(|| Error::NotFound(format!("Node {} not found", node_id)))?;
+        let record_end = offset
+            .checked_add(NODE_RECORD_SIZE as u64)
+            .ok_or_else(|| Error::NotFound(format!("Node {} not found", node_id)))?;
+        if record_end > self.nodes_file_size as u64 {
             return Err(Error::NotFound(format!("Node {} not found", node_id)));
         }
 
@@ -268,11 +286,19 @@ impl RecordStore {
     /// Write a relationship record
     /// Phase 3 Deep Optimization: Optimized write path
     pub fn write_rel(&mut self, rel_id: u64, record: &RelationshipRecord) -> Result<()> {
-        let offset = (rel_id as usize * REL_RECORD_SIZE) as u64;
+        // Overflow-safe offset (see read_node); a write whose offset
+        // arithmetic overflows is rejected rather than wrapping past the map.
+        let offset = rel_id
+            .checked_mul(REL_RECORD_SIZE as u64)
+            .ok_or_else(|| Error::Storage(format!("relationship id {} offset overflow", rel_id)))?;
+        let record_end = offset
+            .checked_add(REL_RECORD_SIZE as u64)
+            .ok_or_else(|| Error::Storage(format!("relationship id {} offset overflow", rel_id)))?;
 
-        // Phase 3 Optimization: Pre-check file size to avoid unnecessary grow check
-        if offset + REL_RECORD_SIZE as u64 > self.rels_file_size as u64 {
-            self.grow_rels_file()?;
+        // Grow the file if the target record extends past it. #4: sized to at
+        // least `record_end` so a sparse write far past EOF is covered.
+        if record_end > self.rels_file_size as u64 {
+            self.grow_rels_file(record_end)?;
         }
 
         // Phase 3 Optimization: Direct write without intermediate allocation
@@ -295,9 +321,14 @@ impl RecordStore {
 
     /// Read a relationship record
     pub fn read_rel(&self, rel_id: u64) -> Result<RelationshipRecord> {
-        let offset = (rel_id as usize * REL_RECORD_SIZE) as u64;
-
-        if offset + REL_RECORD_SIZE as u64 > self.rels_file_size as u64 {
+        // Overflow-safe offset (see read_node).
+        let offset = rel_id
+            .checked_mul(REL_RECORD_SIZE as u64)
+            .ok_or_else(|| Error::NotFound(format!("Relationship {} not found", rel_id)))?;
+        let record_end = offset
+            .checked_add(REL_RECORD_SIZE as u64)
+            .ok_or_else(|| Error::NotFound(format!("Relationship {} not found", rel_id)))?;
+        if record_end > self.rels_file_size as u64 {
             return Err(Error::NotFound(format!(
                 "Relationship {} not found",
                 rel_id

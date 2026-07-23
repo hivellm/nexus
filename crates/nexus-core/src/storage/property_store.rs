@@ -359,8 +359,11 @@ impl PropertyStore {
 
     /// Load properties at a specific offset
     pub fn load_properties_at_offset(&self, offset: u64) -> Result<Option<serde_json::Value>> {
-        if offset as usize >= self.mmap.len() {
-            return Ok(None);
+        // #3: reject any offset whose full 13-byte entry header would run past
+        // EOF (see get_entity_info_at_offset).
+        match offset.checked_add(PROPERTY_ENTRY_HEADER_SIZE) {
+            Some(end) if end <= self.mmap.len() as u64 => {}
+            _ => return Ok(None),
         }
 
         // Read entity_id (8 bytes)
@@ -389,8 +392,13 @@ impl PropertyStore {
     /// Check what entity type is stored at a given offset
     /// Returns (entity_id, entity_type) if found, None otherwise
     pub fn get_entity_info_at_offset(&self, offset: u64) -> Option<(u64, EntityType)> {
-        if offset as usize >= self.mmap.len() {
-            return None;
+        // #3: reject any offset whose full 13-byte entry header would run past
+        // EOF, not just `offset >= len`. A tail shorter than the header cannot
+        // hold a valid entry, and the read_u64/read_u8 below would otherwise
+        // walk off the mapping and panic on a corrupt/crafted prop_ptr.
+        match offset.checked_add(PROPERTY_ENTRY_HEADER_SIZE) {
+            Some(end) if end <= self.mmap.len() as u64 => {}
+            _ => return None,
         }
 
         // Read entity_id (8 bytes)
@@ -953,33 +961,51 @@ impl PropertyStore {
         self.write_u8(entry_offset + 8, ENTITY_TYPE_TOMBSTONE);
     }
 
-    /// Read a u64 value from the given offset
+    /// Read a u64 value from the given offset.
+    ///
+    /// #3: bounds-checked so a caller that omits its own pre-check cannot
+    /// panic here. Returns 0 when the 8-byte read would run past EOF — never
+    /// reached with a valid header offset, which the call sites already guard.
     fn read_u64(&self, offset: u64) -> u64 {
+        let start = offset as usize;
+        match start.checked_add(8) {
+            Some(end) if end <= self.mmap.len() => {}
+            _ => return 0,
+        }
         u64::from_le_bytes([
-            self.mmap[offset as usize],
-            self.mmap[offset as usize + 1],
-            self.mmap[offset as usize + 2],
-            self.mmap[offset as usize + 3],
-            self.mmap[offset as usize + 4],
-            self.mmap[offset as usize + 5],
-            self.mmap[offset as usize + 6],
-            self.mmap[offset as usize + 7],
+            self.mmap[start],
+            self.mmap[start + 1],
+            self.mmap[start + 2],
+            self.mmap[start + 3],
+            self.mmap[start + 4],
+            self.mmap[start + 5],
+            self.mmap[start + 6],
+            self.mmap[start + 7],
         ])
     }
 
-    /// Read a u32 value from the given offset
+    /// Read a u32 value from the given offset (bounds-checked; see read_u64).
     fn read_u32(&self, offset: u64) -> u32 {
+        let start = offset as usize;
+        match start.checked_add(4) {
+            Some(end) if end <= self.mmap.len() => {}
+            _ => return 0,
+        }
         u32::from_le_bytes([
-            self.mmap[offset as usize],
-            self.mmap[offset as usize + 1],
-            self.mmap[offset as usize + 2],
-            self.mmap[offset as usize + 3],
+            self.mmap[start],
+            self.mmap[start + 1],
+            self.mmap[start + 2],
+            self.mmap[start + 3],
         ])
     }
 
-    /// Read a u8 value from the given offset
+    /// Read a u8 value from the given offset (bounds-checked; see read_u64).
     fn read_u8(&self, offset: u64) -> u8 {
-        self.mmap[offset as usize]
+        let start = offset as usize;
+        if start >= self.mmap.len() {
+            return 0;
+        }
+        self.mmap[start]
     }
 
     /// Return the byte-offset stored in the reverse index for `(entity_id, entity_type)`.
@@ -1112,6 +1138,34 @@ mod tests {
         let ctx = TestContext::new();
         let store = PropertyStore::new(ctx.path().to_path_buf()).unwrap();
         assert_eq!(store.property_count(), 0);
+    }
+
+    /// #3: a `prop_ptr` landing in the last 12 bytes before EOF must make the
+    /// header readers return `None`/`Ok(None)` — not over-read past
+    /// `mmap.len()` and panic. The old guard only rejected `offset >= len`,
+    /// so any offset in `[len - 12, len)` passed and then `read_u64` walked
+    /// off the end of the mapping. This is reachable from `read_node` /
+    /// `repair_corrupt_node_prop_ptrs` on a corrupt on-disk pointer.
+    #[test]
+    fn header_read_near_eof_returns_none_not_panic() {
+        let ctx = TestContext::new();
+        let store = PropertyStore::new(ctx.path().to_path_buf()).unwrap();
+        let len = store.mmap.len() as u64;
+        assert!(len >= PROPERTY_ENTRY_HEADER_SIZE, "fixture too small");
+
+        // Every offset whose 13-byte header would run past EOF must be
+        // rejected cleanly, including the exact last byte (`len - 1`).
+        for offset in (len - (PROPERTY_ENTRY_HEADER_SIZE - 1))..len {
+            assert_eq!(
+                store.get_entity_info_at_offset(offset),
+                None,
+                "get_entity_info_at_offset({offset}) (len {len}) must return None"
+            );
+            assert!(
+                matches!(store.load_properties_at_offset(offset), Ok(None)),
+                "load_properties_at_offset({offset}) (len {len}) must return Ok(None)"
+            );
+        }
     }
 
     #[test]

@@ -440,12 +440,18 @@ impl RecordStore {
 
     /// Grow the nodes file
     /// Phase 1 Deep Optimization: Pre-allocate larger chunks to reduce growth frequency
-    pub(super) fn grow_nodes_file(&mut self) -> Result<()> {
+    pub(super) fn grow_nodes_file(&mut self, min_required: u64) -> Result<()> {
         // Phase 1 Deep Optimization: Grow by larger factor to reduce frequency
         // Minimum 2MB growth to reduce frequent remapping overhead
         let min_growth = 2 * 1024 * 1024; // 2MB
         let calculated_size = ((self.nodes_file_size as f64) * FILE_GROWTH_FACTOR) as usize;
-        let new_size = calculated_size.max(self.nodes_file_size + min_growth);
+        // #4: size the grow to at least the caller's target byte offset, so a
+        // single sparse write far past EOF cannot slice past the freshly
+        // remapped file. Mirrors property_store::ensure_capacity's
+        // `.max(required_size)`.
+        let new_size = calculated_size
+            .max(self.nodes_file_size + min_growth)
+            .max(min_required as usize);
 
         // Resize the file
         self.nodes_file.set_len(new_size as u64)?;
@@ -462,12 +468,16 @@ impl RecordStore {
 
     /// Grow the relationships file
     /// Phase 1 Deep Optimization: Pre-allocate larger chunks to reduce growth frequency
-    pub(super) fn grow_rels_file(&mut self) -> Result<()> {
+    pub(super) fn grow_rels_file(&mut self, min_required: u64) -> Result<()> {
         // Phase 1 Deep Optimization: Grow by larger factor to reduce frequency
         // Minimum 2MB growth to reduce frequent remapping overhead
         let min_growth = 2 * 1024 * 1024; // 2MB
         let calculated_size = ((self.rels_file_size as f64) * FILE_GROWTH_FACTOR) as usize;
-        let new_size = calculated_size.max(self.rels_file_size + min_growth);
+        // #4: size the grow to at least the caller's target byte offset (see
+        // grow_nodes_file).
+        let new_size = calculated_size
+            .max(self.rels_file_size + min_growth)
+            .max(min_required as usize);
 
         // Resize the file
         self.rels_file.set_len(new_size as u64)?;

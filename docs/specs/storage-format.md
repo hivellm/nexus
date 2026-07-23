@@ -604,6 +604,35 @@ Backup strategy:
 - Verify checksums on restore
 ```
 
+#### Bounds-checking contract (record & property stores)
+
+A corrupt or adversarially-crafted on-disk value (a bad `dst_id`, a bad
+`prop_ptr`, or a large id-space gap) must surface as a storage `Error` /
+`None`, **never** an out-of-bounds slice panic that aborts the query thread
+or the process (`phase0_fix-storage-oob-panics`). The stores enforce:
+
+- **Overflow-safe record offsets.** `read_node`/`write_node`/`read_rel`/
+  `write_rel` compute `id * RECORD_SIZE` and `offset + RECORD_SIZE` with
+  checked `u64` arithmetic (never `id as usize`, which would also truncate on
+  a 32-bit target). An id whose byte offset overflows is rejected
+  (`NotFound` on read, `Storage` on write) instead of wrapping past the
+  bounds check — in a release build the release profile does not enable
+  `overflow-checks`, so unchecked arithmetic would silently wrap.
+- **Header-length-aware property reads.** `get_entity_info_at_offset` and
+  `load_properties_at_offset` reject any offset whose full 13-byte entry
+  header (`entity_id` 8 + `entity_type` 1 + `data_size` 4) would run past
+  EOF — not merely `offset >= len` — and the low-level `read_u64`/`read_u32`/
+  `read_u8` helpers are themselves bounds-checked (returning `0` rather than
+  indexing past the mapping) so a future caller that omits its own pre-check
+  is still panic-safe. This keeps the corruption-defense paths
+  (`repair_corrupt_node_prop_ptrs`, run at startup) from being crashed by the
+  exact corrupt pointer they exist to sanitize.
+- **Grow sized to the write target.** `grow_nodes_file`/`grow_rels_file` size
+  the new file to `max(1.5x, +2 MB, target_offset + RECORD_SIZE)`, so a single
+  sparse write whose offset is more than one growth step past EOF is covered
+  by that one grow instead of slicing past the freshly-remapped file. This
+  matches `property_store::ensure_capacity`'s `.max(required_size)`.
+
 ## Debugging Tools
 
 ### Hexdump Example
