@@ -891,7 +891,17 @@ RETURN CASE
   WHEN n.age < 65 THEN 'Adult'
   ELSE 'Senior'
 END AS age_group
+
+-- CASE (and list/pattern comprehensions) are supported inside WHERE too,
+-- evaluated against each row — not only in RETURN/WITH projections.
+MATCH (n) WHERE CASE WHEN n.x > 4 THEN true ELSE false END RETURN n
 ```
+
+A `WHERE` clause is evaluated by carrying the parsed predicate AST through to
+the filter operator (`Operator::Filter`/`OptionalFilter` `predicate_ast`) and
+evaluating it directly against each row, the same evaluator `RETURN`/`WITH`
+projections use — so `CASE`, list/pattern comprehensions, and other complex
+expressions in a `WHERE` evaluate identically to their projected form.
 
 ### Comprehensions
 

@@ -16,6 +16,7 @@ impl Executor {
         &self,
         context: &mut ExecutionContext,
         predicate: &str,
+        ast: Option<&parser::Expression>,
     ) -> Result<()> {
         // Try index-based filtering first (optimization for Phase 5)
         if let Some(optimized_rows) = self.try_index_based_filter(context, predicate)? {
@@ -92,9 +93,17 @@ impl Executor {
             }
         }
 
-        // Regular predicate expression
-        let mut parser = parser::CypherParser::new(predicate.to_string());
-        let expr = parser.parse_expression()?;
+        // Regular predicate expression. Prefer the AST the planner carried for
+        // WHERE clauses over re-parsing the display string, which cannot
+        // represent CASE / comprehensions (they serialize to "?" and re-parse
+        // wrongly). phase0_fix-where-predicate-case-comprehension-lost.
+        let expr = match ast {
+            Some(e) => e.clone(),
+            None => {
+                let mut parser = parser::CypherParser::new(predicate.to_string());
+                parser.parse_expression()?
+            }
+        };
 
         // Get rows from variables OR from result_set.rows (e.g., from UNWIND)
         // CRITICAL: Always prefer materializing from variables if they exist,
@@ -344,6 +353,7 @@ impl Executor {
         &self,
         context: &mut ExecutionContext,
         predicate: &str,
+        ast: Option<&parser::Expression>,
         optional_vars: &[String],
     ) -> Result<()> {
         tracing::debug!(
@@ -352,9 +362,15 @@ impl Executor {
             optional_vars
         );
 
-        // Parse the predicate
-        let mut parser = parser::CypherParser::new(predicate.to_string());
-        let expr = parser.parse_expression()?;
+        // Prefer the carried AST over re-parsing (see execute_filter).
+        // phase0_fix-where-predicate-case-comprehension-lost.
+        let expr = match ast {
+            Some(e) => e.clone(),
+            None => {
+                let mut parser = parser::CypherParser::new(predicate.to_string());
+                parser.parse_expression()?
+            }
+        };
 
         // Get rows from variables or result_set
         let had_existing_rows = !context.result_set.rows.is_empty();
@@ -612,7 +628,7 @@ mod tests {
         let mut context = ExecutionContext::new(HashMap::new(), None);
         context.set_variable("n", Value::Array(nodes.to_vec()));
         executor
-            .execute_filter(&mut context, predicate)
+            .execute_filter(&mut context, predicate, None)
             .expect("filter should succeed");
         context
             .result_set
@@ -677,7 +693,7 @@ mod tests {
         )]);
         context.set_variable("n", Value::Array(nodes.clone()));
         executor
-            .execute_filter(&mut context, "n.age > 100")
+            .execute_filter(&mut context, "n.age > 100", None)
             .expect("filter should succeed");
         let hinted: Vec<_> = context
             .result_set
@@ -714,7 +730,7 @@ mod tests {
         )]);
         context.set_variable("n", Value::Array(nodes.clone()));
         executor
-            .execute_filter(&mut context, "n.age > 1000")
+            .execute_filter(&mut context, "n.age > 1000", None)
             .expect("filter should succeed");
         let hinted: Vec<_> = context
             .result_set

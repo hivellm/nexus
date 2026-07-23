@@ -249,6 +249,7 @@ impl<'a> QueryPlanner<'a> {
                                 let filter_expr = format!("{}:{}", variable, additional_label);
                                 operators.push(Operator::Filter {
                                     predicate: filter_expr,
+                                    predicate_ast: None,
                                 });
                             }
                         }
@@ -279,6 +280,7 @@ impl<'a> QueryPlanner<'a> {
                             let filter_expr = format!("{}.{} = {}", variable, prop_name, value_str);
                             operators.push(Operator::Filter {
                                 predicate: filter_expr,
+                                predicate_ast: None,
                             });
                         }
                     }
@@ -440,6 +442,7 @@ impl<'a> QueryPlanner<'a> {
                                     let filter_expr = format!("{}:{}", variable, additional_label);
                                     operators.push(Operator::Filter {
                                         predicate: filter_expr,
+                                        predicate_ast: None,
                                     });
                                 }
                             }
@@ -464,6 +467,7 @@ impl<'a> QueryPlanner<'a> {
                                     format!("{}.{} = {}", variable, prop_name, value_str);
                                 operators.push(Operator::Filter {
                                     predicate: filter_expr,
+                                    predicate_ast: None,
                                 });
                             }
                         }
@@ -500,7 +504,10 @@ impl<'a> QueryPlanner<'a> {
             let predicate = self.predicate_to_string(where_clause)?;
             if optional_vars.is_empty() {
                 tracing::debug!("  WHERE clause #{}: {} (regular Filter)", idx, predicate);
-                operators.push(Operator::Filter { predicate });
+                operators.push(Operator::Filter {
+                    predicate,
+                    predicate_ast: Some(Box::new(where_clause.clone())),
+                });
             } else {
                 tracing::debug!(
                     "  WHERE clause #{}: {} (OptionalFilter, vars={:?})",
@@ -510,6 +517,7 @@ impl<'a> QueryPlanner<'a> {
                 );
                 operators.push(Operator::OptionalFilter {
                     predicate,
+                    predicate_ast: Some(Box::new(where_clause.clone())),
                     optional_vars: optional_vars.clone(),
                 });
             }
@@ -1130,6 +1138,7 @@ impl<'a> QueryPlanner<'a> {
                     );
                     operators.push(Operator::Filter {
                         predicate: filter_str,
+                        predicate_ast: Some(Box::new(where_expression.clone())),
                     });
                 }
 

@@ -457,12 +457,13 @@ impl Executor {
             // DEBUG: Print each operator as it executes
             let op_name = match operator {
                 Operator::NodeByLabel { variable, .. } => format!("NodeByLabel({})", variable),
-                Operator::Filter { predicate } => {
+                Operator::Filter { predicate, .. } => {
                     format!("Filter({})", predicate.chars().take(40).collect::<String>())
                 }
                 Operator::OptionalFilter {
                     predicate,
                     optional_vars,
+                    ..
                 } => {
                     format!(
                         "OptionalFilter({}, vars={:?})",
@@ -532,14 +533,23 @@ impl Executor {
                     let rows = self.materialize_rows_from_variables(&context)?;
                     self.update_result_set_from_rows(&mut context, &rows);
                 }
-                Operator::Filter { predicate } => {
-                    self.execute_filter(&mut context, predicate)?;
+                Operator::Filter {
+                    predicate,
+                    predicate_ast,
+                } => {
+                    self.execute_filter(&mut context, predicate, predicate_ast.as_deref())?;
                 }
                 Operator::OptionalFilter {
                     predicate,
+                    predicate_ast,
                     optional_vars,
                 } => {
-                    self.execute_optional_filter(&mut context, predicate, optional_vars)?;
+                    self.execute_optional_filter(
+                        &mut context,
+                        predicate,
+                        predicate_ast.as_deref(),
+                        optional_vars,
+                    )?;
                 }
                 Operator::Expand {
                     type_ids,
@@ -1376,6 +1386,7 @@ impl Executor {
                     if let Some(where_clause) = &match_clause.where_clause {
                         operators.push(Operator::Filter {
                             predicate: self.expression_to_string(&where_clause.expression)?,
+                            predicate_ast: Some(Box::new(where_clause.expression.clone())),
                         });
                     }
                 }
@@ -1408,6 +1419,7 @@ impl Executor {
                 parser::Clause::Where(where_clause) => {
                     operators.push(Operator::Filter {
                         predicate: self.expression_to_string(&where_clause.expression)?,
+                        predicate_ast: Some(Box::new(where_clause.expression.clone())),
                     });
                 }
                 parser::Clause::Return(return_clause) => {

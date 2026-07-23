@@ -183,7 +183,7 @@ impl Executor {
         use super::context::ExecutionContext;
         let mut context = ExecutionContext::new(HashMap::new(), None);
         context.set_variable(variable, serde_json::Value::Array(rows));
-        self.execute_filter(&mut context, predicate)?;
+        self.execute_filter(&mut context, predicate, None)?;
         Ok(context.result_set.rows.len())
     }
 

@@ -485,6 +485,7 @@ impl QueryOptimizer {
             if !pattern.filters.is_empty() {
                 operators.push(Operator::Filter {
                     predicate: pattern.filters[0].clone(),
+                    predicate_ast: None,
                 });
             }
 
@@ -534,7 +535,7 @@ impl QueryOptimizer {
                     total_cost += scan_cost;
                     estimated_rows = stats.cardinality as f64;
                 }
-                Operator::Filter { predicate } => {
+                Operator::Filter { predicate, .. } => {
                     // Estimate filter selectivity based on predicate complexity
                     let selectivity = self.estimate_filter_selectivity(predicate);
                     let filter_cost = cost_model.cpu_tuple_cost * estimated_rows;

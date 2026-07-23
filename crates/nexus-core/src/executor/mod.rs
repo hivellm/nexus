@@ -143,7 +143,7 @@ mod tests {
         );
 
         executor
-            .execute_filter(&mut context, "n.age > 25")
+            .execute_filter(&mut context, "n.age > 25", None)
             .expect("filter should succeed");
 
         assert_eq!(context.result_set.rows.len(), 1);

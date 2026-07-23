@@ -792,6 +792,7 @@ impl<'a> QueryPlanner<'a> {
                     insert_pos + 1, // Insert right after the WITH operator we just inserted
                     Operator::Filter {
                         predicate: filter_str,
+                        predicate_ast: Some(Box::new(where_expression.clone())),
                     },
                 );
                 // DEBUG: Show operator order after insertion
@@ -800,7 +801,7 @@ impl<'a> QueryPlanner<'a> {
                         Operator::NodeByLabel { variable, .. } => {
                             format!("NodeByLabel({})", variable)
                         }
-                        Operator::Filter { predicate } => {
+                        Operator::Filter { predicate, .. } => {
                             format!("Filter({})", predicate.chars().take(30).collect::<String>())
                         }
                         Operator::With { items, .. } => format!("With({} items)", items.len()),
@@ -850,10 +851,14 @@ impl<'a> QueryPlanner<'a> {
             for (where_clause, optional_vars) in &where_clauses {
                 let predicate = self.predicate_to_string(where_clause)?;
                 if optional_vars.is_empty() {
-                    operators.push(Operator::Filter { predicate });
+                    operators.push(Operator::Filter {
+                        predicate,
+                        predicate_ast: Some(Box::new(where_clause.clone())),
+                    });
                 } else {
                     operators.push(Operator::OptionalFilter {
                         predicate,
+                        predicate_ast: Some(Box::new(where_clause.clone())),
                         optional_vars: optional_vars.clone(),
                     });
                 }
@@ -1227,6 +1232,7 @@ impl<'a> QueryPlanner<'a> {
                         );
                         operators.push(Operator::Filter {
                             predicate: filter_str,
+                            predicate_ast: Some(Box::new(where_expression.clone())),
                         });
                     }
                 } else {

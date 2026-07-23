@@ -77,14 +77,23 @@ impl Executor {
                 let rows = self.materialize_rows_from_variables(context)?;
                 self.update_result_set_from_rows(context, &rows);
             }
-            Operator::Filter { predicate } => {
-                self.execute_filter(context, predicate)?;
+            Operator::Filter {
+                predicate,
+                predicate_ast,
+            } => {
+                self.execute_filter(context, predicate, predicate_ast.as_deref())?;
             }
             Operator::OptionalFilter {
                 predicate,
+                predicate_ast,
                 optional_vars,
             } => {
-                self.execute_optional_filter(context, predicate, optional_vars)?;
+                self.execute_optional_filter(
+                    context,
+                    predicate,
+                    predicate_ast.as_deref(),
+                    optional_vars,
+                )?;
             }
             Operator::Expand {
                 type_ids,

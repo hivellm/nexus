@@ -95,6 +95,7 @@ fn test_estimate_cost() {
         },
         Operator::Filter {
             predicate: "n.age > 18".to_string(),
+            predicate_ast: None,
         },
         Operator::Project {
             items: vec![ProjectionItem {
@@ -163,7 +164,7 @@ fn test_plan_query_with_where_clause() {
     }
 
     match &operators[1] {
-        Operator::Filter { predicate } => {
+        Operator::Filter { predicate, .. } => {
             assert!(predicate.contains("n.age"));
             assert!(predicate.contains(">"));
             assert!(predicate.contains("18"));
@@ -783,6 +784,7 @@ fn test_estimate_cost_all_operators() {
         },
         Operator::Filter {
             predicate: "n.age > 18".to_string(),
+            predicate_ast: None,
         },
         Operator::Expand {
             type_ids: vec![1],
@@ -864,6 +866,7 @@ fn test_optimize_operator_order() {
         },
         Operator::Filter {
             predicate: "n.age > 18".to_string(),
+            predicate_ast: None,
         },
     ];
 

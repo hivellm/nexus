@@ -277,15 +277,25 @@ pub enum Operator {
     },
     /// Filter by property predicate
     Filter {
-        /// Predicate expression
+        /// Predicate expression, serialized for display / cost heuristics /
+        /// the string fast-paths (index seek, label check). Lossy for nodes
+        /// `expression_to_string` cannot render (e.g. `CASE`) — rendered `"?"`.
         predicate: String,
+        /// The parsed predicate AST, carried through for `WHERE` clauses so the
+        /// filter evaluates it directly instead of re-parsing `predicate` (a
+        /// string cannot represent `CASE` / comprehensions). `None` for
+        /// synthetic predicates (label/property checks) that the string path
+        /// handles. See phase0_fix-where-predicate-case-comprehension-lost.
+        predicate_ast: Option<Box<parser::Expression>>,
     },
     /// Optional filter - preserves rows with NULL optional variables
     /// Used for WHERE clauses after OPTIONAL MATCH
     /// If predicate fails but optional_vars are involved, sets them to NULL instead of removing row
     OptionalFilter {
-        /// Predicate expression
+        /// Predicate expression (serialized; see `Filter::predicate`).
         predicate: String,
+        /// Parsed predicate AST (see `Filter::predicate_ast`).
+        predicate_ast: Option<Box<parser::Expression>>,
         /// Variables from OPTIONAL MATCH that should be set to NULL if predicate fails
         optional_vars: Vec<String>,
     },
