@@ -51,17 +51,20 @@ plan-selection only — results must not change.
   precedence, unindexed property.
 
 ## 4. Tail (docs + tests — check or waive with tailWaiver)
-- [x] 4.1 `docs/specs/cypher-subset.md` — WHERE-form seek coverage rewritten
-  (every form and its exact limitation). Notification text/doc corrected: it
+- [x] 4.1 Update or create documentation covering the implementation
+  — `docs/specs/cypher-subset.md`: WHERE-form seek coverage rewritten (every
+  form and its exact limitation). Notification text/doc corrected too: it
   claimed "only a plain equality predicate uses the index", stale since the
   parent landed range.
-- [x] 4.2 Tests: `tests/cypher/where_in_prefix_param_index_seek_test.rs` (10
-  engine-level tests), 2 planner unit tests, and
-  `tests/executor/where_clause_index_seek_test.rs` updated — its three
-  "range/IN/STARTS WITH must notify" tests encoded the pre-seek contract; they
-  now assert silence when the predicate seeks and notification when the operand
-  is a `$parameter` (no plan-time key ⇒ a real scan).
-- [x] 4.3 Full gate green: `cargo +nightly fmt --all`,
+- [x] 4.2 Write tests covering the new behavior
+  — `tests/cypher/where_in_prefix_param_index_seek_test.rs` (10 engine-level
+  tests) + 2 planner unit tests, and `tests/executor/where_clause_index_seek_test.rs`
+  updated: its three "range/IN/STARTS WITH must notify" tests encoded the
+  pre-seek contract; they now assert silence when the predicate seeks and
+  notification when the operand is a `$parameter` (no plan-time key ⇒ a real
+  scan).
+- [x] 4.3 Run tests and confirm they pass
+  — full gate green: `cargo +nightly fmt --all`,
   `cargo clippy --workspace --all-targets --all-features -- -D warnings`,
   `cargo +nightly test --workspace` (0 failed).
 
