@@ -9,6 +9,7 @@ mod merge_index_correctness_test;
 mod property_store_shrink_corruption_test;
 mod record_store_temp_guard_test;
 mod relationship_prop_ptr_test;
+mod relationship_publish_ordering_test;
 mod relationship_traversal_test;
 mod test_index_consistency;
 mod test_relationship_debug;

@@ -317,6 +317,38 @@ impl Drop for Snapshot<'_> {
 }
 ```
 
+### Lock-free read isolation: relationship-insert publish ordering (`phase0_fix-relationship-publish-ordering`)
+
+Record stores have **no per-record version**. The server's read path clones
+the executor under a brief lock, releases it, and runs the query holding **no**
+engine lock (`spawn_blocking`), reading the same shared `nodes_mmap` /
+`rels_mmap` a concurrent writer may be mutating. With no version to fall back
+on, the **order** in which a write publishes its individual record writes *is*
+the isolation contract.
+
+For relationship insert, `RecordStore::create_relationship`
+(`storage/record_store_ops.rs`) MUST publish **record before pointer**:
+
+1. Build the complete `RelationshipRecord`, with `next_src_ptr` / `next_dst_ptr`
+   set to the previously-captured old list heads.
+2. `write_rel(rel_id, &record)` — write the fully-initialized record to
+   `rels_mmap` **first**.
+3. `fence(Release)`.
+4. `write_node(from, &source_node)` — publish the source node's new
+   `first_rel_ptr` (which links the record in) **last**.
+
+The reader side (`executor/operators/path.rs::find_relationships`) issues a
+`fence(Acquire)` before reading a node's `first_rel_ptr`, so the two fences form
+a happens-before edge: a reader that observes the new `first_rel_ptr` is
+guaranteed to observe the fully-initialized record it points to.
+
+Publishing the pointer **before** the record (the historical bug) left a window
+in which a reader could `read_rel` an allocated-but-unwritten (all-zero) slot —
+`is_deleted()` reads `false` on it — and either surface a phantom edge to node 0
+or terminate its adjacency walk on the `next_src_ptr == 0` end-of-chain
+sentinel, silently dropping every older edge in that node's list. Any future
+edit to `create_relationship` must preserve the record-before-pointer order.
+
 ### Version Visibility
 
 ```rust

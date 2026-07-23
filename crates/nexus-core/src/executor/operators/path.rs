@@ -234,6 +234,16 @@ impl Executor {
         // acquisitions around that read.
         let store = self.store();
 
+        // Acquire fence: pairs with the Release fence in
+        // `RecordStore::create_relationship`, which writes a relationship
+        // record before publishing the source node's `first_rel_ptr`. Once we
+        // observe a node's `first_rel_ptr` below, this guarantees we also
+        // observe the fully-initialized relationship record it points to —
+        // never an allocated-but-unwritten (all-zero) slot, which would read
+        // as a phantom edge to node 0 or truncate this adjacency walk on the
+        // `next_src_ptr == 0` end-of-chain sentinel.
+        std::sync::atomic::fence(std::sync::atomic::Ordering::Acquire);
+
         // Read the node record to get the first relationship pointer
         if let Ok(node_record) = store.read_node(node_id) {
             let mut rel_ptr = node_record.first_rel_ptr;

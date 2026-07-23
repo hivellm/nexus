@@ -838,44 +838,22 @@ impl RecordStore {
             target_node_opt = Some(target_node);
         }
 
-        // Write both nodes (better cache locality - sequential writes)
-        if let Some(source_node) = source_node_opt {
-            tracing::debug!(
-                "[create_relationship] Writing source node {} with first_rel_ptr={}",
-                from,
-                source_node.first_rel_ptr
-            );
-            self.write_node(from, &source_node)?;
+        // === Publish ordering: record BEFORE pointer ===
+        // Nexus has no record-level MVCC, so the ORDER in which a relationship
+        // insert publishes its writes IS the isolation contract for lock-free
+        // readers (the server read path clones the executor/store and runs
+        // holding no engine lock, against these same shared mmaps). The new
+        // relationship record must be fully initialized in `rels_mmap` BEFORE
+        // the source node's `first_rel_ptr` links it in — otherwise a reader
+        // that observes the new pointer can `read_rel` a still-zeroed slot and
+        // either surface a phantom edge to node 0 or stop its adjacency walk on
+        // the `next_src_ptr == 0` end-of-chain sentinel (truncating the list).
 
-            // CRITICAL FIX: Flush source node immediately to ensure first_rel_ptr is visible
-            // for subsequent relationship creations in separate queries
-            // This is essential when creating multiple relationships to the same node
-            // in separate MATCH...CREATE statements
-            tracing::debug!(
-                "[create_relationship] Flushing source node {} after write (first_rel_ptr={})",
-                from,
-                source_node.first_rel_ptr
-            );
-            // PERFORMANCE OPTIMIZATION: Skip per-node flush - let executor batch flush at end
-            // The memory barrier below is sufficient for single-writer model
-            // Durability is ensured by flush_async() at executor level
-            std::sync::atomic::fence(std::sync::atomic::Ordering::Release);
-        }
-        if let Some(target_node) = target_node_opt {
-            tracing::debug!(
-                "[create_relationship] Writing target node {} with first_rel_ptr={}",
-                to,
-                target_node.first_rel_ptr
-            );
-            self.write_node(to, &target_node)?;
-
-            // PERFORMANCE OPTIMIZATION: Skip per-node flush - handled at executor level
-        }
-
+        // 1. Finish building the record: its next-pointers chain to the prior
+        //    list heads captured (above) before any node was modified.
         record.next_src_ptr = source_prev_ptr;
         record.next_dst_ptr = target_prev_ptr;
 
-        // CRITICAL DEBUG: Log linked list construction
         tracing::debug!(
             "[create_relationship] Relationship {}: src={}, dst={}, next_src_ptr={}, next_dst_ptr={}",
             rel_id,
@@ -885,8 +863,36 @@ impl RecordStore {
             target_prev_ptr
         );
 
-        // Write the record to storage
+        // 2. Write the fully-initialized relationship record FIRST.
         self.write_rel(rel_id, &record)?;
+
+        // 3. Release fence: the record write above must be visible to another
+        //    thread BEFORE the `first_rel_ptr` publish below. Pairs with the
+        //    Acquire fence on the reader's node read
+        //    (`executor/operators/path.rs::find_relationships`) to form the
+        //    happens-before edge the no-MVCC lock-free read path relies on.
+        std::sync::atomic::fence(std::sync::atomic::Ordering::Release);
+
+        // 4. Only now link the record in by publishing `first_rel_ptr` on the
+        //    source node — the last, externally-visible step. (The target
+        //    node's `first_rel_ptr` is intentionally NOT updated for an
+        //    incoming edge, so its write publishes no adjacency pointer.)
+        if let Some(source_node) = source_node_opt {
+            tracing::debug!(
+                "[create_relationship] Publishing source node {} first_rel_ptr={}",
+                from,
+                source_node.first_rel_ptr
+            );
+            self.write_node(from, &source_node)?;
+        }
+        if let Some(target_node) = target_node_opt {
+            tracing::debug!(
+                "[create_relationship] Writing target node {} (first_rel_ptr={} unchanged)",
+                to,
+                target_node.first_rel_ptr
+            );
+            self.write_node(to, &target_node)?;
+        }
 
         // Phase 3 Deep Optimization: Lazy adjacency list updates (defer to improve CREATE performance)
         // For now, update immediately but with optimizations
