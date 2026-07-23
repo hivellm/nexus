@@ -184,6 +184,48 @@ fn emit_unindexed_for_where_into(
                         );
                     }
                 }
+            } else if matches!(
+                op,
+                BinaryOperator::GreaterThan
+                    | BinaryOperator::GreaterThanOrEqual
+                    | BinaryOperator::LessThan
+                    | BinaryOperator::LessThanOrEqual
+                    | BinaryOperator::In
+                    | BinaryOperator::StartsWith
+                    | BinaryOperator::Contains
+            ) {
+                // Range, `IN`, `STARTS WITH`, and `CONTAINS` predicates
+                // never seek in this pass — `where_equality_seek_operand`
+                // (`strategy.rs`) only lifts plain equality. Unlike the
+                // `Equal` branch above, this fires REGARDLESS of
+                // `has_index`: even a registered index does not help
+                // these predicate shapes yet, so the planner falls back
+                // to a full scan either way and the operator should know.
+                let candidate = match (left.as_ref(), right.as_ref()) {
+                    (Expression::PropertyAccess { variable, property }, _) => {
+                        Some((variable, property))
+                    }
+                    (_, Expression::PropertyAccess { variable, property }) => {
+                        Some((variable, property))
+                    }
+                    _ => None,
+                };
+                if let Some((variable, property)) = candidate
+                    && let Some(label_name) = var_label.get(variable)
+                    && let Ok(label_id) = catalog.get_label_id(label_name)
+                    && let Ok(key_id) = catalog.get_key_id(property)
+                {
+                    let already_indexed = prop_idx.has_index(label_id, key_id);
+                    record_unindexed_predicate_shape_into(
+                        label_id,
+                        key_id,
+                        label_name,
+                        property,
+                        already_indexed,
+                        clause,
+                        out,
+                    );
+                }
             }
             emit_unindexed_for_where_into(catalog, prop_idx, left, var_label, clause, out);
             emit_unindexed_for_where_into(catalog, prop_idx, right, var_label, clause, out);
@@ -275,6 +317,97 @@ fn record_unindexed_into(
             label_name,
             property_name,
             suggested_ddl,
+        );
+    }
+}
+
+/// Records `Nexus.Performance.UnindexedPropertyAccess` for a WHERE
+/// predicate whose OPERATOR the planner never seeks in this pass — range
+/// (`>`, `<`, `>=`, `<=`), `IN`, `STARTS WITH`, `CONTAINS` — regardless of
+/// whether `(label_id, key_id)` currently has a registered index.
+///
+/// Unlike `record_unindexed_into` (the equality case, where a full scan
+/// only happens because NO index exists), these predicate shapes full
+/// scan even when an index IS registered, because the planner has no
+/// seek/range lowering for them yet — equality is the only predicate
+/// shape lifted to `NodeIndexSeek` in this pass (see
+/// `where_equality_seek_operand` in `strategy.rs`). `already_indexed`
+/// selects between the two message bodies so the notification never
+/// claims "no index" when one actually exists, and never suggests
+/// creating an index that would not change the plan.
+fn record_unindexed_predicate_shape_into(
+    label_id: u32,
+    key_id: u32,
+    label_name: &str,
+    property_name: &str,
+    already_indexed: bool,
+    clause: UnindexedAccessClause,
+    out: &mut Vec<Notification>,
+) {
+    let code = "Nexus.Performance.UnindexedPropertyAccess";
+
+    // Per-call dedup, same contract as `record_unindexed_into`.
+    if out.iter().any(|n| {
+        n.code == code && n.title.contains(label_name) && n.description.contains(property_name)
+    }) {
+        return;
+    }
+
+    let title = format!("Unindexed property access on :{label_name}({property_name})");
+    let description = if already_indexed {
+        format!(
+            "{clause} selects nodes by `:{label_name}` with a property predicate on \
+             `{property_name}` that the planner cannot yet seek through the \
+             existing index — only a plain equality predicate currently uses \
+             `:{label_name}({property_name})`'s index. The query falls back to a \
+             full label scan plus property comparison, which is O(N) over every \
+             `:{label_name}` node.",
+        )
+    } else {
+        let suggested_ddl = format!("CREATE INDEX FOR (n:{label_name}) ON (n.{property_name})");
+        format!(
+            "{clause} selects nodes by `:{label_name}` with a property predicate on \
+             `{property_name}`, but no property index covers this pair. The planner \
+             falls back to a full label scan plus property comparison, which is \
+             O(N) over every `:{label_name}` node. Create the recommended index to \
+             switch to an O(log N) index seek: `{suggested_ddl}`.",
+        )
+    };
+
+    out.push(Notification {
+        code: code.to_string(),
+        title,
+        description,
+        severity: NotificationSeverity::Information,
+        category: NotificationCategory::Performance,
+    });
+
+    // Rate-limited WARN log — shared across planner and engine paths via
+    // the process-global `warn_log_state()`.
+    let now = Instant::now();
+    let interval = planner_warn_interval();
+    let mut should_log = true;
+    if let Ok(mut state) = warn_log_state().lock() {
+        if let Some(last) = state.get(&(label_id, key_id)) {
+            if now.duration_since(*last) < interval {
+                should_log = false;
+            }
+        }
+        if should_log {
+            state.insert((label_id, key_id), now);
+        }
+    }
+    if should_log {
+        tracing::warn!(
+            code = code,
+            label = label_name,
+            property = property_name,
+            clause = %clause,
+            already_indexed = already_indexed,
+            "unindexed-shaped property access on :{}({}) — planner cannot seek \
+             this predicate shape yet (equality-only in this pass)",
+            label_name,
+            property_name,
         );
     }
 }

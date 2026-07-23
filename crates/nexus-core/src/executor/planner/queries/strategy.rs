@@ -46,6 +46,34 @@ impl<'a> QueryPlanner<'a> {
             Self::synthesise_anonymous_source_anchors(pattern, &mut anchor_counter);
         }
 
+        // WHERE-form equality index-seek lift: a plan-time-constant
+        // equality on a just-matched node variable (`MATCH (n:Person)
+        // WHERE n.age = 30`) should seek the same way the inline-property
+        // form does (`MATCH (n:Person {age: 30})`) instead of always
+        // falling back to `NodeByLabel` + `Filter`. Each WHERE-clause
+        // entry is decomposed into its top-level AND-conjuncts here so a
+        // qualifying conjunct can be lifted out (by
+        // `where_equality_index_seek_for`, called from the node loops
+        // below, at the exact site that would otherwise emit
+        // `NodeByLabel`) while any OTHER conjunct on the same WHERE
+        // clause survives as a residual `Filter`. Rebuilt back into
+        // `Expression` form (via `rebuild_and_conjunction`) after both
+        // node loops have had a chance to consume conjuncts, then used
+        // in place of `where_clauses` for the Filter/OptionalFilter
+        // lowering pass below. Scope: EQUALITY ONLY on a single-property
+        // index — range/IN/STARTS WITH/CONTAINS predicates are never
+        // lifted here (see `where_equality_seek_operand`'s doc comment);
+        // they stay full scans, made observable via the
+        // `Nexus.Performance.UnindexedPropertyAccess` notification.
+        let mut residual_where: Vec<(Vec<Expression>, Vec<String>)> = where_clauses
+            .iter()
+            .map(|(expr, opt_vars)| {
+                let mut conjuncts = Vec::new();
+                Self::flatten_and_conjuncts(expr, &mut conjuncts);
+                (conjuncts, opt_vars.clone())
+            })
+            .collect();
+
         // Process ALL patterns, not just the first one
         // Multiple patterns need Cartesian product (Join)
         let mut all_target_nodes = std::collections::HashSet::new();
@@ -180,7 +208,18 @@ impl<'a> QueryPlanner<'a> {
                         } else {
                             // Normal planning — prefer an index seek when a
                             // covering property index exists, else label scan.
+                            // Inline property equality (`{prop: value}`)
+                            // takes precedence; a WHERE-form equality
+                            // conjunct (`WHERE n.prop = value`) on an
+                            // indexed property is lifted into the same
+                            // seek shape when no inline seek applies.
                             if let Some(seek) = self.node_index_seek_for(node, label_id, variable) {
+                                operators.push(seek);
+                            } else if let Some(seek) = self.where_equality_index_seek_for(
+                                variable,
+                                label_id,
+                                &mut residual_where,
+                            ) {
                                 operators.push(seek);
                             } else {
                                 operators.push(Operator::NodeByLabel {
@@ -363,6 +402,12 @@ impl<'a> QueryPlanner<'a> {
                             let label_id = self.catalog.get_or_create_label(first_label)?;
                             if let Some(seek) = self.node_index_seek_for(node, label_id, variable) {
                                 operators.push(seek);
+                            } else if let Some(seek) = self.where_equality_index_seek_for(
+                                variable,
+                                label_id,
+                                &mut residual_where,
+                            ) {
+                                operators.push(seek);
                             } else {
                                 operators.push(Operator::NodeByLabel {
                                     label_id,
@@ -416,12 +461,23 @@ impl<'a> QueryPlanner<'a> {
             )?;
         }
 
-        // Add filter operators for WHERE clauses
+        // Add filter operators for WHERE clauses. Rebuild each entry's
+        // surviving conjuncts (some may have been lifted into a
+        // `NodeIndexSeek` by the node loops above, via
+        // `where_equality_index_seek_for`) back into `Expression` form;
+        // an entry that lost every conjunct to a seek is dropped
+        // entirely rather than emitting an empty/always-true Filter.
+        let residual_where_clauses: Vec<(Expression, Vec<String>)> = residual_where
+            .into_iter()
+            .filter_map(|(conjuncts, opt_vars)| {
+                Self::rebuild_and_conjunction(conjuncts).map(|expr| (expr, opt_vars))
+            })
+            .collect();
         tracing::debug!(
             "PLANNER: Adding {} WHERE clauses as Filter/OptionalFilter operators",
-            where_clauses.len()
+            residual_where_clauses.len()
         );
-        for (idx, (where_clause, optional_vars)) in where_clauses.iter().enumerate() {
+        for (idx, (where_clause, optional_vars)) in residual_where_clauses.iter().enumerate() {
             let predicate = self.predicate_to_string(where_clause)?;
             if optional_vars.is_empty() {
                 tracing::debug!("  WHERE clause #{}: {} (regular Filter)", idx, predicate);
@@ -1380,5 +1436,160 @@ impl<'a> QueryPlanner<'a> {
             }
         }
         None
+    }
+
+    /// Flatten a WHERE-clause expression into its top-level AND-conjuncts,
+    /// recursing through nested `AND`s (`a AND b AND c` yields `[a, b,
+    /// c]`). A non-`AND` expression (including one rooted in `OR`, since
+    /// splitting an `OR`'s branches would change its meaning) yields
+    /// itself as the sole conjunct.
+    fn flatten_and_conjuncts(expr: &Expression, out: &mut Vec<Expression>) {
+        if let Expression::BinaryOp {
+            left,
+            op: BinaryOperator::And,
+            right,
+        } = expr
+        {
+            Self::flatten_and_conjuncts(left, out);
+            Self::flatten_and_conjuncts(right, out);
+        } else {
+            out.push(expr.clone());
+        }
+    }
+
+    /// Rebuild an AND-conjunction `Expression` from its conjuncts — the
+    /// inverse of [`Self::flatten_and_conjuncts`]. Returns `None` for an
+    /// empty list (every conjunct on that WHERE-clause entry was lifted
+    /// into a seek by [`Self::where_equality_index_seek_for`], so the
+    /// caller should drop the entry rather than emit an empty/always-true
+    /// Filter).
+    fn rebuild_and_conjunction(conjuncts: Vec<Expression>) -> Option<Expression> {
+        let mut iter = conjuncts.into_iter();
+        let first = iter.next()?;
+        Some(iter.fold(first, |acc, next| Expression::BinaryOp {
+            left: Box::new(acc),
+            op: BinaryOperator::And,
+            right: Box::new(next),
+        }))
+    }
+
+    /// WHERE-form counterpart to [`Self::node_index_seek_for`]: looks for
+    /// a top-level `variable.prop = <constant>` conjunct across
+    /// `residual` — the AND-conjunct-decomposed working copy of the
+    /// query's WHERE clauses, built once in [`Self::plan_execution_strategy`]
+    /// — whose `(label_id, prop)` pair has a registered single-property
+    /// index. On a match, removes the consumed conjunct from `residual`
+    /// (dropping the whole entry once it has no conjuncts left) and
+    /// returns the `NodeIndexSeek` operator to emit in place of
+    /// `NodeByLabel`. Returns `None` when no such conjunct exists, mirroring
+    /// `node_index_seek_for`'s "caller falls back to `NodeByLabel`" contract.
+    ///
+    /// Only inspects entries with an EMPTY `optional_vars` — lifting a
+    /// conjunct out of what would become an `OptionalFilter` would change
+    /// OPTIONAL MATCH semantics (a failed predicate there nulls the
+    /// optional variables rather than dropping the row), so OPTIONAL
+    /// MATCH WHERE clauses are left untouched and keep going through the
+    /// existing `OptionalFilter` path.
+    fn where_equality_index_seek_for(
+        &self,
+        variable: &str,
+        label_id: u32,
+        residual: &mut [(Vec<Expression>, Vec<String>)],
+    ) -> Option<Operator> {
+        self.property_index?;
+        for (conjuncts, optional_vars) in residual.iter_mut() {
+            if !optional_vars.is_empty() {
+                continue;
+            }
+            for i in 0..conjuncts.len() {
+                if let Some(seek) =
+                    self.where_equality_seek_operand(&conjuncts[i], variable, label_id)
+                {
+                    conjuncts.remove(i);
+                    return Some(seek);
+                }
+            }
+        }
+        None
+    }
+
+    /// If `conjunct` is a top-level equality `variable.prop = <constant>`
+    /// (or the mirrored `<constant> = variable.prop`), and `(label_id,
+    /// prop)` has a registered single-property index, return the
+    /// `NodeIndexSeek` operator to emit in its place.
+    ///
+    /// "Constant" here means a plan-time LITERAL only — `$parameter`
+    /// values are deliberately excluded. The planner has no access to
+    /// bound parameter values (they are supplied at execution time), and
+    /// `NodeIndexSeek`'s `key_expression`-driven correlated-seek path
+    /// (`execute_correlated_index_seek`) requires driving rows to
+    /// already exist in the pipeline — the common case a bare `WHERE
+    /// n.prop = $x` lowers to is the FIRST scan of the query, where no
+    /// driving rows exist yet, so routing a parameter through that path
+    /// would silently return zero rows instead of seeking. Lifting
+    /// `$parameter` equality is left to a follow-up.
+    ///
+    /// SCOPE: EQUALITY ONLY. Range (`>`, `<`, `>=`, `<=`), `IN`, `STARTS
+    /// WITH`, and `CONTAINS` predicates are never lifted here — they
+    /// remain full scans, made observable via the
+    /// `Nexus.Performance.UnindexedPropertyAccess` notification
+    /// (`unindexed.rs`).
+    fn where_equality_seek_operand(
+        &self,
+        conjunct: &Expression,
+        variable: &str,
+        label_id: u32,
+    ) -> Option<Operator> {
+        let prop_idx = self.property_index?;
+        let Expression::BinaryOp {
+            left,
+            op: BinaryOperator::Equal,
+            right,
+        } = conjunct
+        else {
+            return None;
+        };
+        // Resolve which side is the `var.prop` operand and which is the
+        // candidate constant. Left is preferred when both sides are
+        // property accesses, matching `unindexed.rs`'s resolution order.
+        let (property, value_expr) = match (left.as_ref(), right.as_ref()) {
+            (
+                Expression::PropertyAccess {
+                    variable: v,
+                    property,
+                },
+                other,
+            ) if v == variable => (property, other),
+            (
+                other,
+                Expression::PropertyAccess {
+                    variable: v,
+                    property,
+                },
+            ) if v == variable => (property, other),
+            _ => return None,
+        };
+        let key_id = self.catalog.get_key_id(property).ok()?;
+        if !prop_idx.has_index(label_id, key_id) {
+            return None;
+        }
+        let value = match value_expr {
+            Expression::Literal(Literal::String(s)) => {
+                crate::index::PropertyValue::String(s.clone())
+            }
+            Expression::Literal(Literal::Integer(i)) => crate::index::PropertyValue::Integer(*i),
+            Expression::Literal(Literal::Float(f)) => crate::index::PropertyValue::Float(*f),
+            Expression::Literal(Literal::Boolean(b)) => crate::index::PropertyValue::Boolean(*b),
+            // null / point / parameter / non-literal: not indexable at
+            // plan time — see the doc comment above.
+            _ => return None,
+        };
+        Some(Operator::NodeIndexSeek {
+            label_id,
+            key_id,
+            value,
+            key_expression: None,
+            variable: variable.to_string(),
+        })
     }
 }
