@@ -8,7 +8,7 @@
 
 | Status | Task | Progress | Description |
 |--------|------|----------|-------------|
-| ⬚ | phase0_fix-wal-durability-gaps | 0/15 | fix wal durability gaps |
+| ⬚ | phase0_fix-wal-checkpoint-truncate-production | 0/9 | fix wal checkpoint truncate production |
 | ⬚ | phase0_fix-wal-torn-tail-recovery | 0/12 | fix wal torn tail recovery |
 | ⬚ | phase0_fix-where-clause-index-seek-extensions | 0/11 | fix where clause index seek extensions |
 | ⬚ | phase0_fix-where-predicate-case-comprehension-lost | 0/14 | fix where predicate case comprehension lost |
