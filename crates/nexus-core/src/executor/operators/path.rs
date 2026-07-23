@@ -1146,7 +1146,7 @@ impl Executor {
         &self,
         start_id: u64,
         end_id: u64,
-        type_id: Option<u32>,
+        type_ids: &[u32],
         direction: Direction,
     ) -> Result<Option<Path>> {
         use std::collections::{HashMap, VecDeque};
@@ -1192,9 +1192,7 @@ impl Executor {
                 }));
             }
 
-            // Find neighbors (convert Option<u32> to slice)
-            let type_ids_slice: Vec<u32> = type_id.into_iter().collect();
-            let neighbors = self.find_relationships(current, &type_ids_slice, direction, None)?;
+            let neighbors = self.find_relationships(current, type_ids, direction, None)?;
             for rel_info in neighbors {
                 let next_node = match direction {
                     Direction::Outgoing => rel_info.target_id,
@@ -1224,7 +1222,7 @@ impl Executor {
         &self,
         start_id: u64,
         end_id: u64,
-        type_id: Option<u32>,
+        type_ids: &[u32],
         direction: Direction,
     ) -> Result<Vec<Path>> {
         use std::collections::{HashMap, VecDeque};
@@ -1247,8 +1245,7 @@ impl Executor {
                 break; // Found target
             }
 
-            let type_ids_slice: Vec<u32> = type_id.into_iter().collect();
-            let neighbors = self.find_relationships(current, &type_ids_slice, direction, None)?;
+            let neighbors = self.find_relationships(current, type_ids, direction, None)?;
             for rel_info in neighbors {
                 let next_node = match direction {
                     Direction::Outgoing => rel_info.target_id,
@@ -1282,7 +1279,7 @@ impl Executor {
         self.find_paths_dfs(
             start_id,
             end_id,
-            type_id,
+            type_ids,
             direction,
             shortest_dist,
             &mut current_path,
@@ -1299,7 +1296,7 @@ impl Executor {
         &self,
         current: u64,
         target: u64,
-        type_id: Option<u32>,
+        type_ids: &[u32],
         direction: Direction,
         remaining_steps: usize,
         current_path: &mut Vec<u64>,
@@ -1312,8 +1309,7 @@ impl Executor {
             for i in 0..current_path.len() - 1 {
                 let from = current_path[i];
                 let to = current_path[i + 1];
-                let type_ids_slice: Vec<u32> = type_id.into_iter().collect();
-                let neighbors = self.find_relationships(from, &type_ids_slice, direction, None)?;
+                let neighbors = self.find_relationships(from, type_ids, direction, None)?;
                 if let Some(rel_info) = neighbors.iter().find(|r| match direction {
                     Direction::Outgoing => r.target_id == to,
                     Direction::Incoming => r.source_id == to,
@@ -1340,8 +1336,7 @@ impl Executor {
             }
         }
 
-        let type_ids_slice: Vec<u32> = type_id.into_iter().collect();
-        let neighbors = self.find_relationships(current, &type_ids_slice, direction, None)?;
+        let neighbors = self.find_relationships(current, type_ids, direction, None)?;
         for rel_info in neighbors {
             let next_node = match direction {
                 Direction::Outgoing => rel_info.target_id,
@@ -1360,7 +1355,7 @@ impl Executor {
                 self.find_paths_dfs(
                     next_node,
                     target,
-                    type_id,
+                    type_ids,
                     direction,
                     remaining_steps - 1,
                     current_path,

@@ -390,16 +390,22 @@ impl Executor {
                                         None
                                     }
                                     let rel = extract_first_rel(&pattern.elements);
-                                    let rel_type = rel.and_then(|r| r.types.first().cloned());
-                                    let type_id = rel_type.and_then(|t| {
-                                        self.catalog().get_type_id(&t).ok().flatten()
-                                    });
+                                    let type_ids: Vec<u32> = rel
+                                        .map(|r| {
+                                            r.types
+                                                .iter()
+                                                .filter_map(|t| {
+                                                    self.catalog().get_type_id(t).ok().flatten()
+                                                })
+                                                .collect()
+                                        })
+                                        .unwrap_or_default();
                                     let direction = rel
                                         .map(|r| super::fn_geo::direction_from_rel(r))
                                         .unwrap_or(Direction::Both);
 
                                     if let Ok(Some(path)) = self
-                                        .find_shortest_path(start_id, end_id, type_id, direction)
+                                        .find_shortest_path(start_id, end_id, &type_ids, direction)
                                     {
                                         return Some(Ok(self.path_to_value(&path)));
                                     }
@@ -451,16 +457,27 @@ impl Executor {
                                 };
 
                                 if let (Some(start_id), Some(end_id)) = (start_id, end_id) {
-                                    let rel_type = pattern.elements.iter().find_map(|e| {
-                                        if let parser::PatternElement::Relationship(rel) = e {
-                                            rel.types.first().cloned()
-                                        } else {
-                                            None
-                                        }
-                                    });
-                                    let type_id = rel_type.and_then(|t| {
-                                        self.catalog().get_type_id(&t).ok().flatten()
-                                    });
+                                    let type_ids: Vec<u32> = pattern
+                                        .elements
+                                        .iter()
+                                        .find_map(|e| {
+                                            if let parser::PatternElement::Relationship(rel) = e {
+                                                Some(
+                                                    rel.types
+                                                        .iter()
+                                                        .filter_map(|t| {
+                                                            self.catalog()
+                                                                .get_type_id(t)
+                                                                .ok()
+                                                                .flatten()
+                                                        })
+                                                        .collect::<Vec<u32>>(),
+                                                )
+                                            } else {
+                                                None
+                                            }
+                                        })
+                                        .unwrap_or_default();
                                     let direction = pattern
                                         .elements
                                         .iter()
@@ -474,7 +491,7 @@ impl Executor {
                                         .unwrap_or(Direction::Both);
 
                                     if let Ok(paths) = self.find_all_shortest_paths(
-                                        start_id, end_id, type_id, direction,
+                                        start_id, end_id, &type_ids, direction,
                                     ) {
                                         let path_values: Vec<Value> =
                                             paths.iter().map(|p| self.path_to_value(p)).collect();

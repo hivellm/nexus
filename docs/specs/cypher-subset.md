@@ -1201,6 +1201,13 @@ RETURN shortestPath((a:Person {name: 'Alice'})-[*]-(b:Person {name: 'Bob'}))
 RETURN allShortestPaths((a:Person)-[*]-(b:Person))
 ```
 
+Both functions take their endpoints from variables bound by a preceding
+`MATCH` (`MATCH (a), (b) RETURN shortestPath((a)-[...]->(b))`); a
+`MATCH p = shortestPath(...)` assignment form is not supported. The
+relationship pattern may name **multiple types** with `|` — `shortestPath((a)-[:R1|R2*..5]->(b))`
+traverses every named type (OR-membership), and an unqualified `[*..n]`
+matches every type. An unbounded `[*]` uses BFS with no depth cap.
+
 ## Built-in Functions ✅ IMPLEMENTED
 
 ### String Functions
