@@ -663,45 +663,31 @@ impl AsyncWalWriter {
         use std::sync::atomic::Ordering::Relaxed;
         stats.wal_errors.fetch_add(batch.len() as u64, Relaxed);
 
-        tracing::error!(
-            "CRITICAL: Failed to flush WAL batch after {} retries. {} entries lost!",
-            MAX_RETRIES,
-            batch.len()
-        );
-
-        // Try emergency save to a backup WAL file
-        Self::emergency_save_batch(batch);
+        // Persist the batch to an emergency side-WAL in the main WAL's own
+        // directory, in the REAL frame format (and cipher), so it is replayed
+        // on the next boot rather than silently lost
+        // (phase0_fix-wal-durability-gaps #4). The previous fallback wrote an
+        // unparseable `[len][bincode]` frame to a CWD-relative `data/` path
+        // that nothing ever read back.
+        match wal.emergency_save(batch) {
+            Ok(path) => tracing::error!(
+                "CRITICAL: WAL flush failed after {} retries; {} entries saved to emergency file {} for boot-time replay",
+                MAX_RETRIES,
+                batch.len(),
+                path.display()
+            ),
+            Err(e) => tracing::error!(
+                "CRITICAL: WAL flush failed after {} retries AND emergency save failed ({e}); {} entries lost",
+                MAX_RETRIES,
+                batch.len()
+            ),
+        }
 
         Err(last_error.unwrap_or_else(|| {
             Error::wal(format!(
                 "WAL flush failed after {MAX_RETRIES} retries with no captured error"
             ))
         }))
-    }
-
-    /// Emergency save batch to backup WAL file when main WAL fails
-    fn emergency_save_batch(batch: &[WalEntry]) {
-        let backup_path = format!("data/wal-emergency-{}.log", chrono::Utc::now().timestamp());
-
-        match std::fs::OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(&backup_path)
-        {
-            Ok(mut file) => {
-                for entry in batch {
-                    if let Ok(data) = bincode::serialize(entry) {
-                        let _ = file.write_all(&(data.len() as u32).to_le_bytes());
-                        let _ = file.write_all(&data);
-                    }
-                }
-                let _ = file.flush();
-                tracing::warn!("Emergency WAL batch saved to: {}", backup_path);
-            }
-            Err(e) => {
-                tracing::error!("CRITICAL: Even emergency WAL save failed: {}", e);
-            }
-        }
     }
 }
 
@@ -746,6 +732,57 @@ mod tests {
     fn test_async_writer_creation() {
         let (mut writer, _dir) = create_test_writer();
         assert_eq!(writer.stats().entries_submitted, 0);
+    }
+
+    /// phase0_fix-wal-durability-gaps #4: when a live flush exhausts its
+    /// retries, the batch is emergency-saved in the real frame format into the
+    /// WAL's own directory, and a fresh `Wal` recovers it — instead of the old
+    /// silent loss to an unparseable CWD-relative file.
+    #[test]
+    fn async_emergency_save_is_recoverable_after_flush_failure() {
+        use std::sync::atomic::AtomicBool;
+
+        let ctx = TestContext::new();
+        let wal_path = ctx.path().join("wal.log");
+        let wal = Wal::new(&wal_path).unwrap();
+
+        let fail = Arc::new(AtomicBool::new(true));
+        let config = AsyncWalConfig {
+            max_batch_size: 10,
+            max_batch_age: Duration::from_millis(50),
+            max_queue_depth: 100,
+            flush_interval: Duration::from_millis(25),
+            channel_buffer_size: 50,
+            flush_gate: None,
+            fail_flush: Some(fail.clone()),
+        };
+        let mut writer = AsyncWalWriter::new(wal, config).unwrap();
+
+        writer
+            .append(WalEntry::ExternalIdAssigned {
+                internal_id: 99,
+                external_id_bytes: vec![9, 9],
+            })
+            .unwrap();
+
+        // Force a flush; with fail_flush set it exhausts retries and takes the
+        // emergency-save path. flush() returns Err — that is expected here.
+        let _ = writer.flush();
+        drop(writer); // writer thread drains and exits, releasing the WAL
+
+        // A fresh Wal over the same directory recovers the emergency-saved entry.
+        let probe = Wal::new(&wal_path).unwrap();
+        let recovered = probe.recover_emergency().unwrap();
+        assert!(
+            recovered.iter().any(|e| matches!(
+                e,
+                WalEntry::ExternalIdAssigned {
+                    internal_id: 99,
+                    ..
+                }
+            )),
+            "an entry that hit the emergency path must be recoverable: {recovered:?}"
+        );
     }
 
     #[test]

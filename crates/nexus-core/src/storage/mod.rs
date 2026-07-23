@@ -10,6 +10,7 @@
 pub mod adjacency_list;
 pub mod crypto;
 pub mod external_id;
+pub(crate) mod fs;
 pub mod graph_engine;
 pub mod property_store;
 pub mod record_store;

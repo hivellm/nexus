@@ -741,13 +741,22 @@ impl Engine {
         // on `self.wal` can be released before we iterate.
         let wal_path = self.wal.path().to_path_buf();
         let mut replay_wal = wal::Wal::new(&wal_path)?;
-        let entries = match replay_wal.recover() {
+        let mut entries = match replay_wal.recover() {
             Ok(e) => e,
             Err(e) => {
                 tracing::warn!("external-id WAL recovery: could not read WAL: {e}");
                 return Ok(());
             }
         };
+
+        // phase0_fix-wal-durability-gaps #4: also replay any emergency side-WAL
+        // files (written when a live flush exhausted its retries), so their
+        // entries are not lost. Merged after the main WAL's entries; the
+        // put_if_absent below is idempotent, so relative order does not affect
+        // correctness.
+        let emergency_entries = replay_wal.recover_emergency().unwrap_or_default();
+        let had_emergency = !emergency_entries.is_empty();
+        entries.extend(emergency_entries);
 
         for entry in &entries {
             if let wal::WalEntry::ExternalIdAssigned {
@@ -793,6 +802,13 @@ impl Engine {
                     }
                 }
             }
+        }
+
+        // The recovered entries (including any emergency ones) are now durably
+        // applied to the catalog; remove the emergency side-files so they are
+        // not replayed on every subsequent boot.
+        if had_emergency {
+            replay_wal.clear_emergency();
         }
 
         Ok(())

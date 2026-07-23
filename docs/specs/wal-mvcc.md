@@ -27,6 +27,36 @@ if the writer thread has already exited, `flush()` returns an error instead of
 blocking forever. `Engine::flush_async_wal` is a pass-through with the same
 (now-real) guarantee.
 
+#### Emergency-save real-frame replay (`phase0_fix-wal-durability-gaps` #4)
+
+When a live batch flush exhausts its retries, the writer persists the batch to
+an **emergency side-WAL** rather than losing it. `Wal::emergency_save` writes a
+`wal-emergency-<ns>.log` file **in the main WAL's own directory** (never a
+CWD-relative `data/` path) using the **real frame format** — it opens a second
+`Wal` at that path, mirroring the main WAL's cipher, and calls `append()`, so
+the frames are byte-identical (and, when the main WAL is encrypted, are **not**
+written in plaintext). On the next boot, `recover_external_ids_from_wal` scans
+the WAL directory for `wal-emergency-*.log` via `Wal::recover_emergency`,
+decodes them with the WAL's cipher, and merges their entries **after** the main
+WAL's; because external-id replay uses idempotent `put_if_absent`, relative
+order is irrelevant. Once the recovered entries are durably applied to the
+catalog, `Wal::clear_emergency` removes the side-files so they are not replayed
+on every subsequent boot. (Replaced the previous fallback, which wrote an
+unparseable `[len][bincode]` frame that `recover()` never read back.)
+
+#### Directory durability on file creation (`phase0_fix-wal-durability-gaps` #5)
+
+POSIX does not guarantee a newly created file's directory entry is durable until
+the **containing directory** is fsynced — an `fsync` on the file covers its data,
+not the directory metadata that makes it discoverable after a crash. After
+creating (and fsyncing) a new file, `Wal::new`, `Wal::with_cipher`, and
+`RecordStore::new` therefore call `storage::fs::sync_parent_dir`, which fsyncs
+the parent directory. It is **best-effort** — a failure is logged, not
+propagated, so a filesystem/platform without directory fsync cannot turn a
+missing-durability-guarantee into a hard startup failure — and a **no-op on
+non-Unix platforms** (e.g. Windows), where std exposes no directory fsync and
+directory-metadata durability is the OS/filesystem's responsibility.
+
 ### MVCC (Multi-Version Concurrency Control)
 
 Provides snapshot isolation without locking readers:

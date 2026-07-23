@@ -149,6 +149,10 @@ impl Wal {
         let metadata = file.metadata()?;
         let offset = metadata.len();
 
+        // phase0_fix-wal-durability-gaps #5: make the WAL file's directory entry
+        // durable, not just its data (best-effort; no-op on Windows).
+        crate::storage::fs::sync_parent_dir(&path);
+
         Ok(Self {
             path,
             file: Arc::new(file),
@@ -218,6 +222,11 @@ impl Wal {
         }
 
         let offset = file.metadata()?.len();
+
+        // phase0_fix-wal-durability-gaps #5: make the WAL file's directory entry
+        // durable, not just its data (best-effort; no-op on Windows).
+        crate::storage::fs::sync_parent_dir(&path);
+
         Ok(Self {
             path,
             file: Arc::new(file),
@@ -387,6 +396,109 @@ impl Wal {
     pub fn flush(&mut self) -> Result<()> {
         self.file.sync_all()?;
         Ok(())
+    }
+
+    /// Persist `entries` to a side "emergency" WAL file in this WAL's own
+    /// directory, using the SAME on-disk frame format (and cipher, if any) as
+    /// the main WAL, so they are recoverable by [`Self::recover_emergency`] on
+    /// the next boot. Called by the async writer when a live flush exhausts its
+    /// retries, instead of silently dropping the batch.
+    ///
+    /// phase0_fix-wal-durability-gaps #4: replaces the previous
+    /// `[len][bincode]` framing written to a CWD-relative `data/` path, which
+    /// `recover()` could never parse and which no boot-time scan ever read.
+    /// Returns the emergency file's path.
+    pub(crate) fn emergency_save(&self, entries: &[WalEntry]) -> Result<PathBuf> {
+        let dir = self
+            .path
+            .parent()
+            .filter(|p| !p.as_os_str().is_empty())
+            .map(Path::to_path_buf)
+            .unwrap_or_else(|| PathBuf::from("."));
+        std::fs::create_dir_all(&dir)?;
+
+        // Nanosecond timestamp keeps successive emergency files distinct; a
+        // collision merely appends to the same file (Wal::new opens append).
+        let ts = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0);
+        let emergency_path = dir.join(format!("wal-emergency-{ts}.log"));
+
+        // Mirror the main WAL's encryption mode so entries are written in the
+        // identical frame format — and, when the main WAL is encrypted, are not
+        // leaked in plaintext on disk.
+        let mut ewal = match &self.cipher {
+            Some(cipher) => Wal::with_cipher(&emergency_path, Arc::clone(cipher))?,
+            None => Wal::new(&emergency_path)?,
+        };
+        for entry in entries {
+            ewal.append(entry)?;
+        }
+        ewal.flush()?;
+        Ok(emergency_path)
+    }
+
+    /// List `wal-emergency-*.log` side files in this WAL's directory, sorted by
+    /// name (which is a nanosecond timestamp, so name order is roughly time
+    /// order).
+    fn emergency_files(&self) -> Vec<PathBuf> {
+        let dir = self
+            .path
+            .parent()
+            .filter(|p| !p.as_os_str().is_empty())
+            .map(Path::to_path_buf)
+            .unwrap_or_else(|| PathBuf::from("."));
+        let mut files = Vec::new();
+        if let Ok(rd) = std::fs::read_dir(&dir) {
+            for entry in rd.flatten() {
+                let p = entry.path();
+                if let Some(name) = p.file_name().and_then(|n| n.to_str()) {
+                    if name.starts_with("wal-emergency-") && name.ends_with(".log") {
+                        files.push(p);
+                    }
+                }
+            }
+        }
+        files.sort();
+        files
+    }
+
+    /// Recover entries from any `wal-emergency-*.log` side files in this WAL's
+    /// directory (written by [`Self::emergency_save`]), decoded with this WAL's
+    /// cipher, merged in filename (≈ time) order. An unreadable emergency file
+    /// is logged and skipped rather than aborting the whole recovery. Does NOT
+    /// delete the files — call [`Self::clear_emergency`] only once the recovered
+    /// entries are durably applied.
+    pub(crate) fn recover_emergency(&self) -> Result<Vec<WalEntry>> {
+        let mut out = Vec::new();
+        for path in self.emergency_files() {
+            let mut ewal = match &self.cipher {
+                Some(cipher) => Wal::with_cipher(&path, Arc::clone(cipher))?,
+                None => Wal::new(&path)?,
+            };
+            match ewal.recover() {
+                Ok(entries) => out.extend(entries),
+                Err(e) => {
+                    tracing::warn!(
+                        "emergency WAL recovery: {} is unreadable, skipping: {e}",
+                        path.display()
+                    );
+                }
+            }
+        }
+        Ok(out)
+    }
+
+    /// Delete all `wal-emergency-*.log` side files in this WAL's directory.
+    /// Call only after [`Self::recover_emergency`]'s entries have been durably
+    /// applied. Best-effort: a failure to remove a file is logged, not fatal.
+    pub(crate) fn clear_emergency(&self) {
+        for path in self.emergency_files() {
+            if let Err(e) = std::fs::remove_file(&path) {
+                tracing::warn!("could not remove emergency WAL {}: {e}", path.display());
+            }
+        }
     }
 
     /// Reopen WAL file (useful for recovery from permission errors)

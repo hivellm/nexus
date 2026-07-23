@@ -127,6 +127,11 @@ impl RecordStore {
             rels_file_size
         };
 
+        // phase0_fix-wal-durability-gaps #5: fsync the directory that now holds
+        // the freshly-created nodes.store/rels.store so their directory entries
+        // are durable, not just the files' data (best-effort; no-op on Windows).
+        super::fs::sync_parent_dir(&nodes_path);
+
         // Create memory mappings
         let nodes_mmap = unsafe { MmapOptions::new().map_mut(&nodes_file)? };
         let rels_mmap = unsafe { MmapOptions::new().map_mut(&rels_file)? };

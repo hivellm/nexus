@@ -88,6 +88,91 @@ mod tests {
         assert_eq!(wal.stats.entries_written, 10);
     }
 
+    // ---- phase0_fix-wal-durability-gaps #4: emergency batch is recoverable --
+    //
+    // Pre-fix (verified by inspection per the task's §1.1) the emergency
+    // fallback wrote `[len][bincode]` frames to a CWD-relative `data/` path
+    // that `recover()` never parsed and no boot-time scan ever read. These
+    // tests pin the fixed behaviour: real frames, in the WAL's own directory,
+    // recoverable (and cipher-mirrored when the WAL is encrypted).
+
+    #[test]
+    fn emergency_save_writes_real_recoverable_frames_in_wal_dir() {
+        let (wal, ctx) = create_test_wal();
+        let entries = vec![
+            WalEntry::CreateNode {
+                node_id: 42,
+                label_bits: 7,
+            },
+            WalEntry::ExternalIdAssigned {
+                internal_id: 42,
+                external_id_bytes: vec![1, 2, 3],
+            },
+        ];
+
+        let path = wal.emergency_save(&entries).unwrap();
+        // Lands in the WAL's own directory, never a CWD-relative "data/".
+        assert_eq!(path.parent(), Some(ctx.path()));
+        assert!(path.exists());
+
+        // Recoverable through the real frame decoder.
+        let recovered = wal.recover_emergency().unwrap();
+        assert_eq!(recovered.len(), 2);
+        assert!(recovered.iter().any(|e| matches!(
+            e,
+            WalEntry::CreateNode {
+                node_id: 42,
+                label_bits: 7
+            }
+        )));
+        assert!(recovered.iter().any(|e| matches!(
+            e,
+            WalEntry::ExternalIdAssigned {
+                internal_id: 42,
+                ..
+            }
+        )));
+    }
+
+    #[test]
+    fn emergency_save_mirrors_cipher_and_does_not_leak_plaintext() {
+        let (wal, _ctx) = make_encrypted_wal(0x5A);
+        let secret = b"topsecret-external-id".to_vec();
+        let entries = vec![WalEntry::ExternalIdAssigned {
+            internal_id: 7,
+            external_id_bytes: secret.clone(),
+        }];
+
+        let path = wal.emergency_save(&entries).unwrap();
+
+        // Decryptable with the same cipher.
+        let recovered = wal.recover_emergency().unwrap();
+        assert!(
+            recovered
+                .iter()
+                .any(|e| matches!(e, WalEntry::ExternalIdAssigned { internal_id: 7, .. }))
+        );
+
+        // The plaintext secret must NOT be present on disk — the emergency
+        // frames are encrypted, mirroring the main WAL.
+        let raw = std::fs::read(&path).unwrap();
+        assert!(
+            !raw.windows(secret.len()).any(|w| w == secret.as_slice()),
+            "an encrypted WAL's emergency file must not leak plaintext"
+        );
+    }
+
+    #[test]
+    fn clear_emergency_removes_side_files() {
+        let (wal, _ctx) = create_test_wal();
+        wal.emergency_save(&[WalEntry::DeleteNode { node_id: 1 }])
+            .unwrap();
+        assert_eq!(wal.recover_emergency().unwrap().len(), 1);
+
+        wal.clear_emergency();
+        assert!(wal.recover_emergency().unwrap().is_empty());
+    }
+
     #[test]
     fn test_flush() {
         let (mut wal, _dir) = create_test_wal();
