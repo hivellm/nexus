@@ -1615,8 +1615,9 @@ impl<'a> QueryPlanner<'a> {
                 continue;
             }
             for i in 0..conjuncts.len() {
-                if let Some(seek) =
-                    self.where_equality_seek_operand(&conjuncts[i], variable, label_id)
+                if let Some(seek) = self
+                    .where_equality_seek_operand(&conjuncts[i], variable, label_id)
+                    .or_else(|| self.where_range_seek_operand(&conjuncts[i], variable, label_id))
                 {
                     conjuncts.remove(i);
                     return Some(seek);
@@ -1624,6 +1625,76 @@ impl<'a> QueryPlanner<'a> {
             }
         }
         None
+    }
+
+    /// If `conjunct` is a top-level range comparison `variable.prop > | >= | <
+    /// | <= <literal>` (or the mirrored `<literal> <op> variable.prop`) and
+    /// `(label_id, prop)` has a single-property index, return the
+    /// `NodeIndexRangeSeek` to emit in its place. The B-tree supports range and
+    /// prefix scans natively, so this only lifts the plan; results are
+    /// unchanged (residual `Filter`s still run). `$parameter`, `IN`, `STARTS
+    /// WITH`, and `CONTAINS` are still left to a follow-up.
+    fn where_range_seek_operand(
+        &self,
+        conjunct: &Expression,
+        variable: &str,
+        label_id: u32,
+    ) -> Option<Operator> {
+        let prop_idx = self.property_index?;
+        let Expression::BinaryOp { left, op, right } = conjunct else {
+            return None;
+        };
+        let base = match op {
+            BinaryOperator::GreaterThan => RangeSeekOp::Gt,
+            BinaryOperator::GreaterThanOrEqual => RangeSeekOp::Ge,
+            BinaryOperator::LessThan => RangeSeekOp::Lt,
+            BinaryOperator::LessThanOrEqual => RangeSeekOp::Le,
+            _ => return None,
+        };
+        // `prop <op> literal` keeps `op`; `literal <op> prop` mirrors it.
+        let mirror = |o: RangeSeekOp| match o {
+            RangeSeekOp::Gt => RangeSeekOp::Lt,
+            RangeSeekOp::Ge => RangeSeekOp::Le,
+            RangeSeekOp::Lt => RangeSeekOp::Gt,
+            RangeSeekOp::Le => RangeSeekOp::Ge,
+        };
+        let (property, value_expr, seek_op) = match (left.as_ref(), right.as_ref()) {
+            (
+                Expression::PropertyAccess {
+                    variable: v,
+                    property,
+                },
+                other,
+            ) if v == variable => (property, other, base),
+            (
+                other,
+                Expression::PropertyAccess {
+                    variable: v,
+                    property,
+                },
+            ) if v == variable => (property, other, mirror(base)),
+            _ => return None,
+        };
+        let key_id = self.catalog.get_key_id(property).ok()?;
+        if !prop_idx.has_index(label_id, key_id) {
+            return None;
+        }
+        let value = match value_expr {
+            Expression::Literal(Literal::String(s)) => {
+                crate::index::PropertyValue::String(s.clone())
+            }
+            Expression::Literal(Literal::Integer(i)) => crate::index::PropertyValue::Integer(*i),
+            Expression::Literal(Literal::Float(f)) => crate::index::PropertyValue::Float(*f),
+            Expression::Literal(Literal::Boolean(b)) => crate::index::PropertyValue::Boolean(*b),
+            _ => return None,
+        };
+        Some(Operator::NodeIndexRangeSeek {
+            label_id,
+            key_id,
+            op: seek_op,
+            value,
+            variable: variable.to_string(),
+        })
     }
 
     /// If `conjunct` is a top-level equality `variable.prop = <constant>`

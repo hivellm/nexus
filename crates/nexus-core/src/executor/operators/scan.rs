@@ -138,6 +138,60 @@ impl Executor {
         Ok(results)
     }
 
+    /// Execute a range seek (`var.prop > | >= | < | <= <literal>`) on a
+    /// single-property B-tree index. The index's range is inclusive on both
+    /// ends, so an exclusive `>` / `<` subtracts the exact-match bitmap for the
+    /// threshold. See phase0_fix-where-clause-index-seek-extensions.
+    pub(in crate::executor) fn execute_node_index_range_seek(
+        &self,
+        label_id: u32,
+        key_id: u32,
+        op: crate::executor::types::RangeSeekOp,
+        value: &crate::index::PropertyValue,
+    ) -> Result<Vec<Value>> {
+        use crate::executor::types::RangeSeekOp;
+        let Some(prop_idx) = self.property_index() else {
+            return self.execute_node_by_label(label_id);
+        };
+        let mut bitmap = match op {
+            RangeSeekOp::Gt | RangeSeekOp::Ge => {
+                prop_idx.find_range(label_id, key_id, Some(value.clone()), None)?
+            }
+            RangeSeekOp::Lt | RangeSeekOp::Le => {
+                prop_idx.find_range(label_id, key_id, None, Some(value.clone()))?
+            }
+        };
+        if matches!(op, RangeSeekOp::Gt | RangeSeekOp::Lt) {
+            let exact = prop_idx.find_exact(label_id, key_id, value.clone())?;
+            bitmap -= &exact;
+        }
+
+        use std::collections::HashSet;
+        let cap_hint = (bitmap.len() as usize).min(MAX_INTERMEDIATE_ROWS);
+        let mut seen = HashSet::new();
+        let mut results = Vec::with_capacity(cap_hint);
+        let store = self.store();
+        for node_id in bitmap.iter() {
+            if results.len() >= MAX_INTERMEDIATE_ROWS {
+                return Err(Error::OutOfMemory(format!(
+                    "NodeIndexRangeSeek would return more than {} rows \
+                     (MAX_INTERMEDIATE_ROWS); add LIMIT or narrow the predicate",
+                    MAX_INTERMEDIATE_ROWS
+                )));
+            }
+            let node_id_u64 = node_id as u64;
+            if !seen.insert(node_id_u64) {
+                continue;
+            }
+            match self.read_node_as_value_with_store(&store, node_id_u64)? {
+                Value::Null => continue,
+                v => results.push(v),
+            }
+        }
+        drop(store);
+        Ok(results)
+    }
+
     /// Execute a correlated `NodeIndexSeek` whose seek key is evaluated per
     /// driving row (`key_expression: Some(expr)`, e.g. `r.s` from
     /// `UNWIND $rows AS r MATCH (a:P {id: r.s})`) instead of a single

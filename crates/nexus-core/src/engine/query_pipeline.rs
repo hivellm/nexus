@@ -907,18 +907,16 @@ impl Engine {
         query: &executor::parser::CypherQuery,
         query_str: &str,
     ) -> Result<executor::ResultSet> {
-        // Use the query AST directly if it has clauses, otherwise parse the string
+        // Plan via the executor's real planning path (`plan_ast`) so the
+        // displayed plan matches execution: it wires property_index AND
+        // composite_index (as well as the r-tree), which the ad-hoc planner
+        // this used to build did not — so a WHERE-equality query on an indexed
+        // property showed NodeByLabel+Filter instead of the NodeIndexSeek /
+        // CompositeBtreeSeek it actually runs
+        // (phase0_fix-where-clause-index-seek-extensions §3).
         let operators = if !query.clauses.is_empty() {
-            // Use the planner directly with the AST
-            let mut planner = executor::planner::QueryPlanner::new(
-                &self.catalog,
-                &self.indexes.label_index,
-                &self.indexes.knn_index,
-            )
-            .with_rtree(self.indexes.rtree.clone());
-            planner.plan_query(query)?
+            self.executor.plan_ast(query)?
         } else {
-            // Fallback: parse and plan from string
             self.executor.parse_and_plan(query_str)?
         };
 
@@ -954,18 +952,12 @@ impl Engine {
 
         let start_time = Instant::now();
 
-        // Use the query AST directly if it has clauses, otherwise parse the string
+        // Plan via the executor's real planning path so the displayed plan
+        // matches execution (wires property_index + composite_index; see
+        // execute_explain_with_string / phase0_fix-where-clause-index-seek-extensions §3).
         let operators = if !query.clauses.is_empty() {
-            // Use the planner directly with the AST
-            let mut planner = executor::planner::QueryPlanner::new(
-                &self.catalog,
-                &self.indexes.label_index,
-                &self.indexes.knn_index,
-            )
-            .with_rtree(self.indexes.rtree.clone());
-            planner.plan_query(query)?
+            self.executor.plan_ast(query)?
         } else {
-            // Fallback: parse and plan from string
             self.executor.parse_and_plan(query_str)?
         };
 

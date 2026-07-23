@@ -520,6 +520,19 @@ impl Executor {
                         self.seed_scan_main_loop(&mut context, variable, nodes)?;
                     }
                 }
+                Operator::NodeIndexRangeSeek {
+                    label_id,
+                    key_id,
+                    op,
+                    value,
+                    variable,
+                } => {
+                    // Read-side range seek on a single-property B-tree index;
+                    // residual Filter operators still run for full correctness.
+                    let nodes =
+                        self.execute_node_index_range_seek(*label_id, *key_id, *op, value)?;
+                    self.seed_scan_main_loop(&mut context, variable, nodes)?;
+                }
                 Operator::AllNodesScan { variable } => {
                     let nodes = self.execute_all_nodes_scan()?;
                     context.variables.remove(variable);

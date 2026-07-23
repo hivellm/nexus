@@ -238,6 +238,19 @@ pub struct ExecutionPlan {
     pub operators: Vec<Operator>,
 }
 
+/// Comparison direction (and inclusivity) for [`Operator::NodeIndexRangeSeek`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RangeSeekOp {
+    /// `>` — strictly greater than the threshold (threshold excluded).
+    Gt,
+    /// `>=` — greater than or equal to the threshold.
+    Ge,
+    /// `<` — strictly less than the threshold (threshold excluded).
+    Lt,
+    /// `<=` — less than or equal to the threshold.
+    Le,
+}
+
 /// Physical operator
 #[derive(Debug, Clone)]
 pub enum Operator {
@@ -267,6 +280,22 @@ pub enum Operator {
         /// planner in a follow-up step; execution handling lands with it.
         /// See `phase0_fix-correlated-predicate-index-seek`.
         key_expression: Option<parser::Expression>,
+        /// Pattern variable to bind the returned nodes to.
+        variable: String,
+    },
+    /// Range seek on a single-property B-tree index for a WHERE comparison
+    /// (`var.prop > | >= | < | <= <literal>`). Yields the nodes on the
+    /// selected side of the threshold; residual `Filter` operators still run
+    /// for full correctness. See phase0_fix-where-clause-index-seek-extensions.
+    NodeIndexRangeSeek {
+        /// Label ID the index was created on.
+        label_id: u32,
+        /// Property key ID.
+        key_id: u32,
+        /// Comparison direction / inclusivity.
+        op: RangeSeekOp,
+        /// Constant threshold value (plan-time literal).
+        value: crate::index::PropertyValue,
         /// Pattern variable to bind the returned nodes to.
         variable: String,
     },

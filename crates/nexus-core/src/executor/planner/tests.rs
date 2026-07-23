@@ -13,6 +13,7 @@ use crate::executor::parser::{
 use crate::executor::planner::queries::{
     qpp_legacy_rewrite_enabled, set_qpp_legacy_rewrite_enabled,
 };
+use crate::executor::types::RangeSeekOp;
 use crate::index::{KnnIndex, LabelIndex};
 use crate::testing::TestContext;
 
@@ -1163,6 +1164,72 @@ fn can_optimize_count_star(source: &Option<Box<Operator>>) -> bool {
 // ───────────────────────────────────────────────────────────────────
 
 /// Helper: parse + plan with an explicit `PropertyIndex` handle.
+#[test]
+fn where_range_predicate_lifts_to_node_index_range_seek() {
+    let (catalog, _ctx) = create_test_catalog();
+    let label_id = catalog.get_or_create_label("Person").expect("label");
+    let key_id = catalog.get_or_create_key("age").expect("key");
+    let prop_idx = crate::index::PropertyIndex::new();
+    prop_idx
+        .create_index(label_id, key_id)
+        .expect("create index");
+
+    for (cypher, expected) in [
+        (
+            "MATCH (n:Person) WHERE n.age > 30 RETURN n",
+            RangeSeekOp::Gt,
+        ),
+        (
+            "MATCH (n:Person) WHERE n.age >= 30 RETURN n",
+            RangeSeekOp::Ge,
+        ),
+        (
+            "MATCH (n:Person) WHERE n.age < 30 RETURN n",
+            RangeSeekOp::Lt,
+        ),
+        (
+            "MATCH (n:Person) WHERE n.age <= 30 RETURN n",
+            RangeSeekOp::Le,
+        ),
+        // Literal on the left mirrors the operator.
+        (
+            "MATCH (n:Person) WHERE 30 < n.age RETURN n",
+            RangeSeekOp::Gt,
+        ),
+    ] {
+        let ops = plan_with_property_index(cypher, &catalog, &prop_idx).expect("plan");
+        let found = ops.iter().find_map(|op| match op {
+            Operator::NodeIndexRangeSeek { op, .. } => Some(*op),
+            _ => None,
+        });
+        assert_eq!(
+            found,
+            Some(expected),
+            "`{cypher}` must lift to a range seek; plan = {ops:?}"
+        );
+    }
+}
+
+#[test]
+fn where_range_predicate_without_index_stays_a_scan() {
+    let (catalog, _ctx) = create_test_catalog();
+    catalog.get_or_create_label("Person").expect("label");
+    catalog.get_or_create_key("age").expect("key");
+    // No create_index -> no seek, plain NodeByLabel + Filter.
+    let prop_idx = crate::index::PropertyIndex::new();
+    let ops = plan_with_property_index(
+        "MATCH (n:Person) WHERE n.age > 30 RETURN n",
+        &catalog,
+        &prop_idx,
+    )
+    .expect("plan");
+    assert!(
+        !ops.iter()
+            .any(|op| matches!(op, Operator::NodeIndexRangeSeek { .. })),
+        "no index -> no range seek; plan = {ops:?}"
+    );
+}
+
 fn plan_with_property_index(
     cypher: &str,
     catalog: &Catalog,

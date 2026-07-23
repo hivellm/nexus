@@ -60,6 +60,16 @@ impl Executor {
                     self.seed_scan_variable(context, variable, nodes)?;
                 }
             }
+            Operator::NodeIndexRangeSeek {
+                label_id,
+                key_id,
+                op,
+                value,
+                variable,
+            } => {
+                let nodes = self.execute_node_index_range_seek(*label_id, *key_id, *op, value)?;
+                self.seed_scan_variable(context, variable, nodes)?;
+            }
             Operator::AllNodesScan { variable } => {
                 let nodes = self.execute_all_nodes_scan()?;
 

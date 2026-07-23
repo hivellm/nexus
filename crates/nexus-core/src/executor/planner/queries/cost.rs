@@ -20,6 +20,12 @@ impl<'a> QueryPlanner<'a> {
                     // far cheaper than a label scan; bias the planner toward it.
                     total_cost += 5.0;
                 }
+                Operator::NodeIndexRangeSeek { .. } => {
+                    // Range seek over the property B-tree: a bounded key-range
+                    // scan — wider than a point seek, far cheaper than a full
+                    // label scan.
+                    total_cost += 50.0;
+                }
                 Operator::AllNodesScan { .. } => {
                     // Scanning all nodes is more expensive than label scan
                     // Assume full scan of all nodes

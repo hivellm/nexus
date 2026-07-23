@@ -41,3 +41,4 @@ mod test_where_in;
 mod unbounded_alloc_guard_test;
 mod unwind_tests;
 mod where_case_comprehension_predicate_test;
+mod where_range_index_seek_test;
