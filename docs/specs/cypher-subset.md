@@ -1119,6 +1119,14 @@ LOAD CSV FROM 'file:///path/to/data.csv' WITH HEADERS AS row
 CREATE (n:Person {name: row.name, age: toInteger(row.age)})
 ```
 
+`LOAD CSV ... AS row` binds a fresh per-row variable, exactly like `UNWIND`.
+The cost-based operator-reordering pass treats it as a per-row binder: it is
+ordered before any `WHERE`/`Filter` that references the row variable, and
+before a correlated seek it feeds (e.g. `LOAD CSV ... AS row MATCH (n:Label
+{id: row.id})` with an index on `:Label(id)`), so a predicate on the CSV row —
+or a `MATCH` seeded from it — is applied correctly rather than silently
+dropped.
+
 ## Advanced Features ✅ IMPLEMENTED
 
 ### Subqueries

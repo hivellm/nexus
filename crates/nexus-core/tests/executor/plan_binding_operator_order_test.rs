@@ -211,3 +211,84 @@ fn node_index_seek_precedes_filter_and_correctly_returns_no_rows() {
         result.rows.len()
     );
 }
+
+/// PLAN-ORDER guard: `LOAD CSV ... AS row` binds a fresh per-row variable
+/// exactly like `UNWIND`, so the `LoadCsv` operator must precede the `Filter`
+/// that references `row`. Before the fix, `LoadCsv` falls into the `others`
+/// bucket (recombined AFTER `filters`), so the residual `Filter` runs against
+/// an unbound `row` (`Null` -> always false) and silently drops every row.
+#[test]
+fn load_csv_precedes_filter_on_its_bound_row_variable() {
+    let ctx = TestContext::new();
+    let mut engine = Engine::with_isolated_catalog(ctx.path()).expect("engine init");
+
+    engine
+        .execute_cypher("CREATE (:Person {id: 'a'})")
+        .expect("seed");
+
+    // `parse_and_plan` does not read the CSV, so a placeholder path is fine.
+    let plan = engine
+        .executor
+        .parse_and_plan(
+            "LOAD CSV FROM 'file:///x.csv' AS row \
+             MATCH (n:Person) WHERE row[0] = n.id RETURN n",
+        )
+        .expect("plan must succeed");
+
+    let load_csv_idx = plan
+        .iter()
+        .position(|op| matches!(op, Operator::LoadCsv { .. }))
+        .unwrap_or_else(|| panic!("LoadCsv must be in the plan; plan = {plan:?}"));
+    let filter_idx = plan
+        .iter()
+        .position(|op| matches!(op, Operator::Filter { .. }))
+        .unwrap_or_else(|| panic!("Filter must be in the plan; plan = {plan:?}"));
+
+    assert!(
+        load_csv_idx < filter_idx,
+        "LoadCsv must precede the Filter that references the per-row variable \
+         it binds; plan = {plan:?}"
+    );
+}
+
+/// PLAN-ORDER guard (correlated seek): `LOAD CSV ... AS row MATCH (n:Label
+/// {id: row.id})` with an index on `:Label(id)` compiles the property
+/// constraint to a correlated `NodeIndexSeek` whose key expression references
+/// `row`. That seek must run AFTER `LoadCsv` binds `row`. Before the fix,
+/// `LoadCsv` (in `others`) is recombined after the seek, so the seek keys on
+/// an unbound `row`.
+#[test]
+fn load_csv_precedes_correlated_index_seek_on_row_variable() {
+    let ctx = TestContext::new();
+    let mut engine = Engine::with_isolated_catalog(ctx.path()).expect("engine init");
+
+    engine
+        .execute_cypher("CREATE (:Person {id: 'a'})")
+        .expect("seed");
+    engine
+        .execute_cypher("CREATE INDEX FOR (n:Person) ON (n.id)")
+        .expect("create index");
+
+    let plan = engine
+        .executor
+        .parse_and_plan(
+            "LOAD CSV FROM 'file:///x.csv' AS row \
+             MATCH (n:Person {id: row.id}) RETURN n",
+        )
+        .expect("plan must succeed");
+
+    let load_csv_idx = plan
+        .iter()
+        .position(|op| matches!(op, Operator::LoadCsv { .. }))
+        .unwrap_or_else(|| panic!("LoadCsv must be in the plan; plan = {plan:?}"));
+    let seek_idx = plan
+        .iter()
+        .position(|op| matches!(op, Operator::NodeIndexSeek { .. }))
+        .unwrap_or_else(|| panic!("NodeIndexSeek must be in the plan; plan = {plan:?}"));
+
+    assert!(
+        load_csv_idx < seek_idx,
+        "LoadCsv must precede the correlated NodeIndexSeek seeded from the row \
+         variable it binds; plan = {plan:?}"
+    );
+}

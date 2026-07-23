@@ -569,14 +569,20 @@ impl<'a> QueryPlanner<'a> {
             }
         }
 
-        // Check if UNWIND comes before any scan in the original operator order
-        // This happens in queries like: UNWIND [...] AS x MATCH (n:Label {prop: x})
-        // In this case, UNWIND must run first to create the variable bindings
+        // Check if a per-row binder (UNWIND or LOAD CSV) comes before any scan
+        // in the original operator order. This happens in queries like
+        // `UNWIND [...] AS x MATCH (n:Label {prop: x})` or
+        // `LOAD CSV FROM '...' AS row MATCH (n:Label {id: row.id})`. In that
+        // case the binder must run first to create the variable bindings the
+        // scan/seek (and any residual filter) depend on.
         let mut unwind_before_scan = false;
         let mut seen_unwind = false;
         for operator in &operators {
             match operator {
-                Operator::Unwind { .. } => {
+                // UNWIND and LOAD CSV both bind a fresh per-row variable
+                // independent of any upstream row stream, so either one
+                // preceding a scan triggers the binder-before-scan order.
+                Operator::Unwind { .. } | Operator::LoadCsv { .. } => {
                     seen_unwind = true;
                 }
                 // Index seeks bind a node variable exactly like a label scan
@@ -623,8 +629,9 @@ impl<'a> QueryPlanner<'a> {
         // drops every row instead of raising an error. The `_ => others`
         // catch-all is recombined AFTER `filters` in both branches, so it
         // must never receive a binding operator — any new binding
-        // operator variant added to `Operator` must be added to `scans`
-        // or `expansions` here, not left to fall through to `others`.
+        // operator variant added to `Operator` must be added to `scans`,
+        // `expansions`, or (for a per-row binder like UNWIND / LOAD CSV)
+        // `unwinds` here, not left to fall through to `others`.
         for operator in operators {
             match &operator {
                 // Index seeks and spatial seeks bind a node variable
@@ -657,8 +664,13 @@ impl<'a> QueryPlanner<'a> {
                 Operator::Join { .. } => {
                     joins.push(operator);
                 }
-                Operator::Unwind { .. } => {
-                    // UNWIND must come before Filter because Filter operates on rows created by UNWIND
+                // UNWIND and LOAD CSV both bind a fresh per-row variable and
+                // must recombine before `filters` — a `Filter` referencing that
+                // variable before it is bound evaluates it as `Null` (always
+                // false) and silently drops every row. `LoadCsv` shares the
+                // `unwinds` bucket so a `LOAD CSV`/`UNWIND` pair keeps its
+                // original relative order.
+                Operator::Unwind { .. } | Operator::LoadCsv { .. } => {
                     unwinds.push(operator);
                 }
                 _ => {

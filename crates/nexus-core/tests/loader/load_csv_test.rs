@@ -200,3 +200,52 @@ fn test_load_csv_nonexistent_file() {
         // Accept empty result as valid behavior
     }
 }
+
+/// BEHAVIORAL regression (`phase0_fix-loadcsv-reorder-drops-predicates`): a
+/// `WHERE` predicate on the LOAD CSV row variable must actually filter rows,
+/// not silently drop every one. Before the fix, `optimize_operator_order` left
+/// `LoadCsv` in the `others` bucket (recombined after `filters`), so the
+/// `Filter` referencing `row` ran before `row` was bound — `row[0]` evaluated
+/// to `Null`, the predicate was always false, and the query returned 0 rows.
+#[test]
+fn test_load_csv_where_on_row_variable_keeps_matching_rows() {
+    let mut engine = create_engine();
+    engine
+        .execute_cypher("CREATE (:Person {id: 'a'})")
+        .expect("seed a");
+    engine
+        .execute_cypher("CREATE (:Person {id: 'b'})")
+        .expect("seed b");
+
+    // Single CSV row "a" — matches exactly one of the two Person nodes.
+    let csv_path = std::env::temp_dir().join("test_load_csv_where_on_row.csv");
+    fs::write(&csv_path, "a\n").expect("Failed to write test CSV");
+    let csv_path_abs = csv_path.canonicalize().unwrap_or_else(|_| csv_path.clone());
+    let path_str = csv_path_abs.to_string_lossy();
+    let normalized_path = if let Some(stripped) = path_str.strip_prefix(r"\\?\") {
+        stripped.replace('\\', "/")
+    } else {
+        path_str.replace('\\', "/")
+    };
+    let query = format!(
+        "LOAD CSV FROM 'file:///{normalized_path}' AS row \
+         MATCH (n:Person) WHERE row[0] = n.id RETURN n.id"
+    );
+
+    let result = engine.execute_cypher(&query).expect("query must succeed");
+    let _ = fs::remove_file(&csv_path);
+
+    assert_eq!(
+        result.rows.len(),
+        1,
+        "the single CSV row 'a' matches exactly one Person (id 'a'); the WHERE \
+         on the row variable must not drop it. got {} rows: {:?}",
+        result.rows.len(),
+        result.rows
+    );
+    assert_eq!(
+        extract_first_row_value(result),
+        Some(Value::String("a".to_string())),
+        "expected the matching Person id 'a'"
+    );
+}
