@@ -632,6 +632,24 @@ or the process (`phase0_fix-storage-oob-panics`). The stores enforce:
   sparse write whose offset is more than one growth step past EOF is covered
   by that one grow instead of slicing past the freshly-remapped file. This
   matches `property_store::ensure_capacity`'s `.max(required_size)`.
+- **Reads bound-check the live mapping, not a cached size.**
+  (`phase0_fix-store-size-per-clone-divergence`) A `RecordStore` shares its
+  mmaps across clones via `Arc<RwLock<MmapMut>>` (a fresh clone is taken on
+  every `refresh_executor`), so a per-clone cached `nodes_file_size` /
+  `rels_file_size` can diverge from the shared mmap: a grow by one clone
+  leaves other clones stale-small (they would report `NotFound` for a node
+  that exists), and a `clear_all` that shrinks the mmap leaves clones
+  stale-large (they would slice past the smaller mapping). `read_node` /
+  `read_rel` therefore bound-check the record's end offset against the **live**
+  `guard.len()` of the mmap **inside the same read lock** used to copy the
+  record — never a cached field — so every clone observes the true current
+  length (the discipline `read_all_node_headers` already used). The cached
+  size fields remain only on the write/grow path, which is safe under the
+  single-writer model (the sole writer both mutates the mmap and updates its
+  own size, so they never diverge for it). The `next_node_id`/`next_rel_id`
+  high-water marks are already shared via `Arc<AtomicU64>`. As defense in
+  depth, `Engine::clear_all_data` refreshes the cached executor clone after a
+  `clear_all` so the reset size is observed promptly.
 
 ## Debugging Tools
 

@@ -204,14 +204,20 @@ impl RecordStore {
         let record_end = offset
             .checked_add(NODE_RECORD_SIZE as u64)
             .ok_or_else(|| Error::NotFound(format!("Node {} not found", node_id)))?;
-        if record_end > self.nodes_file_size as u64 {
-            return Err(Error::NotFound(format!("Node {} not found", node_id)));
-        }
 
         let start = offset as usize;
         let end = start + NODE_RECORD_SIZE;
+        // Bound-check against the LIVE shared mapping length under the same
+        // read lock used to copy the record — never the per-clone cached
+        // `nodes_file_size`, which diverges from the shared mmap after a grow
+        // by another clone (stale-small -> spurious NotFound) or a clear_all
+        // (stale-large -> out-of-bounds slice). Mirrors read_all_node_headers.
+        // See phase0_fix-store-size-per-clone-divergence.
         let mut record: NodeRecord = {
             let guard = self.nodes_mmap.read().unwrap();
+            if record_end > guard.len() as u64 {
+                return Err(Error::NotFound(format!("Node {} not found", node_id)));
+            }
             *bytemuck::from_bytes(&guard[start..end])
         };
 
@@ -328,16 +334,18 @@ impl RecordStore {
         let record_end = offset
             .checked_add(REL_RECORD_SIZE as u64)
             .ok_or_else(|| Error::NotFound(format!("Relationship {} not found", rel_id)))?;
-        if record_end > self.rels_file_size as u64 {
+
+        let start = offset as usize;
+        let end = start + REL_RECORD_SIZE;
+        // Bound-check against the live shared mapping length under the read
+        // lock, not the per-clone cached `rels_file_size` (see read_node).
+        let guard = self.rels_mmap.read().unwrap();
+        if record_end > guard.len() as u64 {
             return Err(Error::NotFound(format!(
                 "Relationship {} not found",
                 rel_id
             )));
         }
-
-        let start = offset as usize;
-        let end = start + REL_RECORD_SIZE;
-        let guard = self.rels_mmap.read().unwrap();
         Ok(*bytemuck::from_bytes(&guard[start..end]))
     }
 

@@ -8,6 +8,7 @@ mod graph_storage_engine_validation_test;
 mod merge_index_correctness_test;
 mod property_store_shrink_corruption_test;
 mod record_store_bounds_test;
+mod record_store_clone_divergence_test;
 mod record_store_temp_guard_test;
 mod relationship_prop_ptr_test;
 mod relationship_publish_ordering_test;

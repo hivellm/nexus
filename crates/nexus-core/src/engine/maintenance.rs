@@ -133,6 +133,15 @@ impl Engine {
         stats.rel_counts.clear();
         self.catalog.update_statistics(&stats)?;
 
+        // Defense in depth (phase0_fix-store-size-per-clone-divergence §3.2):
+        // clear_all shrinks the shared record-store mmap; refresh the cached
+        // executor clone promptly so it re-clones the store with the reset
+        // size instead of leaving a stale-large snapshot until the next
+        // natural refresh_executor. The read path already bound-checks against
+        // the live mmap length, so this is belt-and-suspenders, not the
+        // primary fix.
+        self.refresh_executor()?;
+
         Ok(())
     }
 
