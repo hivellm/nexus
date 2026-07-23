@@ -8,7 +8,7 @@
 
 | Status | Task | Progress | Description |
 |--------|------|----------|-------------|
-| ⬚ | phase0_fix-where-clause-index-seek-extensions | 0/11 | fix where clause index seek extensions |
+| ⬚ | phase0_fix-where-in-prefix-param-index-seek | 0/12 | fix where in prefix param index seek |
 | ⬚ | phase0_perf-store-reverse-incoming-adjacency-index | 0/10 | perf store reverse incoming adjacency index |
 
 ## phase7
