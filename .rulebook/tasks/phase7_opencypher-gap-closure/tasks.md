@@ -127,6 +127,43 @@ gaps, then re-measure so the delta is attributable. Do not reorder §2 before §
       proving no regression) and passes with the cartesian. regression + cypher + database + storage
       + engine groups green. NOTE: the LDBC loader was never affected (it writes via `/ingest`).
 
+- [x] 4.11a **CRITICAL — incoming/undirected relationship traversal returned nothing on graphs with
+      more than ~10 000 relationships.** FIXED. Found while validating the LDBC short reads against
+      Neo4j: `MATCH (:Person {id:933})<-[:HAS_CREATOR]-(:Message)` returned 0 on the loaded SF0.1
+      graph while the reverse direction returned 412 and the edges were provably present.
+      **Root cause**: `executor/operators/path.rs::find_relationships` served an INCOMING (or `Both`)
+      expansion by checking the node's `first_rel_ptr` — which heads only its OUTGOING chain — finding
+      it did not point at an incoming edge, and falling back to a scan that only ever probed
+      relationship ids `0..=10_000`. Any incoming edge at a higher id was invisible. Small graphs
+      worked (the scan covered them), which is why unit tests never caught it. **Fix**: repointed
+      `find_relationships` at the store's authoritative both-direction adjacency index
+      (`storage::adjacency_index`, from `phase0_perf-store-reverse-incoming-adjacency-index`) —
+      O(degree), complete at any scale — replacing ~470 lines of chain walk + capped scan with one
+      lookup. Verified: the failing LDBC query is now 412 = the Neo4j baseline, and six of seven
+      short reads (IS1,3,4,5,6,7) match Neo4j on every sampled id. Regression:
+      `tests/regression/incoming_traversal_large_graph_test.rs` (>10 000 edges + a late incoming edge;
+      + reopen). Full lib + cypher + executor + storage + graph + regression green. Commit 88f78245.
+
+- [ ] 4.11 **Variable-length path expanded from a `WITH`-carried variable does not bind its target.**
+      The one remaining blocker of LDBC IS2. **Repro** (Nexus 2.5.0, loaded SF0.1):
+      `MATCH (:Person {id:933})<-[:HAS_CREATOR]-(m:Message) WITH m LIMIT 3 MATCH (m)-[:REPLY_OF*0..]->(post:Post) RETURN m.id, post.id`
+      → Nexus binds `m` but returns `post = null` for every row; Neo4j binds `post`. The FRESH-MATCH
+      form (no `WITH` in between) binds `post` correctly, and a fixed-length expand after `WITH` also
+      works — so the defect is specifically a VARIABLE-LENGTH expand whose source variable was carried
+      across a `WITH … LIMIT`. IS1,3,4,5,6,7 validate against Neo4j; only IS2 needs this. The ported
+      query is faithful (marked ⛔ in `benchmarks/ldbc-snb/README.md`); do not rewrite it to dodge the
+      gap.
+
+- [ ] 4.12 **`count(*)` / anonymous-relationship traversal under-counts a fully-anonymous pattern.**
+      Lower severity (no IS query hits it — they all bind the relationship or a labelled endpoint).
+      **Repro** (loaded SF0.1): `MATCH ()-[:HAS_CREATOR]->() RETURN count(*)` = 1461, but
+      `MATCH ()-[r:HAS_CREATOR]->() RETURN count(r)` = 286744 (correct), and
+      `MATCH (:Message)-[:HAS_CREATOR]->(:Person) RETURN count(*)` = 286744 (correct). Likewise
+      `MATCH (p:Person {id:933})-[:KNOWS]-(f) RETURN count(f)` = 3 but `-[r:KNOWS]-` = 6. So a
+      fully-anonymous relationship pattern (no rel variable, both endpoints unlabelled) collapses the
+      match count. Binding the relationship or labelling an endpoint both fix it, which is why it does
+      not surface in the reference queries — filed for completeness, not blocking the benchmark.
+
 ## 5. Re-measure and reconcile the documentation
 - [ ] 5.1 Re-run the TCK after §4 and refresh `docs/compatibility/OPENCYPHER_TCK_REPORT.md`; the delta from the §3.3 baseline is the evidence that §4 mattered
 - [ ] 5.2 Reconcile the compatibility claim, which currently spans 40 points across six files, to the single measured number: `AGENTS.override.md:159` (~55%), `docs/PRD.md:24`, `docs/ROADMAP.md:6`, `docs/guides/USER_GUIDE.md:26`, `docs/compatibility/NEO4J_COMPATIBILITY_REPORT.md:84` ("toward ~95%"), `docs/nexus/README.md:22` ("~85%"). State plainly what is measured (TCK pass rate) versus what is a differential result (the 325-case Neo4j suite) — conflating them is how the spread arose. **Do NOT edit `CLAUDE.md`**: it is generated between `RULEBOOK:START/END` sentinels, marked DO NOT EDIT BY HAND at `:1-3`, and does not mention openCypher

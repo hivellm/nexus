@@ -63,10 +63,19 @@ benchmark query.
       it. The loader therefore splits its verification: label counts and the total (both exact and
       stable) are fatal; the per-type read-back is reported loudly but is only fatal under
       `--strict-readback`, which becomes the regression guard once 4.8 is closed.
-- [ ] 1.4 Port short reads IS1–IS7 from `ldbc/ldbc_snb_interactive_impls` (cypher flavor) into `benchmarks/ldbc-snb/queries/`, one file per query with parameter placeholders; smoke-validate each against SF0.1 comparing results with the same query on Neo4j (docker via `scripts/bench/docker-compose.yml`)
-      **UNBLOCKED**: `phase7_opencypher-gap-closure` item 4.8 (the non-deterministic expand that
-      1.3 found) is fixed — `ldbc-load --strict-readback` now passes every per-type count on the
-      loaded SF0.1 graph, so query results are stable and can be validated against Neo4j.
+- [~] 1.4 Port short reads IS1–IS7 from `ldbc/ldbc_snb_interactive_impls` (cypher flavor) into `benchmarks/ldbc-snb/queries/`, one file per query with parameter placeholders; smoke-validate each against SF0.1 comparing results with the same query on Neo4j (docker via `scripts/bench/docker-compose.yml`)
+      **DONE except IS2.** All seven ported to `queries/short/is{1..7}_*.cypher`. Built the full
+      differential rig: a `neo4j-load` bin (loads the identical graph into the bench Neo4j in ~30s)
+      and `scripts/validate-short-reads.py` (samples real ids, runs each query against BOTH engines,
+      diffs order-insensitively where there is no ORDER BY). **IS1, IS3, IS4, IS5, IS6, IS7 match
+      Neo4j on every sampled id.** IS2 is BLOCKED on `phase7_opencypher-gap-closure` 4.11 (a
+      variable-length expand from a `WITH`-carried variable does not bind its target).
+      Getting here required fixing four engine bugs the queries surfaced — gap-closure 4.8–4.10 and
+      the traversal adjacency-index repoint (4.11a), the last of which (incoming traversal returning
+      nothing past ~10k edges) was the decisive blocker. Two schema corrections were needed so the
+      reference queries match the reference data: the `:Message` superlabel on Post/Comment, and
+      dropping the KNOWS mirror (a workaround for the now-fixed incoming traversal that doubled every
+      friendship under `-[:KNOWS]-`).
 - [ ] 1.5 Port complex reads IC1–IC14 the same way, validating each against Neo4j on SF0.1; each query Nexus cannot express or answers differently → file a finding (repro + expected vs actual) in phase7_opencypher-gap-closure and mark the query BLOCKED in the README table
       **UNBLOCKED** — see 1.4.
 - [ ] 1.6 Port the 8 Interactive updates (INS1–INS8: add person/like/post/comment/forum/membership/friendship/reply) with parameter streams from the dataset's update CSVs; validate side effects (counts before/after) on SF0.1
