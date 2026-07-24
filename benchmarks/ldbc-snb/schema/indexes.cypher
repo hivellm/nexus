@@ -26,6 +26,10 @@ CREATE INDEX snb_organisation_id IF NOT EXISTS FOR (n:Organisation) ON (n.id);
 CREATE INDEX snb_place_id IF NOT EXISTS FOR (n:Place) ON (n.id);
 CREATE INDEX snb_tag_id IF NOT EXISTS FOR (n:Tag) ON (n.id);
 CREATE INDEX snb_tagclass_id IF NOT EXISTS FOR (n:TagClass) ON (n.id);
+// Posts and Comments also carry the `:Message` superlabel; IS4-IS7 enter
+// through `MATCH (m:Message {id: …})`, which needs its own index or it scans
+// every message.
+CREATE INDEX snb_message_id IF NOT EXISTS FOR (n:Message) ON (n.id);
 
 // --- Name lookups --------------------------------------------------------
 // IC3 selects two countries by name, IC11 one; IC6 and IC12 enter through a

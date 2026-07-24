@@ -33,12 +33,12 @@ answer is worthless.
 |---|---|
 | Dataset fetch + checksum pinning | **done** |
 | Schema prep DDL | **done** |
-| Bulk loader | **done** — loads and verifies SF0.1 |
-| Short reads IS1–IS7 | not started |
+| Nexus bulk loader (`ldbc-load`) | **done** — loads and verifies SF0.1 |
+| Neo4j baseline loader (`neo4j-load`) | **done** — same graph into Neo4j |
+| Short reads IS1–IS7 | **ported**; differential-validated against Neo4j |
 | Complex reads IC1–IC14 | not started |
 | Updates INS1–INS8 | not started |
 | Bench driver | not started |
-| Neo4j baseline mode | not started |
 | SF1 report | not started |
 
 Tracked as `.rulebook/tasks/phase7_ldbc-snb-benchmark`.
@@ -172,10 +172,25 @@ verifies absolute counts, so pre-existing rows are reported as a mismatch.
    columns. A second streaming pass rather than buffering: an edge needs both
    endpoints to exist, and holding ~600 k (SF0.1) or ~6 M (SF1) pending edges
    in memory is worse than a few seconds of I/O.
-3. **The ten edge files**, with `KNOWS` mirrored (LDBC stores it once per pair).
+3. **The ten edge files**, one edge per row in the recorded direction. `KNOWS`
+   is stored **once per friendship** (LDBC's convention) and is NOT mirrored:
+   the reference queries traverse it undirected (`-[:KNOWS]-`), which Nexus
+   serves in both directions off the store adjacency index. Mirroring would
+   double every friendship under that match. Both engines load it identically.
 
-SF0.1 totals: **327 588 nodes, 1 492 038 relationships** — the 576 896 edge-file
-rows plus 14 073 mirrored `KNOWS` plus 901 069 synthesized merge-foreign edges.
+SF0.1 totals: **327 588 nodes, 1 477 965 relationships** — the 576 896 edge-file
+rows plus 901 069 synthesized merge-foreign edges.
+
+Both loaders write the identical logical graph: same labels (including the
+`:Message` superlabel on Posts and Comments), same merge-foreign edges, same
+single-direction `KNOWS`, dates as epoch-millisecond integers. That is what
+makes the differential validation a like-for-like comparison.
+
+```bash
+# Load the Neo4j baseline (fast: ~30 s; resolves edges by id index, no id map)
+cd loader && cargo build --release
+./target/release/neo4j-load --dataset <dir> --url http://localhost:17474
+```
 
 ### Temporal encoding — epoch milliseconds, deliberately
 
@@ -297,19 +312,40 @@ Other layout notes that bite loaders:
 - Dates are epoch **milliseconds** (`LongDateFormatter`), including
   `person.birthday`, which is a date-only value expressed as a UTC midnight
   timestamp.
-- `person_knows_person` is undirected and stored **once per pair**; both
-  directions must be materialized for the queries to traverse correctly.
+- `person_knows_person` is undirected and stored **once per pair**. The loaders
+  keep it single-direction (as the CSV records it) and rely on the undirected
+  `-[:KNOWS]-` match to traverse both ways — the reference behaviour.
 
 ## Query status
 
-Filled in as IS/IC/INS queries are ported and validated against Neo4j at SF0.1.
-A query is only marked ✅ once Nexus and Neo4j return the same result set.
+Ported queries live under `queries/`. `scripts/validate-short-reads.py` runs
+each short read against BOTH engines on the same loaded SF0.1 graph, sampling
+real ids from the database, and marks a query ✅ only when Nexus and Neo4j
+return the same result set on every sampled id.
+
+```bash
+python scripts/validate-short-reads.py \
+    --nexus http://localhost:15474 --neo4j http://localhost:17474
+```
 
 | Query | Status | Note |
 |---|---|---|
-| IS1–IS7 | — | not ported yet |
+| IS1 | ✅ | matches Neo4j on every sampled id |
+| IS2 | ⛔ BLOCKED | a variable-length path (`REPLY_OF*0..`) expanded from a `WITH`-carried variable does not bind its target on Nexus (`phase7_opencypher-gap-closure` 4.11). The fresh-MATCH form works, so the port is faithful. |
+| IS3 | ✅ | matches Neo4j (friends via undirected `-[:KNOWS]-`) |
+| IS4 | ✅ | matches Neo4j |
+| IS5 | ✅ | matches Neo4j |
+| IS6 | ✅ | matches Neo4j |
+| IS7 | ✅ | matches Neo4j (OPTIONAL MATCH + CASE) |
 | IC1–IC14 | — | not ported yet |
 | INS1–INS8 | — | not ported yet |
+
+Fixing the query-correctness phase surfaced and closed four engine bugs
+(`phase7_opencypher-gap-closure` items 4.8–4.10 plus the relationship-traversal
+adjacency-index repoint): a `type` property misread as a relationship, N²/first-
+row multi-pattern writes, and — the big one — incoming/undirected traversal that
+returned nothing on graphs with more than ~10 000 relationships. IS2 remains
+blocked on a fifth (4.11, the `WITH`-carried variable-length expand).
 
 ## Neo4j baseline
 

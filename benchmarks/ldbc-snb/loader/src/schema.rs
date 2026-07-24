@@ -73,12 +73,30 @@ pub struct ForeignKey {
 pub struct NodeFile {
     /// Path relative to the dataset root.
     pub path: &'static str,
+    /// Primary label — the one edge files and query parameters refer to, and
+    /// the key the id map is scoped by (LDBC ids are unique only within a
+    /// label). Verification counts by this label too.
     pub label: &'static str,
+    /// Additional labels written to every node of this file, on top of
+    /// `label`. The LDBC SNB Neo4j reference schema gives Posts and Comments
+    /// the shared `:Message` superlabel so the short/complex reads can match
+    /// `(m:Message {id: …})` uniformly; without it IS4–IS7 and several IC
+    /// queries match nothing. Never used for id-map keying — only `label` is.
+    pub extra_labels: &'static [&'static str],
     /// Column holding the LDBC id (always `id` in this layout, but named here
     /// so the loader never hard-codes a column position).
     pub id_column: &'static str,
     pub properties: &'static [Property],
     pub foreign_keys: &'static [ForeignKey],
+}
+
+impl NodeFile {
+    /// Every label written to a node of this file: the primary plus any extras.
+    pub fn all_labels(&self) -> Vec<&'static str> {
+        std::iter::once(self.label)
+            .chain(self.extra_labels.iter().copied())
+            .collect()
+    }
 }
 
 /// An edge CSV: one file, one relationship type.
@@ -93,16 +111,13 @@ pub struct EdgeFile {
     /// (0 and 1), with these names kept for error messages only.
     pub dst: (&'static str, &'static str),
     pub properties: &'static [Property],
-    /// Materialize the mirrored edge as well. `person_knows_person` is
-    /// undirected and stored once per pair; without the mirror, half of every
-    /// friendship traversal silently disappears.
-    pub undirected: bool,
 }
 
 pub const NODE_FILES: &[NodeFile] = &[
     NodeFile {
         path: "static/place_0_0.csv",
         label: "Place",
+        extra_labels: &[],
         id_column: "id",
         properties: &[
             Property {
@@ -136,6 +151,7 @@ pub const NODE_FILES: &[NodeFile] = &[
     NodeFile {
         path: "static/organisation_0_0.csv",
         label: "Organisation",
+        extra_labels: &[],
         id_column: "id",
         properties: &[
             Property {
@@ -169,6 +185,7 @@ pub const NODE_FILES: &[NodeFile] = &[
     NodeFile {
         path: "static/tagclass_0_0.csv",
         label: "TagClass",
+        extra_labels: &[],
         id_column: "id",
         properties: &[
             Property {
@@ -197,6 +214,7 @@ pub const NODE_FILES: &[NodeFile] = &[
     NodeFile {
         path: "static/tag_0_0.csv",
         label: "Tag",
+        extra_labels: &[],
         id_column: "id",
         properties: &[
             Property {
@@ -225,6 +243,7 @@ pub const NODE_FILES: &[NodeFile] = &[
     NodeFile {
         path: "dynamic/person_0_0.csv",
         label: "Person",
+        extra_labels: &[],
         id_column: "id",
         properties: &[
             Property {
@@ -288,6 +307,7 @@ pub const NODE_FILES: &[NodeFile] = &[
     NodeFile {
         path: "dynamic/forum_0_0.csv",
         label: "Forum",
+        extra_labels: &[],
         id_column: "id",
         properties: &[
             Property {
@@ -316,6 +336,7 @@ pub const NODE_FILES: &[NodeFile] = &[
     NodeFile {
         path: "dynamic/post_0_0.csv",
         label: "Post",
+        extra_labels: &["Message"],
         id_column: "id",
         properties: &[
             Property {
@@ -383,6 +404,7 @@ pub const NODE_FILES: &[NodeFile] = &[
     NodeFile {
         path: "dynamic/comment_0_0.csv",
         label: "Comment",
+        extra_labels: &["Message"],
         id_column: "id",
         properties: &[
             Property {
@@ -456,7 +478,6 @@ pub const EDGE_FILES: &[EdgeFile] = &[
             name: "creationDate",
             coerce: Coerce::Int,
         }],
-        undirected: true,
     },
     EdgeFile {
         path: "dynamic/forum_hasMember_person_0_0.csv",
@@ -468,7 +489,6 @@ pub const EDGE_FILES: &[EdgeFile] = &[
             name: "joinDate",
             coerce: Coerce::Int,
         }],
-        undirected: false,
     },
     EdgeFile {
         path: "dynamic/forum_hasTag_tag_0_0.csv",
@@ -476,7 +496,6 @@ pub const EDGE_FILES: &[EdgeFile] = &[
         src: ("Forum.id", "Forum"),
         dst: ("Tag.id", "Tag"),
         properties: &[],
-        undirected: false,
     },
     EdgeFile {
         path: "dynamic/post_hasTag_tag_0_0.csv",
@@ -484,7 +503,6 @@ pub const EDGE_FILES: &[EdgeFile] = &[
         src: ("Post.id", "Post"),
         dst: ("Tag.id", "Tag"),
         properties: &[],
-        undirected: false,
     },
     EdgeFile {
         path: "dynamic/comment_hasTag_tag_0_0.csv",
@@ -492,7 +510,6 @@ pub const EDGE_FILES: &[EdgeFile] = &[
         src: ("Comment.id", "Comment"),
         dst: ("Tag.id", "Tag"),
         properties: &[],
-        undirected: false,
     },
     EdgeFile {
         path: "dynamic/person_hasInterest_tag_0_0.csv",
@@ -500,7 +517,6 @@ pub const EDGE_FILES: &[EdgeFile] = &[
         src: ("Person.id", "Person"),
         dst: ("Tag.id", "Tag"),
         properties: &[],
-        undirected: false,
     },
     EdgeFile {
         path: "dynamic/person_likes_post_0_0.csv",
@@ -512,7 +528,6 @@ pub const EDGE_FILES: &[EdgeFile] = &[
             name: "creationDate",
             coerce: Coerce::Int,
         }],
-        undirected: false,
     },
     EdgeFile {
         path: "dynamic/person_likes_comment_0_0.csv",
@@ -524,7 +539,6 @@ pub const EDGE_FILES: &[EdgeFile] = &[
             name: "creationDate",
             coerce: Coerce::Int,
         }],
-        undirected: false,
     },
     EdgeFile {
         path: "dynamic/person_studyAt_organisation_0_0.csv",
@@ -536,7 +550,6 @@ pub const EDGE_FILES: &[EdgeFile] = &[
             name: "classYear",
             coerce: Coerce::Int,
         }],
-        undirected: false,
     },
     EdgeFile {
         path: "dynamic/person_workAt_organisation_0_0.csv",
@@ -548,7 +561,6 @@ pub const EDGE_FILES: &[EdgeFile] = &[
             name: "workFrom",
             coerce: Coerce::Int,
         }],
-        undirected: false,
     },
 ];
 
@@ -699,20 +711,6 @@ mod tests {
     }
 
     #[test]
-    fn only_knows_is_undirected() {
-        let undirected: Vec<&str> = EDGE_FILES
-            .iter()
-            .filter(|e| e.undirected)
-            .map(|e| e.rel_type)
-            .collect();
-        assert_eq!(
-            undirected,
-            vec!["KNOWS"],
-            "only person_knows_person is stored once per pair"
-        );
-    }
-
-    #[test]
     fn node_labels_match_the_expected_count_table() {
         let mut labels: Vec<&str> = NODE_FILES.iter().map(|f| f.label).collect();
         labels.sort_unstable();
@@ -728,5 +726,41 @@ mod tests {
         let mut expected: Vec<&str> = SF0_1_EDGE_FILE_ROWS.iter().map(|(p, _)| *p).collect();
         expected.sort_unstable();
         assert_eq!(paths, expected);
+    }
+
+    #[test]
+    fn only_post_and_comment_carry_the_message_superlabel() {
+        // The LDBC Neo4j reference schema labels Posts and Comments `:Message`
+        // so IS4–IS7 and several IC queries can match `(m:Message {id: …})`.
+        // No other node type may carry it, and the primary label always leads.
+        for file in NODE_FILES {
+            let labels = file.all_labels();
+            assert_eq!(labels[0], file.label, "the primary label must come first");
+            let has_message = labels.contains(&"Message");
+            let expected = matches!(file.label, "Post" | "Comment");
+            assert_eq!(
+                has_message,
+                expected,
+                "{} should{} carry :Message",
+                file.label,
+                if expected { "" } else { " NOT" }
+            );
+        }
+    }
+
+    #[test]
+    fn extra_labels_never_shadow_the_id_map_key() {
+        // The id map is keyed by `label` only; an extra label must never be a
+        // primary label of another file, or edges could resolve to the wrong
+        // node type.
+        let primaries: Vec<&str> = NODE_FILES.iter().map(|f| f.label).collect();
+        for file in NODE_FILES {
+            for extra in file.extra_labels {
+                assert!(
+                    !primaries.contains(extra),
+                    "extra label {extra} collides with a primary label"
+                );
+            }
+        }
     }
 }

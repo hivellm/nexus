@@ -56,6 +56,10 @@ impl IdMap {
     pub fn len(&self) -> usize {
         self.per_label.values().map(HashMap::len).sum()
     }
+
+    pub fn is_empty(&self) -> bool {
+        self.per_label.values().all(HashMap::is_empty)
+    }
 }
 
 /// What the loader sent, per label and per relationship type, so the
@@ -100,6 +104,7 @@ impl Loader<'_> {
             .iter()
             .map(|p| Ok((source.column(p.column)?, p)))
             .collect::<Result<Vec<_>>>()?;
+        let labels = file.all_labels();
 
         let mut batch: Vec<Value> = Vec::new();
         let mut batch_ldbc_ids: Vec<i64> = Vec::new();
@@ -121,7 +126,7 @@ impl Loader<'_> {
             }
 
             batch_bytes += approximate_size(&properties);
-            batch.push(json!({ "labels": [file.label], "properties": properties }));
+            batch.push(json!({ "labels": labels, "properties": properties }));
             batch_ldbc_ids.push(ldbc_id);
             total += 1;
 
@@ -292,19 +297,16 @@ impl Loader<'_> {
                 }
             }
 
+            // Every edge is stored EXACTLY as the CSV records it — one edge
+            // per row, in one direction. `person_knows_person` is stored once
+            // per friendship (LDBC's convention) and is NOT mirrored: the
+            // reference queries traverse it undirected (`-[:KNOWS]-`), which the
+            // executor now serves in both directions off the store adjacency
+            // index. Mirroring would double every friendship under that match.
             batch.push(json!({
                 "src": src, "dst": dst, "type": file.rel_type, "properties": properties,
             }));
             total += 1;
-
-            if file.undirected {
-                // Stored once per pair; both directions have to exist or half
-                // of every friendship traversal silently disappears.
-                batch.push(json!({
-                    "src": dst, "dst": src, "type": file.rel_type, "properties": properties,
-                }));
-                total += 1;
-            }
 
             if batch.len() >= self.batch_rows {
                 self.flush_relationships(&mut batch)?;

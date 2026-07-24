@@ -1,0 +1,13 @@
+// LDBC SNB Interactive — IS7 (replies to a message, their authors, and whether
+// each reply author knows the original message's author). Params: messageId
+MATCH (m:Message {id: $messageId})<-[:REPLY_OF]-(c:Comment)-[:HAS_CREATOR]->(p:Person)
+OPTIONAL MATCH (m)-[:HAS_CREATOR]->(a:Person)-[r:KNOWS]-(p)
+RETURN
+  c.id AS commentId,
+  c.content AS commentContent,
+  c.creationDate AS commentCreationDate,
+  p.id AS replyAuthorId,
+  p.firstName AS replyAuthorFirstName,
+  p.lastName AS replyAuthorLastName,
+  CASE WHEN r IS NULL THEN false ELSE true END AS replyAuthorKnowsOriginalMessageAuthor
+ORDER BY commentCreationDate DESC, replyAuthorId ASC

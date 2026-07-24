@@ -13,19 +13,15 @@
 //! ldbc-load --dataset <dir> --dry-run     # parse + resolve every edge, write nothing
 //! ```
 
-mod client;
-mod csv_source;
-mod load;
-mod schema;
-
 use anyhow::{bail, Context, Result};
 use std::path::PathBuf;
 use std::process::ExitCode;
 use std::time::Instant;
 
-use client::NexusClient;
-use csv_source::CsvSource;
-use load::{verify, IdMap, Loader, Submitted};
+use ldbc_snb_loader::client::NexusClient;
+use ldbc_snb_loader::csv_source::CsvSource;
+use ldbc_snb_loader::load::{verify, IdMap, Loader, Submitted};
+use ldbc_snb_loader::schema;
 
 const DEFAULT_URL: &str = "http://localhost:15474";
 const DEFAULT_BATCH_ROWS: usize = 5_000;
