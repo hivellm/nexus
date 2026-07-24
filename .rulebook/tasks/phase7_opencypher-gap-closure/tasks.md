@@ -90,6 +90,19 @@ gaps, then re-measure so the delta is attributable. Do not reorder §2 before §
       IS/IC query result can be validated against Neo4j while an identical query returns
       different answers on consecutive runs.
 
+- [ ] 4.9 **Multi-row `MATCH … CREATE` writes each relationship TWICE.** Found while writing the
+      4.8 regression fixture. `MATCH (a:A), (b:B) CREATE (a)-[:R]->(b)` over a driving set with one
+      A and one B creates 2 identical edges, not 1; `/stats` `rel_count` and `MATCH ()-[r]->()
+      RETURN count(r)` both report 2, and `RETURN a.id, b.id` yields two identical rows. The
+      single-row inline forms are all correct — `MATCH (a:A {id:1}), (b:B {id:9}) CREATE …`,
+      two separate `MATCH` clauses, and `MERGE` each create exactly one — so the doubling is
+      specific to the CREATE-relationship path consuming a comma-joined multi-pattern driving row
+      set. **Repro** (Nexus 2.5.0, fresh db): `CREATE (:A {id:1}), (:A {id:2}), (:B {id:9})` then
+      `MATCH (a:A), (b:B) CREATE (a)-[:R]->(b)` → `MATCH ()-[r:R]->() RETURN count(r)` = 4, expected
+      2. The 4.8 fixture works around it by pinning both endpoints per statement; a real fix belongs
+      here. NOTE: the LDBC loader is unaffected — it creates edges via `/ingest`, not Cypher CREATE —
+      so the benchmark's edge counts are correct; this only bites Cypher-authored multi-pattern writes.
+
 ## 5. Re-measure and reconcile the documentation
 - [ ] 5.1 Re-run the TCK after §4 and refresh `docs/compatibility/OPENCYPHER_TCK_REPORT.md`; the delta from the §3.3 baseline is the evidence that §4 mattered
 - [ ] 5.2 Reconcile the compatibility claim, which currently spans 40 points across six files, to the single measured number: `AGENTS.override.md:159` (~55%), `docs/PRD.md:24`, `docs/ROADMAP.md:6`, `docs/guides/USER_GUIDE.md:26`, `docs/compatibility/NEO4J_COMPATIBILITY_REPORT.md:84` ("toward ~95%"), `docs/nexus/README.md:22` ("~85%"). State plainly what is measured (TCK pass rate) versus what is a differential result (the 325-case Neo4j suite) — conflating them is how the spread arose. **Do NOT edit `CLAUDE.md`**: it is generated between `RULEBOOK:START/END` sentinels, marked DO NOT EDIT BY HAND at `:1-3`, and does not mention openCypher
