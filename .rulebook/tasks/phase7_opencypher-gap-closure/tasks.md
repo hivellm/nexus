@@ -90,18 +90,36 @@ gaps, then re-measure so the delta is attributable. Do not reorder §2 before §
       IS/IC query result can be validated against Neo4j while an identical query returns
       different answers on consecutive runs.
 
-- [ ] 4.9 **Multi-row `MATCH … CREATE` writes each relationship TWICE.** Found while writing the
-      4.8 regression fixture. `MATCH (a:A), (b:B) CREATE (a)-[:R]->(b)` over a driving set with one
-      A and one B creates 2 identical edges, not 1; `/stats` `rel_count` and `MATCH ()-[r]->()
-      RETURN count(r)` both report 2, and `RETURN a.id, b.id` yields two identical rows. The
-      single-row inline forms are all correct — `MATCH (a:A {id:1}), (b:B {id:9}) CREATE …`,
-      two separate `MATCH` clauses, and `MERGE` each create exactly one — so the doubling is
-      specific to the CREATE-relationship path consuming a comma-joined multi-pattern driving row
-      set. **Repro** (Nexus 2.5.0, fresh db): `CREATE (:A {id:1}), (:A {id:2}), (:B {id:9})` then
-      `MATCH (a:A), (b:B) CREATE (a)-[:R]->(b)` → `MATCH ()-[r:R]->() RETURN count(r)` = 4, expected
-      2. The 4.8 fixture works around it by pinning both endpoints per statement; a real fix belongs
-      here. NOTE: the LDBC loader is unaffected — it creates edges via `/ingest`, not Cypher CREATE —
-      so the benchmark's edge counts are correct; this only bites Cypher-authored multi-pattern writes.
+- [x] 4.9 **Multi-row `MATCH … CREATE` writes N² relationships instead of N.** FIXED. Found while
+      writing the 4.8 regression fixture. `MATCH (a:A), (b:B) CREATE (a)-[:R]->(b)` over 3 A's and
+      1 B created 9 edges, not 3 — always the SQUARE of the driving-row count.
+      **Root cause**: by the time a CREATE runs, the read pipeline has already materialised its
+      driving rows as ALIGNED columns (a comma-joined MATCH puts its cartesian product into
+      `a=[a1,a2,a3]`, `b=[b1,b2,b3]`, index i = one row). `execute_create_with_context`'s slow path
+      called `materialize_rows_from_variables`, which RE-CROSSES equal-length multi-element columns
+      into N² — the exact defect `phase0_fix-materialize-recrosses-aligned-columns` fixed on the
+      READ path (`seed_scan_main_loop` zips), but the CREATE path had its own materialisation and
+      was missed. **Fix**: the slow path now calls `materialize_aligned_rows` (zip by index), one
+      CREATE per driving row. `crates/nexus-core/src/executor/operators/create.rs:945`.
+      **Verified**: `tests/regression/match_create_multi_pattern_test.rs` (3 A's × 1 B → 3 edges;
+      5 P × 4 Q → 20 not 400; single-inline, UNWIND-create, and UNWIND-by-id paths stay correct)
+      fails on the re-cross and passes with the zip. Full regression + engine + cypher + executor
+      groups green. The LDBC loader was never affected (it writes via `/ingest`, not Cypher CREATE).
+
+- [ ] 4.10 **Multi-row `MATCH … MERGE (a)-[:T]->(b)` only processes the FIRST driving row.** Found
+      immediately after 4.9, while confirming the CREATE fix did not regress MERGE. Distinct
+      subsystem (`engine/write_exec.rs::process_merge_relationship`, not the executor CREATE path).
+      **Repro** (Nexus 2.5.0, fresh db): `CREATE (:C {id:1}), (:C {id:2}), (:D {id:8})` then
+      `MATCH (c:C), (d:D) MERGE (c)-[:S]->(d)` → `MATCH ()-[r:S]->() RETURN count(r)` = 1, expected
+      2 (c1→d and c2→d are distinct edges). **Root cause**: `process_merge_relationship`
+      (`write_exec.rs:1005` / `:1018`) resolves each endpoint by collapsing its binding list to
+      `ids[0]` — `Some(ids) if !ids.is_empty() => ids[0]` — so when a preceding MATCH bound the
+      endpoint to MULTIPLE nodes, every row after the first is silently dropped. The single-row
+      inline forms (`MATCH (c:C {id:1}), (d:D {id:8}) MERGE …`) are correct because each endpoint
+      binds one node. A real fix must iterate the aligned driving rows (zip the endpoint id lists,
+      as 4.9 does for CREATE) and MERGE each. NOTE: the LDBC loader is unaffected (it writes via
+      `/ingest`), and this UNDER-counts rather than over-counts, so it silently drops writes — a
+      MERGE-based importer over comma-joined patterns would lose most of its edges.
 
 ## 5. Re-measure and reconcile the documentation
 - [ ] 5.1 Re-run the TCK after §4 and refresh `docs/compatibility/OPENCYPHER_TCK_REPORT.md`; the delta from the §3.3 baseline is the evidence that §4 mattered

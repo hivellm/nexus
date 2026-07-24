@@ -927,8 +927,22 @@ impl Executor {
                     vec![row]
                 }
             } else {
-                // Slow path: use full materialization for array variables
-                let materialized = self.materialize_rows_from_variables(context)?;
+                // Slow path: array variables — one CREATE per driving row.
+                //
+                // Use the ALIGNED materialisation (zip columns by index), NOT
+                // `materialize_rows_from_variables` (which re-crosses). By the
+                // time a CREATE runs, the read pipeline has already produced
+                // the driving rows as aligned columns: a comma-joined
+                // `MATCH (a:A), (b:B)` materialises its cartesian product into
+                // `a = [a1, a2]`, `b = [b1, b2]` (index i = one row), and an
+                // UNWIND aligns the same way. Re-crossing those equal-length
+                // multi-element columns turned N driving rows into N² CREATEs —
+                // `MATCH (a:A), (b:B) CREATE (a)-[:R]->(b)` over 3 A's and 1 B
+                // wrote 9 edges, not 3. The CREATE never introduces its own
+                // cartesian; the MATCH already did. Mirrors the read path's
+                // `seed_scan_main_loop`, which zips for exactly this reason
+                // (phase0_fix-materialize-recrosses-aligned-columns).
+                let materialized = self.materialize_aligned_rows(context);
 
                 // Verify materialized rows have node objects with _nexus_id
                 let has_node_ids = materialized.iter().any(|row| {

@@ -2,6 +2,7 @@
 //! One test binary per group keeps link time down; each module below is a
 //! former top-level `tests/*.rs` integration file.
 
+mod match_create_multi_pattern_test;
 mod node_property_named_type_test;
 mod regression_extended_create;
 mod regression_extended_engine;
