@@ -17,8 +17,7 @@
 //! returned 5305 / 5267 / 5233 where the answer is 7955.
 //!
 //! Fixed by marking relationships structurally (`_nexus_rel_type`, written
-//! only by the relationship constructor) — see
-//! `phase7_opencypher-gap-closure` item 4.8.
+//! only by the relationship constructor).
 
 use nexus_core::Engine;
 use nexus_core::testing::TestContext;

@@ -940,8 +940,7 @@ impl Executor {
                 // `MATCH (a:A), (b:B) CREATE (a)-[:R]->(b)` over 3 A's and 1 B
                 // wrote 9 edges, not 3. The CREATE never introduces its own
                 // cartesian; the MATCH already did. Mirrors the read path's
-                // `seed_scan_main_loop`, which zips for exactly this reason
-                // (phase0_fix-materialize-recrosses-aligned-columns).
+                // `seed_scan_main_loop`, which zips for exactly this reason.
                 let materialized = self.materialize_aligned_rows(context);
 
                 // Verify materialized rows have node objects with _nexus_id

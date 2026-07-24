@@ -1014,8 +1014,7 @@ impl Engine {
         // what the read-side relationship binder in `process_match_clause_multi`
         // already does. Collapsing each list to `ids[0]` silently dropped
         // every driving row after the first: `MATCH (c:C), (d:D) MERGE
-        // (c)-[:S]->(d)` over 2 C's and 1 D created ONE edge, not two
-        // (phase7_opencypher-gap-closure item 4.10).
+        // (c)-[:S]->(d)` over 2 C's and 1 D created ONE edge, not two.
         //
         // A bound-but-EMPTY endpoint (a MATCH that found nothing) still bails
         // to the node-only MERGE fallback via `Ok(None)`, unchanged. An

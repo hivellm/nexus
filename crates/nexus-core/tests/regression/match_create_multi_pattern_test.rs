@@ -7,8 +7,7 @@
 //! operator's slow path used `materialize_rows_from_variables`, which
 //! re-crosses equal-length multi-element columns, so N driving rows produced
 //! N² edges (3 A's × 1 B wrote 9 edges, not 3). Fixed by zipping the aligned
-//! columns instead, mirroring the read path's `seed_scan_main_loop`. See
-//! phase7_opencypher-gap-closure item 4.9.
+//! columns instead, mirroring the read path's `seed_scan_main_loop`.
 
 use nexus_core::Engine;
 use nexus_core::testing::TestContext;

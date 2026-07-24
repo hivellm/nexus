@@ -1102,8 +1102,7 @@ impl Executor {
         // `type` is an ordinary property name a node may legitimately carry
         // (LDBC's `Organisation.type` / `Place.type` do), which is why
         // `_nexus_rel_type` exists — a reserved key that only this constructor
-        // writes. See `is_relationship_value` and
-        // phase7_opencypher-gap-closure 4.8.
+        // writes. See `is_relationship_value`.
         let mut rel_obj = properties_map;
         rel_obj.insert("_nexus_id".to_string(), Value::Number(rel.id.into()));
         rel_obj.insert(

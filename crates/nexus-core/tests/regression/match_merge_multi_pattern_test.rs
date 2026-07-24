@@ -7,8 +7,7 @@
 //! — `MATCH (c:C), (d:D) MERGE (c)-[:S]->(d)` over 2 C's and 1 D created ONE
 //! edge, not two. Under-counting is worse than the CREATE over-count it was
 //! found next to: it silently loses writes. Fixed by MERGE-ing the cartesian
-//! product of the two endpoint id lists. See phase7_opencypher-gap-closure
-//! item 4.10.
+//! product of the two endpoint id lists.
 
 use nexus_core::Engine;
 use nexus_core::testing::TestContext;
