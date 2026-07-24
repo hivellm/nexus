@@ -69,6 +69,39 @@ fn push_with_row_cap<T>(vec: &mut Vec<T>, row: T, op: &'static str) -> Result<()
     Ok(())
 }
 
+/// Reserved key marking a row value as a RELATIONSHIP.
+///
+/// Written by exactly one place — `read_relationship_as_value_with_store` —
+/// and never derived from user data, which is the whole point: the previous
+/// test for "is this a relationship?" was `obj.contains_key("type")`, and
+/// `type` is an ordinary property name. LDBC's `Organisation.type`
+/// (company/university) and `Place.type` (city/country/continent) made every
+/// such node read as a relationship, and the row-deduplication key built from
+/// that misidentification collapsed unrelated rows into one — silently, and
+/// non-deterministically, because the misidentified object was picked by
+/// `HashMap` iteration order. See phase7_opencypher-gap-closure 4.8.
+pub(crate) const REL_TYPE_MARKER: &str = "_nexus_rel_type";
+
+/// Whether `value` is a relationship row value.
+///
+/// Structural: keyed on [`REL_TYPE_MARKER`], which no property map can
+/// contain by accident. Every "node or relationship?" decision in the
+/// executor must go through this or [`is_node_value`] — a bare
+/// `contains_key("type")` is a bug.
+pub(crate) fn is_relationship_value(value: &serde_json::Value) -> bool {
+    matches!(value, serde_json::Value::Object(obj) if obj.contains_key(REL_TYPE_MARKER))
+}
+
+/// Whether `value` is a node row value: it carries an entity id and is not a
+/// relationship.
+pub(crate) fn is_node_value(value: &serde_json::Value) -> bool {
+    matches!(
+        value,
+        serde_json::Value::Object(obj)
+            if obj.contains_key("_nexus_id") && !obj.contains_key(REL_TYPE_MARKER)
+    )
+}
+
 use crate::{Error, Result};
 
 #[cfg(test)]

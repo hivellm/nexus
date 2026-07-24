@@ -731,15 +731,9 @@ impl Executor {
                         );
 
                         // Check if rows contain node variables (not just aggregation results)
-                        let has_node_variables = rows.iter().any(|row| {
-                            row.values().any(|v| {
-                                if let serde_json::Value::Object(obj) = v {
-                                    obj.contains_key("_nexus_id") && !obj.contains_key("type")
-                                } else {
-                                    false
-                                }
-                            })
-                        });
+                        let has_node_variables = rows
+                            .iter()
+                            .any(|row| row.values().any(|v| crate::executor::is_node_value(v)));
 
                         tracing::trace!(
                             "CREATE operator: has_node_variables={}",

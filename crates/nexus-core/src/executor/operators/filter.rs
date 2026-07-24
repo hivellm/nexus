@@ -226,8 +226,8 @@ impl Executor {
                         let mut var_types: Vec<(String, String)> = Vec::new();
                         for (var_name, var_value) in row.iter() {
                             let var_type = match var_value {
-                                Value::Object(obj) => {
-                                    if obj.contains_key("type") {
+                                Value::Object(_) => {
+                                    if crate::executor::is_relationship_value(var_value) {
                                         has_relationships_in_row = true;
                                         "RELATIONSHIP".to_string()
                                     } else {

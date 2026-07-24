@@ -261,7 +261,8 @@ impl Executor {
         let has_synthetic_maps = rows.iter().any(|row_map| {
             row_map.values().any(|val| {
                 if let Value::Object(obj) = val {
-                    !obj.contains_key("_nexus_id") && !obj.contains_key("type")
+                    // A synthetic map is neither a node nor a relationship.
+                    !obj.contains_key("_nexus_id") && !crate::executor::is_relationship_value(val)
                 } else {
                     false
                 }

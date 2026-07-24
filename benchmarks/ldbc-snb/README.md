@@ -205,26 +205,23 @@ The node figure is the first empirical confirmation of the `/ingest` rewrite
 469 nodes/s before, ~58 000 nodes/s now. Relationship creation is now the
 bottleneck by a factor of ~19.
 
-### Caveat: the per-type read-back is blocked on an engine bug
-
-The loader's verification is split by how much each check can be trusted:
+### Verification is split by trustworthiness
 
 | Check | Status |
 |---|---|
 | Per-label node counts | exact and stable — **fatal** on mismatch |
 | Total relationship count (engine write counter, `/stats`) | exact — **fatal** on mismatch |
-| Per-type `MATCH ()-[r:T]->()` read-back | **advisory** — see below |
+| Per-type `MATCH ()-[r:T]->()` read-back | advisory by default, **fatal under `--strict-readback`** |
 
-On the loaded SF0.1 graph, `MATCH (o:Organisation)-[r:IS_LOCATED_IN]->(p:Place)
-RETURN count(r)` returns 5305 / 5267 / 5233 on three consecutive runs of a
-read-only database; the true answer is 7955. The edges are provably present
-(`MATCH (o:Organisation) WHERE NOT (o)-[:IS_LOCATED_IN]->() RETURN count(o)`
-returns 0, every sampled id resolves through an index seek, and the engine's own
-write counter agrees with the loader). Filed as **`phase7_opencypher-gap-closure`
-item 4.8**; it also blocks the query-correctness phase, since no query result can
-be validated against Neo4j while an identical query returns different answers on
-consecutive runs. Once it is closed, run with `--strict-readback` and this check
-becomes a regression guard.
+The per-type read-back was once non-deterministic — three consecutive runs of a
+read-only database returned different, always-short counts — because the engine
+mistook any node carrying a property named `type` (LDBC's `Organisation.type`,
+`Place.type`) for a relationship, and the row-deduplication key then collapsed
+unrelated rows. That was **`phase7_opencypher-gap-closure` item 4.8** and is now
+**fixed**; `ldbc-load --strict-readback` passes every per-type count on SF0.1.
+The advisory-by-default split is kept as a guard: it stays green under normal
+runs and only a future regression of that class would trip it, and `--strict-readback`
+makes such a regression a hard failure in CI.
 
 ## Dataset
 

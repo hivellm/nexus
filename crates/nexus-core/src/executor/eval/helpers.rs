@@ -183,8 +183,8 @@ impl Executor {
         let mut var_types: Vec<(String, String)> = Vec::new();
         for (var, value) in &context.variables {
             let var_type = match value {
-                Value::Object(obj) => {
-                    if obj.contains_key("type") {
+                Value::Object(_) => {
+                    if crate::executor::is_relationship_value(value) {
                         has_relationships = true;
                         "RELATIONSHIP".to_string()
                     } else {
@@ -192,13 +192,7 @@ impl Executor {
                     }
                 }
                 Value::Array(arr) => {
-                    let has_rel = arr.iter().any(|v| {
-                        if let Value::Object(obj) = v {
-                            obj.contains_key("type")
-                        } else {
-                            false
-                        }
-                    });
+                    let has_rel = arr.iter().any(crate::executor::is_relationship_value);
                     if has_rel {
                         has_relationships = true;
                     }
@@ -512,13 +506,7 @@ impl Executor {
         // TRACE: Check if input rows contain relationships
         let mut rows_with_relationships = 0;
         for row in rows {
-            let has_rel = row.values().any(|value| {
-                if let Value::Object(obj) = value {
-                    obj.contains_key("type") // Relationships have "type" property
-                } else {
-                    false
-                }
-            });
+            let has_rel = row.values().any(crate::executor::is_relationship_value);
             if has_rel {
                 rows_with_relationships += 1;
             }
@@ -594,9 +582,13 @@ impl Executor {
                 // This ensures that rows with the same relationship ID are considered duplicates
                 // even if they appear in different contexts (e.g., bidirectional relationships from source vs target)
                 let relationship_id = row_map.values().find_map(|value| {
-                    if let Value::Object(obj) = value {
-                        // Relationship objects have a "type" property
-                        if obj.contains_key("type") {
+                    // Structural check. A NODE carrying a property named
+                    // `type` (LDBC `Organisation.type`) used to be picked
+                    // here, in HashMap order, and the key below then
+                    // dropped both real node variables, collapsing
+                    // unrelated rows into one.
+                    if crate::executor::is_relationship_value(value) {
+                        if let Value::Object(obj) = value {
                             if let Some(Value::Number(nid)) = obj.get("_nexus_id") {
                                 return nid.as_u64();
                             }
@@ -616,9 +608,12 @@ impl Executor {
                         if let Value::Object(obj) = value {
                             if let Some(Value::Number(nid)) = obj.get("_nexus_id") {
                                 if let Some(entity_id) = nid.as_u64() {
-                                    // Skip relationship ID
-                                    if entity_id != rel_id && !obj.contains_key("type") {
-                                        // This is a node variable
+                                    // Every node variable belongs in the
+                                    // key; skip only the relationship
+                                    // itself, already keyed above.
+                                    if entity_id != rel_id
+                                        && !crate::executor::is_relationship_value(value)
+                                    {
                                         var_entries.push((key.clone(), entity_id));
                                     }
                                 }
@@ -1101,10 +1096,20 @@ impl Executor {
             }
         };
 
-        // Add _nexus_id for internal ID extraction (e.g., for type() function)
-        // Add type property to identify this as a relationship object in deduplication
+        // `_nexus_id` carries the internal id; `type` carries the relationship
+        // type under the name the Neo4j-shaped flat format and `type(r)`
+        // expect. Neither can be used to TELL a relationship from a node:
+        // `type` is an ordinary property name a node may legitimately carry
+        // (LDBC's `Organisation.type` / `Place.type` do), which is why
+        // `_nexus_rel_type` exists — a reserved key that only this constructor
+        // writes. See `is_relationship_value` and
+        // phase7_opencypher-gap-closure 4.8.
         let mut rel_obj = properties_map;
         rel_obj.insert("_nexus_id".to_string(), Value::Number(rel.id.into()));
+        rel_obj.insert(
+            crate::executor::REL_TYPE_MARKER.to_string(),
+            Value::String(type_name.clone()),
+        );
         rel_obj.insert("type".to_string(), Value::String(type_name));
 
         // Return only the properties as a flat object, matching Neo4j's format

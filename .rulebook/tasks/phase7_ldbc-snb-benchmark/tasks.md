@@ -64,11 +64,11 @@ benchmark query.
       stable) are fatal; the per-type read-back is reported loudly but is only fatal under
       `--strict-readback`, which becomes the regression guard once 4.8 is closed.
 - [ ] 1.4 Port short reads IS1–IS7 from `ldbc/ldbc_snb_interactive_impls` (cypher flavor) into `benchmarks/ldbc-snb/queries/`, one file per query with parameter placeholders; smoke-validate each against SF0.1 comparing results with the same query on Neo4j (docker via `scripts/bench/docker-compose.yml`)
-      **BLOCKED on `phase7_opencypher-gap-closure` item 4.8** (found by 1.3): result-set validation
-      is meaningless while an identical query returns a different answer on consecutive runs of an
-      unchanged database. Resume once 4.8 is closed and `ldbc-load --strict-readback` passes.
+      **UNBLOCKED**: `phase7_opencypher-gap-closure` item 4.8 (the non-deterministic expand that
+      1.3 found) is fixed — `ldbc-load --strict-readback` now passes every per-type count on the
+      loaded SF0.1 graph, so query results are stable and can be validated against Neo4j.
 - [ ] 1.5 Port complex reads IC1–IC14 the same way, validating each against Neo4j on SF0.1; each query Nexus cannot express or answers differently → file a finding (repro + expected vs actual) in phase7_opencypher-gap-closure and mark the query BLOCKED in the README table
-      **BLOCKED on the same item 4.8** — see 1.4.
+      **UNBLOCKED** — see 1.4.
 - [ ] 1.6 Port the 8 Interactive updates (INS1–INS8: add person/like/post/comment/forum/membership/friendship/reply) with parameter streams from the dataset's update CSVs; validate side effects (counts before/after) on SF0.1
 - [ ] 1.7 Bench driver crate (`benchmarks/ldbc-snb/driver/`, Rust, NOT in the main workspace): loads parameter substitution files, replays the official Interactive operation mix (frequency ratios per query type, configurable client concurrency), measures per-query p50/p95/p99 + overall throughput (ops/s), warm-up phase excluded, emits `results/*.json` + Markdown summary
 - [ ] 1.8 Neo4j baseline mode in the driver (Bolt or HTTP endpoint switch) so the identical run executes against the dockerized Neo4j; produce the side-by-side SF1 comparison

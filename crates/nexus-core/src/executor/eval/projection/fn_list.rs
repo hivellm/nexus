@@ -812,9 +812,7 @@ impl Executor {
                 };
                 Some(match v {
                     Value::Null => Ok(Value::Null),
-                    Value::Object(obj) => Ok(Value::Bool(
-                        obj.contains_key("_nexus_id") && !obj.contains_key("type"),
-                    )),
+                    Value::Object(_) => Ok(Value::Bool(crate::executor::is_node_value(&v))),
                     _ => Ok(Value::Bool(false)),
                 })
             }
@@ -828,9 +826,7 @@ impl Executor {
                 };
                 Some(match v {
                     Value::Null => Ok(Value::Null),
-                    Value::Object(obj) => Ok(Value::Bool(
-                        obj.contains_key("_nexus_id") && obj.contains_key("type"),
-                    )),
+                    Value::Object(_) => Ok(Value::Bool(crate::executor::is_relationship_value(&v))),
                     _ => Ok(Value::Bool(false)),
                 })
             }

@@ -563,17 +563,11 @@ impl Executor {
         // CRITICAL FIX: Remove relationship objects from variables before creating cartesian product
         // Relationship objects have a "type" property - filter them out to avoid contamination
         context.variables.retain(|_var_name, var_value| {
-            let is_relationship = if let Value::Object(obj) = var_value {
-                obj.contains_key("type") // Relationships have "type" property
+            let is_relationship = if matches!(var_value, Value::Object(_)) {
+                crate::executor::is_relationship_value(var_value)
             } else if let Value::Array(arr) = var_value {
                 // Check if array contains relationship objects
-                arr.iter().any(|v| {
-                    if let Value::Object(obj) = v {
-                        obj.contains_key("type")
-                    } else {
-                        false
-                    }
-                })
+                arr.iter().any(crate::executor::is_relationship_value)
             } else {
                 false
             };

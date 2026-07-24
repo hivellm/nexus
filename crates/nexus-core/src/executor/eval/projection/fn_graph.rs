@@ -197,7 +197,11 @@ impl Executor {
                     if let Value::Object(obj) = &value {
                         if let Some(Value::Number(id)) = obj.get("_nexus_id") {
                             if let Some(id_u64) = id.as_u64() {
-                                let prefix = if obj.contains_key("type") { "r" } else { "n" };
+                                let prefix = if crate::executor::is_relationship_value(&value) {
+                                    "r"
+                                } else {
+                                    "n"
+                                };
                                 return Some(Ok(Value::String(format!("{prefix}:{id_u64}"))));
                             }
                         }
