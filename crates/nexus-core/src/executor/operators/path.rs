@@ -216,474 +216,66 @@ impl Executor {
         }
         */
 
-        // Fallback to original linked list traversal (Phase 1-2 behavior)
-        // CRITICAL FIX: Force use of linked list traversal to debug relationship finding issue
-        // This ensures we're using the most reliable method that should find all relationships
-        let mut relationships = Vec::new();
-
-        // phase6_traversal-aggregation-perf §2 — acquire the store read
-        // lock ONCE for the whole node-relationship walk instead of once
-        // per candidate relationship. The scan fallbacks below probe up
-        // to 100,000 candidate ids and the linked-list walk re-reads on
-        // every hop; re-acquiring `parking_lot::RwLock::read()` per
-        // candidate was pure overhead on top of the (already cheap)
-        // fixed-size record read, and it's the actual "materialise before
-        // filtering" cost in this hot path — the record layout has no
-        // narrower unit than one `RelationshipRecord` to read type_id
-        // from, so the only lever available is cutting redundant lock
-        // acquisitions around that read.
+        // Authoritative both-direction adjacency, maintained in
+        // `RecordStore::write_rel` and rebuilt from the records on open. This
+        // replaces the `first_rel_ptr` chain walk (which threads only a node's
+        // OUTGOING edges, so incoming expansion never found anything through
+        // it) and its scan fallback (which only ever probed relationship ids
+        // `0..=10_000`, so on any graph with more relationships than that an
+        // incoming or `Both` traversal from a node whose edges sit at higher
+        // ids silently returned nothing — e.g. every `(:Person)<-[:HAS_CREATOR]-`
+        // on a loaded LDBC graph). The index knows every live edge of a node in
+        // both directions in O(degree). See
+        // `phase0_perf-store-reverse-incoming-adjacency-index`.
+        let _ = cache;
         let store = self.store();
 
-        // Acquire fence: pairs with the Release fence in
-        // `RecordStore::create_relationship`, which writes a relationship
-        // record before publishing the source node's `first_rel_ptr`. Once we
-        // observe a node's `first_rel_ptr` below, this guarantees we also
-        // observe the fully-initialized relationship record it points to —
-        // never an allocated-but-unwritten (all-zero) slot, which would read
-        // as a phantom edge to node 0 or truncate this adjacency walk on the
-        // `next_src_ptr == 0` end-of-chain sentinel.
+        // Acquire fence pairs with the Release fence in `write_rel`, which
+        // publishes a relationship record before the reader observes it via the
+        // adjacency index, so a matched id always resolves to a fully
+        // initialised record rather than an allocated-but-unwritten slot.
         std::sync::atomic::fence(std::sync::atomic::Ordering::Acquire);
 
-        // Read the node record to get the first relationship pointer
-        if let Ok(node_record) = store.read_node(node_id) {
-            let mut rel_ptr = node_record.first_rel_ptr;
+        let rel_ids = match direction {
+            Direction::Outgoing => store.outgoing_relationships(node_id),
+            Direction::Incoming => store.incoming_relationships(node_id),
+            Direction::Both => store.connected_relationships(node_id),
+        };
 
-            // CRITICAL DEBUG: Log node reading and first_rel_ptr
-            tracing::trace!(
-                "[find_relationships] Node {} read: first_rel_ptr={}, type_ids={:?}, direction={:?}",
-                node_id,
-                rel_ptr,
-                type_ids,
-                direction
-            );
-
-            // CRITICAL FIX: If first_rel_ptr is 0, try to find relationships by scanning
-            // This handles the case where mmap synchronization failed and first_rel_ptr
-            // was not updated correctly, but relationships exist
-            // When first_rel_ptr is 0, we scan for all relationships matching the direction
-            // and then follow the linked list from each found relationship
-            if rel_ptr == 0 {
-                // phase8_optional-match-binding-leak: short-circuit
-                // when the relationship store has *no* records at
-                // all. Without this guard the scan loop below reads
-                // rel_id=0 from the memmapped backing file as a
-                // zero-byte record (`src_id=0`, `dst_id=0`,
-                // `type_id=0`) and the existing
-                // "skip if src=0 && dst=0 && rel_id > 0" filter does
-                // not catch the rel_id=0 case. When the source node
-                // is itself node_id=0 (the very first node — Alice
-                // in the canonical reproducer), the
-                // `matches_direction` check at `:266-271` accepts
-                // `check_src_id (0) == node_id (0)` as a match and
-                // the operator emits a phantom relationship pointing
-                // back at the source. OPTIONAL MATCH then binds the
-                // target variable to the source's data instead of to
-                // NULL, returning silent wrong data.
-                //
-                // The scan-fallback is a workaround for an mmap
-                // sync bug; clamping its upper bound to
-                // `relationship_count()` keeps the workaround alive
-                // for genuine sync failures while making it
-                // structurally impossible to fabricate a zero-record
-                // ghost.
-                let total_rels = store.relationship_count();
-                if total_rels == 0 {
-                    tracing::trace!(
-                        "[find_relationships] Node {}: relationship store is empty, returning no relationships",
-                        node_id
-                    );
-                    return Ok(relationships);
-                }
-
-                tracing::trace!(
-                    "[find_relationships] Node {}: first_rel_ptr is 0 - attempting to find relationships by scanning",
-                    node_id
-                );
-
-                // Scan for relationships where this node is the source (for Outgoing) or target (for Incoming)
-                // We'll scan recent relationships (limit to avoid performance issues)
-                // CRITICAL FIX: Start from a reasonable high ID and scan backwards, checking up to 501 relationships
-                // to ensure rel_id=0 is always checked. This assumes relationships are created sequentially.
-                // phase8_optional-match-binding-leak: clamp the scan
-                // upper bound to the live `relationship_count()` so a
-                // node-with-no-edges does not pull zero-byte records
-                // off the end of the in-use range.
-                let start_id = (total_rels.saturating_sub(1)).min(500);
-                let scan_limit = (start_id + 1) as usize;
-                let mut scanned_rel_ids = std::collections::HashSet::new();
-                let mut scanned_count = 0;
-
-                // First pass: Find all relationships directly connected to this node
-                // Scan backwards from start_id to find recent relationships
-                for check_rel_id in (0..=start_id).rev() {
-                    if scanned_count >= scan_limit {
-                        break;
-                    }
-                    scanned_count += 1;
-                    if let Ok(rel_record) = store.read_rel(check_rel_id) {
-                        if !rel_record.is_deleted() {
-                            let check_src_id = rel_record.src_id;
-                            let check_dst_id = rel_record.dst_id;
-
-                            // Skip uninitialized relationship records.
-                            //
-                            // A record whose `src_id`, `dst_id`, and
-                            // `type_id` are all zero is either an
-                            // uninitialized memmap region or a
-                            // tombstone whose `is_deleted()` flag was
-                            // not set (rare but observed under crash
-                            // recovery). A genuine relationship has
-                            // a non-zero `type_id` because the
-                            // catalog's type registry never assigns
-                            // id 0 (catalog ids start at 1).
-                            //
-                            // phase8_optional-match-binding-leak: the
-                            // previous filter qualified the skip with
-                            // `&& check_rel_id > 0`, which let
-                            // rel_id=0 zero-byte records through. When
-                            // the source node was also at id=0, the
-                            // direction check below treated
-                            // `check_src_id (0) == node_id (0)` as a
-                            // match and the operator emitted a
-                            // phantom relationship.
-                            let check_type_id = rel_record.type_id;
-                            if check_src_id == 0 && check_dst_id == 0 && check_type_id == 0 {
-                                continue;
-                            }
-
-                            // Check if this relationship matches the direction we're looking for
-                            let matches_direction = match direction {
-                                Direction::Outgoing => check_src_id == node_id,
-                                Direction::Incoming => check_dst_id == node_id,
-                                Direction::Both => {
-                                    check_src_id == node_id || check_dst_id == node_id
-                                }
-                            };
-
-                            if matches_direction {
-                                let record_type_id = rel_record.type_id;
-                                let matches_type =
-                                    type_ids.is_empty() || type_ids.contains(&record_type_id);
-
-                                if matches_type {
-                                    scanned_rel_ids.insert(check_rel_id);
-                                }
-                            }
-                        }
-                    }
-                }
-
-                // If we found relationships via scan, add them and return
-                // (Skip linked list traversal since first_rel_ptr is 0 - linked list is broken)
-                if !scanned_rel_ids.is_empty() {
-                    tracing::trace!(
-                        "[find_relationships] Node {}: Found {} relationships via scan (first_rel_ptr was 0)",
-                        node_id,
-                        scanned_rel_ids.len()
-                    );
-
-                    for rel_id in scanned_rel_ids {
-                        if let Ok(rel_record) = store.read_rel(rel_id) {
-                            if !rel_record.is_deleted() {
-                                relationships.push(RelationshipInfo {
-                                    id: rel_id,
-                                    source_id: rel_record.src_id,
-                                    target_id: rel_record.dst_id,
-                                    type_id: rel_record.type_id,
-                                });
-                            }
-                        }
-                    }
-
-                    // Return early - we found relationships via scan
-                    return Ok(relationships);
-                } else {
-                    tracing::trace!(
-                        "[find_relationships] Node {}: first_rel_ptr is 0 - no relationships found in linked list or scan",
-                        node_id
-                    );
-                }
+        let mut relationships = Vec::with_capacity(rel_ids.len());
+        for rel_id in rel_ids {
+            let rel_record = match store.read_rel(rel_id) {
+                Ok(record) => record,
+                Err(_) => continue,
+            };
+            if rel_record.is_deleted() {
+                continue;
             }
-
-            // CRITICAL FIX: For Direction::Both, we MUST use scan because the linked list
-            // traversal only follows ONE chain (either next_src_ptr or next_dst_ptr).
-            // A node can have relationships where it's the source (outgoing chain) AND
-            // relationships where it's the target (incoming chain). The linked list approach
-            // only traverses one of these chains, missing relationships on the other chain.
-            // For Direction::Both, scan ALL relationships to find those involving this node.
-            let should_use_scan_for_both = matches!(direction, Direction::Both);
-
-            // CRITICAL FIX: Verify that first_rel_ptr points to a valid relationship for the requested direction
-            // If first_rel_ptr points to a relationship where the node is TARGET but we're looking for OUTGOING,
-            // or vice versa, then first_rel_ptr is invalid and we should use scan instead
-            let mut should_use_scan = rel_ptr == 0;
-            if rel_ptr != 0 && !should_use_scan_for_both {
-                let verify_rel_id = rel_ptr.saturating_sub(1);
-                if let Ok(verify_rel) = store.read_rel(verify_rel_id) {
-                    if !verify_rel.is_deleted() {
-                        let verify_src_id = verify_rel.src_id;
-                        let verify_dst_id = verify_rel.dst_id;
-                        let is_valid_for_direction = match direction {
-                            Direction::Outgoing => verify_src_id == node_id,
-                            Direction::Incoming => verify_dst_id == node_id,
-                            Direction::Both => verify_src_id == node_id || verify_dst_id == node_id,
-                        };
-
-                        if !is_valid_for_direction {
-                            // first_rel_ptr points to an invalid relationship - use scan instead
-                            tracing::trace!(
-                                "[find_relationships] Node {}: first_rel_ptr={} points to invalid relationship {} (src={}, dst={}) for direction {:?}, using scan",
-                                node_id,
-                                rel_ptr,
-                                verify_rel_id,
-                                verify_src_id,
-                                verify_dst_id,
-                                direction
-                            );
-                            should_use_scan = true;
-                        }
-                    } else {
-                        // Relationship is deleted - use scan
-                        should_use_scan = true;
-                    }
-                } else {
-                    // Can't read relationship - use scan
-                    should_use_scan = true;
-                }
+            // Copy out of the packed record before use (unaligned field
+            // references are rejected).
+            let src_id = rel_record.src_id;
+            let dst_id = rel_record.dst_id;
+            let type_id = rel_record.type_id;
+            // The index is an accelerator, not the correctness authority:
+            // re-check the direction against the record itself so a stale entry
+            // could never fabricate an edge.
+            let matches_direction = match direction {
+                Direction::Outgoing => src_id == node_id,
+                Direction::Incoming => dst_id == node_id,
+                Direction::Both => src_id == node_id || dst_id == node_id,
+            };
+            if !matches_direction {
+                continue;
             }
-
-            // If we should use scan (either for Direction::Both or because first_rel_ptr is invalid), do it now
-            if should_use_scan_for_both || (should_use_scan && rel_ptr != 0) {
-                // first_rel_ptr is invalid - scan for relationships
-                tracing::trace!(
-                    "[find_relationships] Node {}: first_rel_ptr={} is invalid, scanning for relationships",
-                    node_id,
-                    rel_ptr
-                );
-
-                // CRITICAL: Scan from a high ID down to 0 to find ALL relationships
-                // Start from a reasonable high ID (assume max 10000 relationships) and scan down
-                // NOTE: We need a high limit because is_deleted() may return false for uninitialized records
-                let start_id = 10000;
-                let scan_limit = 100000; // Increased to handle sparse storage
-                let mut scanned_rel_ids = std::collections::HashSet::new();
-                let mut scanned_count = 0;
-                let mut checked_count = 0;
-
-                // Scan backwards from start_id to find recent relationships
-                for check_rel_id in (0..=start_id).rev() {
-                    if scanned_count >= scan_limit {
-                        break;
-                    }
-                    checked_count += 1;
-                    if checked_count > scan_limit * 2 {
-                        // Stop if we've checked too many (many may be empty)
-                        break;
-                    }
-
-                    if let Ok(rel_record) = store.read_rel(check_rel_id) {
-                        if !rel_record.is_deleted() {
-                            scanned_count += 1;
-                            let check_src_id = rel_record.src_id;
-                            let check_dst_id = rel_record.dst_id;
-
-                            // CRITICAL FIX: Skip uninitialized relationship records
-                            // These have src_id=0 and dst_id=0 (pointing to node 0 in both directions)
-                            // which are invalid for real relationships (would be a self-loop from node 0 to node 0)
-                            // A real relationship would have a valid type_id > 0 if src=0 and dst=0
-                            let record_type_id = rel_record.type_id;
-                            if check_src_id == 0 && check_dst_id == 0 && check_rel_id > 0 {
-                                // This looks like an uninitialized record - skip it
-                                // Note: we only skip if rel_id > 0 because rel_id=0 could be legitimate
-                                continue;
-                            }
-
-                            let matches_direction = match direction {
-                                Direction::Outgoing => check_src_id == node_id,
-                                Direction::Incoming => check_dst_id == node_id,
-                                Direction::Both => {
-                                    check_src_id == node_id || check_dst_id == node_id
-                                }
-                            };
-
-                            if matches_direction {
-                                let matches_type =
-                                    type_ids.is_empty() || type_ids.contains(&record_type_id);
-
-                                if matches_type {
-                                    scanned_rel_ids.insert(check_rel_id);
-                                }
-                            }
-                        }
-                    }
-                }
-
-                if !scanned_rel_ids.is_empty() {
-                    tracing::trace!(
-                        "[find_relationships] Node {}: Found {} relationships via scan",
-                        node_id,
-                        scanned_rel_ids.len()
-                    );
-
-                    for rel_id in scanned_rel_ids {
-                        if let Ok(rel_record) = store.read_rel(rel_id) {
-                            if !rel_record.is_deleted() {
-                                relationships.push(RelationshipInfo {
-                                    id: rel_id,
-                                    source_id: rel_record.src_id,
-                                    target_id: rel_record.dst_id,
-                                    type_id: rel_record.type_id,
-                                });
-                            }
-                        }
-                    }
-
-                    return Ok(relationships);
-                } else {
-                    // Scan found nothing and first_rel_ptr is invalid - no relationships exist for this direction
-                    tracing::trace!(
-                        "[find_relationships] Node {}: first_rel_ptr was invalid and scan found no relationships for direction {:?}",
-                        node_id,
-                        direction
-                    );
-                    return Ok(relationships); // Return empty vector
-                }
+            if !type_ids.is_empty() && !type_ids.contains(&type_id) {
+                continue;
             }
-
-            let mut visited = std::collections::HashSet::new();
-            let mut iteration_count = 0;
-            const MAX_ITERATIONS: usize = 100000; // Failsafe limit
-
-            while rel_ptr != 0 {
-                // Failsafe: Prevent infinite loops even if visited set fails
-                iteration_count += 1;
-                if iteration_count > MAX_ITERATIONS {
-                    tracing::error!(
-                        "[ERROR] Maximum iterations ({}) exceeded in relationship chain for node {}, breaking",
-                        MAX_ITERATIONS,
-                        node_id
-                    );
-                    break;
-                }
-
-                // CRITICAL: Detect infinite loops in relationship chain
-                // This protects against circular references in the relationship linked list
-                if !visited.insert(rel_ptr) {
-                    tracing::error!(
-                        "[WARN] Infinite loop detected in relationship chain for node {}, breaking at rel_ptr={}",
-                        node_id,
-                        rel_ptr
-                    );
-                    break;
-                }
-
-                let current_rel_id = rel_ptr.saturating_sub(1);
-
-                // CRITICAL DEBUG: Log relationship traversal
-                tracing::trace!(
-                    "[find_relationships] Node {}: rel_ptr={}, current_rel_id={}",
-                    node_id,
-                    rel_ptr,
-                    current_rel_id
-                );
-
-                if let Ok(rel_record) = store.read_rel(current_rel_id) {
-                    // Copy fields to local variables to avoid packed struct reference issues
-                    let src_id = rel_record.src_id;
-                    let dst_id = rel_record.dst_id;
-                    let next_src_ptr = rel_record.next_src_ptr;
-                    let next_dst_ptr = rel_record.next_dst_ptr;
-                    let record_type_id = rel_record.type_id;
-                    let is_deleted = rel_record.is_deleted();
-
-                    // CRITICAL DEBUG: Log relationship record details
-                    tracing::trace!(
-                        "[find_relationships] Node {}: rel_id={}, src_id={}, dst_id={}, type_id={}, is_deleted={}, next_src_ptr={}, next_dst_ptr={}",
-                        node_id,
-                        current_rel_id,
-                        src_id,
-                        dst_id,
-                        record_type_id,
-                        is_deleted,
-                        next_src_ptr,
-                        next_dst_ptr
-                    );
-
-                    if is_deleted {
-                        rel_ptr = if src_id == node_id {
-                            next_src_ptr
-                        } else {
-                            next_dst_ptr
-                        };
-                        continue;
-                    }
-
-                    // record_type_id already copied above
-                    let matches_type = type_ids.is_empty() || type_ids.contains(&record_type_id);
-                    let matches_direction = match direction {
-                        Direction::Outgoing => src_id == node_id,
-                        Direction::Incoming => dst_id == node_id,
-                        Direction::Both => true,
-                    };
-
-                    if matches_type && matches_direction {
-                        tracing::trace!(
-                            "[find_relationships] Node {}: MATCHED relationship id={}, src={}, dst={}, type_id={}",
-                            node_id,
-                            current_rel_id,
-                            src_id,
-                            dst_id,
-                            record_type_id
-                        );
-                        relationships.push(RelationshipInfo {
-                            id: current_rel_id,
-                            source_id: src_id,
-                            target_id: dst_id,
-                            type_id: record_type_id,
-                        });
-                    } else {
-                        tracing::trace!(
-                            "[find_relationships] Node {}: SKIPPED relationship id={} (matches_type={}, matches_direction={})",
-                            node_id,
-                            current_rel_id,
-                            matches_type,
-                            matches_direction
-                        );
-                    }
-
-                    let old_rel_ptr = rel_ptr;
-                    rel_ptr = if src_id == node_id {
-                        next_src_ptr
-                    } else {
-                        next_dst_ptr
-                    };
-
-                    // CRITICAL DEBUG: Log linked list traversal
-                    tracing::trace!(
-                        "[find_relationships] Node {}: Moving from rel_id={} to next_ptr={} (src_id={}, node_id={}, using_next_src={})",
-                        node_id,
-                        current_rel_id,
-                        rel_ptr,
-                        src_id,
-                        node_id,
-                        src_id == node_id
-                    );
-
-                    if rel_ptr == 0 {
-                        tracing::trace!(
-                            "[find_relationships] Node {}: Reached end of linked list (rel_ptr=0)",
-                            node_id
-                        );
-                    }
-                } else {
-                    tracing::trace!(
-                        "[find_relationships] Node {}: Failed to read relationship record for rel_id={}",
-                        node_id,
-                        current_rel_id
-                    );
-                    break;
-                }
-            }
+            relationships.push(RelationshipInfo {
+                id: rel_id,
+                source_id: src_id,
+                target_id: dst_id,
+                type_id,
+            });
         }
 
         Ok(relationships)
