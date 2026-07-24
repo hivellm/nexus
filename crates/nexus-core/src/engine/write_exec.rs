@@ -230,18 +230,22 @@ impl Engine {
                     }
                 }
                 executor::parser::Clause::Merge(merge_clause) => {
-                    // Check if this is a relationship MERGE with bound variables
-                    if let Some((rel_var, rel_id, rel_type)) =
+                    // Check if this is a relationship MERGE with bound variables.
+                    // A comma-joined `MATCH (a), (b) MERGE (a)-[:T]->(b)` yields
+                    // one entry per (a, b) driving pair — see 4.10.
+                    if let Some(rels) =
                         self.process_merge_relationship(&merge_clause, &mut context)?
                     {
-                        // Empty `rel_var` is the anonymous-relationship
-                        // sentinel (see `process_merge_relationship`) — it
-                        // must never be bound into `rel_context`.
-                        if !rel_var.is_empty() {
-                            rel_context
-                                .entry(rel_var)
-                                .or_default()
-                                .push((rel_id, rel_type));
+                        for (rel_var, rel_id, rel_type) in rels {
+                            // Empty `rel_var` is the anonymous-relationship
+                            // sentinel (see `process_merge_relationship`) — it
+                            // must never be bound into `rel_context`.
+                            if !rel_var.is_empty() {
+                                rel_context
+                                    .entry(rel_var)
+                                    .or_default()
+                                    .push((rel_id, rel_type));
+                            }
                         }
                     } else {
                         // Fall back to node MERGE
@@ -466,17 +470,19 @@ impl Engine {
             for clause in post {
                 match clause {
                     Clause::Merge(merge_clause) => {
-                        if let Some((rel_var, rel_id, rel_type)) =
+                        if let Some(rels) =
                             self.process_merge_relationship(merge_clause, &mut row_context)?
                         {
-                            // Empty `rel_var` is the anonymous-relationship
-                            // sentinel (see `process_merge_relationship`) —
-                            // it must never be bound into `rel_context`.
-                            if !rel_var.is_empty() {
-                                rel_context
-                                    .entry(rel_var)
-                                    .or_default()
-                                    .push((rel_id, rel_type));
+                            for (rel_var, rel_id, rel_type) in rels {
+                                // Empty `rel_var` is the anonymous-relationship
+                                // sentinel (see `process_merge_relationship`) —
+                                // it must never be bound into `rel_context`.
+                                if !rel_var.is_empty() {
+                                    rel_context
+                                        .entry(rel_var)
+                                        .or_default()
+                                        .push((rel_id, rel_type));
+                                }
                             }
                         } else {
                             let (variable, node_ids) = self.process_merge_clause(merge_clause)?;
@@ -948,7 +954,7 @@ impl Engine {
         &mut self,
         merge_clause: &executor::parser::MergeClause,
         context: &mut HashMap<String, Vec<u64>>,
-    ) -> Result<Option<(String, u64, String)>> {
+    ) -> Result<Option<Vec<(String, u64, String)>>> {
         // Check if pattern has: Node, Relationship, Node structure
         let elements = &merge_clause.pattern.elements;
         if elements.len() != 3 {
@@ -1000,46 +1006,48 @@ impl Engine {
         // `build_return_result_with_executor`'s `context.keys().next()`)
         // assume every key is a real, single, user-visible binding — an
         // extra synthesized key could be picked instead of the real one.
-        let src_id = match &src_node.variable {
-            Some(v) => match context.get(v) {
-                Some(ids) if !ids.is_empty() => ids[0],
-                Some(_) => return Ok(None),
-                None => {
-                    let id = self.merge_single_node(src_node)?;
-                    context.insert(v.clone(), vec![id]);
-                    id
-                }
-            },
-            None => self.merge_single_node(src_node)?,
+        // Resolve each endpoint to the FULL set of bound node ids, not just
+        // the first. A preceding `MATCH (c:C), (d:D)` binds `c`/`d` to every
+        // matched node (see `process_match_clause_multi`, which stores an
+        // independent id list per variable), so the MERGE must run once per
+        // (src, dst) pair — the cartesian product of the two lists, exactly
+        // what the read-side relationship binder in `process_match_clause_multi`
+        // already does. Collapsing each list to `ids[0]` silently dropped
+        // every driving row after the first: `MATCH (c:C), (d:D) MERGE
+        // (c)-[:S]->(d)` over 2 C's and 1 D created ONE edge, not two
+        // (phase7_opencypher-gap-closure item 4.10).
+        //
+        // A bound-but-EMPTY endpoint (a MATCH that found nothing) still bails
+        // to the node-only MERGE fallback via `Ok(None)`, unchanged. An
+        // anonymous or standalone endpoint (no prior binding) is find-or-create
+        // through `merge_single_node`, yielding a single-element list — so a
+        // pattern with one created endpoint and one bound-list endpoint fans
+        // out across the list, and the all-single-node cases (inline `MERGE
+        // (a:L{..})-[:T]->(b:L{..})`, and the per-row UNWIND path whose
+        // `row_context` binds one node per endpoint) still produce exactly one
+        // edge each.
+        let resolve = |this: &mut Self,
+                       node: &executor::parser::NodePattern,
+                       context: &mut HashMap<String, Vec<u64>>|
+         -> Result<Option<Vec<u64>>> {
+            match &node.variable {
+                Some(v) => match context.get(v) {
+                    Some(ids) if !ids.is_empty() => Ok(Some(ids.clone())),
+                    Some(_) => Ok(None),
+                    None => {
+                        let id = this.merge_single_node(node)?;
+                        context.insert(v.clone(), vec![id]);
+                        Ok(Some(vec![id]))
+                    }
+                },
+                None => Ok(Some(vec![this.merge_single_node(node)?])),
+            }
         };
-        let dst_id = match &dst_node.variable {
-            Some(v) => match context.get(v) {
-                Some(ids) if !ids.is_empty() => ids[0],
-                Some(_) => return Ok(None),
-                None => {
-                    let id = self.merge_single_node(dst_node)?;
-                    context.insert(v.clone(), vec![id]);
-                    id
-                }
-            },
-            None => self.merge_single_node(dst_node)?,
+        let Some(src_ids) = resolve(self, src_node, context)? else {
+            return Ok(None);
         };
-
-        // Honour the parsed arrow direction when writing/matching the
-        // relationship — mirrors the CREATE fix in
-        // `executor::operators::create`. `src_id`/`dst_id` above are
-        // resolved in pattern/array order (`elements[0]`, `elements[2]`),
-        // which is only correct for `Outgoing` (`->`). `MERGE
-        // (a)<-[:T]-(b)` must write/match the edge as b->a, so an
-        // `Incoming` direction swaps the pair. `Both` (`-[:T]-`) keeps
-        // Neo4j's documented default of treating the pattern as outgoing
-        // (`elements[0]` -> `elements[2]`) for both the existing-edge
-        // lookup and the create fallback — see openCypher TCK Merge5
-        // scenarios 11/12 ("use/match outgoing direction when
-        // unspecified").
-        let (src_id, dst_id) = match rel_pattern.direction {
-            executor::parser::RelationshipDirection::Incoming => (dst_id, src_id),
-            _ => (src_id, dst_id),
+        let Some(dst_ids) = resolve(self, dst_node, context)? else {
+            return Ok(None);
         };
 
         // Relationship variable: the real name when the pattern bound one,
@@ -1048,43 +1056,61 @@ impl Engine {
         // binding — see `apply_merge_relationship_set` and both call sites.
         let rel_var = rel_pattern.variable.clone().unwrap_or_default();
 
-        // Check if relationship already exists
-        let existing_rel = self.find_relationship_between(src_id, dst_id, &rel_type)?;
+        let mut merged: Vec<(String, u64, String)> = Vec::new();
+        for &raw_src in &src_ids {
+            for &raw_dst in &dst_ids {
+                // Honour the parsed arrow direction per pair. `raw_src`/`raw_dst`
+                // are in pattern/array order (`elements[0]`, `elements[2]`),
+                // correct for `Outgoing` (`->`); `MERGE (a)<-[:T]-(b)` must
+                // write/match b->a, so `Incoming` swaps the pair. `Both`
+                // (`-[:T]-`) keeps Neo4j's documented default of treating the
+                // pattern as outgoing for both the existing-edge lookup and the
+                // create fallback — see openCypher TCK Merge5 scenarios 11/12.
+                let (src_id, dst_id) = match rel_pattern.direction {
+                    executor::parser::RelationshipDirection::Incoming => (raw_dst, raw_src),
+                    _ => (raw_src, raw_dst),
+                };
 
-        let rel_id = if let Some(rid) = existing_rel {
-            // Relationship exists — apply ON MATCH SET to its properties (#14).
-            if let Some(on_match) = &merge_clause.on_match {
-                self.apply_merge_relationship_set(context, &rel_var, rid, &rel_type, on_match)?;
-            }
-            rid
-        } else {
-            // Create the relationship with the pattern's inline properties
-            // (#25 — previously dropped: a hardcoded empty map was used, so
-            // `MERGE (a)-[r:T {k:v}]->(b)` created a propless edge), then
-            // layer ON CREATE SET on top (which may override them). Uses
-            // `eval_write_value` so inline props resolve UNWIND `row.*`
-            // bindings on the per-row MERGE path.
-            let mut props_map = Map::new();
-            if let Some(prop_map) = &rel_pattern.properties {
-                for (key, expr) in &prop_map.properties {
-                    props_map.insert(key.clone(), self.eval_write_value(expr)?);
-                }
-            }
-            let new_rel_id = self.create_relationship(
-                src_id,
-                dst_id,
-                rel_type.clone(),
-                Value::Object(props_map),
-            )?;
-            if let Some(on_create) = &merge_clause.on_create {
-                self.apply_merge_relationship_set(
-                    context, &rel_var, new_rel_id, &rel_type, on_create,
-                )?;
-            }
-            new_rel_id
-        };
+                // Check if the relationship already exists.
+                let rel_id =
+                    if let Some(rid) = self.find_relationship_between(src_id, dst_id, &rel_type)? {
+                        // Exists — apply ON MATCH SET to its properties (#14).
+                        if let Some(on_match) = &merge_clause.on_match {
+                            self.apply_merge_relationship_set(
+                                context, &rel_var, rid, &rel_type, on_match,
+                            )?;
+                        }
+                        rid
+                    } else {
+                        // Create with the pattern's inline properties (#25 —
+                        // previously dropped), then layer ON CREATE SET on top
+                        // (which may override them). `eval_write_value` resolves
+                        // UNWIND `row.*` bindings on the per-row MERGE path.
+                        let mut props_map = Map::new();
+                        if let Some(prop_map) = &rel_pattern.properties {
+                            for (key, expr) in &prop_map.properties {
+                                props_map.insert(key.clone(), self.eval_write_value(expr)?);
+                            }
+                        }
+                        let new_rel_id = self.create_relationship(
+                            src_id,
+                            dst_id,
+                            rel_type.clone(),
+                            Value::Object(props_map),
+                        )?;
+                        if let Some(on_create) = &merge_clause.on_create {
+                            self.apply_merge_relationship_set(
+                                context, &rel_var, new_rel_id, &rel_type, on_create,
+                            )?;
+                        }
+                        new_rel_id
+                    };
 
-        Ok(Some((rel_var, rel_id, rel_type)))
+                merged.push((rel_var.clone(), rel_id, rel_type.clone()));
+            }
+        }
+
+        Ok(Some(merged))
     }
 
     /// Apply a MERGE `ON CREATE` / `ON MATCH SET` clause following a

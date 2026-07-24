@@ -106,20 +106,26 @@ gaps, then re-measure so the delta is attributable. Do not reorder §2 before §
       fails on the re-cross and passes with the zip. Full regression + engine + cypher + executor
       groups green. The LDBC loader was never affected (it writes via `/ingest`, not Cypher CREATE).
 
-- [ ] 4.10 **Multi-row `MATCH … MERGE (a)-[:T]->(b)` only processes the FIRST driving row.** Found
-      immediately after 4.9, while confirming the CREATE fix did not regress MERGE. Distinct
+- [x] 4.10 **Multi-row `MATCH … MERGE (a)-[:T]->(b)` only processed the FIRST driving row.** FIXED.
+      Found immediately after 4.9, while confirming the CREATE fix did not regress MERGE. Distinct
       subsystem (`engine/write_exec.rs::process_merge_relationship`, not the executor CREATE path).
       **Repro** (Nexus 2.5.0, fresh db): `CREATE (:C {id:1}), (:C {id:2}), (:D {id:8})` then
-      `MATCH (c:C), (d:D) MERGE (c)-[:S]->(d)` → `MATCH ()-[r:S]->() RETURN count(r)` = 1, expected
-      2 (c1→d and c2→d are distinct edges). **Root cause**: `process_merge_relationship`
-      (`write_exec.rs:1005` / `:1018`) resolves each endpoint by collapsing its binding list to
-      `ids[0]` — `Some(ids) if !ids.is_empty() => ids[0]` — so when a preceding MATCH bound the
-      endpoint to MULTIPLE nodes, every row after the first is silently dropped. The single-row
-      inline forms (`MATCH (c:C {id:1}), (d:D {id:8}) MERGE …`) are correct because each endpoint
-      binds one node. A real fix must iterate the aligned driving rows (zip the endpoint id lists,
-      as 4.9 does for CREATE) and MERGE each. NOTE: the LDBC loader is unaffected (it writes via
-      `/ingest`), and this UNDER-counts rather than over-counts, so it silently drops writes — a
-      MERGE-based importer over comma-joined patterns would lose most of its edges.
+      `MATCH (c:C), (d:D) MERGE (c)-[:S]->(d)` → `MATCH ()-[r:S]->() RETURN count(r)` was 1, must be 2.
+      **Root cause**: `process_merge_relationship` resolved each endpoint by collapsing its binding
+      list to `ids[0]`, so when a preceding MATCH bound the endpoint to MULTIPLE nodes, every row
+      after the first was silently dropped. Unlike the read path, `process_match_clause_multi` stores
+      an INDEPENDENT id list per variable, so the correct driving set is the cartesian product of the
+      two endpoint lists — exactly what the read-side relationship binder in the same function already
+      iterates. **Fix**: the function now returns `Vec<(rel_var, rel_id, rel_type)>` and MERGEs the
+      `src_ids × dst_ids` product, preserving every special case (bound-but-empty → node-only fallback,
+      anonymous/standalone endpoint → `merge_single_node` single, direction swap, inline props, ON
+      CREATE / ON MATCH per edge). Both call sites iterate the returned vec. The single-inline and
+      per-row UNWIND paths bind one node per endpoint, so their product is one edge — unchanged.
+      **Verified**: `tests/regression/match_merge_multi_pattern_test.rs` (once-per-row, idempotent,
+      3×4 full cartesian, ON CREATE fires per edge, incoming-direction reversal per pair, single +
+      UNWIND unchanged) fails under the old `ids[0]` semantics (5 of 6, single/UNWIND stays green,
+      proving no regression) and passes with the cartesian. regression + cypher + database + storage
+      + engine groups green. NOTE: the LDBC loader was never affected (it writes via `/ingest`).
 
 ## 5. Re-measure and reconcile the documentation
 - [ ] 5.1 Re-run the TCK after §4 and refresh `docs/compatibility/OPENCYPHER_TCK_REPORT.md`; the delta from the §3.3 baseline is the evidence that §4 mattered
