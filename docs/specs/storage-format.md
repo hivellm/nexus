@@ -141,6 +141,37 @@ while rel_ptr != 0xFFFFFFFFFFFFFFFF:
 > destination node. A node that is only ever a relationship TARGET therefore
 > keeps `first_rel_ptr == 0`, so `first_rel_ptr != 0` alone is NOT a complete
 > liveness check for "has any relationship" (it misses incoming-only nodes).
+> The "incoming relationships" walk sketched above is therefore only usable
+> from a node that already heads a chain; the reverse direction is served by
+> the in-memory adjacency index below.
+
+#### Adjacency index (in-memory, authoritative)
+
+Because the on-disk format carries no reverse adjacency, `RecordStore` keeps
+one in memory (`storage::adjacency_index::AdjacencyIndex`): `node_id → {live
+relationship ids}`, in both directions, shared by every clone of the store.
+
+- **Maintained in exactly one place** — `RecordStore::write_rel`, the single
+  funnel every relationship-record mutation passes through (creation, the
+  `next_src_ptr` fix-ups, and all deletion paths, only some of which call
+  `delete_rel`). A write path cannot desync it by forgetting to call anything;
+  that is what makes it authoritative, unlike `cache::RelationshipIndex`, which
+  the executor `CREATE` operator and the bulk loader never notify and which is
+  therefore only ever a hint. `clear_all` resets it explicitly, being the one
+  operation that replaces the record files wholesale.
+- **Rebuilt on open**, inside the scan `RecordStore::new` already performs to
+  derive `next_rel_id` — no extra I/O, no format change, nothing to migrate.
+  Deleted records are skipped, so a reopen cannot resurrect a deleted edge.
+- **Endpoints are immutable** once written (nothing assigns `src_id`/`dst_id`
+  on an existing record), so a write only ever adds or removes the record's own
+  id from the sets, decided by its own deleted bit — no read-before-write.
+- **Accelerator, not an oracle**: consumers (`Engine::delete_node`'s liveness
+  guard, `delete_node_relationships`, the MERGE exact-edge fallback) read each
+  candidate record back and re-check it, so the index only decides WHICH
+  records are worth reading. It turns those paths from
+  O(total relationships) into O(degree).
+
+Design notes: `docs/analysis/store-adjacency-index/`.
 
 **Deletion invariant** (`phase0_fix-delete-node-dangling-relationships`): no
 LIVE relationship record may reference a deleted node. A non-`DETACH` node

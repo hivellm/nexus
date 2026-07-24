@@ -7,6 +7,7 @@
 //! - CRUD operations for graph entities
 //! - Property storage and retrieval
 
+pub mod adjacency_index;
 pub mod adjacency_list;
 pub mod crypto;
 pub mod external_id;

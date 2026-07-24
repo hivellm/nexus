@@ -718,6 +718,72 @@ mod tests {
         assert!(result.duration_seconds.is_some());
     }
 
+    /// The bulk loader writes edges straight to the store without telling any
+    /// cache layer — which is exactly why `cache::RelationshipIndex` is only a
+    /// hint. The store's own adjacency index is maintained at `write_rel`, so
+    /// bulk-loaded edges ARE indexed in both directions, incoming included.
+    /// See phase0_perf-store-reverse-incoming-adjacency-index.
+    #[tokio::test]
+    async fn bulk_loaded_relationships_populate_the_store_adjacency_index() {
+        let ctx = TestContext::new();
+        let catalog = Arc::new(Catalog::new(ctx.path()).unwrap());
+        let storage = Arc::new(RwLock::new(RecordStore::new(ctx.path()).unwrap()));
+        let indexes = Arc::new(IndexManager::new(ctx.path().join("indexes")).unwrap());
+        let transaction_manager = Arc::new(RwLock::new(TransactionManager::new().unwrap()));
+
+        let loader = BulkLoader::new(
+            catalog,
+            Arc::clone(&storage),
+            indexes,
+            transaction_manager,
+            BulkLoadConfig::default(),
+        );
+
+        let nodes = vec![
+            NodeData {
+                id: None,
+                labels: vec!["Person".to_string()],
+                properties: HashMap::new(),
+            },
+            NodeData {
+                id: None,
+                labels: vec!["Person".to_string()],
+                properties: HashMap::new(),
+            },
+        ];
+        let relationships = vec![RelationshipData {
+            id: None,
+            source_id: 0,
+            target_id: 1,
+            rel_type: "KNOWS".to_string(),
+            properties: HashMap::new(),
+        }];
+
+        let result = loader
+            .load_data(
+                DataSource::InMemory {
+                    nodes,
+                    relationships,
+                },
+                None,
+            )
+            .await
+            .unwrap();
+        assert_eq!(result.relationships_loaded, 1);
+
+        let store = storage.read().await;
+        assert_eq!(
+            store.incoming_relationships(1),
+            vec![0],
+            "the bulk loader must register the incoming edge"
+        );
+        assert_eq!(store.outgoing_relationships(0), vec![0]);
+        assert!(
+            store.incoming_relationships(0).is_empty(),
+            "nothing points at the source node"
+        );
+    }
+
     #[tokio::test]
     async fn test_bulk_load_config_default() {
         let config = BulkLoadConfig::default();

@@ -1236,73 +1236,53 @@ impl Engine {
             }
         }
 
-        // Read source node to get its relationship chain
-        let src_node = self.storage.read_node(src_id)?;
-        let mut rel_ptr = src_node.first_rel_ptr;
-
         // #20: make the fast-path miss itself observable (debug level — entry
         // is common on small graphs; the warn below covers the pathology).
         tracing::debug!(
             src_id,
             rel_type,
-            "exact-edge index miss — falling back to O(degree) chain walk"
+            "exact-edge index miss — falling back to O(out-degree) adjacency walk"
         );
 
-        // Telemetry (issue #12): the chain walk is O(degree). For a hub node
+        // Authoritative fallback: the store's own outgoing adjacency
+        // (`storage::adjacency_index`, maintained in `RecordStore::write_rel`
+        // and rebuilt from the records on open). It replaced a walk of
+        // `first_rel_ptr`/`next_src_ptr`, which was the same O(out-degree) but
+        // depended on chain integrity — the chain is patched up heuristically
+        // by `create_relationship` when the mmap looks stale, and a single
+        // broken link silently ended the walk early, making MERGE re-create an
+        // edge that already existed. Each candidate is still read back and
+        // fully re-checked, so the index only chooses which records to read.
+        // See phase0_perf-store-reverse-incoming-adjacency-index §1.7.
+        let outgoing = self.storage.outgoing_relationships(src_id);
+
+        // Telemetry (issue #12): still O(out-degree). For a hub node
         // accumulating thousands of same-type edges, each edge-MERGE existence
-        // check that misses the exact-edge index degrades to a full-chain
-        // scan, which under a sustained edge-write burst manifests as a
-        // no-query-running CPU climb. Count hops and warn past a threshold so
-        // the pathology is observable (RUST_LOG=nexus_core=warn) instead of an
-        // opaque stall.
-        let mut hops: u64 = 0;
-        while rel_ptr != 0 {
-            // Chain pointers are stored as `rel_id + 1` (0 is the
-            // end-of-chain sentinel — see record_store_ops
-            // `create_relationship` and the matching decode in
-            // executor/operators/path.rs). Reading `rel_ptr` directly was
-            // an off-by-one that silently broke this authoritative
-            // fallback: it walked the wrong records and returned None (or
-            // a wrong id) whenever the exact-edge index missed.
-            let rel_id = rel_ptr - 1;
+        // check that misses the exact-edge index scans them all, which under a
+        // sustained edge-write burst manifests as a no-query-running CPU
+        // climb. Warn past a threshold so the pathology is observable
+        // (RUST_LOG=nexus_core=warn) instead of an opaque stall.
+        if outgoing.len() >= 1000 {
+            tracing::warn!(
+                src_id,
+                rel_type,
+                out_degree = outgoing.len(),
+                "find_relationship_between is scanning a high-degree node's \
+                 outgoing edges (>= 1000) — exact-edge index miss on a hub; \
+                 sustained edge-MERGE here can pin CPU (issue #12)"
+            );
+        }
+
+        for rel_id in outgoing {
             let rel_record = self.storage.read_rel(rel_id)?;
-            hops += 1;
-
-            // #20: warn DURING the walk, the moment it crosses the threshold,
-            // so a hub-degree pathology is surfaced in real time — not only
-            // after a (possibly enormous) scan completes, and even when the
-            // edge is eventually found below (the early return would otherwise
-            // skip a post-loop warning).
-            if hops == 1000 {
-                tracing::warn!(
-                    src_id,
-                    rel_type,
-                    "find_relationship_between is walking a long O(degree) \
-                     relationship chain (>= 1000 hops) — exact-edge index miss \
-                     on a high-degree hub; sustained edge-MERGE here can pin CPU \
-                     (issue #12)"
-                );
-            }
-
-            // Check if this is an outgoing relationship to dst_id with the
-            // right type. Skip deleted records — the fast path above
-            // verifies deletion too, and MERGE must not treat a deleted
-            // edge as existing.
+            // Skip deleted records — the fast path above verifies deletion
+            // too, and MERGE must not treat a deleted edge as existing.
             if !rel_record.is_deleted()
                 && rel_record.src_id == src_id
                 && rel_record.dst_id == dst_id
                 && rel_record.type_id == type_id
             {
                 return Ok(Some(rel_id));
-            }
-
-            // Move to next relationship in chain
-            if rel_record.src_id == src_id {
-                rel_ptr = rel_record.next_src_ptr;
-            } else if rel_record.dst_id == src_id {
-                rel_ptr = rel_record.next_dst_ptr;
-            } else {
-                break;
             }
         }
 

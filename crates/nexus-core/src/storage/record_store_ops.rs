@@ -322,7 +322,48 @@ impl RecordStore {
         // Release is sufficient for single-writer model
         std::sync::atomic::fence(std::sync::atomic::Ordering::Release);
 
+        // Maintain the adjacency index HERE, and only here: this is the single
+        // funnel every relationship-record mutation passes through (creation,
+        // the `next_src_ptr` fix-ups, and all five deletion paths, only two of
+        // which go through `delete_rel`). Doing it at the funnel is what makes
+        // the index authoritative for write paths that do not know it exists —
+        // the property `cache::RelationshipIndex` lacks, and the reason it can
+        // only ever be a hint. Endpoints are immutable once written, so the
+        // record's own deleted bit decides add-or-remove; no read-before-write.
+        // See docs/analysis/store-adjacency-index/01_write_chokepoint.md.
+        if record_to_write.is_deleted() {
+            self.adjacency_index
+                .remove(rel_id, record_to_write.src_id, record_to_write.dst_id);
+        } else {
+            self.adjacency_index
+                .insert(rel_id, record_to_write.src_id, record_to_write.dst_id);
+        }
+
         Ok(())
+    }
+
+    /// Live relationship ids pointing AT `node_id` (the reverse adjacency the
+    /// record format itself does not carry), ascending. O(in-degree).
+    pub fn incoming_relationships(&self, node_id: u64) -> Vec<u64> {
+        self.adjacency_index.incoming(node_id)
+    }
+
+    /// Live relationship ids `node_id` is the source of, ascending.
+    /// O(out-degree). Unlike a `first_rel_ptr` chain walk this cannot be
+    /// defeated by a damaged chain — it is rebuilt from the records on open.
+    pub fn outgoing_relationships(&self, node_id: u64) -> Vec<u64> {
+        self.adjacency_index.outgoing(node_id)
+    }
+
+    /// Every live relationship id incident on `node_id` in either direction,
+    /// ascending and de-duplicated (a self-loop appears once). O(degree).
+    pub fn connected_relationships(&self, node_id: u64) -> Vec<u64> {
+        self.adjacency_index.connected(node_id)
+    }
+
+    /// Whether any live relationship touches `node_id`. O(1).
+    pub fn has_any_relationship(&self, node_id: u64) -> bool {
+        self.adjacency_index.has_any(node_id)
     }
 
     /// Read a relationship record
@@ -1084,6 +1125,11 @@ impl RecordStore {
         // Reset counters
         self.next_node_id.store(0, Ordering::SeqCst);
         self.next_rel_id.store(0, Ordering::SeqCst);
+
+        // The record files are re-mapped wholesale below, bypassing
+        // `write_rel` — the only other place the adjacency index is
+        // maintained — so drop every entry explicitly.
+        self.adjacency_index.clear();
 
         // CRITICAL FIX: Clear property store FIRST to prevent next_offset corruption
         // When clear_all() is called, the properties.store file still contains old data

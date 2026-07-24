@@ -15,6 +15,7 @@ use tracing;
 
 use crate::error::{Error, Result};
 
+use super::adjacency_index::AdjacencyIndex;
 use super::adjacency_list;
 use super::property_store;
 use super::records::{
@@ -42,6 +43,13 @@ pub struct RecordStore {
     pub property_store: Arc<RwLock<property_store::PropertyStore>>,
     /// Phase 3: Adjacency list store for optimized relationship traversal
     pub(crate) adjacency_store: Option<adjacency_list::AdjacencyListStore>,
+    /// Authoritative live-edge adjacency in BOTH directions, rebuilt from the
+    /// record file on open and maintained by `write_rel` — the store's only
+    /// reverse (incoming) adjacency, since `NodeRecord::first_rel_ptr` heads
+    /// the outgoing chain alone. Shared across clones: clones share the
+    /// records, so they must share the index derived from them.
+    /// See `storage::adjacency_index`.
+    pub(super) adjacency_index: AdjacencyIndex,
     /// Next available node ID (shared across clones)
     pub(super) next_node_id: Arc<AtomicU64>,
     /// Next available relationship ID (shared across clones)
@@ -193,6 +201,12 @@ impl RecordStore {
             }
         }
 
+        // The same pass rebuilds the adjacency index: every LIVE record found
+        // here is indexed in both directions, which is what makes the index
+        // authoritative across a restart without any on-disk format change.
+        // Free by construction — this loop already reads every record.
+        // See docs/analysis/store-adjacency-index/02_structure_decision.md.
+        let adjacency_index = AdjacencyIndex::new();
         let mut next_rel_id = 0u64;
         let mut legacy_rels: Vec<(u64, RelationshipRecord)> = Vec::new();
         for i in 0..(rels_file_size / REL_RECORD_SIZE) {
@@ -204,6 +218,9 @@ impl RecordStore {
                 next_rel_id = (i + 1) as u64;
                 if legacy_in_use && !record.is_allocated() {
                     legacy_rels.push((i as u64, record));
+                }
+                if !record.is_deleted() {
+                    adjacency_index.insert(i as u64, record.src_id, record.dst_id);
                 }
             }
         }
@@ -224,6 +241,7 @@ impl RecordStore {
             rels_mmap: Arc::new(RwLock::new(rels_mmap)),
             property_store,
             adjacency_store,
+            adjacency_index,
             nodes_created: Arc::new(AtomicU64::new(0)),
             next_node_id: Arc::new(AtomicU64::new(next_node_id)),
             next_rel_id: Arc::new(AtomicU64::new(next_rel_id)),
@@ -554,6 +572,11 @@ impl Clone for RecordStore {
             rels_mmap: Arc::clone(&self.rels_mmap),
             property_store, // CRITICAL: Shared PropertyStore instance (not a clone)
             adjacency_store,
+            // Shared, like the mappings it is derived from: a write through
+            // one clone must be visible to every other clone, or the guard
+            // reading through the engine's store would miss an edge the
+            // executor's store just created.
+            adjacency_index: self.adjacency_index.clone(),
             nodes_created: Arc::clone(&self.nodes_created),
             next_node_id: Arc::clone(&self.next_node_id),
             next_rel_id: Arc::clone(&self.next_rel_id),

@@ -13,6 +13,7 @@ mod record_store_temp_guard_test;
 mod relationship_prop_ptr_test;
 mod relationship_publish_ordering_test;
 mod relationship_traversal_test;
+mod reverse_adjacency_index_test;
 mod test_index_consistency;
 mod test_relationship_debug;
 mod test_storage_init;
