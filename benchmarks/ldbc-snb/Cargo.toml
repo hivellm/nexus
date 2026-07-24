@@ -1,0 +1,30 @@
+# Harness workspace for the LDBC SNB benchmark, deliberately OUTSIDE the main
+# Nexus workspace (which lists this path under `exclude`): the harness is a
+# consumer of the server's HTTP API, not part of the product, and must never
+# pull benchmark-only dependencies into the shipped crates' lockfile.
+#
+# The loader and (later) the driver live here as sibling members so they share
+# one lockfile and one `target/` — two standalone crates would compile the same
+# HTTP stack twice.
+#
+# Edition 2021 on purpose: the engine crates need `cargo +nightly` for edition
+# 2024, but this harness is an ordinary HTTP client and should build on stable.
+[workspace]
+resolver = "2"
+members = ["loader"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "Apache-2.0"
+publish = false
+
+[workspace.dependencies]
+anyhow = "1"
+csv = "1.3"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+# Blocking HTTP with no TLS and no async runtime: the loader is a sequential
+# streaming job against localhost, so a tokio/reqwest stack would be pure
+# build-time cost.
+ureq = { version = "2.10", features = ["json"], default-features = false }

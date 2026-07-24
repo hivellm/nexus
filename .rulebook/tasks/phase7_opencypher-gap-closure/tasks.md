@@ -42,6 +42,50 @@ gaps, then re-measure so the delta is attributable. Do not reorder §2 before §
 
 - [ ] 4.7 **Negative numeric literals are rejected in CREATE property maps.** `CREATE (:T {v: -7})` fails with `Cypher execution error: Complex expressions not supported in CREATE properties`, while `CREATE (:T {v: 7})` succeeds. Neo4j accepts both. A leading `-` parses as a unary-minus expression wrapping the literal rather than as a negative literal, so it falls through to the catch-all arm that rejects non-literal expressions. **Two call sites, both need the same fix**: `engine/match_exec.rs:573-575` and `executor/operators/create.rs:634-636` (the latter sits directly below the `Literal::Float`/`Boolean`/`Null` arms at `:617-626`, which is where the folded value belongs). Constant-fold unary minus over `Literal::Integer`/`Literal::Float` before the catch-all; consider folding constant arithmetic generally, but negative literals are the case that actually bites. Verify `SET n.v = -7` and relationship property maps (`CREATE (a)-[r:T {w: -1}]->(b)`) take the same path. **Repro**: `CREATE (:NegT {v: -7})` → error; `MATCH (n:NegT) RETURN n.v` → no rows. Discovered by `phase7_ldbc-snb-benchmark` item 1.2. LDBC ids are non-negative so the benchmark is not blocked, but any dataset with negative values cannot be loaded through inline CREATE maps.
 
+- [ ] 4.8 **CRITICAL — silent wrong results: expanding from a label scan loses rows NON-DETERMINISTICALLY on a large graph.**
+      On the loaded LDBC SF0.1 graph (327 588 nodes / 1 492 038 relationships), a plain
+      pattern count returns a DIFFERENT, always-short answer on every run of a read-only
+      database. The rows are not missing from storage — they are missing from the traversal.
+      **Repro** (Nexus 2.5.0, `POST /cypher`, after `benchmarks/ldbc-snb` loads SF0.1):
+      ```
+      MATCH (o:Organisation)-[r:IS_LOCATED_IN]->(p:Place) RETURN count(r)
+        -> 5305, 5267, 5233   (three consecutive runs; the true answer is 7955)
+      MATCH ()-[r:STUDY_AT]->() RETURN count(r)
+        -> 893, 912, 895      (true answer 1209)
+      MATCH (:Person)-[r:STUDY_AT]->(:Organisation) RETURN count(r)
+        -> 1209, 1209, 1209   (correct and stable — same edges, smaller driving label)
+      ```
+      **Proof the data is present and complete** (same database, same session):
+      ```
+      MATCH (o:Organisation) WHERE NOT (o)-[:IS_LOCATED_IN]->() RETURN count(o)   -> 0
+      MATCH (o:Organisation {id: 7954})-[:IS_LOCATED_IN]->(p:Place) RETURN p.id   -> 1449 (every sampled id resolves)
+      MATCH (o:Organisation) RETURN count(o)                                      -> 7955 (stable)
+      GET /stats -> catalog.rel_count = 1492038 = exactly what the loader submitted
+      ```
+      Every `count` variant of the failing query drifts (`count(*)`, `count(o)`,
+      `count(DISTINCT o)`, and with the destination label dropped), so the instability is in
+      the ROW SET the expand produces, not in aggregation. `count(DISTINCT o)` drifting means a
+      different subset of source nodes is expanded on each run.
+      **Ruled out** by synthetic reproduction attempts against a fresh server (all correct and
+      stable): 2 000 / 4 000 / 5 000 / 8 000 sources fanning into 10 shared destinations, and
+      the SNB write ordering where a node group accumulates 40 000 incoming edges before its
+      own outgoing edge is created. Neither driving-row count nor incoming/outgoing ordering
+      alone reproduces it — total graph size appears to be a factor.
+      **Where to look**: `executor/operators/path.rs::find_relationships` is the only live
+      lookup. It walks `first_rel_ptr`/`next_src_ptr` and silently SWALLOWS read failures
+      (`if let Ok(rel_record) = store.read_rel(...)`), so an intermittently failing record read
+      under page-cache pressure would present exactly as this: a varying subset, no error. Its
+      `first_rel_ptr == 0` fallback also scans only the first 501 relationship ids, which cannot
+      find an edge in a 1.5 M-edge store. Start by making both paths surface the error instead
+      of dropping the row, then compare against the store's authoritative adjacency index
+      (`storage::adjacency_index`, added by `phase0_perf-store-reverse-incoming-adjacency-index`),
+      which knows every live edge of a node in both directions and is the natural replacement
+      for the chain walk.
+      **Discovered by** `phase7_ldbc-snb-benchmark` item 1.3, whose post-load count verification
+      is what caught it. **This blocks the benchmark's query-correctness phase (1.4/1.5)**: no
+      IS/IC query result can be validated against Neo4j while an identical query returns
+      different answers on consecutive runs.
+
 ## 5. Re-measure and reconcile the documentation
 - [ ] 5.1 Re-run the TCK after §4 and refresh `docs/compatibility/OPENCYPHER_TCK_REPORT.md`; the delta from the §3.3 baseline is the evidence that §4 mattered
 - [ ] 5.2 Reconcile the compatibility claim, which currently spans 40 points across six files, to the single measured number: `AGENTS.override.md:159` (~55%), `docs/PRD.md:24`, `docs/ROADMAP.md:6`, `docs/guides/USER_GUIDE.md:26`, `docs/compatibility/NEO4J_COMPATIBILITY_REPORT.md:84` ("toward ~95%"), `docs/nexus/README.md:22` ("~85%"). State plainly what is measured (TCK pass rate) versus what is a differential result (the 325-case Neo4j suite) — conflating them is how the spread arose. **Do NOT edit `CLAUDE.md`**: it is generated between `RULEBOOK:START/END` sentinels, marked DO NOT EDIT BY HAND at `:1-3`, and does not mention openCypher

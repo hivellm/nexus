@@ -11,6 +11,10 @@ members = [
 ]
 exclude = [
     "sdks/rust",
+    # LDBC SNB harness: an HTTP client of the running server, not part of the
+    # product. Kept out so its benchmark-only dependencies never reach the
+    # shipped crates' lockfile. See benchmarks/ldbc-snb/Cargo.toml.
+    "benchmarks/ldbc-snb",
 ]
 
 [workspace.package]

@@ -33,7 +33,7 @@ answer is worthless.
 |---|---|
 | Dataset fetch + checksum pinning | **done** |
 | Schema prep DDL | **done** |
-| Bulk loader | not started |
+| Bulk loader | **done** — loads and verifies SF0.1 |
 | Short reads IS1–IS7 | not started |
 | Complex reads IC1–IC14 | not started |
 | Updates INS1–INS8 | not started |
@@ -143,6 +143,89 @@ at all reported every index present). The script therefore creates one throwaway
 node per label, probes, then deletes them and asserts they are gone — a leaked
 probe row would corrupt the loader's post-load cardinality verification.
 
+## Loading
+
+```bash
+cd loader && cargo build --release        # stable Rust; the harness is not in the Nexus workspace
+./target/release/ldbc-load \
+  --dataset ~/.cache/ldbc-snb/sf0.1/social_network-sf0.1-CsvCompositeMergeForeign-LongDateFormatter \
+  --url http://localhost:15474
+```
+
+The database must be **empty** and its indexes created first — the loader
+verifies absolute counts, so pre-existing rows are reported as a mismatch.
+
+| Flag | Purpose |
+|---|---|
+| `--dry-run` | Parse every file and resolve every foreign key without writing. Needs no server; proves the dataset is internally consistent in ~2 s. |
+| `--verify-only` | Re-check an already-loaded database without reloading it. |
+| `--strict-readback` | Make the per-type traversal read-back fatal (see the caveat below). |
+| `--batch-rows` / `--batch-bytes` | Request sizing. Both ceilings apply — a batch of long-`content` Posts is orders of magnitude bigger than a batch of Tags, and the server's body limit is 16 MiB. |
+
+### How the load works
+
+1. **Nodes**, static labels first, recording `(label, LDBC id) → internal id`
+   from the ids `/ingest` returns in input order. The map is keyed per label
+   because LDBC ids are only unique *within* a label — SF0.1 has a Place 0, an
+   Organisation 0, a Tag 0 and a Forum 0.
+2. **Merge-foreign relationships**, by re-reading the node files for their FK
+   columns. A second streaming pass rather than buffering: an edge needs both
+   endpoints to exist, and holding ~600 k (SF0.1) or ~6 M (SF1) pending edges
+   in memory is worse than a few seconds of I/O.
+3. **The ten edge files**, with `KNOWS` mirrored (LDBC stores it once per pair).
+
+SF0.1 totals: **327 588 nodes, 1 492 038 relationships** — the 576 896 edge-file
+rows plus 14 073 mirrored `KNOWS` plus 901 069 synthesized merge-foreign edges.
+
+### Temporal encoding — epoch milliseconds, deliberately
+
+`creationDate`, `joinDate` and `birthday` are stored as **integers**, exactly as
+`LongDateFormatter` writes them, not converted to ISO-8601 strings:
+
+- Nexus has no native temporal property type — `datetime()` returns a string.
+- The benchmark's own substitution parameters express dates as epoch millis
+  (`interactive_2_param.txt`: `maxDate = 1354060800000`), so the queries compare
+  like with like instead of round-tripping through a string format.
+- Integer comparisons are served by the property B-tree's range seek; a string
+  encoding would only order correctly by lexicographic accident.
+
+The Neo4j baseline must load them the same way or the comparison is not
+like-for-like.
+
+### Measured on SF0.1 (release build, localhost, 2026-07-24)
+
+| Phase | Rate |
+|---|---|
+| Nodes via `/ingest` | ~58 000 nodes/s |
+| Relationships via `/ingest` | ~3 100 rel/s |
+| Whole SF0.1 load | ~480 s |
+
+The node figure is the first empirical confirmation of the `/ingest` rewrite
+(`phase0_fix-ingest-bulk-path` §3.2, which deferred its re-measurement here):
+469 nodes/s before, ~58 000 nodes/s now. Relationship creation is now the
+bottleneck by a factor of ~19.
+
+### Caveat: the per-type read-back is blocked on an engine bug
+
+The loader's verification is split by how much each check can be trusted:
+
+| Check | Status |
+|---|---|
+| Per-label node counts | exact and stable — **fatal** on mismatch |
+| Total relationship count (engine write counter, `/stats`) | exact — **fatal** on mismatch |
+| Per-type `MATCH ()-[r:T]->()` read-back | **advisory** — see below |
+
+On the loaded SF0.1 graph, `MATCH (o:Organisation)-[r:IS_LOCATED_IN]->(p:Place)
+RETURN count(r)` returns 5305 / 5267 / 5233 on three consecutive runs of a
+read-only database; the true answer is 7955. The edges are provably present
+(`MATCH (o:Organisation) WHERE NOT (o)-[:IS_LOCATED_IN]->() RETURN count(o)`
+returns 0, every sampled id resolves through an index seek, and the engine's own
+write counter agrees with the loader). Filed as **`phase7_opencypher-gap-closure`
+item 4.8**; it also blocks the query-correctness phase, since no query result can
+be validated against Neo4j while an identical query returns different answers on
+consecutive runs. Once it is closed, run with `--strict-readback` and this check
+becomes a regression guard.
+
 ## Dataset
 
 Pre-generated LDBC artifacts from `datasets.ldbcouncil.org`, serializer
@@ -186,8 +269,9 @@ row excluded):
 
 The `MergeForeign` serializer folds every **single-cardinality** relationship
 into the owning node's CSV as a foreign-key column instead of emitting a
-separate edge file. The loader must synthesize these — they account for 9 of
-the schema's relationship types and are easy to miss when counting rows:
+separate edge file. The loader must synthesize these — 13 foreign-key columns
+carrying 8 of the schema's 15 relationship types (the other 7 come from the
+edge files above) — and they are easy to miss when counting rows:
 
 | Source file | FK column | Relationship |
 |---|---|---|

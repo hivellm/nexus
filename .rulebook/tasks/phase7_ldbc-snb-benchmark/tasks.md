@@ -33,21 +33,42 @@ benchmark query.
       empty database reported every index present even with none created. Fixed by creating one throwaway
       node per label, probing, then deleting and asserting removal. Validated with both controls:
       Person.firstName (no index) → MISS, Person.id (indexed) → silent.
-- [ ] 1.3 Bulk loader (`benchmarks/ldbc-snb/loader/`, Rust bin or Python script): stream the composite-merged CSVs into Nexus via `/ingest` — all 8 node labels first, then all edge files with date/datetime coercion; verify post-load node/edge counts against the dataset's expected cardinalities and fail loudly on mismatch
-      **BLOCKED on two engine bugs; the "via `/ingest`" premise does not hold.** Measured before writing
-      any loader code: `/ingest` cannot load a connected graph at all — `NodeIngest.id` is parsed and never
-      read, and `IngestResponse` never returns the created internal ids that `RelIngest.src`/`.dst` require,
-      so the node and relationship halves do not compose. It is also ~11x slower than the plain query path
-      (469 nodes/s vs 5 097 for `UNWIND`, release; `/ingest` does not improve with optimizations because its
-      cost is per-node lock + parse). Filed as `phase0_fix-ingest-bulk-path`.
-      The natural alternative — `UNWIND $rows AS r MATCH (a:P {id: r.s}), (b:P {id: r.d}) CREATE (a)-[:R]->(b)`,
-      which resolves edges by LDBC id through the 1.2 indexes — **aborts the server process** with
-      `memory allocation of 4000000000000 bytes failed`. Filed as `phase0_fix-cypher-oom-process-abort`
-      (CRITICAL: one query kills the server). Minimal repro not yet isolated.
-      Resume by either waiting on those two, or loading edges with a shape that avoids the cartesian
-      multi-pattern MATCH — but confirm the workaround does not abort before building on it.
+- [x] 1.3 Bulk loader (`benchmarks/ldbc-snb/loader/`, Rust bin or Python script): stream the composite-merged CSVs into Nexus via `/ingest` — all 8 node labels first, then all edge files with date/datetime coercion; verify post-load node/edge counts against the dataset's expected cardinalities and fail loudly on mismatch
+      **Both prior blockers are closed** (`phase0_fix-ingest-bulk-path` archived 2026-07-22,
+      `phase0_fix-cypher-oom-process-abort` archived 2026-07-20), and the `/ingest` contract was
+      re-verified end to end before any loader code was written: `node_ids` returns in input order,
+      array properties round-trip (`language: ["si","en"]`), epoch-ms integers survive past 2^32,
+      and relationship properties are stored.
+      Delivered: a standalone stable-Rust workspace at `benchmarks/ldbc-snb/` (excluded from the
+      Nexus workspace so benchmark-only deps never reach the shipped lockfile) with `ldbc-load`.
+      Three streaming passes — nodes (recording `(label, LDBC id) → internal id` from the returned
+      ids), then the node files RE-READ for their 13 merge-foreign FK columns, then the ten edge
+      files with `KNOWS` mirrored. The id map is keyed PER LABEL: LDBC ids are only unique within a
+      label (SF0.1 has a Place 0, an Organisation 0, a Tag 0 and a Forum 0), and a flat map would
+      silently wire edges to the wrong nodes.
+      **Temporal encoding decision**: dates stay epoch-millisecond integers. Nexus has no native
+      temporal type (`datetime()` returns a string), the benchmark's own substitution parameters
+      are epoch millis (`maxDate = 1354060800000`), and integers are what the property B-tree's
+      range seek can serve. Documented in the README as a constraint the Neo4j baseline must match.
+      **Result — SF0.1 loads and verifies**: 327 588 nodes / 1 492 038 relationships in ~480 s
+      (~58 000 nodes/s, ~3 100 rel/s). Every label count matches exactly and the engine's write
+      counter agrees on the relationship total. This is also the deferred empirical answer to
+      `phase0_fix-ingest-bulk-path` §3.2: 469 nodes/s before the rewrite, ~58 000 after.
+      **Found and FILED, not worked around**: the per-type read-back
+      `MATCH ()-[r:TYPE]->() RETURN count(r)` is NON-DETERMINISTIC on the loaded graph — three
+      consecutive runs of a read-only database return 5305 / 5267 / 5233 where the answer is 7955 —
+      while the edges are provably present (`WHERE NOT (o)-[:IS_LOCATED_IN]->()` → 0, every sampled
+      id resolves via index seek, write counter agrees). Filed as `phase7_opencypher-gap-closure`
+      item 4.8 with the repro, the counter-evidence, and the synthetic shapes that do NOT reproduce
+      it. The loader therefore splits its verification: label counts and the total (both exact and
+      stable) are fatal; the per-type read-back is reported loudly but is only fatal under
+      `--strict-readback`, which becomes the regression guard once 4.8 is closed.
 - [ ] 1.4 Port short reads IS1–IS7 from `ldbc/ldbc_snb_interactive_impls` (cypher flavor) into `benchmarks/ldbc-snb/queries/`, one file per query with parameter placeholders; smoke-validate each against SF0.1 comparing results with the same query on Neo4j (docker via `scripts/bench/docker-compose.yml`)
+      **BLOCKED on `phase7_opencypher-gap-closure` item 4.8** (found by 1.3): result-set validation
+      is meaningless while an identical query returns a different answer on consecutive runs of an
+      unchanged database. Resume once 4.8 is closed and `ldbc-load --strict-readback` passes.
 - [ ] 1.5 Port complex reads IC1–IC14 the same way, validating each against Neo4j on SF0.1; each query Nexus cannot express or answers differently → file a finding (repro + expected vs actual) in phase7_opencypher-gap-closure and mark the query BLOCKED in the README table
+      **BLOCKED on the same item 4.8** — see 1.4.
 - [ ] 1.6 Port the 8 Interactive updates (INS1–INS8: add person/like/post/comment/forum/membership/friendship/reply) with parameter streams from the dataset's update CSVs; validate side effects (counts before/after) on SF0.1
 - [ ] 1.7 Bench driver crate (`benchmarks/ldbc-snb/driver/`, Rust, NOT in the main workspace): loads parameter substitution files, replays the official Interactive operation mix (frequency ratios per query type, configurable client concurrency), measures per-query p50/p95/p99 + overall throughput (ops/s), warm-up phase excluded, emits `results/*.json` + Markdown summary
 - [ ] 1.8 Neo4j baseline mode in the driver (Bolt or HTTP endpoint switch) so the identical run executes against the dockerized Neo4j; produce the side-by-side SF1 comparison
