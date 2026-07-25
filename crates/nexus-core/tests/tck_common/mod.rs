@@ -104,11 +104,26 @@ pub fn assert_rows_equal(got: &[Value], want: &[Value], idx: usize) {
 
 /// Tolerant value comparison.
 ///
+/// `a` is the value parsed from the TCK table cell (expected); `b` is
+/// the Nexus result value (actual).
+///
 /// - Floats: 1e-9 absolute tolerance.
 /// - Numbers: integer-vs-float coercion allowed (`1` == `1.0`).
 /// - Maps: unordered, every key must match.
 /// - Lists: ordered.
+/// - Node/relationship/path literals (tagged via `@tck_node` /
+///   `@tck_rel` / `@tck_path`, see `tck_cell_to_json`): matched
+///   structurally against Nexus's node/relationship/path value shapes.
 pub fn values_equal(a: &Value, b: &Value) -> bool {
+    if tck_marker(a, "@tck_node") {
+        return tck_node_matches(a, b);
+    }
+    if tck_marker(a, "@tck_rel") {
+        return tck_rel_matches(a, b);
+    }
+    if tck_marker(a, "@tck_path") {
+        return tck_path_matches(a, b);
+    }
     match (a, b) {
         (Value::Null, Value::Null) => true,
         (Value::Bool(x), Value::Bool(y)) => x == y,
@@ -132,6 +147,115 @@ pub fn values_equal(a: &Value, b: &Value) -> bool {
         }
         _ => false,
     }
+}
+
+/// True when `v` is a JSON object carrying the boolean marker `key`
+/// set to `true` (used for the `@tck_node` / `@tck_rel` / `@tck_path`
+/// tags produced by the TCK cell parser).
+fn tck_marker(v: &Value, key: &str) -> bool {
+    v.get(key) == Some(&Value::Bool(true))
+}
+
+/// Match a parsed TCK node literal (`expected`) against a Nexus result
+/// value (`actual`).
+///
+/// Nexus never emits node labels on returned values (a known gap), so
+/// a node literal with non-empty `@labels` can never match — this is
+/// the correct, attributable outcome rather than a silent pass.
+fn tck_node_matches(expected: &Value, actual: &Value) -> bool {
+    let Some(actual_obj) = actual.as_object() else {
+        return false;
+    };
+    if !actual_obj.contains_key("_nexus_id") || actual_obj.contains_key("_nexus_rel_type") {
+        return false;
+    }
+    let expected_obj = expected.as_object().expect("tck node is always an object");
+    let labels_empty = expected_obj
+        .get("@labels")
+        .and_then(Value::as_array)
+        .is_none_or(|labels| labels.is_empty());
+    if !labels_empty {
+        return false;
+    }
+    props_match(
+        expected_obj,
+        &["@tck_node", "@labels"],
+        actual_obj,
+        &["_nexus_id"],
+    )
+}
+
+/// Match a parsed TCK relationship literal (`expected`) against a
+/// Nexus result value (`actual`).
+fn tck_rel_matches(expected: &Value, actual: &Value) -> bool {
+    let Some(actual_obj) = actual.as_object() else {
+        return false;
+    };
+    if !actual_obj.contains_key("_nexus_rel_type") {
+        return false;
+    }
+    let expected_obj = expected.as_object().expect("tck rel is always an object");
+    let expected_type = expected_obj.get("@type").and_then(Value::as_str);
+    let actual_type = actual_obj.get("_nexus_rel_type").and_then(Value::as_str);
+    if expected_type != actual_type {
+        return false;
+    }
+    props_match(
+        expected_obj,
+        &["@tck_rel", "@type"],
+        actual_obj,
+        &["_nexus_id", "_nexus_rel_type", "type"],
+    )
+}
+
+/// Match a parsed TCK path literal (`expected`) against a Nexus
+/// result value (`actual`), comparing `nodes` and `relationships`
+/// element-wise in traversal order.
+fn tck_path_matches(expected: &Value, actual: &Value) -> bool {
+    let Some(actual_obj) = actual.as_object() else {
+        return false;
+    };
+    let expected_obj = expected.as_object().expect("tck path is always an object");
+    let expected_nodes = expected_obj.get("nodes").and_then(Value::as_array);
+    let expected_rels = expected_obj.get("relationships").and_then(Value::as_array);
+    let actual_nodes = actual_obj.get("nodes").and_then(Value::as_array);
+    let actual_rels = actual_obj.get("relationships").and_then(Value::as_array);
+    let (Some(en), Some(an), Some(er), Some(ar)) =
+        (expected_nodes, actual_nodes, expected_rels, actual_rels)
+    else {
+        return false;
+    };
+    en.len() == an.len()
+        && er.len() == ar.len()
+        && en.iter().zip(an.iter()).all(|(x, y)| values_equal(x, y))
+        && er.iter().zip(ar.iter()).all(|(x, y)| values_equal(x, y))
+}
+
+/// Compare the "real" (non-marker, non-ignored) properties of two
+/// JSON objects for an exact key-set + value match.
+fn props_match(
+    expected: &serde_json::Map<String, Value>,
+    expected_ignore: &[&str],
+    actual: &serde_json::Map<String, Value>,
+    actual_ignore: &[&str],
+) -> bool {
+    let expected_keys: std::collections::BTreeSet<&str> = expected
+        .keys()
+        .map(String::as_str)
+        .filter(|k| !expected_ignore.contains(k))
+        .collect();
+    let actual_keys: std::collections::BTreeSet<&str> = actual
+        .keys()
+        .map(String::as_str)
+        .filter(|k| !actual_ignore.contains(k))
+        .collect();
+    expected_keys == actual_keys
+        && expected_keys.iter().all(|k| {
+            values_equal(
+                expected.get(*k).expect("key came from expected.keys()"),
+                actual.get(*k).expect("key set equality checked above"),
+            )
+        })
 }
 
 // ───────────────────── TCK cell parser ─────────────────────
@@ -207,8 +331,10 @@ impl<'a> TckParser<'a> {
         self.skip_ws();
         match self.peek() {
             Some(b'\'') => self.parse_string(),
-            Some(b'[') => self.parse_list(),
+            Some(b'[') => self.parse_list_or_rel(),
             Some(b'{') => self.parse_map(),
+            Some(b'(') => self.parse_node(),
+            Some(b'<') => self.parse_path(),
             Some(b) if b == b'-' || b.is_ascii_digit() => self.parse_number(),
             Some(b) if b.is_ascii_alphabetic() => self.parse_keyword(),
             Some(b) => panic!(
@@ -276,6 +402,25 @@ impl<'a> TckParser<'a> {
             "true" => Value::Bool(true),
             "false" => Value::Bool(false),
             other => panic!("unknown keyword `{other}` in TCK cell {:?}", self.src),
+        }
+    }
+
+    /// `[` starts either a list literal (`[1, 'a']`) or a relationship
+    /// literal (`[:TYPE {...}]`). Disambiguate by looking past the `[`
+    /// (and any whitespace) for a leading `:`.
+    fn parse_list_or_rel(&mut self) -> Value {
+        let mut lookahead = self.pos + 1;
+        while let Some(b) = self.bytes.get(lookahead) {
+            if *b == b' ' || *b == b'\t' || *b == b'\n' || *b == b'\r' {
+                lookahead += 1;
+            } else {
+                break;
+            }
+        }
+        if self.bytes.get(lookahead) == Some(&b':') {
+            self.parse_rel()
+        } else {
+            self.parse_list()
         }
     }
 
@@ -360,4 +505,148 @@ impl<'a> TckParser<'a> {
             None => panic!("EOF in map key in {:?}", self.src),
         }
     }
+
+    /// Parse a node literal: `()`, `(:A)`, `(:A:B)`, `({name: 'c'})`,
+    /// `(:A {name: 'A', age: 3})`. Produces a tagged object using the
+    /// `@tck_node` / `@labels` marker keys (see `values_equal`).
+    fn parse_node(&mut self) -> Value {
+        self.expect(b'(');
+        let labels = self.parse_labels();
+        self.skip_ws();
+        let props = if self.peek() == Some(b'{') {
+            self.parse_map()
+        } else {
+            Value::Object(serde_json::Map::new())
+        };
+        self.skip_ws();
+        self.expect(b')');
+
+        let mut map = serde_json::Map::new();
+        map.insert("@tck_node".to_string(), Value::Bool(true));
+        map.insert(
+            "@labels".to_string(),
+            Value::Array(labels.into_iter().map(Value::String).collect()),
+        );
+        if let Value::Object(props_map) = props {
+            for (k, v) in props_map {
+                map.insert(k, v);
+            }
+        }
+        Value::Object(map)
+    }
+
+    /// Parse zero or more `:Label` segments (e.g. `:A:B`) following an
+    /// opening `(`.
+    fn parse_labels(&mut self) -> Vec<String> {
+        let mut labels = Vec::new();
+        loop {
+            self.skip_ws();
+            if self.peek() != Some(b':') {
+                break;
+            }
+            self.pos += 1;
+            let start = self.pos;
+            while let Some(b) = self.peek() {
+                if b.is_ascii_alphanumeric() || b == b'_' {
+                    self.pos += 1;
+                } else {
+                    break;
+                }
+            }
+            assert!(
+                self.pos > start,
+                "expected label name at pos {} in {:?}",
+                start,
+                self.src
+            );
+            labels.push(self.src[start..self.pos].to_string());
+        }
+        labels
+    }
+
+    /// Parse a relationship literal: `[:TYPE]` or `[:TYPE {props}]`.
+    /// Produces a tagged object using the `@tck_rel` / `@type` marker
+    /// keys (see `values_equal`).
+    fn parse_rel(&mut self) -> Value {
+        self.expect(b'[');
+        self.skip_ws();
+        self.expect(b':');
+        let start = self.pos;
+        while let Some(b) = self.peek() {
+            if b.is_ascii_alphanumeric() || b == b'_' {
+                self.pos += 1;
+            } else {
+                break;
+            }
+        }
+        assert!(
+            self.pos > start,
+            "expected relationship type at pos {} in {:?}",
+            start,
+            self.src
+        );
+        let rel_type = self.src[start..self.pos].to_string();
+        self.skip_ws();
+        let props = if self.peek() == Some(b'{') {
+            self.parse_map()
+        } else {
+            Value::Object(serde_json::Map::new())
+        };
+        self.skip_ws();
+        self.expect(b']');
+
+        let mut map = serde_json::Map::new();
+        map.insert("@tck_rel".to_string(), Value::Bool(true));
+        map.insert("@type".to_string(), Value::String(rel_type));
+        if let Value::Object(props_map) = props {
+            for (k, v) in props_map {
+                map.insert(k, v);
+            }
+        }
+        Value::Object(map)
+    }
+
+    /// Parse a path literal: `<()>`,
+    /// `<(:A {name:'A'})-[:KNOWS {num:1}]->(:B {name:'B'})>`, with
+    /// `<-[:T]-` incoming and `-[:T]-` undirected connectors also
+    /// accepted. Produces a tagged object using the `@tck_path` marker
+    /// key (see `values_equal`).
+    fn parse_path(&mut self) -> Value {
+        self.expect(b'<');
+        self.skip_ws();
+
+        let mut nodes = vec![self.parse_node()];
+        let mut relationships = Vec::new();
+
+        self.skip_ws();
+        while self.peek() != Some(b'>') {
+            // Connector is one of `-[...]->`, `<-[...]-`, or `-[...]-`.
+            if self.peek() == Some(b'<') {
+                self.pos += 1;
+            }
+            self.expect(b'-');
+            self.skip_ws();
+            relationships.push(self.parse_rel());
+            self.skip_ws();
+            self.expect(b'-');
+            if self.peek() == Some(b'>') {
+                self.pos += 1;
+            }
+            self.skip_ws();
+            nodes.push(self.parse_node());
+            self.skip_ws();
+        }
+        self.expect(b'>');
+
+        let mut map = serde_json::Map::new();
+        map.insert("@tck_path".to_string(), Value::Bool(true));
+        map.insert("nodes".to_string(), Value::Array(nodes));
+        map.insert("relationships".to_string(), Value::Array(relationships));
+        Value::Object(map)
+    }
 }
+
+// Unit tests for this module live in the harness=true target
+// `tests/tck_cells.rs`: a `#[cfg(test)] mod` here would never run,
+// because `tck_common` is only included by the `harness = false`
+// runner binaries (which have no libtest to collect `#[test]` fns).
