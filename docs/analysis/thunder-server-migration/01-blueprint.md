@@ -178,3 +178,65 @@ ClientConfig)`. Port the old server.rs tests (ping, multiplex, unknown-command-k
 auth-gate root/root) plus §5.2 legacy int-array Bytes decode + §5.3 error model.
 Build the `NexusServer` via the same helper the old `spawn_test_server` used
 (lines 259-309 of the pre-rewrite server.rs — preserve that construction).
+
+---
+
+## F. §4 shim — scoped (bigger than "pure re-export"; own focused pass)
+
+The system is FULLY FUNCTIONAL after §2+§3 without §4: the server speaks
+Thunder wire, the out-of-server consumers still speak `nexus-protocol`'s own
+wire, and the two are byte-identical (proven by `rpc_integration_test` 8/8).
+§4 only CONSOLIDATES the consumer-side types onto Thunder ahead of phase11's
+deletion of `nexus-protocol`. It is a THROWAWAY shim ("do NOT invest").
+
+**Good news — `thunder::wire` provides everything for a near-pure re-export:**
+- `thunder::Request { id:u32, command:String, args:Vec<Value> }` and
+  `thunder::Response { id:u32, result:Result<Value,String> }` (`ok`/`err`) are
+  IDENTICAL to `nexus_protocol::rpc::{Request,Response}`.
+- `thunder::wire` re-exports `encode_frame, decode_frame, decode_frame_with_limit,
+  DecodeError` (sync) AND — under the `tokio` feature — `read_request,
+  read_request_with_limit, read_response, read_response_with_limit,
+  write_request, write_response, read_frame, write_frame` (async). So the
+  consumers' `nexus_protocol::rpc::codec::{read_response, write_request}` imports
+  can be satisfied by re-export.
+- `thunder::Value` is a superset of the old `NexusValue` accessors
+  (as_str/as_bytes/as_int/as_float/as_bool/as_array/as_map/map_get/is_null/bytes)
+  + From impls (incl. From<Vec<u8>>).
+
+**The catch — blast radius is `nexus-protocol`'s OWN test suite (148 tests):**
+`type NexusValue = thunder::Value` means Bytes is `Arc<[u8]>` not `Vec<u8>`.
+Gutting `src/rpc/types.rs` + `codec.rs` to re-exports deletes/invalidates their
+`#[cfg(test)]` modules (types 5, codec 11) AND breaks the integration suites
+`tests/protocol_extended_tests.rs` (**120 tests**) + `tests/auth_test.rs` (12),
+many of which construct `NexusValue::Bytes(vec![...])` (→ `Value::bytes(...)`)
+or assert wire specifics. Plus 2 consumer read sites: `nexus-bench/src/client/
+rpc.rs:298` `String::from_utf8(b)` → `.to_vec()`, and `nexus-cli/src/client.rs:834`
+`b.into_iter().map(Value::from)` (owned `Arc<[u8]>` is not `IntoIterator<Item=u8>`
+→ `b.iter().copied()`). `sdks/rust/.../http.rs:227` `b.iter().copied()` already
+works via deref.
+
+**Plan for the focused pass:**
+1. `nexus-protocol/Cargo.toml`: `thunder-rpc = { version = "0.2.2",
+   default-features = false, features = ["tokio"] }` (enables the async wire
+   helpers; verify "tokio" is directly nameable, else use "client"). Drop
+   `rmp-serde` direct dep IF nothing else in the crate (rest.rs/mcp.rs/umicp.rs/
+   resp3/) uses it — grep first.
+2. `src/rpc/types.rs` → `pub use thunder::{Value as NexusValue, Request, Response};`
+   (delete its `#[cfg(test)]`). `src/rpc/codec.rs` → `pub use thunder::wire::{...}`
+   (delete its `#[cfg(test)]`). `src/rpc/mod.rs` → `pub use thunder::{PUSH_ID};`
+   `pub use thunder::wire::DEFAULT_MAX_FRAME_BYTES;` keep the top-level re-exports.
+3. Rewrite/prune `tests/protocol_extended_tests.rs` + `auth_test.rs`: fix every
+   `Bytes(vec!)` → `bytes(vec!)`; drop any byte-exact assertions that were
+   testing the old hand-rolled codec's identity (Thunder's is the same wire, but
+   don't re-assert Thunder's internals from here). These 132 tests are the real
+   work — decide per-test keep-and-fix vs delete (they largely duplicate Thunder's
+   own conformance suite now).
+4. Consumer Bytes fixes: nexus-bench:298 `.to_vec()`, nexus-cli:834 `b.iter().copied()`.
+5. §4.3: the server LIB no longer imports `nexus_protocol::rpc` (done in §2). The
+   `nexus-server/tests/rpc_integration_test.rs` still does (deliberately — it's the
+   old-codec wire-compat proof); it moves/becomes a Thunder-client test when
+   `nexus-protocol` is deleted in phase11, or stays until then.
+6. §4.4: `Dockerfile:84` COPY + workflow `crates/nexus-protocol/**` path filters
+   stay valid until phase11 deletes the crate — audit but likely no change now.
+
+Given the 132-test rewrite, §4 is its own focused increment, not a tail task.
