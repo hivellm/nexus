@@ -81,6 +81,14 @@ pub struct RecordStore {
     /// so this is stitched into `ResultSet::side_effects.labels_added`
     /// alongside the engine-level `SET n:Label` count. Reset per query.
     pub(super) labels_created: Arc<AtomicU64>,
+    /// Total inline properties written at creation since the last reset —
+    /// the map-key count of each created node's and relationship's inline
+    /// property map. Same `Arc` sharing rationale as the counters above. The
+    /// openCypher TCK counts properties on CREATE-d entities toward
+    /// `+properties`, so this is stitched into
+    /// `ResultSet::side_effects.properties_set` alongside the engine-level
+    /// `SET` count. Reset per query.
+    pub(super) properties_created: Arc<AtomicU64>,
     /// Current nodes file size
     pub(super) nodes_file_size: usize,
     /// Current relationships file size
@@ -262,6 +270,7 @@ impl RecordStore {
             nodes_created: Arc::new(AtomicU64::new(0)),
             relationships_created: Arc::new(AtomicU64::new(0)),
             labels_created: Arc::new(AtomicU64::new(0)),
+            properties_created: Arc::new(AtomicU64::new(0)),
             next_node_id: Arc::new(AtomicU64::new(next_node_id)),
             next_rel_id: Arc::new(AtomicU64::new(next_rel_id)),
             nodes_file_size,
@@ -440,6 +449,19 @@ impl RecordStore {
     /// reported on a `ResultSet` covers only that query.
     pub fn reset_labels_created(&self) {
         self.labels_created.store(0, Ordering::SeqCst);
+    }
+
+    /// Inline properties written at entity creation since the last
+    /// [`RecordStore::reset_properties_created`]. Stitched into
+    /// `side_effects.properties_set`.
+    pub fn properties_created(&self) -> u64 {
+        self.properties_created.load(Ordering::SeqCst)
+    }
+
+    /// Zero the create-properties counter. Called at query start so the count
+    /// reported on a `ResultSet` covers only that query.
+    pub fn reset_properties_created(&self) {
+        self.properties_created.store(0, Ordering::SeqCst);
     }
 
     pub fn peek_next_node_id(&self) -> u64 {
@@ -626,6 +648,7 @@ impl Clone for RecordStore {
             nodes_created: Arc::clone(&self.nodes_created),
             relationships_created: Arc::clone(&self.relationships_created),
             labels_created: Arc::clone(&self.labels_created),
+            properties_created: Arc::clone(&self.properties_created),
             next_node_id: Arc::clone(&self.next_node_id),
             next_rel_id: Arc::clone(&self.next_rel_id),
             nodes_file_size: self.nodes_file_size,

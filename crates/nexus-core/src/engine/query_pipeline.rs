@@ -76,6 +76,7 @@ impl Engine {
         self.storage.reset_nodes_created();
         self.storage.reset_relationships_created();
         self.storage.reset_labels_created();
+        self.storage.reset_properties_created();
         let result = self.execute_cypher_with_context(
             query,
             None,
@@ -96,6 +97,9 @@ impl Engine {
         // (already accumulated on `side_effects` by the write path). Add, do
         // not overwrite.
         side_effects.labels_added += self.storage.labels_created();
+        // Inline properties on CREATE-d entities count toward `+properties`;
+        // `SET`/`REMOVE` property writes are already on `side_effects`. Add.
+        side_effects.properties_set += self.storage.properties_created();
         result.map(|mut rs| {
             rs.side_effects = side_effects;
             rs
@@ -133,6 +137,7 @@ impl Engine {
         self.storage.reset_nodes_created();
         self.storage.reset_relationships_created();
         self.storage.reset_labels_created();
+        self.storage.reset_properties_created();
         let result = self.execute_cypher_ast_with_context(
             ast,
             query_str,
@@ -144,6 +149,7 @@ impl Engine {
         side_effects.nodes_created = self.storage.nodes_created();
         side_effects.relationships_created = self.storage.relationships_created();
         side_effects.labels_added += self.storage.labels_created();
+        side_effects.properties_set += self.storage.properties_created();
         result.map(|mut rs| {
             rs.side_effects = side_effects;
             rs

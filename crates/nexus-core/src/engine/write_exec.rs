@@ -1467,6 +1467,13 @@ impl Engine {
         // Accumulated locally to avoid borrowing `self` while `state` is held,
         // then folded into `self.side_effects` once below.
         let mut labels_added = 0u64;
+        // Side-effect counts for properties (openCypher TCK `+properties` /
+        // `-properties`): every `SET n.k = <non-null>` is a write (counted even
+        // when the value is unchanged, per the TCK); `SET n.k = null` and the
+        // null branch of `SET n += {…}` remove a key (counted only when the key
+        // was present). Same local-accumulator-then-fold pattern as labels.
+        let mut properties_set = 0u64;
+        let mut properties_removed = 0u64;
 
         for item in &set_clause.items {
             match item {
@@ -1545,9 +1552,12 @@ impl Engine {
                         // semantics: a property whose value is NULL is
                         // absent), rather than storing a literal JSON null.
                         if matches!(json_value, serde_json::Value::Null) {
-                            state.properties.remove(property);
+                            if state.properties.remove(property).is_some() {
+                                properties_removed += 1;
+                            }
                         } else {
                             state.properties.insert(property.clone(), json_value);
+                            properties_set += 1;
                         }
                     }
                 }
@@ -1605,9 +1615,12 @@ impl Engine {
                             Value::Object(rhs) => {
                                 for (k, v) in rhs.into_iter() {
                                     if matches!(v, Value::Null) {
-                                        state.properties.remove(&k);
+                                        if state.properties.remove(&k).is_some() {
+                                            properties_removed += 1;
+                                        }
                                     } else {
                                         state.properties.insert(k, v);
+                                        properties_set += 1;
                                     }
                                 }
                             }
@@ -1652,6 +1665,8 @@ impl Engine {
         tracing::info!("[apply_set_clause] DONE");
 
         self.side_effects.labels_added += labels_added;
+        self.side_effects.properties_set += properties_set;
+        self.side_effects.properties_removed += properties_removed;
         Ok(())
     }
 
@@ -1670,6 +1685,9 @@ impl Engine {
         // idempotent no-op the TCK expects. Local accumulator, folded into
         // `self.side_effects` below.
         let mut labels_removed = 0u64;
+        // `REMOVE n.k` removes a property key — counted (TCK `-properties`)
+        // only when the key was actually present.
+        let mut properties_removed = 0u64;
 
         for item in &remove_clause.items {
             match item {
@@ -1689,7 +1707,9 @@ impl Engine {
                         // property bag.
                         let label_ids = self.label_ids_for_state(state)?;
                         self.enforce_not_null_on_prop_change(&label_ids, property, None)?;
-                        state.properties.remove(property);
+                        if state.properties.remove(property).is_some() {
+                            properties_removed += 1;
+                        }
                     }
                 }
                 executor::parser::RemoveItem::Label { target, label } => {
@@ -1721,6 +1741,7 @@ impl Engine {
         }
 
         self.side_effects.labels_removed += labels_removed;
+        self.side_effects.properties_removed += properties_removed;
         Ok(())
     }
 

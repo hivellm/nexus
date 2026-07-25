@@ -276,3 +276,136 @@ fn remove_absent_label_is_idempotent() {
         "removing a label the node does not have counts nothing (TCK idempotent)"
     );
 }
+
+#[test]
+fn create_node_with_inline_properties_counts_each_key() {
+    let ctx = TestContext::new();
+    let mut engine = Engine::with_isolated_catalog(ctx.path()).expect("engine init");
+
+    let result = engine
+        .execute_cypher("CREATE (n:PropNode {a: 1, b: 2})")
+        .expect("CREATE with properties must succeed");
+
+    let effects = result.side_effects;
+    assert_eq!(
+        effects.properties_set, 2,
+        "both inline keys count toward +properties"
+    );
+    assert_eq!(effects.nodes_created, 1);
+    assert_eq!(effects.labels_added, 1);
+    assert_eq!(effects.properties_removed, 0);
+}
+
+#[test]
+fn create_relationship_with_inline_property_counts_it() {
+    let ctx = TestContext::new();
+    let mut engine = Engine::with_isolated_catalog(ctx.path()).expect("engine init");
+
+    let result = engine
+        .execute_cypher("CREATE (a:RelPropA)-[:RelPropR {w: 5}]->(b:RelPropB)")
+        .expect("CREATE with relationship property must succeed");
+
+    let effects = result.side_effects;
+    assert_eq!(
+        effects.properties_set, 1,
+        "the relationship's inline property counts"
+    );
+    assert_eq!(effects.relationships_created, 1);
+    assert_eq!(effects.nodes_created, 2);
+}
+
+#[test]
+fn set_property_reports_one_property_set() {
+    let ctx = TestContext::new();
+    let mut engine = Engine::with_isolated_catalog(ctx.path()).expect("engine init");
+
+    engine
+        .execute_cypher("CREATE (n:SetPropNode)")
+        .expect("seed CREATE must succeed");
+
+    let result = engine
+        .execute_cypher("MATCH (n:SetPropNode) SET n.x = 5")
+        .expect("SET property must succeed");
+
+    let effects = result.side_effects;
+    assert_eq!(effects.properties_set, 1, "the SET write counts");
+    assert_eq!(effects.properties_removed, 0);
+    assert_eq!(effects.nodes_created, 0);
+}
+
+#[test]
+fn set_property_to_null_removes_it() {
+    let ctx = TestContext::new();
+    let mut engine = Engine::with_isolated_catalog(ctx.path()).expect("engine init");
+
+    engine
+        .execute_cypher("CREATE (n:SetNullNode {x: 1})")
+        .expect("seed CREATE must succeed");
+
+    let result = engine
+        .execute_cypher("MATCH (n:SetNullNode) SET n.x = null")
+        .expect("SET null must succeed");
+
+    let effects = result.side_effects;
+    assert_eq!(
+        effects.properties_removed, 1,
+        "SET n.x = null removes the key (TCK -properties)"
+    );
+    assert_eq!(effects.properties_set, 0, "no property was set to a value");
+}
+
+#[test]
+fn remove_property_reports_one_property_removed() {
+    let ctx = TestContext::new();
+    let mut engine = Engine::with_isolated_catalog(ctx.path()).expect("engine init");
+
+    engine
+        .execute_cypher("CREATE (n:RmPropNode {x: 1})")
+        .expect("seed CREATE must succeed");
+
+    let result = engine
+        .execute_cypher("MATCH (n:RmPropNode) REMOVE n.x")
+        .expect("REMOVE property must succeed");
+
+    assert_eq!(
+        result.side_effects.properties_removed, 1,
+        "the removed key counts"
+    );
+}
+
+#[test]
+fn remove_absent_property_is_idempotent() {
+    let ctx = TestContext::new();
+    let mut engine = Engine::with_isolated_catalog(ctx.path()).expect("engine init");
+
+    engine
+        .execute_cypher("CREATE (n:RmAbsentNode)")
+        .expect("seed CREATE must succeed");
+
+    let result = engine
+        .execute_cypher("MATCH (n:RmAbsentNode) REMOVE n.missing")
+        .expect("REMOVE of an absent property must succeed");
+
+    assert_eq!(
+        result.side_effects.properties_removed, 0,
+        "removing a property the node does not have counts nothing (TCK idempotent)"
+    );
+}
+
+#[test]
+fn set_map_merge_counts_each_non_null_key() {
+    let ctx = TestContext::new();
+    let mut engine = Engine::with_isolated_catalog(ctx.path()).expect("engine init");
+
+    engine
+        .execute_cypher("CREATE (n:MapMergeNode)")
+        .expect("seed CREATE must succeed");
+
+    let result = engine
+        .execute_cypher("MATCH (n:MapMergeNode) SET n += {a: 1, b: 2}")
+        .expect("SET += map must succeed");
+
+    let effects = result.side_effects;
+    assert_eq!(effects.properties_set, 2, "both merged keys count");
+    assert_eq!(effects.properties_removed, 0);
+}
