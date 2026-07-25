@@ -99,3 +99,26 @@ fn external_id_conflict_policy_match_reports_no_creation() {
         "ON CONFLICT MATCH resolved to an existing node; nothing was created"
     );
 }
+
+#[test]
+fn create_relationship_reports_one_relationship_and_two_nodes() {
+    let ctx = TestContext::new();
+    let mut engine = Engine::with_isolated_catalog(ctx.path()).expect("engine init");
+
+    let result = engine
+        .execute_cypher("CREATE (a:A)-[:R]->(b:B)")
+        .expect("CREATE relationship must succeed");
+
+    let effects = result.side_effects;
+    assert_eq!(
+        effects.relationships_created, 1,
+        "exactly one relationship was created"
+    );
+    assert_eq!(effects.nodes_created, 2, "both endpoint nodes were created");
+    assert_eq!(effects.nodes_deleted, 0);
+    assert_eq!(effects.relationships_deleted, 0);
+    assert_eq!(effects.properties_set, 0);
+    assert_eq!(effects.properties_removed, 0);
+    assert_eq!(effects.labels_added, 0);
+    assert_eq!(effects.labels_removed, 0);
+}

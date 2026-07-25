@@ -74,6 +74,7 @@ impl Engine {
         self.current_params = params;
         self.side_effects = executor::types::SideEffects::default();
         self.storage.reset_nodes_created();
+        self.storage.reset_relationships_created();
         let result = self.execute_cypher_with_context(
             query,
             None,
@@ -88,6 +89,7 @@ impl Engine {
         // Counting at the shared chokepoint is what keeps the number right
         // for both shapes.
         side_effects.nodes_created = self.storage.nodes_created();
+        side_effects.relationships_created = self.storage.relationships_created();
         result.map(|mut rs| {
             rs.side_effects = side_effects;
             rs
@@ -123,6 +125,7 @@ impl Engine {
         self.current_params = params;
         self.side_effects = executor::types::SideEffects::default();
         self.storage.reset_nodes_created();
+        self.storage.reset_relationships_created();
         let result = self.execute_cypher_ast_with_context(
             ast,
             query_str,
@@ -132,6 +135,7 @@ impl Engine {
         self.current_params.clear();
         let mut side_effects = std::mem::take(&mut self.side_effects);
         side_effects.nodes_created = self.storage.nodes_created();
+        side_effects.relationships_created = self.storage.relationships_created();
         result.map(|mut rs| {
             rs.side_effects = side_effects;
             rs

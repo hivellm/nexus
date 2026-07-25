@@ -1001,6 +1001,7 @@ impl RecordStore {
             // Self-loop: skip incoming update (same as outgoing)
         }
 
+        self.relationships_created.fetch_add(1, Ordering::SeqCst);
         Ok(rel_id)
     }
 
