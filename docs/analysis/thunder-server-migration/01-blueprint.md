@@ -85,3 +85,96 @@ nexus_thunder_config(), ClientConfig)`; cover PING pre-auth, AUTH gate
 (NOAUTH before / OK after), CYPHER round-trip, KNN Bytes round-trip, legacy
 int-array Bytes decode, unknown-command-keeps-connection, over-cap length
 prefix refused, connection ceiling, graceful `stop()`.
+
+---
+
+## E. §2+§3 are ONE atomic increment (concrete rewrite plan)
+
+The `NexusValue = thunder::Value` alias (§2.4) breaks the old `server.rs`
+immediately (its accept loop uses `nexus_protocol`'s codec + `Request`/
+`Response`), and an unwired `NexusDispatch` fails `clippy -D warnings`
+(dead_code). So there is **no intermediate sub-commit that compiles** —
+§2 (bridge + alias) and §3 (listener swap + delete old accept loop) land
+together and compile once at the end. Treat as a fresh focused increment.
+
+### Changes, in order
+1. **`protocol/rpc/mod.rs`**: replace the `nexus_protocol::rpc` re-export
+   with `pub type NexusValue = thunder::Value;` + `pub use thunder::{Request,
+   Response};`. Drop the codec re-exports (the old accept loop that used them
+   is being deleted). Keep `pub use config::nexus_thunder_config;`.
+2. **`server.rs` — full rewrite** (delete accept loop / handle_connection /
+   writer task / semaphore / encoded_request_size / the old `#[cfg(test)]`
+   TCP tests). New contents:
+   - `struct NexusDispatch { server: Arc<NexusServer>, auth_required: bool }`.
+   - `impl thunder::server::Dispatch`: `type Identity = ()` (simplest — keep
+     using `RpcSession.authenticated` mirrored from `session.is_authenticated()`).
+     - `async fn dispatch(&self, session: &Session<()>, command, args) ->
+       Result<Value,String>`: build an `RpcSession { server: self.server.clone(),
+       authenticated: Arc::new(AtomicBool::new(session.is_authenticated())),
+       auth_required: self.auth_required, connection_id: session.connection_id() }`
+       then `dispatch::run(&rpc, command, args).await`. (Reconcile the double
+       NOAUTH gate — see UNKNOWN below.)
+     - `async fn authenticate(&self, creds: Credentials) -> Result<Principal<()>,
+       AuthError>`: `ApiKey(k)|Token(k)` → `matches!(self.server.auth_manager
+       .verify_api_key(&k), Ok(Some(_)))`; `UserPass(u,p)` → root fast-path
+       (`self.server.root_user_config`) else `self.server.rbac.read().await`
+       list_users + `is_active` + `nexus_core::auth::verify_password(p, hash)`;
+       `None` → `Err(AuthError::InvalidCredentials)`. On success
+       `Ok(Principal::new(name))`, else `Err(AuthError::InvalidCredentials)`
+       (→ profile-correct WRONGPASS). NOTE: factor the `verify_user_password`
+       body out of `dispatch/admin.rs` (it currently takes `&RpcSession` but only
+       needs `&NexusServer`) OR duplicate it — don't leave two copies drifting.
+   - `struct NexusMetrics; impl MetricsObserver`: `command_completed(cmd,in,out,
+     dur,is_err)` → `metrics::record_rpc_command(cmd, !is_err, dur.as_secs_f64())`
+     + `metrics::record_rpc_frame_sizes(in,out)` + WARN + `record_rpc_slow_command()`
+     when `dur > SLOW`; `connection_opened/closed` → `metrics::rpc_connection_open/close`;
+     `connection_refused` → (add a counter or reuse). `const SLOW = from_millis(config.slow_threshold_ms)` — but the observer has no config; pass slow via a field on NexusMetrics or use a fixed 2ms.
+   - `pub async fn spawn_rpc_listener(server, addr, config: RpcConfig, auth_required)
+     -> std::io::Result<Arc<ListenerHandle>>` (KEEP THE NAME so main.rs barely
+     changes, but change the return type to hold the handle): build
+     `ListenerConfig::new(addr).with_max_connections(0 or a mapped cap)
+     .with_observer(Arc::new(NexusMetrics{..}))`; set `.idle_timeout` /
+     `.slow_threshold` by field; `.open()` iff `!auth_required`; then
+     `spawn_listener(Arc::new(NexusDispatch{server, auth_required}),
+     nexus_thunder_config(), ServerInfo{name:"nexus",version:env!("CARGO_PKG_VERSION")},
+     cfg).await.map(Arc::new)`.
+3. **`dispatch/mod.rs`**: `arg_bytes` → `Ok(b.to_vec())` (was `b.clone()`, now
+   Arc). Fix the `#[cfg(test)]` `NexusValue::Bytes(vec![..])` sites →
+   `NexusValue::bytes(vec![..])` (thunder's `Value::bytes(impl Into<Arc<[u8]>>)`).
+4. **`dispatch/convert.rs:27`**: `String::from_utf8(b)` → `String::from_utf8(b.to_vec())`
+   (b is now `Arc<[u8]>`). Fix its `#[cfg(test)]` `Bytes(..)` construction sites.
+5. **`dispatch/admin.rs`**: `:42` `Bytes(b.clone())` compiles (Arc clone). Fix the
+   two `#[cfg(test)]` `Bytes(vec![..])` sites → `bytes(..)`.
+6. **`dispatch/knn.rs`**: `:165` read arm reads `b` for f32 chunking — `&Arc<[u8]>`
+   derefs to `&[u8]`, verify it compiles (likely fine); fix the 3 test `Bytes(raw)`
+   sites → `bytes(raw)`.
+7. **`main.rs:480-506`**: `let handle = spawn_rpc_listener(...).await?` now returns
+   `Arc<ListenerHandle>` — hold it for process lifetime (store in a `let _rpc =`
+   that lives as long as the server, or push into a keep-alive Vec like the other
+   listeners). Log `handle.local_addr()`.
+8. **Metrics**: `metrics.rs` gains a `record_rpc_connection_refused` if we want the
+   `connection_refused` observer callback to feed a series (optional — the current
+   Prometheus set has no refused counter; add one or drop the callback).
+
+### THE ONE REMAINING UNKNOWN (read before writing §2.2)
+Read `~/.cargo/registry/src/index.crates.io-*/thunder-rpc-0.2.2/src/server/listener.rs`
+for exactly which allowlist commands the listener ANSWERS ITSELF vs ROUTES to
+`Dispatch::dispatch`, under `Handshake::AuthCommand` + `HelloStyle::NotUsed`:
+- Pre-auth `PING` is answered builtin (`builtin_ping`). Does an AUTHENTICATED
+  `PING` also get intercepted, or routed to dispatch (→ admin PING handler)?
+- Is `HELLO` intercepted under `NotUsed`, or routed to dispatch (→ admin HELLO)?
+- `AUTH` is driven via `authenticate()` (never reaches dispatch). `QUIT` closes.
+This decides whether Nexus's admin `PING/HELLO/QUIT` arms stay (routed) or become
+dead (intercepted). If intercepted, remove those arms from `dispatch/mod.rs`'s
+`run` match + `admin.rs` and drop them from `PRE_AUTH_COMMANDS`; keep the
+`run` NOAUTH gate only if the listener does NOT already enforce it for routed
+commands (it does under AuthCommand — so the `run` gate likely becomes redundant
+and should be removed to avoid a double-gate that returns a different NOAUTH string
+than Thunder's `NOAUTH Authentication required.`).
+
+### §5 tests (new `tests/thunder_rpc_tests.rs`) replace the deleted server.rs TCP tests
+Use `thunder::client::Client::connect_with("nexus://{addr}", nexus_thunder_config(),
+ClientConfig)`. Port the old server.rs tests (ping, multiplex, unknown-command-keeps-conn,
+auth-gate root/root) plus §5.2 legacy int-array Bytes decode + §5.3 error model.
+Build the `NexusServer` via the same helper the old `spawn_test_server` used
+(lines 259-309 of the pre-rewrite server.rs — preserve that construction).
