@@ -148,6 +148,10 @@ tower = { workspace = true, features = ["util"] }
 # 0.21 because that's the latest stable major; default features cover
 # Gherkin parsing + tracing which is all the runner needs.
 cucumber = "0.21"
+# `LocalBoxFuture` / `.boxed_local()` for the vendored-corpus runner's
+# `after` hook, which tallies per-category outcomes. Resolves to the same
+# 0.3.x cucumber already pulls in.
+futures = "0.3"
 
 # openCypher TCK runner — uses the cucumber crate's own main, not
 # libtest. `harness = false` lets `fn main()` in tests/tck_runner.rs
@@ -155,6 +159,14 @@ cucumber = "0.21"
 [[test]]
 name = "tck_runner"
 path = "tests/tck_runner.rs"
+harness = false
+
+# openCypher conformance runner over the vendored upstream TCK corpus.
+# Same `harness = false` custom-main pattern; gated behind `NEXUS_TCK=1`
+# so a plain `cargo test` does not pay for 1600+ isolated-engine scenarios.
+[[test]]
+name = "tck_opencypher"
+path = "tests/tck_opencypher.rs"
 harness = false
 
 [[bench]]
