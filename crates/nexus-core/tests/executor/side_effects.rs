@@ -122,3 +122,72 @@ fn create_relationship_reports_one_relationship_and_two_nodes() {
     assert_eq!(effects.labels_added, 0);
     assert_eq!(effects.labels_removed, 0);
 }
+
+#[test]
+fn delete_node_reports_one_node_deleted() {
+    let ctx = TestContext::new();
+    let mut engine = Engine::with_isolated_catalog(ctx.path()).expect("engine init");
+
+    engine
+        .execute_cypher("CREATE (n:DelNodeProbe)")
+        .expect("seed CREATE must succeed");
+
+    let result = engine
+        .execute_cypher("MATCH (n:DelNodeProbe) DELETE n")
+        .expect("DELETE must succeed");
+
+    let effects = result.side_effects;
+    assert_eq!(effects.nodes_deleted, 1, "exactly one node was deleted");
+    assert_eq!(effects.nodes_created, 0, "a DELETE creates nothing");
+    assert_eq!(effects.relationships_deleted, 0);
+    assert_eq!(effects.relationships_created, 0);
+}
+
+#[test]
+fn delete_relationship_reports_one_relationship_deleted() {
+    let ctx = TestContext::new();
+    let mut engine = Engine::with_isolated_catalog(ctx.path()).expect("engine init");
+
+    engine
+        .execute_cypher("CREATE (a:DelRelA)-[:DelRelR]->(b:DelRelB)")
+        .expect("seed CREATE must succeed");
+
+    let result = engine
+        .execute_cypher("MATCH ()-[r:DelRelR]->() DELETE r")
+        .expect("DELETE relationship must succeed");
+
+    let effects = result.side_effects;
+    assert_eq!(
+        effects.relationships_deleted, 1,
+        "exactly one relationship was deleted"
+    );
+    assert_eq!(
+        effects.nodes_deleted, 0,
+        "the endpoint nodes survive a relationship-only DELETE"
+    );
+    assert_eq!(effects.nodes_created, 0);
+    assert_eq!(effects.relationships_created, 0);
+}
+
+#[test]
+fn detach_delete_reports_node_and_its_relationship() {
+    let ctx = TestContext::new();
+    let mut engine = Engine::with_isolated_catalog(ctx.path()).expect("engine init");
+
+    engine
+        .execute_cypher("CREATE (a:DetachA)-[:DetachR]->(b:DetachB)")
+        .expect("seed CREATE must succeed");
+
+    // DETACH DELETE a removes node a and its one edge; b survives.
+    let result = engine
+        .execute_cypher("MATCH (a:DetachA) DETACH DELETE a")
+        .expect("DETACH DELETE must succeed");
+
+    let effects = result.side_effects;
+    assert_eq!(effects.nodes_deleted, 1, "the matched node is deleted");
+    assert_eq!(
+        effects.relationships_deleted, 1,
+        "its one relationship is detached and deleted"
+    );
+    assert_eq!(effects.nodes_created, 0);
+}

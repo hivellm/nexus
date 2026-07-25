@@ -396,6 +396,11 @@ impl Engine {
             tracing::warn!("freeing property blob failed on delete of relationship {rel_id}: {e}");
         }
 
+        // Side-effect counter (openCypher TCK `-relationships`): only the
+        // actual-deletion path reaches here — an already-deleted or missing
+        // edge returned `Ok(false)` above, so re-deleting is not counted.
+        self.side_effects.relationships_deleted += 1;
+
         Ok(true)
     }
 
@@ -496,6 +501,11 @@ impl Engine {
                 }
             }
 
+            // Side-effect counter (openCypher TCK `-nodes`): reached only on
+            // the actual-deletion path — a missing node returned `Ok(false)`
+            // below and a node with live relationships errored above.
+            self.side_effects.nodes_deleted += 1;
+
             Ok(true)
         } else {
             Ok(false)
@@ -553,6 +563,12 @@ impl Engine {
             }
         }
 
+        // Side-effect count (openCypher TCK `-relationships`): `rels_to_delete`
+        // was pre-filtered to live, connected edges above, so a `DELETE r, n`
+        // that named an edge already removed in the relationship pass does not
+        // double-count it here.
+        let deleted_rel_count = rels_to_delete.len() as u64;
+
         // Mark all connected relationships as deleted
         for rel_id in rels_to_delete {
             if let Ok(rel_record) = self.storage.read_rel(rel_id) {
@@ -583,6 +599,7 @@ impl Engine {
         }
 
         self.transaction_manager.write().commit(&mut tx)?;
+        self.side_effects.relationships_deleted += deleted_rel_count;
         Ok(())
     }
 }
