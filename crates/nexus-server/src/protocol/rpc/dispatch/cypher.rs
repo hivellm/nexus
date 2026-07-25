@@ -176,6 +176,7 @@ fn cypher_response_to_nexus(resp: CypherResponse) -> NexusValue {
         execution_time_ms,
         error,
         notifications,
+        stats: _stats,
     } = resp;
 
     let columns_val = NexusValue::Array(columns.into_iter().map(NexusValue::Str).collect());
