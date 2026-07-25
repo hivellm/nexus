@@ -481,7 +481,10 @@ async fn async_main(_worker_threads: usize) -> anyhow::Result<()> {
     // Enabled by default — first-party SDKs prefer this transport for its
     // multiplexed MessagePack framing, but HTTP and RESP3 keep running
     // regardless so existing clients and tooling stay working.
-    if config.rpc.enabled {
+    // Held for the process lifetime: dropping the Thunder `ListenerHandle`
+    // triggers a graceful shutdown, so this binding must outlive the HTTP
+    // serve below.
+    let _rpc_handle = if config.rpc.enabled {
         match nexus_server::protocol::rpc::spawn_rpc_listener(
             nexus_server.clone(),
             config.rpc.addr,
@@ -490,20 +493,24 @@ async fn async_main(_worker_threads: usize) -> anyhow::Result<()> {
         )
         .await
         {
-            Ok(()) => {
+            Ok(handle) => {
                 info!(
                     "Nexus RPC listener bound on {} (auth_required={}, max_frame_bytes={})",
                     config.rpc.addr, config.rpc.require_auth, config.rpc.max_frame_bytes
                 );
+                Some(handle)
             }
             Err(e) => {
                 warn!(
                     "Failed to bind RPC listener on {}: {}. HTTP/RESP3 surfaces continue unaffected.",
                     config.rpc.addr, e
                 );
+                None
             }
         }
-    }
+    } else {
+        None
+    };
 
     // Hoisted above `create_mcp_router` so both the MCP and main
     // routers see the same cluster flag. Legacy auth stays wired

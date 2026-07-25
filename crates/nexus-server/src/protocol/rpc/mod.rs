@@ -16,11 +16,12 @@ pub mod server;
 pub use config::nexus_thunder_config;
 pub use server::spawn_rpc_listener;
 
-// Re-export the shared wire surface for ergonomic intra-server use so
-// handlers can write `use crate::protocol::rpc::NexusValue;` instead of
-// reaching into `nexus_protocol` directly.
-pub use nexus_protocol::rpc::{
-    DEFAULT_MAX_FRAME_BYTES, DecodeError, NexusValue, PUSH_ID, Request, Response, decode_frame,
-    decode_frame_with_limit, encode_frame, read_request, read_request_with_limit, read_response,
-    write_request, write_response,
-};
+// phase10 — the wire value model and request/response frames now come
+// straight from Thunder (wire v1 is byte-identical to the historical Nexus
+// RPC wire). `NexusValue` is a thin alias so the dispatch tree + arg
+// helpers keep their names unchanged; the async codec that the old
+// hand-rolled accept loop used is gone with it (the Thunder listener owns
+// framing). `nexus-protocol::rpc` becomes re-export shims for the
+// out-of-server consumers in §4 and is deleted in phase11.
+pub type NexusValue = thunder::Value;
+pub use thunder::{PUSH_ID, Request, Response};

@@ -58,9 +58,16 @@ async fn spawn_server(auth_required: bool) -> std::net::SocketAddr {
     let addr = scratch.local_addr().unwrap();
     drop(scratch);
 
-    spawn_rpc_listener(server, addr, RpcConfig::default(), auth_required)
+    // Hold the Thunder `ListenerHandle` for the whole test process —
+    // dropping it would gracefully shut the listener down. Leaking mirrors
+    // the `ctx` leak above and keeps `spawn_server`'s `-> SocketAddr`
+    // signature (and every caller) unchanged. NOTE: this test drives the
+    // migrated Thunder server with the OLD `nexus_protocol` codec, proving
+    // Thunder wire v1 is byte-compatible with deployed clients.
+    let handle = spawn_rpc_listener(server, addr, RpcConfig::default(), auth_required)
         .await
         .unwrap();
+    Box::leak(Box::new(handle));
 
     addr
 }
