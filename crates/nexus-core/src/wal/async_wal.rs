@@ -1339,4 +1339,168 @@ mod tests {
             .recv_timeout(Duration::from_secs(5))
             .expect("dropping the writer (joining the background thread) must not hang");
     }
+
+    /// Group commit (`flush_batch` runs exactly one `wal.flush()` per
+    /// batch, not one per entry) must be durability-equivalent to a
+    /// per-entry fsync: appending many entries across many small batches,
+    /// followed by a single `flush()`, must recover every entry in
+    /// exactly the order it was appended — nothing lost, nothing
+    /// reordered.
+    #[test]
+    fn group_commit_recovers_every_appended_entry_in_order() {
+        let ctx = TestContext::new();
+        let wal_path = ctx.path().join("wal.log");
+        let wal = Wal::new(&wal_path).unwrap();
+        let config = AsyncWalConfig {
+            max_batch_size: 8, // small: 200 entries span ~25 batches
+            max_batch_age: Duration::from_millis(20),
+            max_queue_depth: 64,
+            flush_interval: Duration::from_millis(10),
+            channel_buffer_size: 32,
+            checkpoint_size_bytes: u64::MAX,
+            flush_gate: None,
+            fail_flush: None,
+        };
+        let mut writer = AsyncWalWriter::new(wal, config).unwrap();
+
+        const N: u64 = 200;
+        let mut appended = Vec::with_capacity(N as usize);
+        for i in 0..N {
+            let rel_id = i;
+            let src = i * 10;
+            let dst = i * 10 + 1;
+            let type_id = (i % 7) as u32;
+            writer
+                .append(WalEntry::CreateRel {
+                    rel_id,
+                    src,
+                    dst,
+                    type_id,
+                })
+                .unwrap();
+            appended.push((rel_id, src, dst, type_id));
+        }
+
+        writer.flush().unwrap();
+        writer.shutdown().unwrap();
+
+        let mut reopened = Wal::new(&wal_path).unwrap();
+        let recovered = reopened.recover().unwrap();
+        let recovered_rels: Vec<(u64, u64, u64, u32)> = recovered
+            .iter()
+            .filter_map(|e| match e {
+                WalEntry::CreateRel {
+                    rel_id,
+                    src,
+                    dst,
+                    type_id,
+                } => Some((*rel_id, *src, *dst, *type_id)),
+                _ => None,
+            })
+            .collect();
+
+        assert_eq!(
+            recovered_rels.len(),
+            N as usize,
+            "must recover exactly the number of entries appended, got {}",
+            recovered_rels.len()
+        );
+        assert_eq!(
+            recovered_rels, appended,
+            "group-commit batching (one fsync per batch) must preserve exact \
+             append order and content across many small batches"
+        );
+    }
+
+    /// #19: a burst far larger than the channel capacity must engage
+    /// backpressure (blocking `send()` after a full `try_send()`), keep
+    /// the observed queue depth bounded at the configured capacity, and
+    /// still accept and durably persist every entry — bounded, not
+    /// unbounded, and lossless under sustained pressure.
+    #[test]
+    fn sustained_backpressure_is_bounded_and_lossless() {
+        let ctx = TestContext::new();
+        let wal = Wal::new(ctx.path().join("wal.log")).unwrap();
+        const CAPACITY: u64 = 32; // channel capacity = max(8, 32) = 32
+        let config = AsyncWalConfig {
+            max_batch_size: 8,
+            max_batch_age: Duration::from_millis(20),
+            max_queue_depth: CAPACITY as usize,
+            flush_interval: Duration::from_millis(10),
+            channel_buffer_size: 8,
+            checkpoint_size_bytes: u64::MAX,
+            flush_gate: None,
+            fail_flush: None,
+        };
+        let mut writer = AsyncWalWriter::new(wal, config).unwrap();
+
+        const BURST: u64 = CAPACITY * 40;
+        for i in 0..BURST {
+            writer
+                .append(WalEntry::CreateRel {
+                    rel_id: i,
+                    src: i * 2,
+                    dst: i * 2 + 1,
+                    type_id: 0,
+                })
+                .expect("append must succeed under sustained backpressure, never drop or error");
+        }
+
+        writer.flush().unwrap();
+
+        let stats = writer.stats();
+        assert!(
+            stats.backpressure_blocks > 0,
+            "a burst 40x the channel capacity must engage backpressure at least once"
+        );
+        // `current_queue_depth`/`max_queue_depth` counts entries accepted
+        // into the pipeline (`fetch_add` runs immediately in `append()`,
+        // before the entry is physically placed on the bounded channel via
+        // `try_send`/blocking `send`) minus entries the writer thread has
+        // dequeued AND already decremented (the decrement runs strictly
+        // after `recv`, before the writer loops back — see
+        // `writer_thread`'s `Ok(WalCommand::Append(entry))` arm). So it can
+        // read up to 2 higher than true channel occupancy: (1) the single
+        // producer's one entry that is counted but still blocked in
+        // `send()` waiting for room, plus (2) the writer's most recently
+        // dequeued entry whose decrement has not yet executed. Both gaps
+        // are bounded at exactly one each because the producer is a single
+        // sequential thread (never more than one `append()` in flight) and
+        // the writer thread is single-threaded and processes recv/push/
+        // decrement as one atomic-w.r.t.-itself sequence before recv-ing
+        // again. So the peak is bounded by capacity + 2 — never higher,
+        // and never unbounded.
+        assert!(
+            stats.max_queue_depth <= CAPACITY + 2,
+            "observed queue depth {} must stay bounded near configured capacity {} \
+             (capacity + 2 to account for the two structural in-flight gaps, not unbounded)",
+            stats.max_queue_depth,
+            CAPACITY
+        );
+
+        writer.shutdown().unwrap();
+
+        let mut reopened = Wal::new(ctx.path().join("wal.log")).unwrap();
+        let recovered = reopened.recover().unwrap();
+        let recovered_ids: std::collections::HashSet<u64> = recovered
+            .iter()
+            .filter_map(|e| match e {
+                WalEntry::CreateRel { rel_id, .. } => Some(*rel_id),
+                _ => None,
+            })
+            .collect();
+
+        assert_eq!(
+            recovered_ids.len(),
+            BURST as usize,
+            "every appended entry must be recoverable after a bounded, \
+             sustained backpressure burst"
+        );
+        let expected_ids: std::collections::HashSet<u64> = (0..BURST).collect();
+        assert_eq!(
+            recovered_ids, expected_ids,
+            "recovered id set must exactly match the appended id set \
+             (no loss, no duplication)"
+        );
+    }
 }
