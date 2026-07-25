@@ -188,12 +188,20 @@ fn error_at_runtime(world: &mut SpatialWorld, _kind: String, token: String) {
 }
 
 #[then(regex = r"^no side effects$")]
-fn no_side_effects(_world: &mut SpatialWorld) {
-    // Nexus does not currently surface a side-effect counter in
-    // ResultSet; the corpus uses this step for documentation
-    // parity with the upstream TCK shape. When the engine starts
-    // surfacing nodes_created / properties_set / etc. on the
-    // ResultSet, replace this no-op with the real assertion.
+fn no_side_effects(world: &mut SpatialWorld) {
+    // The engine now surfaces the openCypher-TCK mutation counters on
+    // `ResultSet.side_effects` (nodes/relationships created+deleted,
+    // properties set/removed, labels added/removed). "no side effects"
+    // asserts the query mutated nothing. A query that errored committed
+    // nothing and left no `last_result`, so there is nothing to check on
+    // that path.
+    if let Some(result) = world.last_result.as_ref() {
+        assert!(
+            result.side_effects.is_empty(),
+            "expected no side effects, but the query reported {:?}",
+            result.side_effects
+        );
+    }
 }
 
 // ─────────────────── Result-table comparison ───────────────────
