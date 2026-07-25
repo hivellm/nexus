@@ -237,6 +237,10 @@ harness = false
 name = "ingest_relationship"
 harness = false
 
+[[bench]]
+name = "wal_throughput"
+harness = false
+
 [[example]]
 name = "hierarchical_call_graph_example"
 path = "../../examples/hierarchical_call_graph_example.rs"

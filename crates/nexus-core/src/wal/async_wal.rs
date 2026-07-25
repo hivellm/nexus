@@ -169,7 +169,26 @@ pub struct AsyncWalConfig {
 impl Default for AsyncWalConfig {
     fn default() -> Self {
         Self {
-            max_batch_size: 100,                      // Batch up to 100 entries
+            // Sustained durable WAL throughput ~= max_batch_size /
+            // per-batch fsync latency (group commit already does exactly
+            // one fsync per batch — this knob does not change that
+            // mechanism, only how many entries share it). Measured via
+            // `benches/wal_throughput.rs` on real hardware: at 100, the
+            // writer sustains ~54-59k entries/s (~1.8ms/batch fsync), which
+            // sits right at the ~52-68k/s bulk-ingest submit rate (e.g.
+            // LDBC SF0.1 relationship loads) — the async queue fills and
+            // the producer backpressures. At 1000, sustained throughput is
+            // ~71-112k entries/s (~12-14ms/batch fsync; disk write-back
+            // noise on this class of hardware is wide, but every run clears
+            // the bar), giving headroom over that submit rate so the queue
+            // drains instead of filling; a full 10k `max_queue_depth` still
+            // drains in ~140ms, well under any client timeout. Under light load,
+            // `max_batch_age`/`flush_interval` (unchanged below) still
+            // flush partial batches within ~10ms, so latency-to-durable
+            // for small workloads is unaffected. Durability is unchanged:
+            // still exactly one fsync per batch, recovery replay and
+            // `flush()`'s barrier semantics are untouched.
+            max_batch_size: 1000,
             max_batch_age: Duration::from_millis(10), // Or flush after 10ms
             max_queue_depth: 10_000,                  // Block if queue gets too deep
             flush_interval: Duration::from_millis(5), // Background flush every 5ms
