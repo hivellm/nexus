@@ -175,18 +175,31 @@ fn run() -> Result<ExitCode> {
     let mut ids = IdMap::default();
     let mut submitted = Submitted::default();
 
+    let node_pass_started = Instant::now();
     println!("\nPass 1/3 — nodes");
     loader.load_nodes(&mut ids, &mut submitted)?;
     println!("  {} node ids mapped", ids.len());
+    println!(
+        "node pass: {:.1}s",
+        node_pass_started.elapsed().as_secs_f64()
+    );
 
+    let rel_pass_started = Instant::now();
     println!("\nPass 2/3 — merge-foreign relationships");
     loader.load_foreign_key_edges(&ids, &mut submitted)?;
 
     println!("\nPass 3/3 — relationship files");
     loader.load_edge_files(&ids, &mut submitted)?;
 
-    let nodes: usize = submitted.nodes.values().sum();
+    let rel_pass_elapsed = rel_pass_started.elapsed().as_secs_f64();
     let relationships: usize = submitted.relationships.values().sum();
+    println!(
+        "relationship pass (Pass2+Pass3): {:.1}s ({:.0} rel/s)",
+        rel_pass_elapsed,
+        relationships as f64 / rel_pass_elapsed
+    );
+
+    let nodes: usize = submitted.nodes.values().sum();
     if args.verify_only {
         println!("\nDataset holds {nodes} nodes and {relationships} relationships");
     } else {

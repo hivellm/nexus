@@ -12,6 +12,7 @@ use super::super::context::{ExecutionContext, RelationshipInfo};
 use super::super::engine::Executor;
 use super::super::parser;
 use super::super::types::Row;
+use crate::catalog::TypeId;
 use crate::{Error, Result};
 use serde_json::{Map, Value};
 use std::collections::HashMap;
@@ -115,6 +116,13 @@ impl Executor {
         let mut label_cache: std::collections::HashMap<String, u32> =
             std::collections::HashMap::new();
         let mut label_count_updates: std::collections::HashMap<u32, u32> =
+            std::collections::HashMap::new();
+        // Symmetric to `label_count_updates` above but for relationship
+        // types: this executor CREATE path writes edges directly to the
+        // record store (bypassing `Engine::create_relationship`), so
+        // without this accumulator + its post-commit flush below,
+        // `catalog.rel_counts` never sees these edges.
+        let mut rel_count_updates: std::collections::HashMap<TypeId, u32> =
             std::collections::HashMap::new();
         // Track exact (node_id, label_ids) pairs as we create them, so the
         // post-commit label-index update doesn't have to reverse-engineer
@@ -502,9 +510,6 @@ impl Executor {
                     // too. See `Catalog::register_property_keys`.
                     self.catalog().register_property_keys(&rel_properties);
 
-                    // Clone properties for Phase 8 synchronization (before moving to create_relationship)
-                    let rel_props_clone = rel_properties.clone();
-
                     // Acquire row locks on source and target nodes before creating relationship
                     let (_source_lock, _target_lock) =
                         self.acquire_relationship_locks(source_id, target_id)?;
@@ -517,6 +522,10 @@ impl Executor {
                         type_id,
                         rel_properties,
                     )?;
+
+                    // Phase 1 Optimization: Batch catalog metadata updates (defer to end),
+                    // mirrors the node-count accumulation above.
+                    *rel_count_updates.entry(type_id).or_insert(0) += 1;
 
                     // Locks are released when guards are dropped
 
@@ -532,51 +541,6 @@ impl Executor {
                             },
                         );
                     }
-
-                    // Phase 8: Update RelationshipStorageManager and RelationshipPropertyIndex
-                    if self.enable_relationship_optimizations {
-                        if let Some(ref rel_storage) = self.shared.relationship_storage {
-                            // Convert properties from JSON Value to HashMap<String, Value>
-                            let mut props_map = std::collections::HashMap::new();
-                            if let serde_json::Value::Object(obj) = &rel_props_clone {
-                                for (key, value) in obj {
-                                    props_map.insert(key.clone(), value.clone());
-                                }
-                            }
-
-                            // Add relationship to specialized storage
-                            if let Err(e) = rel_storage.write().create_relationship(
-                                source_id,
-                                target_id,
-                                type_id,
-                                props_map.clone(),
-                            ) {
-                                tracing::warn!(
-                                    "Failed to update RelationshipStorageManager: {}",
-                                    e
-                                );
-                                // Don't fail the operation, just log the warning
-                            }
-
-                            // Update property index if there are properties
-                            if !props_map.is_empty() {
-                                if let Some(ref prop_index) =
-                                    self.shared.relationship_property_index
-                                {
-                                    if let Err(e) = prop_index
-                                        .write()
-                                        .index_properties(rel_id, type_id, &props_map)
-                                    {
-                                        tracing::warn!(
-                                            "Failed to update RelationshipPropertyIndex: {}",
-                                            e
-                                        );
-                                        // Don't fail the operation, just log the warning
-                                    }
-                                }
-                            }
-                        }
-                    }
                 }
             }
         }
@@ -591,6 +555,15 @@ impl Executor {
             if let Err(e) = self.catalog().batch_increment_node_counts(&updates) {
                 // Log error but don't fail the operation
                 tracing::warn!("Failed to batch update node counts: {}", e);
+            }
+        }
+
+        // Symmetric batch flush for relationship-type counts — see
+        // `rel_count_updates` above.
+        let rel_updates: Vec<(TypeId, u32)> = rel_count_updates.into_iter().collect();
+        if !rel_updates.is_empty() {
+            if let Err(e) = self.catalog().batch_increment_rel_counts(&rel_updates) {
+                tracing::warn!("Failed to batch update relationship counts: {}", e);
             }
         }
 
@@ -1007,6 +980,14 @@ impl Executor {
         // the update UNWIND + CREATE creates nodes the planner can't find).
         let mut created_nodes_with_labels: Vec<(u64, Vec<u32>)> = Vec::new();
 
+        // This CREATE path also writes relationships directly to the
+        // record store (bypassing `Engine::create_relationship`), so
+        // `catalog.rel_counts` is never updated without this accumulator
+        // and its post-commit flush below — mirrors
+        // `execute_create_pattern_internal`'s `rel_count_updates`.
+        let mut rel_count_updates: std::collections::HashMap<TypeId, u32> =
+            std::collections::HashMap::new();
+
         // For each row in the MATCH result, create the pattern
         // PERFORMANCE OPTIMIZATION: Pre-calculate expected capacity for node_ids
         let expected_vars = pattern
@@ -1291,6 +1272,7 @@ impl Executor {
                             let rel_id = self.store_mut().create_relationship(
                                 &mut tx, source_id, target_id, type_id, properties,
                             )?;
+                            *rel_count_updates.entry(type_id).or_insert(0) += 1;
                             context.push_undo(
                                 super::super::context::CompensatingUndoOp::DeleteRelationship(
                                     rel_id,
@@ -1331,6 +1313,16 @@ impl Executor {
         // Commit transaction
         tx_mgr.commit(&mut tx)?;
         drop(tx_mgr);
+
+        // Batch-flush relationship-type counts accumulated above — see
+        // `rel_count_updates`. One catalog commit for the whole batch,
+        // mirroring `execute_create_pattern_internal`'s post-commit flush.
+        let rel_updates: Vec<(TypeId, u32)> = rel_count_updates.into_iter().collect();
+        if !rel_updates.is_empty() {
+            if let Err(e) = self.catalog().batch_increment_rel_counts(&rel_updates) {
+                tracing::warn!("Failed to batch update relationship counts: {}", e);
+            }
+        }
 
         // Register the created nodes in the label-bitmap index so subsequent
         // MATCH queries can find them. The engine's `create_node` path does

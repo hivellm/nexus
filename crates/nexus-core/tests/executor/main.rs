@@ -8,6 +8,7 @@ mod composite_index_seek_test;
 mod correlated_index_seek_e2e_test;
 mod correlated_predicate_notification_e2e_test;
 mod create_path_index_and_constraints_test;
+mod create_relationship_count_test;
 mod cypher_oom_guard_test;
 mod delete_node_dangling_relationships_test;
 mod executor_comprehensive_test;

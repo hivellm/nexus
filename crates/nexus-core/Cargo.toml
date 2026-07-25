@@ -233,6 +233,10 @@ harness = false
 name = "qpp_benchmark"
 harness = false
 
+[[bench]]
+name = "ingest_relationship"
+harness = false
+
 [[example]]
 name = "hierarchical_call_graph_example"
 path = "../../examples/hierarchical_call_graph_example.rs"

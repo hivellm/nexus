@@ -3,6 +3,7 @@
 use crate::NexusServer;
 use axum::extract::{Json, State};
 use nexus_core::Engine;
+use nexus_core::catalog::TypeId;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
@@ -257,12 +258,19 @@ async fn process_with_batching(
         batches_processed += 1;
         let mut batch_rels = 0;
         let mut batch_errors = Vec::new();
+        let mut rel_counts: HashMap<TypeId, u32> = HashMap::new();
 
         let mut engine = server.engine.write().await;
         for rel in batch {
-            match create_relationship_direct(&mut engine, rel, id_map) {
+            match create_relationship_direct(&mut engine, rel, id_map, &mut rel_counts) {
                 Ok(_) => batch_rels += 1,
                 Err(e) => batch_errors.push(format!("Relationship creation failed: {}", e)),
+            }
+        }
+        if !rel_counts.is_empty() {
+            let updates: Vec<(TypeId, u32)> = rel_counts.into_iter().collect();
+            if let Err(e) = engine.catalog.batch_increment_rel_counts(&updates) {
+                tracing::warn!("failed to batch update relationship counts: {}", e);
             }
         }
         drop(engine);
@@ -301,10 +309,17 @@ async fn process_without_batching(
 
     if !request.relationships.is_empty() {
         let mut engine = server.engine.write().await;
+        let mut rel_counts: HashMap<TypeId, u32> = HashMap::new();
         for rel in &request.relationships {
-            match create_relationship_direct(&mut engine, rel, id_map) {
+            match create_relationship_direct(&mut engine, rel, id_map, &mut rel_counts) {
                 Ok(_) => *relationships_ingested += 1,
                 Err(e) => errors.push(format!("Relationship ingestion failed: {}", e)),
+            }
+        }
+        if !rel_counts.is_empty() {
+            let updates: Vec<(TypeId, u32)> = rel_counts.into_iter().collect();
+            if let Err(e) = engine.catalog.batch_increment_rel_counts(&updates) {
+                tracing::warn!("failed to batch update relationship counts: {}", e);
             }
         }
     }
@@ -357,14 +372,17 @@ fn create_node_direct(
     Ok(internal_id)
 }
 
-/// Create a single relationship directly against the engine — the same
-/// `Engine::create_relationship` entry point a standalone Cypher
-/// `CREATE (a)-[r]->(b)` statement uses internally. `rel.src`/`.dst` are
-/// resolved through `id_map` first (see [`resolve_endpoint`]).
+/// Create a single relationship directly against the engine via the
+/// uncounted path — the catalog relationship-type counter is bumped once
+/// per batch by the caller (see `rel_counts`) instead of once per row, which
+/// is what removes a durable LMDB fsync per edge on this bulk path.
+/// `rel.src`/`.dst` are resolved through `id_map` first (see
+/// [`resolve_endpoint`]).
 fn create_relationship_direct(
     engine: &mut Engine,
     rel: &RelIngest,
     id_map: &HashMap<u64, u64>,
+    rel_counts: &mut HashMap<TypeId, u32>,
 ) -> Result<u64, String> {
     // Same parity rationale as `create_node_direct`.
     super::identifier::validate_identifier(&rel.r#type)
@@ -373,9 +391,15 @@ fn create_relationship_direct(
     let src = resolve_endpoint(id_map, rel.src);
     let dst = resolve_endpoint(id_map, rel.dst);
 
-    engine
-        .create_relationship(src, dst, rel.r#type.clone(), rel.properties.clone())
-        .map_err(|e| e.to_string())
+    let (rel_id, type_id) = engine
+        .create_relationship_uncounted(src, dst, rel.r#type.clone(), rel.properties.clone())
+        .map_err(|e| e.to_string())?;
+
+    // Only reached on success — a failed row must not contribute to the
+    // batched count flush.
+    *rel_counts.entry(type_id).or_insert(0) += 1;
+
+    Ok(rel_id)
 }
 
 #[cfg(test)]
@@ -980,6 +1004,196 @@ mod tests {
         assert_eq!(
             count, 2,
             "both valid nodes must be durably committed (non-atomic batch)"
+        );
+    }
+
+    // ── relationship-count regression: catalog flush from `/ingest` ───────
+    //
+    // The `/ingest` relationship path creates every edge via
+    // `Engine::create_relationship_uncounted` (no per-edge catalog fsync)
+    // and flushes the per-type counts ONCE per batch through
+    // `Catalog::batch_increment_rel_counts` (see `create_relationship_direct`
+    // accumulating `(type_id, +1)` per successful row into a `HashMap`,
+    // flushed by both `process_with_batching` and `process_without_batching`
+    // after their row loop). The count-equivalence property of the batched
+    // flush itself is covered by
+    // `crates/nexus-core/src/catalog/stats.rs`
+    // (`test_batch_increment_rel_counts_matches_sequential_increments` and
+    // `_empty_is_noop`), and the `UNWIND ... CREATE` total-equals-edges case
+    // is covered by
+    // `crates/nexus-core/tests/executor/create_relationship_count_test.rs`.
+    // The two tests below close the remaining gap: the `/ingest` HTTP path
+    // itself, which is the caller responsible for building the
+    // per-batch `rel_counts` map and flushing it.
+    //
+    // Determinism note: `create_test_server` builds its `Engine` via
+    // `Engine::with_data_dir`, which opens its catalog through
+    // `Catalog::new` — under `cargo test` that transparently redirects to
+    // ONE shared per-process LMDB directory (see
+    // `catalog::store::TEST_CATALOG_DIR`), so `catalog.get_statistics()`
+    // is process-wide, not isolated per test. Both tests below use a
+    // relationship-type name that is unique to this test (not used
+    // anywhere else in this crate), so the `TypeId` catalog resolves it to
+    // is only ever touched by that one test's rows — this keeps the
+    // absolute-count assertion deterministic under parallel `cargo test`
+    // execution without needing per-test catalog isolation.
+
+    #[tokio::test]
+    async fn test_ingest_relationship_batch_flushes_exact_count_to_catalog() {
+        const REL_TYPE: &str = "IngestCountRegressionTypeExact";
+        const EDGE_COUNT: usize = 5;
+
+        let (_ctx, server) = create_test_server().await;
+
+        let request = IngestRequest {
+            nodes: vec![
+                NodeIngest {
+                    id: Some(1),
+                    labels: vec!["Person".to_string()],
+                    properties: json!({"name": "Src"}),
+                },
+                NodeIngest {
+                    id: Some(2),
+                    labels: vec!["Person".to_string()],
+                    properties: json!({"name": "Dst"}),
+                },
+            ],
+            relationships: (0..EDGE_COUNT)
+                .map(|_| RelIngest {
+                    id: None,
+                    src: 1,
+                    dst: 2,
+                    r#type: REL_TYPE.to_string(),
+                    properties: json!({}),
+                })
+                .collect(),
+            batch_size: 1000,
+            use_batching: false,
+        };
+
+        let response = ingest_data_inner(State(server.clone()), request).await;
+        assert_eq!(
+            response.relationships_ingested, EDGE_COUNT,
+            "every row of this test's unique relationship type must succeed"
+        );
+        assert!(
+            response.error.is_none(),
+            "no per-row error expected: {:?}",
+            response.error
+        );
+
+        // The required assertion: the catalog's OWN counter (the thing the
+        // batched flush maintains), not `relationships_ingested` and not a
+        // Cypher `count(r)` — must equal exactly the edges created.
+        let engine = server.engine.read().await;
+        let type_id = engine
+            .catalog
+            .get_type_id(REL_TYPE)
+            .expect("type lookup must not error")
+            .expect("relationship type must have been registered by the ingest above");
+        let stats = engine
+            .catalog
+            .get_statistics()
+            .expect("catalog statistics must be readable");
+        assert_eq!(
+            stats.rel_counts.get(&type_id).copied().unwrap_or(0),
+            EDGE_COUNT as u64,
+            "the catalog rel-count for this test's unique relationship type must equal \
+             exactly the number of edges created by this batch — proving the \
+             once-per-batch flush neither drops nor duplicates counts"
+        );
+        drop(engine);
+
+        // Extra confidence (not the required assertion): the edges are also
+        // independently visible via a Cypher count over the same type.
+        let mut engine = server.engine.write().await;
+        let result = engine
+            .execute_cypher(&format!("MATCH ()-[r:{}]->() RETURN count(r)", REL_TYPE))
+            .expect("count query must execute");
+        let count = result.rows[0].values[0].as_i64().unwrap_or(-1);
+        assert_eq!(count, EDGE_COUNT as i64);
+    }
+
+    #[tokio::test]
+    async fn test_ingest_relationship_batch_excludes_failed_rows_from_catalog_count() {
+        const REL_TYPE: &str = "IngestCountRegressionTypePartial";
+        const VALID_COUNT: usize = 3;
+
+        let (_ctx, server) = create_test_server().await;
+
+        let mut relationships: Vec<RelIngest> = (0..VALID_COUNT)
+            .map(|_| RelIngest {
+                id: None,
+                src: 1,
+                dst: 2,
+                r#type: REL_TYPE.to_string(),
+                properties: json!({}),
+            })
+            .collect();
+        // Interleaved rows that fail `validate_identifier` (leading digit)
+        // inside `create_relationship_direct`, before the accumulator is
+        // ever touched — these must not contribute to the catalog count.
+        relationships.insert(
+            1,
+            RelIngest {
+                id: None,
+                src: 1,
+                dst: 2,
+                r#type: "1InvalidType".to_string(),
+                properties: json!({}),
+            },
+        );
+        relationships.push(RelIngest {
+            id: None,
+            src: 1,
+            dst: 2,
+            r#type: "1AlsoInvalid".to_string(),
+            properties: json!({}),
+        });
+
+        let request = IngestRequest {
+            nodes: vec![
+                NodeIngest {
+                    id: Some(1),
+                    labels: vec!["Person".to_string()],
+                    properties: json!({"name": "Src"}),
+                },
+                NodeIngest {
+                    id: Some(2),
+                    labels: vec!["Person".to_string()],
+                    properties: json!({"name": "Dst"}),
+                },
+            ],
+            relationships,
+            batch_size: 1000,
+            use_batching: false,
+        };
+
+        let response = ingest_data_inner(State(server.clone()), request).await;
+        assert_eq!(
+            response.relationships_ingested, VALID_COUNT,
+            "only the rows carrying a valid relationship type may be counted as ingested"
+        );
+        assert!(
+            response.error.is_some(),
+            "the two invalid-type rows must be reported as errors"
+        );
+
+        let engine = server.engine.read().await;
+        let type_id = engine
+            .catalog
+            .get_type_id(REL_TYPE)
+            .expect("type lookup must not error")
+            .expect("relationship type must have been registered by the valid rows");
+        let stats = engine
+            .catalog
+            .get_statistics()
+            .expect("catalog statistics must be readable");
+        assert_eq!(
+            stats.rel_counts.get(&type_id).copied().unwrap_or(0),
+            VALID_COUNT as u64,
+            "the catalog rel-count must equal only the SUCCESSFUL rows — a failed row \
+             must never reach the (type_id, +1) accumulator in create_relationship_direct"
         );
     }
 

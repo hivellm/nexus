@@ -478,17 +478,17 @@ impl Engine {
     /// lower bound used by reconcilers and admin-level audits to
     /// verify the heuristic hasn't drifted.
     ///
-    /// **Caveat on relationship counts.** The current CREATE
-    /// operator batches node-count catalog updates but does NOT
-    /// increment `catalog.rel_counts` when a relationship is
-    /// created (see `executor::operators::create` —
-    /// `batch_increment_node_counts` is called, the rel-type
-    /// equivalent is not). As a result this function's node total
-    /// is accurate but the relationship total is a lower bound,
-    /// typically zero. Fixing create.rs to also batch
-    /// `increment_rel_count` is a separate follow-up; once that
-    /// lands the calculation here needs no change — it's
-    /// already summing both columns.
+    /// **Relationship counts.** Both write paths now record
+    /// `catalog.rel_counts` through the batched
+    /// `Catalog::batch_increment_rel_counts` (mirroring the
+    /// node-count batching): the executor CREATE operator
+    /// (`executor::operators::create`) accumulates a rel-type column
+    /// alongside its node-count column, and the `/ingest` bulk path
+    /// flushes one rel-count batch per request. As a result both this
+    /// function's node total and its relationship total are accurate
+    /// — neither is a lower bound. (The per-edge `increment_rel_count`
+    /// is still used by the single-edge REST / RPC / RESP3 / MERGE
+    /// callers, which do not batch.)
     ///
     /// Under [`crate::cluster::TenantIsolationMode::None`] (or when
     /// the namespace has no catalog entries yet) this returns 0

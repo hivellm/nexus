@@ -3,7 +3,7 @@
 Nexus loads LDBC SF0.1 ~16× slower than Neo4j (~480 s vs ~30 s). Before
 touching code, this localised the cost empirically. All numbers are from a
 release build, `POST /ingest` with `use_batching: false`, localhost, fresh
-`NEXUS_DATA_DIR`, on the bench box.
+`NEXUS_DATA_DIR`, on the bench box. For post-fix results, see [04](04_results.md).
 
 ## What is slow
 
