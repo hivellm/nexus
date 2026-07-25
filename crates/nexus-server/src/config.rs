@@ -1,8 +1,10 @@
 //! Server configuration
 
+use crate::middleware::RateLimitConfig;
 use serde::Deserialize;
 use std::net::SocketAddr;
 use std::path::Path;
+use std::time::Duration;
 
 /// Literal default root password shipped by [`RootUserConfig::default`].
 /// Lives in one place so the boot-time preflight ([`Config::security_preflight`])
@@ -28,6 +30,12 @@ pub struct Config {
     /// inside the Cypher executor (see H4 follow-up in the server-hardening
     /// report).
     pub request_timeout_secs: u64,
+    /// Per-IP rate limiting configuration for the global token-bucket
+    /// limiter that fronts every HTTP route. `NEXUS_RATE_LIMIT_*` env
+    /// vars override the defaults (enabled, 100 req/60s + 20 burst,
+    /// loopback exempt) — see [`RateLimitConfig`] for the full knob
+    /// list.
+    pub rate_limit: RateLimitConfig,
     /// CORS allow-list (M4). Empty (the default) grants no cross-origin
     /// access — a browser on another origin cannot read API responses.
     /// Populate via `NEXUS_CORS_ALLOWED_ORIGINS` (comma-separated origins)
@@ -293,6 +301,7 @@ impl Default for Config {
             // exhaust the server's allocator.
             max_body_size_bytes: 16 * 1024 * 1024,
             request_timeout_secs: 30,
+            rate_limit: RateLimitConfig::default(),
             cors_allowed_origins: Vec::new(),
             engine: nexus_core::EngineConfig::default(),
             root_user: RootUserConfig::default(),
@@ -1030,6 +1039,43 @@ impl Config {
             .and_then(|v| v.parse::<u64>().ok())
             .unwrap_or(30);
 
+        // Per-IP rate limiting (H2, hardened to fix the /ingest
+        // connection-reset bug): enabled by default with the original
+        // 100 req/60s + 20 burst budget, but loopback clients are now
+        // exempt by default so local bulk loads (e.g. LDBC ingest)
+        // never trip it. `NEXUS_RATE_LIMIT_*` overrides every knob;
+        // an absent or unparseable var falls back to `RateLimitConfig::
+        // default()`.
+        let rate_limit_defaults = RateLimitConfig::default();
+        let rate_limit_enabled = std::env::var("NEXUS_RATE_LIMIT_ENABLED")
+            .ok()
+            .and_then(|v| v.parse::<bool>().ok())
+            .unwrap_or(rate_limit_defaults.enabled);
+        let rate_limit_max_requests = std::env::var("NEXUS_RATE_LIMIT_MAX_REQUESTS")
+            .ok()
+            .and_then(|v| v.parse::<usize>().ok())
+            .unwrap_or(rate_limit_defaults.max_requests);
+        let rate_limit_window = std::env::var("NEXUS_RATE_LIMIT_WINDOW_SECS")
+            .ok()
+            .and_then(|v| v.parse::<u64>().ok())
+            .map(Duration::from_secs)
+            .unwrap_or(rate_limit_defaults.window_duration);
+        let rate_limit_burst = std::env::var("NEXUS_RATE_LIMIT_BURST")
+            .ok()
+            .and_then(|v| v.parse::<usize>().ok())
+            .unwrap_or(rate_limit_defaults.burst_capacity);
+        let rate_limit_exempt_loopback = std::env::var("NEXUS_RATE_LIMIT_EXEMPT_LOOPBACK")
+            .ok()
+            .and_then(|v| v.parse::<bool>().ok())
+            .unwrap_or(rate_limit_defaults.exempt_loopback);
+        let rate_limit = RateLimitConfig {
+            enabled: rate_limit_enabled,
+            max_requests: rate_limit_max_requests,
+            window_duration: rate_limit_window,
+            burst_capacity: rate_limit_burst,
+            exempt_loopback: rate_limit_exempt_loopback,
+        };
+
         // M4: CORS allow-list, comma-separated origins. Empty (default) means
         // no cross-origin access is granted.
         let cors_allowed_origins = std::env::var("NEXUS_CORS_ALLOWED_ORIGINS")
@@ -1047,6 +1093,7 @@ impl Config {
             data_dir,
             max_body_size_bytes,
             request_timeout_secs,
+            rate_limit,
             cors_allowed_origins,
             engine,
             root_user,

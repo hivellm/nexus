@@ -524,8 +524,12 @@ async fn async_main(_worker_threads: usize) -> anyhow::Result<()> {
 
     // Initialize the per-IP rate limiter. Layered onto `app` below (H2);
     // relies on `ConnectInfo<SocketAddr>` being available, which requires
-    // serving through `into_make_service_with_connect_info`.
-    let rate_limiter = RateLimiter::new();
+    // serving through `into_make_service_with_connect_info`. Sourced from
+    // `config.rate_limit` (NEXUS_RATE_LIMIT_* env vars) so operators can
+    // tune the budget or disable it, and so loopback clients are exempt by
+    // default — fixes bulk `/ingest` loads getting their connection reset
+    // instead of a clean 429 once the token bucket empties.
+    let rate_limiter = RateLimiter::with_config(config.rate_limit.clone());
 
     // Initialize authentication middleware if enabled
     // For now, we'll enable it based on config.auth.enabled
