@@ -487,8 +487,11 @@ mod tests {
                 .unwrap();
         }
         // After max_batch_size enqueues the writer auto-flushes.
-        // Give it a slice of time to wake up and process.
-        for _ in 0..50 {
+        // Poll generously (up to ~5s): the flush lands within ~1
+        // iteration in isolation, but the background writer thread can be
+        // starved for seconds when the full `--workspace` suite saturates
+        // every core, so a tight 1s budget flaked under load.
+        for _ in 0..250 {
             let opts = crate::index::fulltext::SearchOptions::default();
             let hits = idx.search("batch", opts).unwrap();
             if hits.len() == 3 {
