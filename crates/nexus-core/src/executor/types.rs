@@ -178,9 +178,13 @@ pub struct SideEffects {
     pub properties_set: u64,
     /// Property keys removed (via `REMOVE` or `SET n.k = null`).
     pub properties_removed: u64,
-    /// Labels added to an existing node (`SET n:Label`).
+    /// Labels applied to nodes — both labels on `CREATE`-d nodes and
+    /// `SET n:Label` on existing ones (the openCypher TCK counts both toward
+    /// `+labels`). `SET n:Label` on a node that already carries the label is
+    /// idempotent and not counted.
     pub labels_added: u64,
-    /// Labels removed from an existing node (`REMOVE n:Label`).
+    /// Labels removed from an existing node (`REMOVE n:Label`). Removing an
+    /// absent label is idempotent and not counted.
     pub labels_removed: u64,
 }
 

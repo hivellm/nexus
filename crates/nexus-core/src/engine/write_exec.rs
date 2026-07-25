@@ -1461,6 +1461,12 @@ impl Engine {
         }
 
         let mut state_map: HashMap<u64, NodeWriteState> = HashMap::new();
+        // Side-effect count (openCypher TCK `+labels`): only labels that were
+        // not already present on the node are counted, so `SET n:L` on a node
+        // that already carries `L` is the idempotent no-op the TCK expects.
+        // Accumulated locally to avoid borrowing `self` while `state` is held,
+        // then folded into `self.side_effects` once below.
+        let mut labels_added = 0u64;
 
         for item in &set_clause.items {
             match item {
@@ -1567,7 +1573,9 @@ impl Engine {
                             // must fail before the label lands on the
                             // pending state.
                             self.enforce_add_label_constraints(lbl, &state.properties)?;
-                            state.labels.insert(lbl.clone());
+                            if state.labels.insert(lbl.clone()) {
+                                labels_added += 1;
+                            }
                         }
                     }
                 }
@@ -1643,6 +1651,7 @@ impl Engine {
         }
         tracing::info!("[apply_set_clause] DONE");
 
+        self.side_effects.labels_added += labels_added;
         Ok(())
     }
 
@@ -1656,6 +1665,11 @@ impl Engine {
         }
 
         let mut state_map: HashMap<u64, NodeWriteState> = HashMap::new();
+        // Side-effect count (openCypher TCK `-labels`): only labels actually
+        // present are counted, so `REMOVE n:L` of an absent label is the
+        // idempotent no-op the TCK expects. Local accumulator, folded into
+        // `self.side_effects` below.
+        let mut labels_removed = 0u64;
 
         for item in &remove_clause.items {
             match item {
@@ -1693,7 +1707,9 @@ impl Engine {
                     for node_id in node_ids.clone() {
                         let state = self.ensure_node_state(node_id, &mut state_map)?;
                         for lbl in &resolved {
-                            state.labels.remove(lbl);
+                            if state.labels.remove(lbl) {
+                                labels_removed += 1;
+                            }
                         }
                     }
                 }
@@ -1704,6 +1720,7 @@ impl Engine {
             self.persist_node_state(node_id, state)?;
         }
 
+        self.side_effects.labels_removed += labels_removed;
         Ok(())
     }
 

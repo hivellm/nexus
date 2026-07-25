@@ -20,12 +20,15 @@ fn create_node_reports_one_node_created_and_nothing_else() {
 
     let effects = result.side_effects;
     assert_eq!(effects.nodes_created, 1, "exactly one node was created");
+    assert_eq!(
+        effects.labels_added, 1,
+        "the :X label on the created node counts toward +labels"
+    );
     assert_eq!(effects.nodes_deleted, 0);
     assert_eq!(effects.relationships_created, 0);
     assert_eq!(effects.relationships_deleted, 0);
     assert_eq!(effects.properties_set, 0);
     assert_eq!(effects.properties_removed, 0);
-    assert_eq!(effects.labels_added, 0);
     assert_eq!(effects.labels_removed, 0);
 }
 
@@ -115,11 +118,14 @@ fn create_relationship_reports_one_relationship_and_two_nodes() {
         "exactly one relationship was created"
     );
     assert_eq!(effects.nodes_created, 2, "both endpoint nodes were created");
+    assert_eq!(
+        effects.labels_added, 2,
+        "labels :A and :B on the two created nodes both count"
+    );
     assert_eq!(effects.nodes_deleted, 0);
     assert_eq!(effects.relationships_deleted, 0);
     assert_eq!(effects.properties_set, 0);
     assert_eq!(effects.properties_removed, 0);
-    assert_eq!(effects.labels_added, 0);
     assert_eq!(effects.labels_removed, 0);
 }
 
@@ -190,4 +196,83 @@ fn detach_delete_reports_node_and_its_relationship() {
         "its one relationship is detached and deleted"
     );
     assert_eq!(effects.nodes_created, 0);
+}
+
+#[test]
+fn set_label_on_existing_node_reports_one_label_added() {
+    let ctx = TestContext::new();
+    let mut engine = Engine::with_isolated_catalog(ctx.path()).expect("engine init");
+
+    engine
+        .execute_cypher("CREATE (n:SetLblBase)")
+        .expect("seed CREATE must succeed");
+
+    let result = engine
+        .execute_cypher("MATCH (n:SetLblBase) SET n:SetLblExtra")
+        .expect("SET label must succeed");
+
+    let effects = result.side_effects;
+    assert_eq!(effects.labels_added, 1, "the newly added label counts");
+    assert_eq!(
+        effects.nodes_created, 0,
+        "SET on a matched node creates nothing"
+    );
+    assert_eq!(effects.labels_removed, 0);
+}
+
+#[test]
+fn set_label_already_present_is_idempotent() {
+    let ctx = TestContext::new();
+    let mut engine = Engine::with_isolated_catalog(ctx.path()).expect("engine init");
+
+    engine
+        .execute_cypher("CREATE (n:IdemLbl)")
+        .expect("seed CREATE must succeed");
+
+    let result = engine
+        .execute_cypher("MATCH (n:IdemLbl) SET n:IdemLbl")
+        .expect("idempotent SET label must succeed");
+
+    assert_eq!(
+        result.side_effects.labels_added, 0,
+        "re-adding a label the node already has counts nothing (TCK idempotent)"
+    );
+}
+
+#[test]
+fn remove_label_reports_one_label_removed() {
+    let ctx = TestContext::new();
+    let mut engine = Engine::with_isolated_catalog(ctx.path()).expect("engine init");
+
+    engine
+        .execute_cypher("CREATE (n:RmLblA:RmLblB)")
+        .expect("seed CREATE must succeed");
+
+    let result = engine
+        .execute_cypher("MATCH (n:RmLblA) REMOVE n:RmLblB")
+        .expect("REMOVE label must succeed");
+
+    let effects = result.side_effects;
+    assert_eq!(effects.labels_removed, 1, "the removed label counts");
+    assert_eq!(effects.labels_added, 0);
+    assert_eq!(effects.nodes_deleted, 0, "REMOVE label deletes no node");
+}
+
+#[test]
+fn remove_absent_label_is_idempotent() {
+    let ctx = TestContext::new();
+    let mut engine = Engine::with_isolated_catalog(ctx.path()).expect("engine init");
+
+    engine
+        .execute_cypher("CREATE (n:AbsentLblA)")
+        .expect("seed CREATE must succeed");
+
+    let result = engine
+        .execute_cypher("MATCH (n:AbsentLblA) REMOVE n:AbsentLblB")
+        .expect("REMOVE of an absent label must succeed");
+
+    assert_eq!(
+        result.side_effects.labels_removed, 0,
+        "removing a label the node does not have counts nothing (TCK idempotent)"
+    );
 }

@@ -74,6 +74,13 @@ pub struct RecordStore {
     /// executor. Reset per query by the engine; read to populate
     /// `ResultSet::side_effects`.
     pub(super) relationships_created: Arc<AtomicU64>,
+    /// Total node labels set at creation since the last reset — the
+    /// `count_ones()` of each created node's `label_bits`. Same `Arc`
+    /// sharing rationale as the counters above (executor clones the store).
+    /// The openCypher TCK counts labels on CREATE-d nodes toward `+labels`,
+    /// so this is stitched into `ResultSet::side_effects.labels_added`
+    /// alongside the engine-level `SET n:Label` count. Reset per query.
+    pub(super) labels_created: Arc<AtomicU64>,
     /// Current nodes file size
     pub(super) nodes_file_size: usize,
     /// Current relationships file size
@@ -254,6 +261,7 @@ impl RecordStore {
             adjacency_index,
             nodes_created: Arc::new(AtomicU64::new(0)),
             relationships_created: Arc::new(AtomicU64::new(0)),
+            labels_created: Arc::new(AtomicU64::new(0)),
             next_node_id: Arc::new(AtomicU64::new(next_node_id)),
             next_rel_id: Arc::new(AtomicU64::new(next_rel_id)),
             nodes_file_size,
@@ -419,6 +427,19 @@ impl RecordStore {
     /// count reported on a `ResultSet` covers only that query.
     pub fn reset_relationships_created(&self) {
         self.relationships_created.store(0, Ordering::SeqCst);
+    }
+
+    /// Node labels set at creation since the last
+    /// [`RecordStore::reset_labels_created`] — summed `label_bits.count_ones()`
+    /// over created nodes. Stitched into `side_effects.labels_added`.
+    pub fn labels_created(&self) -> u64 {
+        self.labels_created.load(Ordering::SeqCst)
+    }
+
+    /// Zero the create-labels counter. Called at query start so the count
+    /// reported on a `ResultSet` covers only that query.
+    pub fn reset_labels_created(&self) {
+        self.labels_created.store(0, Ordering::SeqCst);
     }
 
     pub fn peek_next_node_id(&self) -> u64 {
@@ -604,6 +625,7 @@ impl Clone for RecordStore {
             adjacency_index: self.adjacency_index.clone(),
             nodes_created: Arc::clone(&self.nodes_created),
             relationships_created: Arc::clone(&self.relationships_created),
+            labels_created: Arc::clone(&self.labels_created),
             next_node_id: Arc::clone(&self.next_node_id),
             next_rel_id: Arc::clone(&self.next_rel_id),
             nodes_file_size: self.nodes_file_size,

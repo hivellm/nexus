@@ -75,6 +75,7 @@ impl Engine {
         self.side_effects = executor::types::SideEffects::default();
         self.storage.reset_nodes_created();
         self.storage.reset_relationships_created();
+        self.storage.reset_labels_created();
         let result = self.execute_cypher_with_context(
             query,
             None,
@@ -90,6 +91,11 @@ impl Engine {
         // for both shapes.
         side_effects.nodes_created = self.storage.nodes_created();
         side_effects.relationships_created = self.storage.relationships_created();
+        // Labels come from two sources: labels on CREATE-d nodes (counted in
+        // the storage chokepoint) plus `SET n:Label` on existing nodes
+        // (already accumulated on `side_effects` by the write path). Add, do
+        // not overwrite.
+        side_effects.labels_added += self.storage.labels_created();
         result.map(|mut rs| {
             rs.side_effects = side_effects;
             rs
@@ -126,6 +132,7 @@ impl Engine {
         self.side_effects = executor::types::SideEffects::default();
         self.storage.reset_nodes_created();
         self.storage.reset_relationships_created();
+        self.storage.reset_labels_created();
         let result = self.execute_cypher_ast_with_context(
             ast,
             query_str,
@@ -136,6 +143,7 @@ impl Engine {
         let mut side_effects = std::mem::take(&mut self.side_effects);
         side_effects.nodes_created = self.storage.nodes_created();
         side_effects.relationships_created = self.storage.relationships_created();
+        side_effects.labels_added += self.storage.labels_created();
         result.map(|mut rs| {
             rs.side_effects = side_effects;
             rs
