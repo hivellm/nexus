@@ -18,18 +18,18 @@ exercise) or the scenario was skip-listed. Skips are counted, never hidden.
 
 ## Totals
 
-**3868 scenarios — 505 passed (13.1%), 3205 failed, 158 skipped.**
+**3868 scenarios — 506 passed (13.1%), 3178 failed, 184 skipped.**
 
 ## Per-category
 
 | Category | Pass | Fail | Skip | Total | Pass % |
 |---|---:|---:|---:|---:|---:|
 | `clauses/call` | 0 | 2 | 50 | 52 | 0.0% |
-| `clauses/create` | 14 | 58 | 6 | 78 | 17.9% |
+| `clauses/create` | 14 | 55 | 9 | 78 | 17.9% |
 | `clauses/delete` | 0 | 39 | 2 | 41 | 0.0% |
 | `clauses/match` | 12 | 339 | 1 | 352 | 3.4% |
 | `clauses/match-where` | 1 | 30 | 3 | 34 | 2.9% |
-| `clauses/merge` | 16 | 55 | 4 | 75 | 21.3% |
+| `clauses/merge` | 16 | 50 | 9 | 75 | 21.3% |
 | `clauses/remove` | 6 | 27 | 0 | 33 | 18.2% |
 | `clauses/return` | 12 | 49 | 2 | 63 | 19.0% |
 | `clauses/return-orderby` | 11 | 22 | 2 | 35 | 31.4% |
@@ -38,7 +38,7 @@ exercise) or the scenario was skip-listed. Skips are counted, never hidden.
 | `clauses/union` | 6 | 6 | 0 | 12 | 50.0% |
 | `clauses/unwind` | 5 | 7 | 2 | 14 | 35.7% |
 | `clauses/with` | 3 | 25 | 1 | 29 | 10.3% |
-| `clauses/with-orderBy` | 26 | 265 | 1 | 292 | 8.9% |
+| `clauses/with-orderBy` | 27 | 264 | 1 | 292 | 9.2% |
 | `clauses/with-skip-limit` | 1 | 7 | 1 | 9 | 11.1% |
 | `clauses/with-where` | 0 | 18 | 1 | 19 | 0.0% |
 | `expressions/aggregation` | 2 | 20 | 13 | 35 | 5.7% |
@@ -57,8 +57,25 @@ exercise) or the scenario was skip-listed. Skips are counted, never hidden.
 | `expressions/precedence` | 35 | 86 | 0 | 121 | 28.9% |
 | `expressions/quantifier` | 16 | 588 | 0 | 604 | 2.6% |
 | `expressions/string` | 5 | 27 | 0 | 32 | 15.6% |
-| `expressions/temporal` | 51 | 953 | 0 | 1004 | 5.1% |
+| `expressions/temporal` | 51 | 935 | 18 | 1004 | 5.1% |
 | `expressions/typeConversion` | 19 | 27 | 1 | 47 | 40.4% |
 | `useCases/countingSubgraphMatches` | 0 | 11 | 0 | 11 | 0.0% |
 | `useCases/triadicSelection` | 0 | 0 | 19 | 19 | 0.0% |
-| **total** | **505** | **3205** | **158** | **3868** | **13.1%** |
+| **total** | **506** | **3178** | **184** | **3868** | **13.1%** |
+
+## Skip-list (deliberately un-evaluated)
+
+Scenarios the runner cannot yet exercise because they need a capability it does
+not provide. Counted as skips, never as fails. Features Nexus attempts but gets
+wrong (e.g. temporal semantics) are NOT here — those remain real fails above.
+
+| Reason | Scenarios |
+|---|---:|
+| control-query reference comparison not supported | 33 |
+| named fixture graph (binary-tree-N) not supported | 19 |
+| procedure registration not supported by the harness | 50 |
+| query parameters not wired into the harness | 62 |
+| **total deliberate skips** | **164** |
+
+The remaining skips in the per-category table are scenarios that use a Gherkin
+step the runner does not define yet (they skip at the unmatched step).

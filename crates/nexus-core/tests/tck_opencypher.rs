@@ -38,9 +38,13 @@ use tck_common::compare_table;
 /// denominator can never masquerade as a static percentage.
 const PINNED_COMMIT: &str = "677cbafabb8c3c5eed458fd3b1ec0daec8d67d23";
 
-/// category → [pass, fail, skip]. Filled by the `after` hook; drained once
-/// the run completes (same thread, so no ordering concern beyond the lock).
+/// category → [pass, fail, skip]. Filled by the `after` hook (run scenarios)
+/// and the skip-list filter (deliberately-skipped scenarios).
 static RESULTS: Mutex<BTreeMap<String, [u64; 3]>> = Mutex::new(BTreeMap::new());
+
+/// skip reason → count, for scenarios the skip-list removes before running.
+/// Reported so the skip total is attributed, never a silent omission.
+static SKIP_REASONS: Mutex<BTreeMap<&'static str, u64>> = Mutex::new(BTreeMap::new());
 
 // ─────────────────────────── World ───────────────────────────
 
@@ -298,6 +302,47 @@ fn record(category: String, finished: &event::ScenarioFinished) {
     guard.entry(category).or_insert([0; 3])[slot] += 1;
 }
 
+/// Deliberate skip-list: scenarios the harness cannot yet EVALUATE because
+/// they depend on a capability the runner does not provide. These are skipped
+/// (counted + reported by reason), never run and never counted as fails.
+///
+/// This is strictly for un-evaluatable scenarios. Features Nexus attempts but
+/// gets wrong — temporal semantics, etc. — are NOT skip-listed: those stay as
+/// real fails, because hiding a real gap behind a skip is what makes a
+/// conformance number a lie.
+fn skip_reason(scenario: &gherkin::Scenario) -> Option<&'static str> {
+    for step in &scenario.steps {
+        let t = step.value.as_str();
+        if t.starts_with("there exists a procedure") {
+            return Some("procedure registration not supported by the harness");
+        }
+        if t.contains("binary-tree-") {
+            return Some("named fixture graph (binary-tree-N) not supported");
+        }
+        if t.starts_with("parameters are") {
+            return Some("query parameters not wired into the harness");
+        }
+        if t.starts_with("executing control query") {
+            return Some("control-query reference comparison not supported");
+        }
+    }
+    None
+}
+
+/// Count a filtered-out scenario as a skip against its category and reason.
+fn record_skip(category: String, reason: &'static str) {
+    RESULTS
+        .lock()
+        .expect("results mutex poisoned")
+        .entry(category)
+        .or_insert([0; 3])[2] += 1;
+    *SKIP_REASONS
+        .lock()
+        .expect("skip-reasons mutex poisoned")
+        .entry(reason)
+        .or_insert(0) += 1;
+}
+
 fn pct(pass: u64, total: u64) -> String {
     if total == 0 {
         "—".to_string()
@@ -372,6 +417,29 @@ fn write_report(results: &BTreeMap<String, [u64; 3]>) {
         pct(total[0], grand),
     ));
 
+    let skip_reasons = SKIP_REASONS.lock().expect("skip-reasons mutex poisoned");
+    if !skip_reasons.is_empty() {
+        md.push_str("\n## Skip-list (deliberately un-evaluated)\n\n");
+        md.push_str(
+            "Scenarios the runner cannot yet exercise because they need a capability it does\n\
+             not provide. Counted as skips, never as fails. Features Nexus attempts but gets\n\
+             wrong (e.g. temporal semantics) are NOT here — those remain real fails above.\n\n",
+        );
+        md.push_str("| Reason | Scenarios |\n|---|---:|\n");
+        let mut skip_total = 0u64;
+        for (reason, count) in skip_reasons.iter() {
+            md.push_str(&format!("| {reason} | {count} |\n"));
+            skip_total += count;
+        }
+        md.push_str(&format!(
+            "| **total deliberate skips** | **{skip_total}** |\n"
+        ));
+        md.push_str(
+            "\nThe remaining skips in the per-category table are scenarios that use a Gherkin\n\
+             step the runner does not define yet (they skip at the unmatched step).\n",
+        );
+    }
+
     let out = concat!(
         env!("CARGO_MANIFEST_DIR"),
         "/../../docs/compatibility/OPENCYPHER_TCK_REPORT.md"
@@ -427,7 +495,20 @@ fn main() {
                         record(category, ev);
                         async {}.boxed_local()
                     })
-                    .run("tests/tck/opencypher/features")
+                    .filter_run(
+                        "tests/tck/opencypher/features",
+                        |feature, _rule, scenario| {
+                            // Skip-list: deliberately skip un-evaluatable scenarios,
+                            // counting them by reason. Everything else runs.
+                            match skip_reason(scenario) {
+                                Some(reason) => {
+                                    record_skip(category_of(feature), reason);
+                                    false
+                                }
+                                None => true,
+                            }
+                        },
+                    )
                     .await;
             });
         })
