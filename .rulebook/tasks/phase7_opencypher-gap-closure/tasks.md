@@ -170,7 +170,15 @@ gaps, then re-measure so the delta is attributable. Do not reorder §2 before §
       match count. Binding the relationship or labelling an endpoint both fix it, which is why it does
       not surface in the reference queries — filed for completeness, not blocking the benchmark.
 
-- [ ] 4.13 **`RETURN n` omits node labels from the returned value.** Discovered by the §3.2 TCK
+- [x] 4.13 **`RETURN n` omits node labels from the returned value.** DONE (commit `bc661fbe`) — emit
+      them under the reserved `_nexus_labels` key (matching the sibling `Engine::node_to_result_value`,
+      which already did; additive like `_nexus_id`). **Honest outcome: NO conformance gain (net -1 noise,
+      3868 → 505 pass).** The hypothesis that missing labels capped node scenarios was WRONG — with labels
+      correct, node-returning scenarios still fail on DEEPER bugs surfaced by the baseline, filed below as
+      4.14/4.15. Kept as a correctness/consistency fix (nodes now carry their labels; comparison is now
+      accurate). Blast radius clean (nexus-core lib 2519/0, integration + server green modulo a pre-existing
+      Windows/Tantivy fulltext flake). Original filing:
+      Discovered by the §3.2 TCK
       baseline: `read_node_as_value_with_store` (`executor/operators/path.rs:1040`) computes the node's
       label names at `:1051-1054` into a `let _labels` binding that is then DISCARDED — the returned
       Value is a flat object of `{ <properties>, "_nexus_id": id }` with no labels key at all. openCypher
@@ -183,6 +191,21 @@ gaps, then re-measure so the delta is attributable. Do not reorder §2 before §
       row format (`CLAUDE.md` "NEVER modify server response formats"), so adding a `_labels` key must be
       done as an ADDITIVE internal field (like `_nexus_id`) that the TCK comparison can read, mirrored on
       the relationship's `_nexus_rel_type` precedent — not by changing the existing property projection.
+
+- [ ] 4.14 **Multi-variable node RETURN drops a binding to `Null`.** Surfaced by the §3.2 baseline, NOT yet
+      root-caused. Several `clauses/match` scenarios that bind two node variables and `RETURN a, b` come back
+      with the second column `Null` where a node was expected — e.g. a two-column result row materialised as
+      `[<node>, Null]` against an expected `[<node>, <node>]`. This is the single largest attributable
+      failure family in the node categories after 4.13. Root-cause the binding loss (likely the same
+      alignment/partial-binding territory as the `expand-required-partial-binding-leak` note) before fixing;
+      add a regression test that asserts BOTH columns bind. Reproduce from the failing scenarios the runner
+      now reports (they were previously masked as cell-parse panics before §2.3).
+- [ ] 4.15 **A labelled node scan appears to return unlabelled/other-labelled nodes.** Also surfaced by the
+      baseline, NOT yet root-caused (could be a genuine label-filter gap or a mis-ported scenario — confirm
+      the actual query first). Observed shape: an expected single `(:A)` row against a result carrying
+      `(:A)`, `(:B {..})`, and `({..})` rows. If a real label-filter bug, it is high severity; if the
+      scenario is `MATCH (n) RETURN n` with a differently-shaped expectation, it belongs with the row-set
+      differences instead. Diagnose against the specific `clauses/match` scenario before filing a fix.
 
 ## 5. Re-measure and reconcile the documentation
 - [ ] 5.1 Re-run the TCK after §4 and refresh `docs/compatibility/OPENCYPHER_TCK_REPORT.md`; the delta from the §3.3 baseline is the evidence that §4 mattered
