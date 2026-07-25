@@ -26,6 +26,10 @@ path = "src/main.rs"
 nexus-core = { workspace = true, features = ["axum"] }
 nexus-protocol.workspace = true
 
+# HiveLLM family RPC transport (Thunder wire v1). phase10 migrates the
+# native binary RPC server (15475) onto this shared, hardened transport.
+thunder-rpc = { workspace = true, features = ["server"] }
+
 # Web framework
 axum.workspace = true
 tower.workspace = true
@@ -132,6 +136,8 @@ kms = ["kms-aws", "kms-gcp", "kms-vault"]
 [dev-dependencies]
 tokio = { workspace = true, features = ["test-util"] }
 serial_test = "3.0"
+# Client feature too, for the in-process thunder_rpc integration tests.
+thunder-rpc = { workspace = true, features = ["client", "server"] }
 
 [package.metadata.deb]
 maintainer = "HiveLLM Contributors <info@hivellm.org>"

@@ -8,10 +8,12 @@
 //! - `server` — TCP accept loop, per-connection read/write tasks (added
 //!   in Phase 7 of `phase1_nexus-rpc-binary-protocol`).
 
+pub mod config;
 pub mod dispatch;
 pub mod metrics;
 pub mod server;
 
+pub use config::nexus_thunder_config;
 pub use server::spawn_rpc_listener;
 
 // Re-export the shared wire surface for ergonomic intra-server use so

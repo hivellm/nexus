@@ -31,6 +31,11 @@ rust-version = "1.85"
 nexus-core = { path = "crates/nexus-core" }
 nexus-protocol = { path = "crates/nexus-protocol" }
 
+# HiveLLM family RPC standard (Thunder wire v1 — byte-identical to the
+# current hand-rolled Nexus RPC wire). Registry version only, no path/git
+# (crates.io publish constraint). phase10_thunder-server-migration.
+thunder-rpc = { version = "0.2.2", default-features = false }
+
 # Storage
 memmap2 = "0.9"
 # `read-txn-no-tls` switches LMDB envs to MDB_NOTLS so reader slot
