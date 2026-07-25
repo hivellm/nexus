@@ -1051,7 +1051,7 @@ impl Executor {
         let label_names = self
             .catalog()
             .get_labels_from_bitmap(node_record.label_bits)?;
-        let _labels: Vec<Value> = label_names.into_iter().map(Value::String).collect();
+        let labels: Vec<Value> = label_names.into_iter().map(Value::String).collect();
 
         // phase8_neo4j-concurrency-gaps §2 — pass the `prop_ptr` this
         // function already read above instead of calling
@@ -1093,10 +1093,17 @@ impl Executor {
             }
         };
 
-        // Return only the properties as a flat object, matching Neo4j's format
-        // But include _nexus_id for internal ID extraction during relationship traversal
+        // Return the properties as a flat object, matching Neo4j's format,
+        // plus reserved internal fields: `_nexus_id` for id extraction during
+        // relationship traversal, and `_nexus_labels` so callers can recover
+        // the node's labels. openCypher treats labels as part of node
+        // identity; this mirrors the sibling constructor
+        // `Engine::node_to_result_value` (which already emits `_nexus_labels`)
+        // and the `_nexus_id` / `_nexus_rel_type` precedent, and is ignored by
+        // SDKs that only read declared properties.
         let mut node = properties_map;
         node.insert("_nexus_id".to_string(), Value::Number(node_id.into()));
+        node.insert("_nexus_labels".to_string(), Value::Array(labels));
 
         tracing::trace!(
             "read_node_as_value: node_id={}, final node has {} keys: {:?}",

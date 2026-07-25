@@ -59,22 +59,37 @@ fn parses_path_with_two_nodes_one_rel() {
 #[test]
 fn unlabelled_node_matches_nexus_node_on_properties() {
     let expected = tck_cell_to_json("({name: 'c'})");
-    let actual = json!({"name": "c", "_nexus_id": 5});
+    let actual = json!({"name": "c", "_nexus_id": 5, "_nexus_labels": []});
     assert!(values_equal(&expected, &actual));
 }
 
 #[test]
-fn labelled_node_does_not_match_nexus_node_missing_labels() {
-    // Nexus omits node labels (§4.13), so a labelled literal cannot match.
+fn labelled_node_matches_when_labels_present() {
+    // Nexus emits labels under `_labels`, so a labelled literal matches
+    // when the label sets agree.
     let expected = tck_cell_to_json("(:A {name: 'c'})");
-    let actual = json!({"name": "c", "_nexus_id": 5});
+    let actual = json!({"name": "c", "_nexus_id": 5, "_nexus_labels": ["A"]});
+    assert!(values_equal(&expected, &actual));
+}
+
+#[test]
+fn labelled_node_does_not_match_on_label_mismatch() {
+    let expected = tck_cell_to_json("(:A {name: 'c'})");
+    let actual = json!({"name": "c", "_nexus_id": 5, "_nexus_labels": ["B"]});
     assert!(!values_equal(&expected, &actual));
+}
+
+#[test]
+fn multi_label_node_matches_regardless_of_order() {
+    let expected = tck_cell_to_json("(:A:B)");
+    let actual = json!({"_nexus_id": 5, "_nexus_labels": ["B", "A"]});
+    assert!(values_equal(&expected, &actual));
 }
 
 #[test]
 fn node_with_extra_property_does_not_match() {
     let expected = tck_cell_to_json("({name: 'c', age: 3})");
-    let actual = json!({"name": "c", "_nexus_id": 5});
+    let actual = json!({"name": "c", "_nexus_id": 5, "_nexus_labels": []});
     assert!(!values_equal(&expected, &actual));
 }
 

@@ -159,9 +159,9 @@ fn tck_marker(v: &Value, key: &str) -> bool {
 /// Match a parsed TCK node literal (`expected`) against a Nexus result
 /// value (`actual`).
 ///
-/// Nexus never emits node labels on returned values (a known gap), so
-/// a node literal with non-empty `@labels` can never match — this is
-/// the correct, attributable outcome rather than a silent pass.
+/// Nexus emits node labels under the reserved `_nexus_labels` key; the
+/// literal's `@labels` are compared against it as a set (openCypher labels
+/// are unordered), and the remaining properties must match exactly.
 fn tck_node_matches(expected: &Value, actual: &Value) -> bool {
     let Some(actual_obj) = actual.as_object() else {
         return false;
@@ -170,19 +170,30 @@ fn tck_node_matches(expected: &Value, actual: &Value) -> bool {
         return false;
     }
     let expected_obj = expected.as_object().expect("tck node is always an object");
-    let labels_empty = expected_obj
-        .get("@labels")
-        .and_then(Value::as_array)
-        .is_none_or(|labels| labels.is_empty());
-    if !labels_empty {
+    if !label_sets_equal(
+        expected_obj.get("@labels").and_then(Value::as_array),
+        actual_obj.get("_nexus_labels").and_then(Value::as_array),
+    ) {
         return false;
     }
     props_match(
         expected_obj,
         &["@tck_node", "@labels"],
         actual_obj,
-        &["_nexus_id"],
+        &["_nexus_id", "_nexus_labels"],
     )
+}
+
+/// Compare two label lists (either may be absent ⇒ empty) as unordered sets
+/// of strings.
+fn label_sets_equal(a: Option<&Vec<Value>>, b: Option<&Vec<Value>>) -> bool {
+    let to_set = |v: Option<&Vec<Value>>| -> std::collections::BTreeSet<String> {
+        v.into_iter()
+            .flatten()
+            .filter_map(|x| x.as_str().map(str::to_owned))
+            .collect()
+    };
+    to_set(a) == to_set(b)
 }
 
 /// Match a parsed TCK relationship literal (`expected`) against a
