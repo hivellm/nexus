@@ -124,6 +124,9 @@ pub fn values_equal(a: &Value, b: &Value) -> bool {
     if tck_marker(a, "@tck_path") {
         return tck_path_matches(a, b);
     }
+    if a.get("@tck_float").is_some() {
+        return tck_float_matches(a, b);
+    }
     match (a, b) {
         (Value::Null, Value::Null) => true,
         (Value::Bool(x), Value::Bool(y)) => x == y,
@@ -242,6 +245,32 @@ fn tck_path_matches(expected: &Value, actual: &Value) -> bool {
         && er.iter().zip(ar.iter()).all(|(x, y)| values_equal(x, y))
 }
 
+/// Match a parsed IEEE-special-float literal (`NaN` / `Infinity` /
+/// `-Infinity`, tagged `@tck_float`) against a Nexus result value.
+///
+/// openCypher renders non-finite floats unquoted in result tables, so they
+/// cannot ride through as `serde_json::Number` (which rejects NaN/±∞). Nexus
+/// today converts every non-finite arithmetic result into an error rather
+/// than a value, so no current Nexus result can match — such a scenario stays
+/// an attributable FAIL, never a harness panic on the unparseable cell. The
+/// matcher is written for the general numeric case so that a future engine
+/// which represents non-finite floats numerically is measured correctly.
+fn tck_float_matches(expected: &Value, actual: &Value) -> bool {
+    let kind = expected
+        .get("@tck_float")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    let Some(f) = actual.as_f64() else {
+        return false;
+    };
+    match kind {
+        "NaN" => f.is_nan(),
+        "Infinity" => f.is_infinite() && f.is_sign_positive(),
+        "-Infinity" => f.is_infinite() && f.is_sign_negative(),
+        _ => false,
+    }
+}
+
 /// Compare the "real" (non-marker, non-ignored) properties of two
 /// JSON objects for an exact key-set + value match.
 fn props_match(
@@ -273,12 +302,22 @@ fn props_match(
 
 /// Parse a TCK Gherkin cell into a `serde_json::Value`.
 ///
-/// Supports the subset the spatial corpus needs:
+/// Covers every literal form the vendored openCypher corpus renders in a
+/// result table:
 ///   - `null`, `true`, `false`
 ///   - integers, floats (incl. negative, scientific notation)
-///   - single-quoted strings: `'foo'` → `"foo"`
+///   - the IEEE special floats `NaN`, `Infinity`, `-Infinity` (rendered
+///     unquoted; carried as a `@tck_float` marker since `serde_json::Number`
+///     cannot hold them — see `tck_float_matches`)
+///   - single-quoted strings: `'foo'` → `"foo"`. Temporal and duration
+///     values (`date`, `datetime`, `duration`, …) are rendered by the corpus
+///     as quoted strings (e.g. `'2015-07-21'`, `'P14DT16H12M'`) and so parse
+///     here as plain `Value::String` — no dedicated temporal literal exists
+///     in the result tables.
 ///   - lists: `[1, 'a', {x: 1}]`
 ///   - maps with unquoted keys: `{x: 1.0, y: 2.0, crs: 'cartesian'}`
+///   - node / relationship / path literals: `(:A {k: 1})`, `[:T {k: 1}]`,
+///     `<(:A)-[:T]->(:B)>` (tagged `@tck_node` / `@tck_rel` / `@tck_path`)
 pub fn tck_cell_to_json(cell: &str) -> Value {
     let trimmed = cell.trim();
     let mut parser = TckParser::new(trimmed);
@@ -291,6 +330,15 @@ pub fn tck_cell_to_json(cell: &str) -> Value {
         &parser.src[parser.pos..]
     );
     v
+}
+
+/// Build the tagged marker for an IEEE special float (`NaN`, `Infinity`,
+/// `-Infinity`) that `serde_json::Number` cannot represent. Compared via
+/// `tck_float_matches`.
+fn tck_float_marker(kind: &str) -> Value {
+    let mut m = serde_json::Map::new();
+    m.insert("@tck_float".to_string(), Value::String(kind.to_string()));
+    Value::Object(m)
 }
 
 struct TckParser<'a> {
@@ -376,6 +424,13 @@ impl<'a> TckParser<'a> {
     }
 
     fn parse_number(&mut self) -> Value {
+        // IEEE special: `-Infinity` reaches this path via its leading `-`.
+        // The positive `Infinity` and `NaN` are alphabetic and handled in
+        // `parse_keyword`.
+        if self.src[self.pos..].starts_with("-Infinity") {
+            self.pos += "-Infinity".len();
+            return tck_float_marker("-Infinity");
+        }
         let start = self.pos;
         if self.peek() == Some(b'-') {
             self.pos += 1;
@@ -412,6 +467,10 @@ impl<'a> TckParser<'a> {
             "null" => Value::Null,
             "true" => Value::Bool(true),
             "false" => Value::Bool(false),
+            // IEEE special floats openCypher renders unquoted; `serde_json`
+            // cannot hold them as `Number`, so they carry a `@tck_float`
+            // marker (the negative `-Infinity` is handled in `parse_number`).
+            "NaN" | "Infinity" => tck_float_marker(kw),
             other => panic!("unknown keyword `{other}` in TCK cell {:?}", self.src),
         }
     }
