@@ -173,91 +173,116 @@ impl<'a> QueryPlanner<'a> {
                     if !node.labels.is_empty() {
                         // Use first label for initial scan
                         let first_label = &node.labels[0];
-                        let label_id = self.catalog.get_or_create_label(first_label)?;
 
-                        // Apply USING INDEX hint if present.
-                        //
-                        // phase7_planner-using-index-hints §1.5: when a
-                        // `PropertyIndex` handle is installed
-                        // (`with_property_index`), the planner verifies
-                        // that the hinted `(label, property)` pair has a
-                        // registered index and raises a structured
-                        // `ERR_USING_INDEX_NOT_FOUND` when it doesn't.
-                        // Without a handle the hint is accepted silently
-                        // — that's the legacy behaviour of unit-test
-                        // callers that don't construct an
-                        // `IndexManager`.
-                        if let Some(QueryHint::UsingIndex {
-                            label: hint_label,
-                            property: hint_property,
-                            ..
-                        }) = use_index_hint
-                        {
-                            if let Some(prop_idx) = self.property_index {
-                                // Verify the (label, property) pair has
-                                // a registered single-property index.
-                                let label_id_for_check = self.catalog.get_label_id(hint_label).map_err(|_| {
-                                    Error::CypherSyntax(format!(
-                                        "ERR_USING_INDEX_NOT_FOUND: label `:{hint_label}` referenced by USING INDEX hint is not registered"
-                                    ))
-                                })?;
-                                let key_id_for_check = self.catalog.get_key_id(hint_property).map_err(|_| {
-                                    Error::CypherSyntax(format!(
-                                        "ERR_USING_INDEX_NOT_FOUND: property `{hint_property}` referenced by USING INDEX hint on `:{hint_label}` is not registered"
-                                    ))
-                                })?;
-                                if !prop_idx.has_index(label_id_for_check, key_id_for_check) {
-                                    return Err(Error::CypherSyntax(format!(
-                                        "ERR_USING_INDEX_NOT_FOUND: no property index registered for `:{hint_label}({hint_property})` (USING INDEX hint requires a matching CREATE INDEX)"
-                                    )));
-                                }
-                            }
-                            // Force index usage for this property
-                            // The executor will use property index lookup instead of label scan
-                            operators.push(Operator::NodeByLabel {
-                                label_id,
+                        if first_label.starts_with('$') {
+                            // Dynamic-label sentinel (`$param`): the planner
+                            // has no params (they live on the execution
+                            // context), so it cannot resolve the label id
+                            // here. Drive the scan with AllNodesScan and
+                            // lower the sentinel to a label-check Filter —
+                            // the same lowering used for additional labels
+                            // below — which resolves `$param` against the
+                            // runtime params in operators/filter.rs (a
+                            // non-empty STRING becomes the label;
+                            // NULL/empty/non-STRING yields no rows, to
+                            // mirror `WHERE n:$x`).
+                            operators.push(Operator::AllNodesScan {
                                 variable: variable.clone(),
                             });
-                            // Add filter to use index (executor will detect property filter and use index)
-                        } else if use_scan_hint.is_some() {
-                            // USING SCAN hint - force label scan (already using NodeByLabel)
-                            operators.push(Operator::NodeByLabel {
-                                label_id,
-                                variable: variable.clone(),
+                            operators.push(Operator::Filter {
+                                predicate: format!("{}:{}", variable, first_label),
+                                predicate_ast: None,
                             });
                         } else {
-                            // Normal planning — prefer an index seek when a
-                            // covering property index exists, else label scan.
-                            // A composite index covering the FULL inline
-                            // property-map key set takes precedence over a
-                            // single-property seek (one seek narrows to the
-                            // exact tuple instead of leaving a residual
-                            // Filter on the other predicate(s)); inline
-                            // property equality (`{prop: value}`) on a
-                            // single-property index is tried next; a
-                            // WHERE-form equality conjunct (`WHERE n.prop =
-                            // value`) on an indexed property is lifted into
-                            // the same seek shape when neither inline seek
-                            // applies.
-                            if let Some(seek) =
-                                self.composite_index_seek_for(node, label_id, first_label, variable)
+                            let label_id = self.catalog.get_or_create_label(first_label)?;
+
+                            // Apply USING INDEX hint if present.
+                            //
+                            // phase7_planner-using-index-hints §1.5: when a
+                            // `PropertyIndex` handle is installed
+                            // (`with_property_index`), the planner verifies
+                            // that the hinted `(label, property)` pair has a
+                            // registered index and raises a structured
+                            // `ERR_USING_INDEX_NOT_FOUND` when it doesn't.
+                            // Without a handle the hint is accepted silently
+                            // — that's the legacy behaviour of unit-test
+                            // callers that don't construct an
+                            // `IndexManager`.
+                            if let Some(QueryHint::UsingIndex {
+                                label: hint_label,
+                                property: hint_property,
+                                ..
+                            }) = use_index_hint
                             {
-                                operators.push(seek);
-                            } else if let Some(seek) =
-                                self.node_index_seek_for(node, label_id, variable)
-                            {
-                                operators.push(seek);
-                            } else if let Some(seek) = self.where_equality_index_seek_for(
-                                variable,
-                                label_id,
-                                &mut residual_where,
-                            ) {
-                                operators.push(seek);
-                            } else {
+                                if let Some(prop_idx) = self.property_index {
+                                    // Verify the (label, property) pair has
+                                    // a registered single-property index.
+                                    let label_id_for_check = self.catalog.get_label_id(hint_label).map_err(|_| {
+                                        Error::CypherSyntax(format!(
+                                            "ERR_USING_INDEX_NOT_FOUND: label `:{hint_label}` referenced by USING INDEX hint is not registered"
+                                        ))
+                                    })?;
+                                    let key_id_for_check = self.catalog.get_key_id(hint_property).map_err(|_| {
+                                        Error::CypherSyntax(format!(
+                                            "ERR_USING_INDEX_NOT_FOUND: property `{hint_property}` referenced by USING INDEX hint on `:{hint_label}` is not registered"
+                                        ))
+                                    })?;
+                                    if !prop_idx.has_index(label_id_for_check, key_id_for_check) {
+                                        return Err(Error::CypherSyntax(format!(
+                                            "ERR_USING_INDEX_NOT_FOUND: no property index registered for `:{hint_label}({hint_property})` (USING INDEX hint requires a matching CREATE INDEX)"
+                                        )));
+                                    }
+                                }
+                                // Force index usage for this property
+                                // The executor will use property index lookup instead of label scan
                                 operators.push(Operator::NodeByLabel {
                                     label_id,
                                     variable: variable.clone(),
                                 });
+                                // Add filter to use index (executor will detect property filter and use index)
+                            } else if use_scan_hint.is_some() {
+                                // USING SCAN hint - force label scan (already using NodeByLabel)
+                                operators.push(Operator::NodeByLabel {
+                                    label_id,
+                                    variable: variable.clone(),
+                                });
+                            } else {
+                                // Normal planning — prefer an index seek when a
+                                // covering property index exists, else label scan.
+                                // A composite index covering the FULL inline
+                                // property-map key set takes precedence over a
+                                // single-property seek (one seek narrows to the
+                                // exact tuple instead of leaving a residual
+                                // Filter on the other predicate(s)); inline
+                                // property equality (`{prop: value}`) on a
+                                // single-property index is tried next; a
+                                // WHERE-form equality conjunct (`WHERE n.prop =
+                                // value`) on an indexed property is lifted into
+                                // the same seek shape when neither inline seek
+                                // applies.
+                                if let Some(seek) = self.composite_index_seek_for(
+                                    node,
+                                    label_id,
+                                    first_label,
+                                    variable,
+                                ) {
+                                    operators.push(seek);
+                                } else if let Some(seek) =
+                                    self.node_index_seek_for(node, label_id, variable)
+                                {
+                                    operators.push(seek);
+                                } else if let Some(seek) = self.where_equality_index_seek_for(
+                                    variable,
+                                    label_id,
+                                    &mut residual_where,
+                                ) {
+                                    operators.push(seek);
+                                } else {
+                                    operators.push(Operator::NodeByLabel {
+                                        label_id,
+                                        variable: variable.clone(),
+                                    });
+                                }
                             }
                         }
 
@@ -433,26 +458,52 @@ impl<'a> QueryPlanner<'a> {
 
                         if !node.labels.is_empty() {
                             let first_label = &node.labels[0];
-                            let label_id = self.catalog.get_or_create_label(first_label)?;
-                            if let Some(seek) =
-                                self.composite_index_seek_for(node, label_id, first_label, variable)
-                            {
-                                operators.push(seek);
-                            } else if let Some(seek) =
-                                self.node_index_seek_for(node, label_id, variable)
-                            {
-                                operators.push(seek);
-                            } else if let Some(seek) = self.where_equality_index_seek_for(
-                                variable,
-                                label_id,
-                                &mut residual_where,
-                            ) {
-                                operators.push(seek);
-                            } else {
-                                operators.push(Operator::NodeByLabel {
-                                    label_id,
+
+                            if first_label.starts_with('$') {
+                                // Dynamic-label sentinel (`$param`): the
+                                // planner has no params (they live on the
+                                // execution context), so it cannot resolve
+                                // the label id here. Drive the scan with
+                                // AllNodesScan and lower the sentinel to a
+                                // label-check Filter — the same lowering
+                                // used for additional labels below — which
+                                // resolves `$param` against the runtime
+                                // params in operators/filter.rs (a
+                                // non-empty STRING becomes the label;
+                                // NULL/empty/non-STRING yields no rows, to
+                                // mirror `WHERE n:$x`).
+                                operators.push(Operator::AllNodesScan {
                                     variable: variable.clone(),
                                 });
+                                operators.push(Operator::Filter {
+                                    predicate: format!("{}:{}", variable, first_label),
+                                    predicate_ast: None,
+                                });
+                            } else {
+                                let label_id = self.catalog.get_or_create_label(first_label)?;
+                                if let Some(seek) = self.composite_index_seek_for(
+                                    node,
+                                    label_id,
+                                    first_label,
+                                    variable,
+                                ) {
+                                    operators.push(seek);
+                                } else if let Some(seek) =
+                                    self.node_index_seek_for(node, label_id, variable)
+                                {
+                                    operators.push(seek);
+                                } else if let Some(seek) = self.where_equality_index_seek_for(
+                                    variable,
+                                    label_id,
+                                    &mut residual_where,
+                                ) {
+                                    operators.push(seek);
+                                } else {
+                                    operators.push(Operator::NodeByLabel {
+                                        label_id,
+                                        variable: variable.clone(),
+                                    });
+                                }
                             }
 
                             // Add filters for additional labels
