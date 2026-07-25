@@ -23,11 +23,11 @@ Nexus is a high-performance graph database with native support for vector simila
 
 - **Graph Database**: Store and query complex relationships
 - **Vector Search**: Native KNN support for similarity queries
-- **Cypher Support**: Industry-standard query language (~55% openCypher compatibility)
+- **Cypher Support**: Industry-standard query language (300/300 Neo4j differential tests; openCypher TCK ~13%)
 - **REST API**: Easy integration with any application
 - **High Performance**: Optimized for both graph traversal and vector operations
 - **ACID Transactions**: Data consistency and reliability
-- **Neo4j Compatibility**: 300/300 compatibility tests passing (100%)
+- **Neo4j Compatibility**: 300/300 differential-suite tests passing
 
 ### Neo4j Compatibility
 

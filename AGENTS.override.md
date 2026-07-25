@@ -91,7 +91,7 @@ Main-conversation context is the scarcest resource. Every `Read`/`Grep`/`Edit` i
 
 > **Last Updated**: 2026-04-19
 > **Version**: 1.0.0 (workspace)
-> **Status**: 300/300 Neo4j compatibility (Neo4j 2025.09.0 diff, matches the claim on line 81). Workspace
+> **Status**: 300/300 Neo4j differential suite tests passing (Neo4j 2025.09.0 diff-suite; distinct from openCypher TCK conformance ~13%). Workspace
 > `cargo +nightly test --workspace` reports **2310 passed / 67 ignored / 0 failed**. Production-readiness
 > statement intentionally dropped from this header — see the "Production readiness" criterion section below
 > for the maintainers' explicit gate (auth + persistence + compat + RPC transport).
@@ -156,11 +156,11 @@ powershell -ExecutionPolicy Bypass -File scripts/compatibility/test-neo4j-nexus-
 ### Key Characteristics
 
 - **Neo4j-Inspired Architecture**: Fixed-size record stores, O(1) traversal via linked lists
-- **~55% openCypher Compatibility**: Core clauses + ~60 functions (300/300 compatibility tests passing)
+- **Neo4j Compatibility**: 300/300 on Neo4j differential suite (curated queries); openCypher TCK conformance ~13% (strict spec, 505/3868 scenarios; see docs/compatibility/OPENCYPHER_TCK_REPORT.md)
 - **Native Vector Search**: First-class HNSW KNN indexes per label
 - **ACID Transactions**: Simplified MVCC via epochs, single-writer model
 - **Multi-Database Support**: Isolated databases within single server instance
-- **Test surface**: 2310 workspace tests passing on `cargo +nightly test --workspace` (0 failed, 67 ignored); 300/300 on the Neo4j diff suite. Re-run the numbers via `scripts/compatibility/test-neo4j-nexus-compatibility-200.ps1` (diff) and `cargo +nightly test --workspace` (unit + integration). See [docs/compatibility/NEO4J_COMPATIBILITY_REPORT.md](docs/compatibility/NEO4J_COMPATIBILITY_REPORT.md) for the canonical feature-by-feature status.
+- **Test surface**: 2310 workspace tests passing on `cargo +nightly test --workspace` (0 failed, 67 ignored); **300/300 on the Neo4j differential suite** (see MEASUREMENT clarification below). Re-run the numbers via `scripts/compatibility/test-neo4j-nexus-compatibility-200.ps1` (diff) and `cargo +nightly test --workspace` (unit + integration). See [docs/compatibility/NEO4J_COMPATIBILITY_REPORT.md](docs/compatibility/NEO4J_COMPATIBILITY_REPORT.md) for the canonical feature-by-feature status and openCypher TCK conformance (first baseline ~13%, see [docs/compatibility/OPENCYPHER_TCK_REPORT.md](docs/compatibility/OPENCYPHER_TCK_REPORT.md)).
 
 ### Target Use Cases
 
