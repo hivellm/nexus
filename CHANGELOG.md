@@ -15,6 +15,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > carry these fixes. The remediation is tracked across 27 `phase0_fix-*`
 > tasks and will land incrementally under this release.
 
+### Changed — `phase10_thunder-server-migration` (native RPC now runs on `thunder-rpc`)
+
+- **The native binary RPC server (port 15475) was migrated from a
+  hand-rolled MessagePack transport onto the shared HiveLLM `thunder-rpc`
+  crate (Thunder wire v1).** No wire change — Thunder wire v1 is
+  byte-identical to the previous Nexus RPC wire (same `u32` LE length prefix
+  + rmp-serde externally-tagged body, same `Request`/`Response`/value model,
+  same `PUSH_ID`), so **deployed SDKs and CLIs keep working unchanged**
+  (proven end-to-end by `rpc_integration_test.rs`, a raw-framing client
+  round-tripping the migrated server, plus `thunder_rpc_tests.rs` driving it
+  through the real `thunder::client::Client`). The server now inherits
+  Thunder's hardening (pre-allocation frame-cap validation, idle timeout,
+  connection ceiling, metrics observer, session identity) and deletes
+  ~230 lines of duplicated accept-loop / framing / writer-task code.
+- **The RPC command catalog, arg conventions, response encodings, error
+  strings, ports and env vars are unchanged.** `NEXUS_RPC_{ADDR,
+  MAX_FRAME_BYTES,MAX_IN_FLIGHT,SLOW_MS,REQUIRE_AUTH}` still apply
+  (mapped onto Thunder's `Config`/`ListenerConfig`). HTTP/REST (15474),
+  RESP3 (15476), MCP and GraphQL are untouched.
+- **`nexus-protocol::rpc` was removed.** The RPC wire is now the shared
+  `thunder-rpc` registry crate, consumed directly by the server, the CLI,
+  and the SDKs (each side normalizes on Thunder — no shared protocol crate).
+  The Rust SDK (`nexus-graph-sdk`) consequently no longer depends on
+  `nexus-protocol` at all and depends only on published crates. The rest of
+  `nexus-protocol` (REST/MCP/UMICP/RESP3 clients) is unaffected.
+- API-level note (not a wire change): consumers that reached into
+  `nexus_protocol::rpc::{types,codec}` now use `thunder::{Value, Request,
+  Response, wire::*, PUSH_ID}` directly. `thunder::Value::Bytes` holds
+  `Arc<[u8]>` (build with `Value::bytes(..)`), and Thunder's async frame
+  read/write helpers also return the frame size.
+
 ### Fixed — `phase0_fix-where-clause-index-seek-extensions` (range seek + EXPLAIN/PROFILE accuracy)
 
 - **A range WHERE predicate (`n.age > 30`, `>=`, `<`, `<=`) on an indexed property now index-seeks instead of full-scanning, and EXPLAIN/PROFILE now show the real plan.** Follow-up to `phase0_fix-where-clause-index-seek`, which scoped its seeks to constant-literal equality; range/IN/STARTS WITH still full-scanned (they emitted the `Nexus.Performance.UnindexedPropertyAccess` notification but never sought). **Range seek:** the single-property B-tree already supported range and prefix scans (`find_range`/`find_greater_than`/`find_less_than`); a new `Operator::NodeIndexRangeSeek { op, value }` and `where_range_seek_operand` lift `var.prop <op> <literal>` (and the mirrored `<literal> <op> var.prop`, which inverts the operator) to a bounded key-range scan. Because the B-tree range is inclusive on both ends, exclusive `>` / `<` subtract the exact-match bitmap for the threshold, so the results are identical to a full scan (residual `Filter`s still run). When both bounds are present (`age > 10 AND age < 40`) one lifts to the seek and the other stays a residual filter. **EXPLAIN/PROFILE accuracy:** `execute_explain_with_string` / `execute_profile_with_string` built their display plan via an ad-hoc `QueryPlanner` that wired neither `property_index` nor `composite_index`, so an EXPLAIN'd plan showed `NodeByLabel`+`Filter` where execution actually runs a `NodeIndexSeek`/`CompositeBtreeSeek`; they now plan via the executor's real `plan_ast`, so the shown plan matches execution. Not a breaking change — plan-selection / diagnostics only; results are unchanged. The remaining forms (`IN`, `STARTS WITH`, and `$parameter` equality) are split into the follow-up `phase0_fix-where-in-prefix-param-index-seek`. Regression tests: `tests/cypher/where_range_index_seek_test.rs` (result-parity for `>`/`>=`/`<`/`<=`, the mirrored form, and a combined-bound case) and planner unit tests (each comparison lifts to the right `NodeIndexRangeSeek`; no index → no seek). See `docs/specs/cypher-subset.md`.

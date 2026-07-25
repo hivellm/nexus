@@ -1,8 +1,17 @@
 # Nexus Binary RPC — Wire Format Specification
 
-> Status: **v1 (stable)**
-> Source of truth: [nexus-protocol/src/rpc](../../nexus-protocol/src/rpc/)
+> Status: **Thunder wire v1 (stable, frozen)**
+> Source of truth: the shared [`thunder-rpc`](https://crates.io/crates/thunder-rpc)
+> crate (`thunder::wire`) — see Thunder SPEC-003/004. Since
+> `phase10_thunder-server-migration` the Nexus RPC wire **is** Thunder wire
+> v1 (byte-identical to the pre-migration hand-rolled wire this document
+> originally described: same `u32` LE length prefix + rmp-serde
+> externally-tagged body, same `Request`/`Response`/value model, same
+> `PUSH_ID`). Deployed clients need no change.
 > Server: [nexus-server/src/protocol/rpc](../../nexus-server/src/protocol/rpc/)
+> (a `thunder::server::Dispatch` bridge over the unchanged command tree).
+> Profile: `nexus_thunder_config()` (scheme `nexus`, `AuthCommand` handshake,
+> `Resp3Prefixes` errors, 64 MiB frame cap).
 > Default port: **15475** (additive to HTTP 15474 and RESP3 15476)
 
 The native binary RPC is the preferred transport for first-party Nexus SDKs.
