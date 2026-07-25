@@ -85,7 +85,7 @@ pub mod wal;
 // The module provides isolated test environments that prevent LMDB conflicts
 pub mod testing;
 
-pub use error::{Error, Result};
+pub use error::{Error, OpenCypherErrorKind, Result};
 pub use graph::clustering::{
     Cluster, ClusteringAlgorithm, ClusteringConfig, ClusteringEngine, ClusteringMetrics,
     ClusteringResult, DistanceMetric, FeatureStrategy, LinkageType,

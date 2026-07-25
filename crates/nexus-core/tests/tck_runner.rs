@@ -25,6 +25,7 @@ use std::collections::HashMap;
 
 use cucumber::{World, gherkin, given, then, when};
 use nexus_core::Engine;
+use nexus_core::OpenCypherErrorKind;
 use nexus_core::executor::ResultSet;
 use nexus_core::testing::{TestContext, setup_isolated_test_engine};
 use serde_json::Value;
@@ -40,6 +41,10 @@ pub struct SpatialWorld {
     _ctx: Option<TestContext>,
     last_result: Option<ResultSet>,
     last_error: Option<String>,
+    /// openCypher classification of `last_error`, captured from the typed
+    /// engine error before it was stringified. `None` when the last query
+    /// succeeded or none has run.
+    last_error_kind: Option<OpenCypherErrorKind>,
 }
 
 impl std::fmt::Debug for SpatialWorld {
@@ -52,6 +57,7 @@ impl std::fmt::Debug for SpatialWorld {
                 &self.last_result.as_ref().map(|r| r.rows.len()),
             )
             .field("last_error", &self.last_error)
+            .field("last_error_kind", &self.last_error_kind)
             .finish()
     }
 }
@@ -80,9 +86,11 @@ impl SpatialWorld {
             Ok(rs) => {
                 self.last_result = Some(rs);
                 self.last_error = None;
+                self.last_error_kind = None;
             }
             Err(e) => {
                 self.last_result = None;
+                self.last_error_kind = Some(e.opencypher_kind());
                 self.last_error = Some(e.to_string());
             }
         }
@@ -160,18 +168,29 @@ fn result_empty(world: &mut SpatialWorld) {
 }
 
 /// `Then a TypeError should be raised at runtime: ERR_CRS_MISMATCH`
+/// `Then a SyntaxError should be raised at compile time: UndefinedVariable`
 ///
-/// Asserts the captured error message contains the named token. The
-/// "TypeError" / "SyntaxError" / "ConstraintError" prefix is matched
-/// loosely — Nexus's error taxonomy doesn't yet split errors into
-/// strict openCypher categories, so the harness only verifies the
-/// failure happened and the error message contains the expected
-/// token (typically a `ERR_*` code).
-#[then(regex = r"^a (\w+) should be raised at runtime: (.+)$")]
-fn error_at_runtime(world: &mut SpatialWorld, _kind: String, token: String) {
-    let err = world.last_error.as_ref().unwrap_or_else(|| {
+/// Asserts two things, so a scenario cannot pass by coincidence:
+///   1. the failure's openCypher *kind* (as classified by the engine from
+///      the typed `Error`, via `Error::opencypher_kind`) equals the kind
+///      named in the feature — `ConstraintError` is accepted as an alias
+///      of `ConstraintVerificationFailed`;
+///   2. the error message carries the expected detail token.
+///
+/// The phase (`compile time` vs `runtime`) is captured so both forms bind
+/// to this step, but is not asserted: Nexus detects some statically-provable
+/// errors only at execution time, and failing on that distinction would be a
+/// false negative rather than a real conformance gap.
+#[then(regex = r"^a (\w+) should be raised at (compile time|runtime): (.+)$")]
+fn error_should_be_raised(
+    world: &mut SpatialWorld,
+    kind_word: String,
+    _phase: String,
+    token: String,
+) {
+    let msg = world.last_error.as_ref().unwrap_or_else(|| {
         panic!(
-            "expected an error containing `{token}` but the query succeeded; \
+            "expected a {kind_word} containing `{token}` but the query succeeded; \
              last_result has {} rows",
             world
                 .last_result
@@ -180,10 +199,20 @@ fn error_at_runtime(world: &mut SpatialWorld, _kind: String, token: String) {
                 .unwrap_or(0)
         )
     });
+    let expected = OpenCypherErrorKind::parse_tck_name(kind_word.trim())
+        .unwrap_or_else(|| panic!("unknown openCypher error kind in feature: `{kind_word}`"));
+    let actual = world
+        .last_error_kind
+        .expect("an error was captured but not classified");
+    assert_eq!(
+        actual, expected,
+        "expected error kind {expected:?} (`{kind_word}`), but Nexus classified it as \
+         {actual:?}: {msg}"
+    );
     let token = token.trim();
     assert!(
-        err.contains(token),
-        "expected error to contain `{token}`, got: {err}"
+        msg.contains(token),
+        "expected error to contain `{token}`, got: {msg}"
     );
 }
 
