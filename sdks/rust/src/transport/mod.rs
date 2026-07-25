@@ -33,7 +33,7 @@ pub use endpoint::{Endpoint, Scheme};
 
 use crate::error::Result;
 use async_trait::async_trait;
-use nexus_protocol::rpc::types::NexusValue;
+use thunder::Value as NexusValue;
 
 /// Which wire transport the client uses.
 ///

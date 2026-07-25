@@ -12,7 +12,6 @@
 pub mod mcp;
 pub mod resp3;
 pub mod rest;
-pub mod rpc;
 pub mod umicp;
 
 pub use mcp::{McpClient, McpClientError};

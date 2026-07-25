@@ -13,7 +13,7 @@
 use crate::error::{NexusError, Result};
 use async_trait::async_trait;
 use base64::Engine;
-use nexus_protocol::rpc::types::NexusValue;
+use thunder::Value as NexusValue;
 use reqwest::{Client, Method};
 use serde_json::Value;
 

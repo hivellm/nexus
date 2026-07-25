@@ -17,7 +17,7 @@
 //!
 //! See `docs/specs/sdk-transport.md` §6 for the full contract.
 
-use nexus_protocol::rpc::types::NexusValue;
+use thunder::Value as NexusValue;
 use serde_json::Value;
 
 use super::http::json_to_nexus;

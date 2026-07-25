@@ -1,8 +1,8 @@
 use anyhow::{Result, anyhow};
-use nexus_protocol::rpc::types::NexusValue;
 use reqwest::{Client, StatusCode};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use thunder::Value as NexusValue;
 
 use crate::endpoint::Endpoint;
 use crate::rpc_transport::{RpcCredentials, RpcTransport};
@@ -834,7 +834,8 @@ fn nexus_to_json(v: NexusValue) -> Value {
         NexusValue::Bytes(b) => {
             // Preserve bytes as a JSON array of ints so they survive
             // the trip to the CLI's print-table / print-json code.
-            Value::Array(b.into_iter().map(Value::from).collect())
+            // (Thunder's `Bytes` is `Arc<[u8]>`, so iterate by ref.)
+            Value::Array(b.iter().copied().map(Value::from).collect())
         }
         NexusValue::Array(a) => Value::Array(a.into_iter().map(nexus_to_json).collect()),
         NexusValue::Map(pairs) => {

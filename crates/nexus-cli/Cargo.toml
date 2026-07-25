@@ -30,7 +30,7 @@ clap_complete = "4.5"
 reqwest = { version = "0.12", default-features = false, features = ["json", "blocking", "rustls-tls"] }
 
 # Native binary RPC transport (default on `nexus://` URLs)
-nexus-protocol = { path = "../nexus-protocol" }
+thunder-rpc = { workspace = true, features = ["tokio"] }
 
 # Async runtime
 tokio = { workspace = true }

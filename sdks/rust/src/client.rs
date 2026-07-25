@@ -15,7 +15,7 @@ use crate::transport::http::{HttpCredentials, HttpTransport, nexus_to_json};
 use crate::transport::rpc::{RpcCredentials, RpcTransport};
 use crate::transport::{Transport, TransportMode, TransportRequest};
 use base64::Engine;
-use nexus_protocol::rpc::types::NexusValue;
+use thunder::Value as NexusValue;
 use reqwest::{Client, ClientBuilder, Response};
 use std::collections::HashMap;
 use std::sync::Arc;

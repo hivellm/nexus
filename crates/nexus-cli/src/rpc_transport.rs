@@ -19,9 +19,9 @@
 //! tiny.
 
 use anyhow::{Result, anyhow};
-use nexus_protocol::rpc::codec::{read_response, write_request};
-use nexus_protocol::rpc::types::{NexusValue, Request};
 use std::sync::atomic::{AtomicU32, Ordering};
+use thunder::wire::{read_response, write_request};
+use thunder::{Request, Value as NexusValue};
 use tokio::io::BufReader;
 use tokio::net::TcpStream;
 use tokio::sync::Mutex;
@@ -81,7 +81,7 @@ impl RpcTransport {
 
         // Reserve an id. u32::MAX is reserved for server push, skip it.
         let mut id = self.next_id.fetch_add(1, Ordering::Relaxed);
-        if id == nexus_protocol::rpc::PUSH_ID {
+        if id == thunder::PUSH_ID {
             id = self.next_id.fetch_add(1, Ordering::Relaxed);
         }
 
@@ -94,7 +94,7 @@ impl RpcTransport {
             .await
             .map_err(|e| anyhow!("failed to send RPC frame: {}", e))?;
 
-        let resp = read_response(stream)
+        let (resp, _) = read_response(stream)
             .await
             .map_err(|e| anyhow!("failed to read RPC frame: {}", e))?;
         if resp.id != id {
@@ -135,7 +135,7 @@ impl RpcTransport {
         )
         .await
         .map_err(|e| anyhow!("failed to send HELLO: {}", e))?;
-        let hello = read_response(&mut buf)
+        let (hello, _) = read_response(&mut buf)
             .await
             .map_err(|e| anyhow!("failed to read HELLO reply: {}", e))?;
         if let Err(e) = hello.result {
@@ -164,7 +164,7 @@ impl RpcTransport {
             )
             .await
             .map_err(|e| anyhow!("failed to send AUTH: {}", e))?;
-            let auth = read_response(&mut buf)
+            let (auth, _) = read_response(&mut buf)
                 .await
                 .map_err(|e| anyhow!("failed to read AUTH reply: {}", e))?;
             if let Err(e) = auth.result {

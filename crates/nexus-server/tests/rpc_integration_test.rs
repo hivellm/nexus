@@ -3,12 +3,26 @@
 //! These start a real server via `NexusServer::new`, bind a listener on an
 //! OS-picked loopback port, and drive it through `TcpStream` so the full
 //! accept -> read -> dispatch -> write -> read pipeline is exercised.
+//!
+//! phase10 — the client side here talks the Thunder `wire` codec directly
+//! (the same wire the migrated listener serves), doubling as the wire-compat
+//! proof that a raw framing client round-trips the Thunder-backed server.
 
 use std::sync::Arc;
 use std::time::Duration;
 
-use nexus_protocol::rpc::{NexusValue, PUSH_ID, Request, read_response, write_request};
+use thunder::wire::write_request;
+use thunder::{PUSH_ID, Request, Value as NexusValue};
+use tokio::io::AsyncRead;
 use tokio::net::{TcpListener, TcpStream};
+
+/// Thunder's async `read_response` also returns the frame size; these tests
+/// only want the `Response`, so drop it here and keep the call sites tidy.
+async fn read_response<R: AsyncRead + Unpin>(reader: &mut R) -> std::io::Result<thunder::Response> {
+    thunder::wire::read_response(reader)
+        .await
+        .map(|(resp, _)| resp)
+}
 
 use nexus_server::config::{RootUserConfig, RpcConfig};
 use nexus_server::protocol::rpc::spawn_rpc_listener;
@@ -61,9 +75,7 @@ async fn spawn_server(auth_required: bool) -> std::net::SocketAddr {
     // Hold the Thunder `ListenerHandle` for the whole test process —
     // dropping it would gracefully shut the listener down. Leaking mirrors
     // the `ctx` leak above and keeps `spawn_server`'s `-> SocketAddr`
-    // signature (and every caller) unchanged. NOTE: this test drives the
-    // migrated Thunder server with the OLD `nexus_protocol` codec, proving
-    // Thunder wire v1 is byte-compatible with deployed clients.
+    // signature (and every caller) unchanged.
     let handle = spawn_rpc_listener(server, addr, RpcConfig::default(), auth_required)
         .await
         .unwrap();

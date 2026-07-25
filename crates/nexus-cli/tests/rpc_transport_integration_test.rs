@@ -3,8 +3,7 @@
 //!
 //! The CLI crate cannot depend on `nexus-server` (reverse-dep) so this
 //! suite stands up a **minimal mock** RPC server speaking the exact
-//! wire format defined in `nexus_protocol::rpc::{codec,types}`. The
-//! mock:
+//! wire format from the shared `thunder::wire` codec. The mock:
 //!
 //! - binds a loopback TCP socket on an OS-assigned free port,
 //! - accepts one connection,
@@ -22,9 +21,19 @@
 //! CLI will fail loudly here without waiting for an end-to-end
 //! integration against the real server.
 
-use nexus_protocol::rpc::{NexusValue, Request, Response, read_request, write_response};
 use std::net::SocketAddr;
+use thunder::wire::write_response;
+use thunder::{Request, Response, Value as NexusValue};
+use tokio::io::AsyncRead;
 use tokio::net::TcpListener;
+
+/// Thunder's async `read_request` also returns the frame size; this mock
+/// server only wants the `Request`, so drop it and keep the call sites tidy.
+async fn read_request<R: AsyncRead + Unpin>(reader: &mut R) -> std::io::Result<Request> {
+    thunder::wire::read_request(reader)
+        .await
+        .map(|(req, _)| req)
+}
 
 /// Build a CYPHER-shape reply envelope.
 fn cypher_envelope(columns: Vec<&str>, rows: Vec<Vec<NexusValue>>, elapsed_ms: i64) -> NexusValue {
