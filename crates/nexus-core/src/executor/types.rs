@@ -162,7 +162,7 @@ pub struct Notification {
 /// openCypher TCK uses (`+nodes`, `-properties`, ...). Every field is a
 /// plain `u64` counter, `Copy`, and defaults to all-zero — read-only
 /// queries surface a zeroed `SideEffects` on their `ResultSet`.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize)]
 pub struct SideEffects {
     /// Nodes actually inserted. A `MERGE`/`ConflictPolicy::Match` that
     /// resolves to an existing node must NOT increment this.
@@ -186,6 +186,17 @@ pub struct SideEffects {
     /// Labels removed from an existing node (`REMOVE n:Label`). Removing an
     /// absent label is idempotent and not counted.
     pub labels_removed: u64,
+}
+
+impl SideEffects {
+    /// True when every counter is zero — i.e. a read-only query performed no
+    /// mutations. Used by the `/cypher` HTTP layer to omit the `stats` object
+    /// on the read hot path, so read responses stay byte-for-byte what they
+    /// were before side-effect reporting was added.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        *self == Self::default()
+    }
 }
 
 /// Query result set

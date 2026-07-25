@@ -226,6 +226,18 @@ pub struct CypherResponse {
     /// before phase6.
     #[serde(skip_serializing_if = "Vec::is_empty", default)]
     pub notifications: Vec<nexus_core::executor::types::Notification>,
+    /// Mutation counters for the query in openCypher/Neo4j vocabulary
+    /// (nodes/relationships created and deleted, properties set/removed,
+    /// labels added/removed). Omitted from the wire format for read-only
+    /// queries (all-zero) so the read hot path keeps the exact byte count it
+    /// had before side-effect reporting; present on any query that mutated
+    /// the graph. Additive — the Neo4j-compatible `columns`/`rows` shape is
+    /// unchanged.
+    #[serde(
+        default,
+        skip_serializing_if = "nexus_core::executor::types::SideEffects::is_empty"
+    )]
+    pub stats: nexus_core::executor::types::SideEffects,
 }
 
 /// Record Prometheus metrics for query execution against the server's

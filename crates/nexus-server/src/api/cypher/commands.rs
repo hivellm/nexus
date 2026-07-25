@@ -38,6 +38,7 @@ pub(crate) async fn execute_database_commands(
                         .to_string(),
                 ),
                 notifications: vec![],
+                stats: Default::default(),
             });
         }
 
@@ -70,6 +71,7 @@ pub(crate) async fn execute_database_commands(
                         execution_time_ms: execution_time,
                         error: Some(format!("Database '{}' does not exist", use_db.name)),
                         notifications: Vec::new(),
+                        stats: Default::default(),
                     });
                 }
             }
@@ -123,6 +125,7 @@ pub(crate) async fn execute_database_commands(
                             execution_time_ms: execution_time,
                             error: Some(format!("Failed to create database: {}", e)),
                             notifications: Vec::new(),
+                            stats: Default::default(),
                         });
                     }
                 }
@@ -155,6 +158,7 @@ pub(crate) async fn execute_database_commands(
                             execution_time_ms: execution_time,
                             error: Some(format!("Failed to drop database: {}", e)),
                             notifications: Vec::new(),
+                            stats: Default::default(),
                         });
                     }
                 }
@@ -170,6 +174,7 @@ pub(crate) async fn execute_database_commands(
         execution_time_ms: execution_time,
         error: None,
         notifications: Vec::new(),
+        stats: Default::default(),
     })
 }
 
@@ -241,6 +246,7 @@ pub(crate) async fn execute_user_commands(
                         execution_time_ms: execution_time,
                         error: Some(format!("User '{}' not found", show_user.username)),
                         notifications: Vec::new(),
+                        stats: Default::default(),
                     });
                 }
             }
@@ -265,6 +271,7 @@ pub(crate) async fn execute_user_commands(
                                 "Cannot delete root user. Use DISABLE instead.".to_string(),
                             ),
                             notifications: Vec::new(),
+                            stats: Default::default(),
                         });
                     }
 
@@ -281,6 +288,7 @@ pub(crate) async fn execute_user_commands(
                             execution_time_ms: execution_time,
                             error: Some(format!("Failed to delete user '{}'", drop_user.username)),
                             notifications: Vec::new(),
+                            stats: Default::default(),
                         });
                     }
                 } else if drop_user.if_exists {
@@ -296,6 +304,7 @@ pub(crate) async fn execute_user_commands(
                         execution_time_ms: execution_time,
                         error: Some(format!("User '{}' not found", drop_user.username)),
                         notifications: Vec::new(),
+                        stats: Default::default(),
                     });
                 }
             }
@@ -316,6 +325,7 @@ pub(crate) async fn execute_user_commands(
                         execution_time_ms: execution_time,
                         error: Some(format!("User '{}' already exists", create_user.username)),
                         notifications: Vec::new(),
+                        stats: Default::default(),
                     });
                 }
 
@@ -378,6 +388,7 @@ pub(crate) async fn execute_user_commands(
                             execution_time_ms: execution_time,
                             error: Some(e),
                             notifications: Vec::new(),
+                            stats: Default::default(),
                         });
                     }
                 };
@@ -398,6 +409,7 @@ pub(crate) async fn execute_user_commands(
                             execution_time_ms: execution_time,
                             error: Some("Cannot modify root user permissions. Only root users can modify root users.".to_string()),
                             notifications: Vec::new(),
+                            stats: Default::default(),
                         });
                     }
                 }
@@ -443,6 +455,7 @@ pub(crate) async fn execute_user_commands(
                         execution_time_ms: execution_time,
                         error: Some(format!("User or role '{}' not found", grant.target)),
                         notifications: Vec::new(),
+                        stats: Default::default(),
                     });
                 }
             }
@@ -479,6 +492,7 @@ pub(crate) async fn execute_user_commands(
                             execution_time_ms: execution_time,
                             error: Some(e),
                             notifications: Vec::new(),
+                            stats: Default::default(),
                         });
                     }
                 };
@@ -499,6 +513,7 @@ pub(crate) async fn execute_user_commands(
                             execution_time_ms: execution_time,
                             error: Some("Cannot modify root user permissions. Only root users can modify root users.".to_string()),
                             notifications: Vec::new(),
+                            stats: Default::default(),
                         });
                     }
                 }
@@ -535,6 +550,7 @@ pub(crate) async fn execute_user_commands(
                         execution_time_ms: execution_time,
                         error: Some(format!("User or role '{}' not found", revoke.target)),
                         notifications: Vec::new(),
+                        stats: Default::default(),
                     });
                 }
             }
@@ -549,6 +565,7 @@ pub(crate) async fn execute_user_commands(
         execution_time_ms: execution_time,
         error: None,
         notifications: Vec::new(),
+        stats: Default::default(),
     })
 }
 
@@ -627,6 +644,7 @@ pub(crate) async fn execute_query_management_commands(
                             terminate_clause.query_id
                         )),
                         notifications: Vec::new(),
+                        stats: Default::default(),
                     });
                 }
             }
@@ -641,6 +659,7 @@ pub(crate) async fn execute_query_management_commands(
         execution_time_ms: execution_time,
         error: None,
         notifications: Vec::new(),
+        stats: Default::default(),
     })
 }
 
@@ -738,6 +757,7 @@ pub(crate) async fn execute_api_key_commands(
                             execution_time_ms: execution_time,
                             error: Some(e),
                             notifications: Vec::new(),
+                            stats: Default::default(),
                         });
                     }
                 };
@@ -756,6 +776,7 @@ pub(crate) async fn execute_api_key_commands(
                                 execution_time_ms: execution_time,
                                 error: Some(format!("User '{}' not found", username)),
                                 notifications: Vec::new(),
+                                stats: Default::default(),
                             });
                         }
                     }
@@ -775,6 +796,7 @@ pub(crate) async fn execute_api_key_commands(
                                 execution_time_ms: execution_time,
                                 error: Some(e),
                                 notifications: Vec::new(),
+                                stats: Default::default(),
                             });
                         }
                     }
@@ -829,6 +851,7 @@ pub(crate) async fn execute_api_key_commands(
                             execution_time_ms: execution_time,
                             error: Some(format!("Failed to create API key: {}", e)),
                             notifications: Vec::new(),
+                            stats: Default::default(),
                         });
                     }
                 }
@@ -859,6 +882,7 @@ pub(crate) async fn execute_api_key_commands(
                             execution_time_ms: execution_time,
                             error: Some(format!("User '{}' not found", username)),
                             notifications: Vec::new(),
+                            stats: Default::default(),
                         });
                     }
                 } else {
@@ -902,6 +926,7 @@ pub(crate) async fn execute_api_key_commands(
                             execution_time_ms: execution_time,
                             error: Some(format!("Failed to revoke API key: {}", e)),
                             notifications: Vec::new(),
+                            stats: Default::default(),
                         });
                     }
                 }
@@ -922,6 +947,7 @@ pub(crate) async fn execute_api_key_commands(
                         execution_time_ms: execution_time,
                         error: Some(format!("API key '{}' not found", delete_key.key_id)),
                         notifications: Vec::new(),
+                        stats: Default::default(),
                     });
                 }
             }
@@ -936,5 +962,6 @@ pub(crate) async fn execute_api_key_commands(
         execution_time_ms: execution_time,
         error: None,
         notifications: Vec::new(),
+        stats: Default::default(),
     })
 }

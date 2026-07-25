@@ -205,6 +205,7 @@ pub async fn execute_cypher(
                 execution_time_ms: execution_time,
                 error: Some(format!("Parse error: {}", e)),
                 notifications: Vec::new(),
+                stats: Default::default(),
             });
         }
     };
@@ -286,6 +287,7 @@ pub async fn execute_cypher(
                 execution_time_ms: execution_time,
                 error: Some(message),
                 notifications: Vec::new(),
+                stats: Default::default(),
             });
         }
     };
@@ -324,6 +326,7 @@ pub async fn execute_cypher(
                     execution_time_ms: execution_time,
                     error: None,
                     notifications: Vec::new(),
+                    stats: result.side_effects,
                 });
             }
             Err(e) => {
@@ -334,6 +337,7 @@ pub async fn execute_cypher(
                     execution_time_ms: execution_time,
                     error: Some(format!("Execution error: {}", e)),
                     notifications: Vec::new(),
+                    stats: Default::default(),
                 });
             }
         }
@@ -397,6 +401,7 @@ pub async fn execute_cypher(
                     execution_time_ms: execution_time,
                     error: None,
                     notifications: Vec::new(),
+                    stats: result.side_effects,
                 });
             }
             Err(e) => {
@@ -407,6 +412,7 @@ pub async fn execute_cypher(
                     execution_time_ms: execution_time,
                     error: Some(format!("Execution error: {}", e)),
                     notifications: Vec::new(),
+                    stats: Default::default(),
                 });
             }
         }
@@ -452,6 +458,7 @@ pub async fn execute_cypher(
                         execution_time_ms: execution_time,
                         error: None,
                         notifications: result.notifications,
+                        stats: result.side_effects,
                     })
                 }
                 Err(e) => Json(CypherResponse {
@@ -460,6 +467,7 @@ pub async fn execute_cypher(
                     execution_time_ms: execution_time,
                     error: Some(format!("Execution error: {}", e)),
                     notifications: Vec::new(),
+                    stats: Default::default(),
                 }),
             };
         }
@@ -505,6 +513,7 @@ pub async fn execute_cypher(
                         execution_time_ms: execution_time,
                         error: None,
                         notifications: result.notifications,
+                        stats: result.side_effects,
                     })
                 }
                 Err(e) => Json(CypherResponse {
@@ -513,6 +522,7 @@ pub async fn execute_cypher(
                     execution_time_ms: execution_time,
                     error: Some(format!("Execution error: {}", e)),
                     notifications: Vec::new(),
+                    stats: Default::default(),
                 }),
             };
         }
@@ -605,6 +615,7 @@ pub async fn execute_cypher(
                     execution_time_ms: execution_time,
                     error: None,
                     notifications: result_set.notifications,
+                    stats: result_set.side_effects,
                 })
             }
             Err(e) => {
@@ -627,6 +638,7 @@ pub async fn execute_cypher(
                     execution_time_ms: execution_time,
                     error: Some(e.to_string()),
                     notifications: Vec::new(),
+                    stats: Default::default(),
                 })
             }
         };
@@ -699,6 +711,7 @@ pub async fn execute_cypher(
                                 execution_time_ms: start_time.elapsed().as_millis() as u64,
                                 error: Some(format!("Task execution error: {}", e)),
                                 notifications: Vec::new(),
+                                stats: Default::default(),
                             });
                         }
                     };
@@ -721,6 +734,7 @@ pub async fn execute_cypher(
                             execution_time_ms,
                             error: None,
                             notifications: result_set.notifications,
+                            stats: result_set.side_effects,
                         })
                     }
                     Err(e) => {
@@ -731,6 +745,7 @@ pub async fn execute_cypher(
                             execution_time_ms,
                             error: Some(e.to_string()),
                             notifications: Vec::new(),
+                            stats: Default::default(),
                         })
                     }
                 };
@@ -771,6 +786,7 @@ pub async fn execute_cypher(
                         execution_time_ms: execution_time,
                         error: None,
                         notifications: result_set.notifications,
+                        stats: result_set.side_effects,
                     });
                 }
                 Err(e) => {
@@ -783,6 +799,7 @@ pub async fn execute_cypher(
                         execution_time_ms: execution_time,
                         error: Some(e.to_string()),
                         notifications: Vec::new(),
+                        stats: Default::default(),
                     });
                 }
             }
@@ -844,6 +861,7 @@ pub async fn execute_cypher(
                 execution_time_ms: start_time.elapsed().as_millis() as u64,
                 error: Some(format!("Task execution error: {}", e)),
                 notifications: Vec::new(),
+                stats: Default::default(),
             });
         }
     };
@@ -901,6 +919,7 @@ pub async fn execute_cypher(
                 execution_time_ms,
                 error: None,
                 notifications: result_set.notifications,
+                stats: result_set.side_effects,
             })
         }
         Err(e) => {
@@ -938,6 +957,7 @@ pub async fn execute_cypher(
                 execution_time_ms,
                 error: Some(error_msg),
                 notifications: Vec::new(),
+                stats: Default::default(),
             })
         }
     }
