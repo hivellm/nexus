@@ -887,8 +887,10 @@ fn set_plus_equals_merges_map_into_properties() {
 /// Filter operator's text-mode short-circuit (`filter.rs` line ~29).
 /// §8 extends that short-circuit to accept `$param` on the RHS so
 /// `MATCH (n) WHERE n:$x RETURN n` resolves the label at runtime.
-/// Unknown / NULL / empty / non-STRING parameter collapses the
-/// predicate to "no rows" (three-valued-logic equivalent for labels).
+/// A missing / NULL / empty / non-STRING parameter raises a typed
+/// `ERR_INVALID_LABEL` (phase7 §4.4 uniformised this with dynamic
+/// relationship types — a degenerate dynamic label/type is an error, not
+/// a silent no-rows).
 #[test]
 fn where_label_predicate_accepts_static_and_dynamic_label_forms() {
     let ctx = crate::testing::TestContext::new();
@@ -923,25 +925,18 @@ fn where_label_predicate_accepts_static_and_dynamic_label_forms() {
         r.err()
     );
 
-    // Dynamic label form: `n:$lbl` — the parser change this test
-    // primarily guards. The runtime branch resolves the parameter and
-    // short-circuits to no-match when the binding is absent / empty.
+    // Dynamic label form: `n:$missing` — the parser change this test
+    // primarily guards. Since §4.4 the runtime branch RAISES
+    // `ERR_INVALID_LABEL` for a missing / NULL / non-STRING binding
+    // (uniform with dynamic relationship types) rather than silently
+    // matching nothing.
     let parsed = engine.execute_cypher(&format!(
         "MATCH (n {{phase6qw_run: '{}'}}) WHERE n:$missing RETURN count(n) AS c",
         run
     ));
     assert!(
-        parsed.is_ok(),
-        "WHERE n:$param must parse; got {:?}",
-        parsed.err()
-    );
-    let rs = parsed.unwrap();
-    assert_eq!(
-        rs.rows[0].values[0].as_u64(),
-        Some(0),
-        "missing $param binding must collapse the label predicate to zero matches; \
-         got {:?}",
-        rs.rows[0].values[0]
+        parsed.is_err_and(|e| e.to_string().contains("ERR_INVALID_LABEL")),
+        "missing $param binding must raise ERR_INVALID_LABEL"
     );
 }
 

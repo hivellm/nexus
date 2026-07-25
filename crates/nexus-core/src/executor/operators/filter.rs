@@ -32,27 +32,21 @@ impl Executor {
             if parts.len() == 2 && !parts[0].contains(' ') && !parts[1].contains(' ') {
                 // This is a label check: variable:Label
                 let variable = parts[0].trim();
-                let mut label_name = parts[1].trim().to_string();
+                let label_name = parts[1].trim().to_string();
 
-                // phase6_opencypher-quickwins §8 — read-only dynamic label.
-                // Resolve a `$param` reference from the execution context
-                // at runtime. The parameter must bind to a non-empty
-                // STRING; anything else reduces the predicate to
-                // "no match" (empty filter) rather than erroring, which
-                // matches openCypher three-valued logic for NULL labels.
-                if let Some(name) = label_name.strip_prefix('$') {
-                    let resolved = context.params.get(name).cloned().unwrap_or(Value::Null);
-                    match resolved {
-                        Value::String(s) if !s.is_empty() => {
-                            label_name = s;
-                        }
-                        _ => {
-                            let empty: Vec<std::collections::HashMap<String, Value>> = Vec::new();
-                            self.update_variables_from_rows(context, &empty);
-                            self.update_result_set_from_rows(context, &empty);
-                            return Ok(());
-                        }
-                    }
+                // phase7 §4.4 — read-only dynamic label. A `$param` label
+                // resolves against the execution params: a non-empty STRING
+                // is one label, a LIST<STRING> is a label intersection (the
+                // node must carry ALL of them, like `(n:A:B)`), and
+                // NULL/missing/empty/non-STRING raises `ERR_INVALID_LABEL`
+                // (consistent with dynamic relationship types and the
+                // write-path resolver) rather than silently matching nothing.
+                if label_name.starts_with('$') {
+                    let labels = crate::engine::dynamic_labels::resolve_labels(
+                        std::slice::from_ref(&label_name),
+                        &context.params,
+                    )?;
+                    return self.filter_rows_by_label_intersection(context, variable, &labels);
                 }
 
                 // Get label ID
@@ -343,6 +337,57 @@ impl Executor {
             self.update_variables_from_rows(context, &filtered_rows);
             self.update_result_set_from_rows(context, &filtered_rows);
         }
+        Ok(())
+    }
+
+    /// Keep only the rows whose `variable` node carries EVERY label in
+    /// `labels` (a label intersection, like `(n:A:B)`). Backs the resolved
+    /// `$param` / `$list` dynamic-label predicate. An unregistered label
+    /// matches no node, so the whole predicate collapses to zero rows.
+    fn filter_rows_by_label_intersection(
+        &self,
+        context: &mut ExecutionContext,
+        variable: &str,
+        labels: &[String],
+    ) -> Result<()> {
+        let mut label_ids = Vec::with_capacity(labels.len());
+        for lbl in labels {
+            match self.catalog().get_label_id(lbl) {
+                Ok(id) => label_ids.push(id),
+                Err(_) => {
+                    // Unregistered label — nothing carries it.
+                    let empty: Vec<HashMap<String, Value>> = Vec::new();
+                    self.update_variables_from_rows(context, &empty);
+                    self.update_result_set_from_rows(context, &empty);
+                    return Ok(());
+                }
+            }
+        }
+
+        let rows = self.materialize_rows_from_variables(context)?;
+        let mut filtered_rows = Vec::new();
+        for row in rows {
+            if let Some(Value::Object(obj)) = row.get(variable) {
+                if let Some(Value::Number(id)) = obj.get("_nexus_id") {
+                    if let Some(node_id) = id.as_u64() {
+                        if let Ok(node_record) = self.store().read_node(node_id) {
+                            // Labels with id >= 64 are not in the bitmap, so a
+                            // node can never satisfy them (matches the static
+                            // single-label check above).
+                            let has_all = label_ids.iter().all(|&lid| {
+                                lid < 64 && (node_record.label_bits & (1u64 << lid)) != 0
+                            });
+                            if has_all {
+                                filtered_rows.push(row);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        self.update_variables_from_rows(context, &filtered_rows);
+        self.update_result_set_from_rows(context, &filtered_rows);
         Ok(())
     }
 

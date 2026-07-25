@@ -15,9 +15,11 @@
 //! The WHERE-clause form `WHERE n:$x` already resolved this correctly at
 //! EXECUTION time (`executor/operators/filter.rs`): a `$name` label-check
 //! predicate is resolved against `context.params` when the Filter operator
-//! runs, with a non-empty STRING becoming the label and anything else
-//! (missing / NULL / empty / non-STRING) collapsing the predicate to "no
-//! rows" — never an error. The fix makes the MATCH scan path mirror this:
+//! runs. A non-empty STRING becomes the label, a LIST<STRING> a label
+//! intersection (§4.4), and NULL/missing/empty/non-STRING raises a typed
+//! `ERR_INVALID_LABEL` (§4.4 uniformised labels with relationship types —
+//! see `dynamic_rel_type_read_path_test`). The fix makes the MATCH scan
+//! path mirror this:
 //! when the first label starts with `$`, the planner emits an
 //! `AllNodesScan` + a label-check `Filter("{var}:{first_label}")` instead
 //! of resolving via the catalog, deferring resolution to `filter.rs` at
@@ -95,50 +97,76 @@ fn dynamic_label_match_nonexistent_label_returns_no_rows() {
     );
 }
 
-/// Mirrors the `WHERE n:$x` collapse semantics from
-/// `crates/nexus-core/src/engine/tests/query.rs`
-/// (`where_label_predicate_accepts_static_and_dynamic_label_forms`):
-/// missing / null / empty-string / non-string parameter bindings must all
-/// collapse the predicate to "no rows" — never an error, never "all
-/// nodes".
+/// §4.4 uniformised the degenerate-parameter policy for labels with the
+/// one already chosen for relationship types: missing / null / empty-string
+/// / non-string bindings raise a typed `ERR_INVALID_LABEL` rather than
+/// silently collapsing to "no rows". (A valid-but-unregistered label name
+/// like `'Nope'` is NOT degenerate — it stays a plain empty result, covered
+/// by `dynamic_label_match_nonexistent_label_returns_no_rows`.)
 #[test]
-fn dynamic_label_match_missing_or_invalid_param_collapses_to_no_rows() {
+fn dynamic_label_match_invalid_param_raises_typed_error() {
     let (mut engine, _ctx) = engine();
     seed_foo_bar(&mut engine);
 
     // Missing param binding entirely (no `label` key in the params map).
-    let r = engine
-        .execute_cypher("MATCH (n:$label) RETURN n.n AS n")
-        .expect("MATCH (n:$label) with no bound params must parse and execute");
+    let res = engine.execute_cypher("MATCH (n:$label) RETURN n.n AS n");
     assert!(
-        r.rows.is_empty(),
-        "missing $label binding must collapse to no rows, got {:?}",
-        r.rows
+        res.is_err_and(|e| e.to_string().contains("ERR_INVALID_LABEL")),
+        "missing $label binding must raise ERR_INVALID_LABEL"
     );
 
-    // Explicit NULL binding.
-    let r = query_label_param(&mut engine, serde_json::Value::Null);
-    assert!(
-        r.rows.is_empty(),
-        "null $label binding must collapse to no rows, got {:?}",
-        r.rows
-    );
+    for bad in [
+        serde_json::Value::Null,
+        serde_json::json!(""),
+        serde_json::json!(42),
+        serde_json::json!([]),
+        serde_json::json!(["Foo", 42]),
+    ] {
+        let mut params: HashMap<String, serde_json::Value> = HashMap::new();
+        params.insert("label".to_string(), bad.clone());
+        let res = engine.execute_cypher_with_params("MATCH (n:$label) RETURN n.n AS n", params);
+        match res {
+            Err(e) => assert!(
+                e.to_string().contains("ERR_INVALID_LABEL"),
+                "expected ERR_INVALID_LABEL for {bad:?}, got {e}"
+            ),
+            Ok(rs) => panic!(
+                "expected an error for invalid $label {bad:?}, got {} rows",
+                rs.rows.len()
+            ),
+        }
+    }
+}
 
-    // Empty string binding.
-    let r = query_label_param(&mut engine, serde_json::json!(""));
-    assert!(
-        r.rows.is_empty(),
-        "empty-string $label binding must collapse to no rows, got {:?}",
-        r.rows
-    );
+/// §4.4 — a LIST parameter is a label INTERSECTION: `MATCH (n:$labels)` with
+/// `labels = ['A', 'B']` matches only nodes carrying BOTH labels (like
+/// `(n:A:B)`), while `['A']` matches every `A` node.
+#[test]
+fn dynamic_label_match_list_param_is_a_label_intersection() {
+    let (mut engine, _ctx) = engine();
+    engine
+        .execute_cypher("CREATE (:A:B {n: 10}), (:A {n: 20})")
+        .expect("seed multi-label graph");
 
-    // Non-string (integer) binding.
-    let r = query_label_param(&mut engine, serde_json::json!(42));
-    assert!(
-        r.rows.is_empty(),
-        "non-string $label binding must collapse to no rows, got {:?}",
-        r.rows
-    );
+    let query = |engine: &mut Engine, labels: serde_json::Value| -> Vec<i64> {
+        let mut params: HashMap<String, serde_json::Value> = HashMap::new();
+        params.insert("labels".to_string(), labels);
+        let rs = engine
+            .execute_cypher_with_params("MATCH (n:$labels) RETURN n.n AS n", params)
+            .expect("query");
+        let mut ids: Vec<i64> = rs
+            .rows
+            .iter()
+            .filter_map(|r| r.values.first().and_then(serde_json::Value::as_i64))
+            .collect();
+        ids.sort_unstable();
+        ids
+    };
+
+    // Both labels required → only the (:A:B) node (n = 10).
+    assert_eq!(query(&mut engine, serde_json::json!(["A", "B"])), vec![10]);
+    // Single label → every A node (n = 10 and n = 20).
+    assert_eq!(query(&mut engine, serde_json::json!(["A"])), vec![10, 20]);
 }
 
 /// Confusion guard: the `$label` sentinel must never be treated as (or
