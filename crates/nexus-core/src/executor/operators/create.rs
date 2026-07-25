@@ -988,6 +988,21 @@ impl Executor {
         let mut rel_count_updates: std::collections::HashMap<TypeId, u32> =
             std::collections::HashMap::new();
 
+        // Node-count twin of `rel_count_updates` above: this path also
+        // writes nodes directly to the record store (bypassing
+        // `Engine::create_node`), so `catalog.node_counts` stays a lower
+        // bound (never incremented past 1 per label) without this
+        // accumulator and its post-commit flush below — mirrors
+        // `execute_create_pattern_internal`'s `label_count_updates`.
+        // Populated once after the row loop below from
+        // `created_nodes_with_labels`, which both node-creation call
+        // sites in this path (`create_pattern_node_with_context`) already
+        // populate with the exact (node_id, label_ids) pair for every
+        // node created — counting from it is equivalent to incrementing
+        // at each call site, without duplicating label-id extraction.
+        let mut label_count_updates: std::collections::HashMap<u32, u32> =
+            std::collections::HashMap::new();
+
         // For each row in the MATCH result, create the pattern
         // PERFORMANCE OPTIMIZATION: Pre-calculate expected capacity for node_ids
         let expected_vars = pattern
@@ -1310,6 +1325,19 @@ impl Executor {
             }
         }
 
+        // Derive per-label node counts from every node actually created
+        // above. `created_nodes_with_labels` already carries the exact
+        // (node_id, label_ids) pair for both node-creation call sites in
+        // this path (fresh Node-arm creates and inline
+        // relationship-target creates), so a single pass here is
+        // equivalent to incrementing `label_count_updates` at each call
+        // site.
+        for (_, label_ids) in &created_nodes_with_labels {
+            for label_id in label_ids {
+                *label_count_updates.entry(*label_id).or_insert(0) += 1;
+            }
+        }
+
         // Commit transaction
         tx_mgr.commit(&mut tx)?;
         drop(tx_mgr);
@@ -1321,6 +1349,17 @@ impl Executor {
         if !rel_updates.is_empty() {
             if let Err(e) = self.catalog().batch_increment_rel_counts(&rel_updates) {
                 tracing::warn!("Failed to batch update relationship counts: {}", e);
+            }
+        }
+
+        // Symmetric batch flush for per-label node counts — see
+        // `label_count_updates` above. One catalog commit for the whole
+        // batch, mirroring `execute_create_pattern_internal`'s
+        // post-commit flush (and the `rel_updates` flush directly above).
+        let node_updates: Vec<(u32, u32)> = label_count_updates.into_iter().collect();
+        if !node_updates.is_empty() {
+            if let Err(e) = self.catalog().batch_increment_node_counts(&node_updates) {
+                tracing::warn!("Failed to batch update node counts: {}", e);
             }
         }
 
