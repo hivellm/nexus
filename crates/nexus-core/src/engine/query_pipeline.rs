@@ -885,6 +885,31 @@ impl Engine {
             return Ok(result);
         }
 
+        // phase7 §4.3/§4.4 — dynamic relationship types (`-[r:$type]->`).
+        // The parser encodes a `:$param` type as the `"$param"` sentinel;
+        // resolve it against the runtime params BEFORE planning (the planner
+        // has none — the same reason the read-side dynamic-label fix defers
+        // to a runtime Filter) and hand the executor the rewritten AST via a
+        // preparsed override so it does NOT re-parse the sentinel back. A
+        // STRING param becomes one type, a LIST<STRING> a `:A|B` union; an
+        // invalid param (NULL/missing/empty/non-STRING/…) raises
+        // `ERR_INVALID_RELATIONSHIP_TYPE` rather than silently matching
+        // nothing (which would also hit the "empty type set = match every
+        // type" trap in Expand). Resolving the name on the AST means the
+        // existing plan-time lowering works unchanged for the single-hop
+        // `Expand`, `VariableLengthPath`, and `QuantifiedExpand` operators.
+        if query_has_dynamic_rel_types(ast) {
+            let mut rewritten = ast.clone();
+            resolve_ast_dynamic_rel_types(&mut rewritten, &self.current_params)?;
+            self.executor
+                .install_preparsed_ast_override(Some(rewritten));
+            let query_obj = executor::Query {
+                cypher: String::new(),
+                params: self.current_params.clone(),
+            };
+            return self.executor.execute(&query_obj);
+        }
+
         // Execute the query normally. TopLevel attaches the scoped AST by
         // re-parsing the original query text (a cluster-mode label
         // rewrite, if any, was already installed as a one-shot override
@@ -1039,5 +1064,71 @@ impl Engine {
         ast: &executor::parser::CypherQuery,
     ) -> Result<executor::ResultSet> {
         self.dispatch(ast, DispatchSource::Internal)
+    }
+}
+
+// ── phase7 §4.3/§4.4 — dynamic relationship-type (`-[r:$type]->`) AST walk ──
+
+/// True when any `MATCH` pattern in the query carries a relationship type
+/// with a `$param` sentinel that must be resolved at runtime.
+fn query_has_dynamic_rel_types(ast: &executor::parser::CypherQuery) -> bool {
+    ast.clauses.iter().any(|c| {
+        if let executor::parser::Clause::Match(m) = c {
+            m.pattern.elements.iter().any(element_has_dynamic_rel_types)
+        } else {
+            false
+        }
+    })
+}
+
+fn element_has_dynamic_rel_types(el: &executor::parser::PatternElement) -> bool {
+    match el {
+        executor::parser::PatternElement::Relationship(r) => {
+            // `contains_dynamic` is entity-agnostic (a `$`-prefix check),
+            // so the node-label helper serves relationship types too.
+            crate::engine::dynamic_labels::contains_dynamic(&r.types)
+        }
+        executor::parser::PatternElement::QuantifiedGroup(g) => {
+            g.inner.iter().any(element_has_dynamic_rel_types)
+        }
+        executor::parser::PatternElement::Node(_) => false,
+    }
+}
+
+/// Rewrite every `$param` relationship-type sentinel in the query's `MATCH`
+/// patterns to its resolved concrete type name(s), in place on the cloned
+/// AST. Propagates `ERR_INVALID_RELATIONSHIP_TYPE` for an invalid parameter.
+fn resolve_ast_dynamic_rel_types(
+    ast: &mut executor::parser::CypherQuery,
+    params: &std::collections::HashMap<String, serde_json::Value>,
+) -> Result<()> {
+    for c in &mut ast.clauses {
+        if let executor::parser::Clause::Match(m) = c {
+            for el in &mut m.pattern.elements {
+                resolve_element_dynamic_rel_types(el, params)?;
+            }
+        }
+    }
+    Ok(())
+}
+
+fn resolve_element_dynamic_rel_types(
+    el: &mut executor::parser::PatternElement,
+    params: &std::collections::HashMap<String, serde_json::Value>,
+) -> Result<()> {
+    match el {
+        executor::parser::PatternElement::Relationship(r) => {
+            if crate::engine::dynamic_labels::contains_dynamic(&r.types) {
+                r.types = crate::engine::dynamic_types::resolve_types(&r.types, params)?;
+            }
+            Ok(())
+        }
+        executor::parser::PatternElement::QuantifiedGroup(g) => {
+            for inner in &mut g.inner {
+                resolve_element_dynamic_rel_types(inner, params)?;
+            }
+            Ok(())
+        }
+        executor::parser::PatternElement::Node(_) => Ok(()),
     }
 }

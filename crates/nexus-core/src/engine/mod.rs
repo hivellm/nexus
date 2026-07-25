@@ -24,6 +24,7 @@ pub mod clustering;
 pub mod config;
 pub mod crud;
 pub mod dynamic_labels;
+pub mod dynamic_types;
 pub mod graph_scope;
 pub mod maintenance;
 pub mod stats;
