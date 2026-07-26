@@ -1,9 +1,9 @@
 //! Thin RPC client used when the endpoint scheme is `nexus://`.
 //!
-//! The server lives in `nexus-server::protocol::rpc` and speaks the
-//! length-prefixed MessagePack framing defined in
-//! [`nexus_protocol::rpc`]. This module provides a minimal
-//! request/response helper tailored to the CLI's needs:
+//! The server lives in `nexus-server::protocol::rpc` and speaks Thunder
+//! wire v1 (length-prefixed MessagePack framing, from the `thunder-rpc`
+//! crate). This module provides a minimal request/response helper tailored
+//! to the CLI's needs:
 //!
 //! - Lazy connect on the first call.
 //! - Optional `AUTH <api_key>` or `AUTH <username> <password>` on
