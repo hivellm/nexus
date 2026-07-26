@@ -170,15 +170,31 @@ gaps, then re-measure so the delta is attributable. Do not reorder §2 before §
       `tests/regression/incoming_traversal_large_graph_test.rs` (>10 000 edges + a late incoming edge;
       + reopen). Full lib + cypher + executor + storage + graph + regression green. Commit 88f78245.
 
-- [ ] 4.11 **Variable-length path expanded from a `WITH`-carried variable does not bind its target.**
+- [ ] 4.11 **A `MATCH` that follows a `WITH` does not bind the variables it introduces.**
+      ROOT-CAUSED (this session) and found to be MUCH broader than the original filing below. It is NOT
+      specific to variable-length expands, `LIMIT`, or a carried source variable. **Minimal repro** (no
+      SF0.1 needed — see `tests/regression/match_after_with_binding_test.rs`, `#[ignore]`d spec + two
+      passing controls): `WITH 1 AS x MATCH (post:Post) RETURN x, post.id` returns `[1, null]` — even a
+      plain fresh scan after a query-initial `WITH` loses its binding. `MATCH (m:Message) WITH m MATCH
+      (m)-[:REPLY_OF]->(post:Post) RETURN m.id, post.id` → `[1, null]`. Controls that WORK: any expand
+      with no intervening `WITH` (`MATCH (m)-[:REPLY_OF]->(post:Post)`), and two `MATCH`es with no `WITH`
+      between them (`MATCH (m) MATCH (post) RETURN m, post`) — so multi-MATCH itself is fine; the trigger
+      is strictly the `WITH → MATCH` boundary. **Mechanism:** `QueryPlanner::plan_query`
+      (`executor/planner/queries/planner_core.rs`) is a "bucket" planner — it collects the pattern of
+      EVERY `MATCH` clause into one `patterns` Vec (`:373`) and passes them all to a single
+      `plan_execution_strategy` call (`:655`), while `WITH` clauses go to a separate `with_operators`
+      list (`:466`). The clause interleaving is lost: a post-`WITH` `MATCH` is matched in the same
+      up-front pattern phase, then the `WITH` projection (referencing only its own items) drops every
+      variable that `MATCH` introduced. **Fix direction:** segment-based planning — split the clause list
+      at each `WITH` boundary and plan each segment as a pipeline stage feeding the next, threading the
+      bound variables across the boundary. This is a core planner change (touches pattern collection,
+      `plan_execution_strategy`, aggregation/optional-match interaction), not a surgical patch — size it
+      as its own focused effort with a full re-run of the differential suite. Blocks LDBC IS2 (marked ⛔
+      in `benchmarks/ldbc-snb/README.md`; do not rewrite the query to dodge the gap). — original filing
+      (superseded diagnosis) —
       The one remaining blocker of LDBC IS2. **Repro** (Nexus 2.5.0, loaded SF0.1):
       `MATCH (:Person {id:933})<-[:HAS_CREATOR]-(m:Message) WITH m LIMIT 3 MATCH (m)-[:REPLY_OF*0..]->(post:Post) RETURN m.id, post.id`
-      → Nexus binds `m` but returns `post = null` for every row; Neo4j binds `post`. The FRESH-MATCH
-      form (no `WITH` in between) binds `post` correctly, and a fixed-length expand after `WITH` also
-      works — so the defect is specifically a VARIABLE-LENGTH expand whose source variable was carried
-      across a `WITH … LIMIT`. IS1,3,4,5,6,7 validate against Neo4j; only IS2 needs this. The ported
-      query is faithful (marked ⛔ in `benchmarks/ldbc-snb/README.md`); do not rewrite it to dodge the
-      gap.
+      → Nexus binds `m` but returns `post = null` for every row; Neo4j binds `post`.
 
 - [ ] 4.12 **`count(*)` / anonymous-relationship traversal under-counts a fully-anonymous pattern.**
       Lower severity (no IS query hits it — they all bind the relationship or a labelled endpoint).
