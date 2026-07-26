@@ -1204,6 +1204,36 @@ pub enum Expression {
     },
 }
 
+impl Expression {
+    /// Constant-fold a leading unary `+`/`-` over a numeric literal into the
+    /// signed literal itself (`-7` → `Integer(-7)`, `+1.5` → `Float(1.5)`).
+    ///
+    /// The parser represents a signed numeric literal as a `UnaryOp` wrapping
+    /// the magnitude, so property-value evaluators (CREATE / SET) that only
+    /// accept literals would otherwise reject `{v: -7}` as a "complex
+    /// expression". Returns `None` for anything that is not a unary sign over
+    /// an integer/float literal.
+    #[must_use]
+    pub fn fold_signed_numeric_literal(&self) -> Option<Literal> {
+        let Expression::UnaryOp { op, operand } = self else {
+            return None;
+        };
+        match (op, operand.as_ref()) {
+            (UnaryOperator::Minus, Expression::Literal(Literal::Integer(i))) => {
+                Some(Literal::Integer(i.wrapping_neg()))
+            }
+            (UnaryOperator::Minus, Expression::Literal(Literal::Float(f))) => {
+                Some(Literal::Float(-*f))
+            }
+            (
+                UnaryOperator::Plus,
+                Expression::Literal(lit @ (Literal::Integer(_) | Literal::Float(_))),
+            ) => Some(lit.clone()),
+            _ => None,
+        }
+    }
+}
+
 /// When clause for CASE expressions
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WhenClause {

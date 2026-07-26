@@ -647,6 +647,17 @@ impl Executor {
             parser::Expression::Variable(_) => Err(Error::CypherExecution(
                 "Variables not supported in CREATE properties".to_string(),
             )),
+            // phase7 §4.7 — a leading `-`/`+` on a numeric literal parses as a
+            // UnaryOp; constant-fold it so `CREATE (:T {v: -7})` works like
+            // Neo4j instead of hitting the "complex expression" reject below.
+            parser::Expression::UnaryOp { .. } => match expr.fold_signed_numeric_literal() {
+                Some(lit) => {
+                    self.expression_to_json_value(&parser::Expression::Literal(lit), params)
+                }
+                None => Err(Error::CypherExecution(
+                    "Complex expressions not supported in CREATE properties".to_string(),
+                )),
+            },
             _ => Err(Error::CypherExecution(
                 "Complex expressions not supported in CREATE properties".to_string(),
             )),

@@ -2,6 +2,7 @@
 //! One test binary per group keeps link time down; each module below is a
 //! former top-level `tests/*.rs` integration file.
 
+mod create_negative_numeric_literal_test;
 mod dynamic_label_read_path_test;
 mod dynamic_rel_type_read_path_test;
 mod incoming_traversal_large_graph_test;
