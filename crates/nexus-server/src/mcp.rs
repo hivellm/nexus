@@ -5,7 +5,6 @@
 
 use std::sync::Arc;
 use tokio::sync::RwLock;
-use tracing;
 
 /// MCP client for communicating with AI services
 pub struct McpClient {

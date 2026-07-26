@@ -6,14 +6,12 @@ on:
     paths:
       - 'sdks/python/**'
       - 'crates/nexus-server/**'
-      - 'crates/nexus-protocol/**'
       - '.github/workflows/sdk-python-test.yml'
   pull_request:
     branches: ['**']
     paths:
       - 'sdks/python/**'
       - 'crates/nexus-server/**'
-      - 'crates/nexus-protocol/**'
       - '.github/workflows/sdk-python-test.yml'
 
 jobs:

@@ -24,6 +24,7 @@ pub mod api;
 pub mod cluster_bootstrap;
 pub mod config;
 pub mod hub;
+pub mod mcp;
 pub mod middleware;
 pub mod protocol;
 

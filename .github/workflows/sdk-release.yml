@@ -76,9 +76,9 @@ jobs:
       - uses: actions/setup-dotnet@v4
         with:
           dotnet-version: "8.0.x"
-      # The repo is nightly-based (edition 2024). The Rust SDK depends on the
-      # workspace crate `nexus-protocol` via a path dep, so it builds against the
-      # workspace here.
+      # The repo is nightly-based (edition 2024). Since phase10 the Rust SDK
+      # depends only on published registry crates (thunder-rpc for the RPC
+      # wire) — no path dependency on an internal workspace crate.
       - name: Rust
         working-directory: sdks/rust
         run: |
@@ -148,12 +148,10 @@ jobs:
       #   owner: hivellm | repository: nexus | workflow: sdk-release.yml
       #   environment: crates
       #
-      # PREREQUISITE: `nexus-graph-sdk` depends on `nexus-protocol` via a path
-      # dep carrying `version = "<x>"`. `cargo publish` resolves that dep from
-      # crates.io, so `nexus-protocol <x>` must already be published there or this
-      # step fails ("no matching package named `nexus-protocol`"). Either publish
-      # `nexus-protocol` first (add a step above, or a separate release), or drop
-      # the path dep from sdks/rust/Cargo.toml. See docs/releases/SDK_RELEASE.md.
+      # Since phase10 `nexus-graph-sdk` depends only on published registry
+      # crates (no path dependency on an internal workspace crate), so this
+      # single `cargo publish` needs no prior publish of any Nexus crate.
+      # See docs/releases/SDK_RELEASE.md.
       - name: Authenticate with crates.io
         id: auth
         uses: rust-lang/crates-io-auth-action@v1

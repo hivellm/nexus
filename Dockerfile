@@ -81,7 +81,6 @@ COPY Cargo.toml Cargo.lock ./
 # if any member directory is missing, even when building a single package.
 COPY crates/nexus-core ./crates/nexus-core
 COPY crates/nexus-server ./crates/nexus-server
-COPY crates/nexus-protocol ./crates/nexus-protocol
 COPY crates/nexus-cli ./crates/nexus-cli
 COPY crates/nexus-bench ./crates/nexus-bench
 COPY crates/nexus-knn-bench ./crates/nexus-knn-bench

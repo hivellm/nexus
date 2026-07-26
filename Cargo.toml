@@ -4,7 +4,6 @@ resolver = "2"
 members = [
     "crates/nexus-core",
     "crates/nexus-server",
-    "crates/nexus-protocol",
     "crates/nexus-cli",
     "crates/nexus-bench",
     "crates/nexus-knn-bench",
@@ -29,7 +28,6 @@ rust-version = "1.85"
 [workspace.dependencies]
 # Core graph engine
 nexus-core = { path = "crates/nexus-core" }
-nexus-protocol = { path = "crates/nexus-protocol" }
 
 # HiveLLM family RPC standard (Thunder wire v1 — byte-identical to the
 # current hand-rolled Nexus RPC wire). Registry version only, no path/git
