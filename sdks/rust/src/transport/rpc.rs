@@ -8,9 +8,9 @@
 
 use crate::error::{NexusError, Result};
 use async_trait::async_trait;
+use std::sync::atomic::{AtomicU32, Ordering};
 use thunder::wire::{read_response, write_request};
 use thunder::{Request, Value as NexusValue};
-use std::sync::atomic::{AtomicU32, Ordering};
 use tokio::io::BufReader;
 use tokio::net::TcpStream;
 use tokio::sync::Mutex;

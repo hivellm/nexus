@@ -15,11 +15,11 @@ use crate::transport::http::{HttpCredentials, HttpTransport, nexus_to_json};
 use crate::transport::rpc::{RpcCredentials, RpcTransport};
 use crate::transport::{Transport, TransportMode, TransportRequest};
 use base64::Engine;
-use thunder::Value as NexusValue;
 use reqwest::{Client, ClientBuilder, Response};
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
+use thunder::Value as NexusValue;
 use url::Url;
 
 /// Nexus client — transport-agnostic handle to a running server.
@@ -41,6 +41,14 @@ pub struct NexusClient {
     password: Option<String>,
     #[allow(dead_code)]
     max_retries: u32,
+    /// Client-side "current database" for the session. The server is
+    /// stateless (the `GET`/`PUT /session/database` routes were removed),
+    /// so `switch_database` just updates this and every `execute_cypher`
+    /// stamps it onto the request for per-database routing. `Arc<RwLock>`
+    /// so the handle stays `Clone` and a switch on one clone is visible to
+    /// the others (they share one session). Defaults to the server's
+    /// default database name, `neo4j`.
+    current_database: Arc<std::sync::RwLock<String>>,
 }
 
 impl std::fmt::Debug for NexusClient {
@@ -202,6 +210,7 @@ impl NexusClient {
             username: config.username,
             password: config.password,
             max_retries: config.max_retries,
+            current_database: Arc::new(std::sync::RwLock::new("neo4j".to_string())),
         })
     }
 
@@ -224,11 +233,17 @@ impl NexusClient {
             }
             args.push(NexusValue::Map(pairs));
         }
+        let database = self
+            .current_database
+            .read()
+            .map(|db| db.clone())
+            .unwrap_or_else(|_| "neo4j".to_string());
         let resp = self
             .transport
             .execute(TransportRequest {
                 command: "CYPHER".to_string(),
                 args,
+                database: Some(database),
             })
             .await?;
         cypher_envelope_to_query_result(resp.value)
@@ -241,6 +256,7 @@ impl NexusClient {
             .execute(TransportRequest {
                 command: "STATS".to_string(),
                 args: vec![],
+                database: None,
             })
             .await?;
         // The RPC STATS envelope is flat (`{nodes, relationships,
@@ -285,6 +301,7 @@ impl NexusClient {
             .execute(TransportRequest {
                 command: if self.is_rpc() { "PING" } else { "HEALTH" }.to_string(),
                 args: vec![],
+                database: None,
             })
             .await
         {
@@ -384,55 +401,128 @@ impl NexusClient {
         request_builder = self.add_auth_headers(request_builder)?;
 
         let response = self.execute_with_retry(request_builder).await?;
+        let response = Self::error_for_status(response).await?;
         let result: CreateDatabaseResponse = response.json().await?;
+        if !result.success {
+            return Err(NexusError::Api {
+                message: result.message,
+                status: 0,
+            });
+        }
         Ok(result)
     }
 
     /// Get database information (REST).
+    ///
+    /// Sourced from `GET /databases` (the list) rather than
+    /// `GET /databases/{name}`: the single-database route returns a stub
+    /// with an empty `path`/`created_at`/`storage_size`, whereas the list
+    /// carries the fully-populated records.
     pub async fn get_database(&self, name: &str) -> Result<DatabaseInfo> {
-        let url = self.get_base_url().join(&format!("/databases/{}", name))?;
-        let mut request_builder = self.get_client().get(url);
-        request_builder = self.add_auth_headers(request_builder)?;
-
-        let response = self.execute_with_retry(request_builder).await?;
-        let result: DatabaseInfo = response.json().await?;
-        Ok(result)
+        let databases = self.list_databases().await?;
+        databases
+            .databases
+            .into_iter()
+            .find(|db| db.name == name)
+            .ok_or_else(|| NexusError::Api {
+                message: format!("database '{}' not found", name),
+                status: 404,
+            })
     }
 
     /// Drop a database (REST).
+    ///
+    /// Refuses to drop the client's current session database (switch away
+    /// first) and surfaces the server's rejection of dropping the default
+    /// database as an error rather than a silent `success: false`.
     pub async fn drop_database(&self, name: &str) -> Result<DropDatabaseResponse> {
+        if self
+            .current_database
+            .read()
+            .map(|db| *db == name)
+            .unwrap_or(false)
+        {
+            return Err(NexusError::Api {
+                message: format!(
+                    "cannot drop database '{}': it is the current session database (switch away first)",
+                    name
+                ),
+                status: 0,
+            });
+        }
         let url = self.get_base_url().join(&format!("/databases/{}", name))?;
         let mut request_builder = self.get_client().delete(url);
         request_builder = self.add_auth_headers(request_builder)?;
 
         let response = self.execute_with_retry(request_builder).await?;
+        let response = Self::error_for_status(response).await?;
         let result: DropDatabaseResponse = response.json().await?;
+        if !result.success {
+            return Err(NexusError::Api {
+                message: result.message,
+                status: 0,
+            });
+        }
         Ok(result)
     }
 
-    /// Get the current session database (REST).
+    /// Get the current session database.
+    ///
+    /// The server is stateless (`GET /session/database` was removed), so
+    /// this returns the client-side session value set by
+    /// [`Self::switch_database`] (defaults to `neo4j`).
     pub async fn get_current_database(&self) -> Result<String> {
-        let url = self.get_base_url().join("/session/database")?;
-        let mut request_builder = self.get_client().get(url);
-        request_builder = self.add_auth_headers(request_builder)?;
-
-        let response = self.execute_with_retry(request_builder).await?;
-        let result: SessionDatabaseResponse = response.json().await?;
-        Ok(result.database)
+        Ok(self
+            .current_database
+            .read()
+            .map(|db| db.clone())
+            .unwrap_or_else(|_| "neo4j".to_string()))
     }
 
-    /// Switch to a different database (REST).
+    /// Switch the client's session to a different database.
+    ///
+    /// Stateless server: this validates the database exists, then updates
+    /// the client-side session so subsequent [`Self::execute_cypher`] calls
+    /// route to it (`PUT /session/database` was removed).
     pub async fn switch_database(&self, name: &str) -> Result<SwitchDatabaseResponse> {
-        let url = self.get_base_url().join("/session/database")?;
-        let request = SwitchDatabaseRequest {
-            name: name.to_string(),
-        };
-        let mut request_builder = self.get_client().put(url).json(&request);
-        request_builder = self.add_auth_headers(request_builder)?;
+        let databases = self.list_databases().await?;
+        if !databases.databases.iter().any(|db| db.name == name) {
+            return Err(NexusError::Api {
+                message: format!("database '{}' does not exist", name),
+                status: 0,
+            });
+        }
+        if let Ok(mut current) = self.current_database.write() {
+            *current = name.to_string();
+        }
+        Ok(SwitchDatabaseResponse {
+            success: true,
+            message: format!("Switched to database '{}'", name),
+        })
+    }
 
-        let response = self.execute_with_retry(request_builder).await?;
-        let result: SwitchDatabaseResponse = response.json().await?;
-        Ok(result)
+    /// Convert a non-success HTTP response into a [`NexusError::Api`],
+    /// pulling the server's `message` out of the JSON body when present.
+    /// Leaves 2xx responses untouched for the caller to decode.
+    async fn error_for_status(response: Response) -> Result<Response> {
+        let status = response.status();
+        if status.is_success() {
+            return Ok(response);
+        }
+        let code = status.as_u16();
+        let body = response.text().await.unwrap_or_default();
+        let message = serde_json::from_str::<serde_json::Value>(&body)
+            .ok()
+            .and_then(|v| {
+                v.get("message")
+                    .or_else(|| v.get("error"))
+                    .and_then(|m| m.as_str().map(String::from))
+            })
+            .unwrap_or_else(|| body.clone());
+        Err(NexusError::Api {
+            message,
+            status: code,
+        })
     }
 }
 

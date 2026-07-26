@@ -94,6 +94,13 @@ pub struct TransportRequest {
     pub command: String,
     /// Positional arguments as already-encoded `NexusValue` entries.
     pub args: Vec<NexusValue>,
+    /// Target database for a `CYPHER` command (client-side session
+    /// state; the server is stateless and routes each request by this
+    /// field — see `phase0_fix-cypher-database-routing`). `None` (and
+    /// every non-`CYPHER` command) leaves routing to the server default.
+    /// The HTTP transport threads it into the `/cypher` request body;
+    /// the RPC transport currently ignores it (default database only).
+    pub database: Option<String>,
 }
 
 /// A single-frame response from the active transport. The

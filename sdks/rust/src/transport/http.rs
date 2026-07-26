@@ -13,9 +13,9 @@
 use crate::error::{NexusError, Result};
 use async_trait::async_trait;
 use base64::Engine;
-use thunder::Value as NexusValue;
 use reqwest::{Client, Method};
 use serde_json::Value;
+use thunder::Value as NexusValue;
 
 use super::endpoint::{Endpoint, Scheme};
 use super::{Transport, TransportRequest, TransportResponse};
@@ -76,15 +76,26 @@ impl HttpTransport {
         req
     }
 
-    async fn dispatch(&self, cmd: &str, args: &[NexusValue]) -> Result<Value> {
+    async fn dispatch(
+        &self,
+        cmd: &str,
+        args: &[NexusValue],
+        database: Option<&str>,
+    ) -> Result<Value> {
         match cmd {
             "CYPHER" => {
                 let query = first_str(args).ok_or_else(|| arg_err("CYPHER", 0, "string"))?;
                 let params = args.get(1).map(nexus_to_json).unwrap_or(Value::Null);
-                let body = serde_json::json!({
+                let mut body = serde_json::json!({
                     "query": query,
                     "parameters": if params.is_null() { Value::Null } else { params },
                 });
+                // Per-database routing (server is stateless): stamp the
+                // client-side session database onto the request so the
+                // server's `/cypher` handler targets the right engine.
+                if let Some(db) = database {
+                    body["database"] = Value::String(db.to_string());
+                }
                 let url = format!("{}/cypher", self.base_url);
                 let resp = self
                     .auth(self.client.request(Method::POST, &url).json(&body))
@@ -147,7 +158,9 @@ impl HttpTransport {
 #[async_trait]
 impl Transport for HttpTransport {
     async fn execute(&self, req: TransportRequest) -> Result<TransportResponse> {
-        let json = self.dispatch(&req.command, &req.args).await?;
+        let json = self
+            .dispatch(&req.command, &req.args, req.database.as_deref())
+            .await?;
         Ok(TransportResponse {
             value: json_to_nexus(json),
         })
@@ -275,7 +288,7 @@ mod tests {
         let ep = Endpoint::parse("http://127.0.0.1:1").unwrap();
         let t = HttpTransport::new(ep, HttpCredentials::default(), 5).unwrap();
         let err = t
-            .dispatch("WIDGET", &[])
+            .dispatch("WIDGET", &[], None)
             .await
             .expect_err("unknown cmd must error");
         assert!(format!("{err}").contains("does not know how to route"));

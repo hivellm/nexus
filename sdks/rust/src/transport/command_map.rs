@@ -17,8 +17,8 @@
 //!
 //! See `docs/specs/sdk-transport.md` §6 for the full contract.
 
-use thunder::Value as NexusValue;
 use serde_json::Value;
+use thunder::Value as NexusValue;
 
 use super::http::json_to_nexus;
 
