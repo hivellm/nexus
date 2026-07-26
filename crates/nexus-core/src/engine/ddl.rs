@@ -229,6 +229,87 @@ impl Engine {
                         ],
                     });
                 }
+                executor::parser::Clause::ShowIndexes => {
+                    // Mirror of the `SHOW CONSTRAINTS` handler: enumerate every
+                    // registered index and emit one row per index in
+                    // Neo4j-compatible column shape. Two disjoint registries
+                    // feed this: single-property (`properties.len() <= 1`)
+                    // indexes are persisted in the catalog, multi-property
+                    // ones live in the composite B-tree registry (see the
+                    // create routing above). Spatial indexes live in the
+                    // executor and are intentionally out of scope for this
+                    // minimal listing.
+                    let mut index_rows: Vec<executor::Row> = Vec::new();
+
+                    // Single-property range indexes (durable catalog records).
+                    let mut singles = self.catalog.list_property_indexes()?;
+                    singles.sort_unstable();
+                    for (label_id, key_id) in singles {
+                        let label_name = self
+                            .catalog
+                            .get_label_name(label_id)?
+                            .unwrap_or_else(|| format!("Label_{}", label_id));
+                        let prop_name = self
+                            .catalog
+                            .get_key_name(key_id)?
+                            .unwrap_or_else(|| format!("Property_{}", key_id));
+                        let name = format!("index_{}_{}", label_name, prop_name);
+                        index_rows.push(executor::Row {
+                            values: vec![
+                                serde_json::Value::String(name),
+                                serde_json::Value::String("RANGE".to_string()),
+                                serde_json::Value::String("NODE".to_string()),
+                                serde_json::Value::Array(vec![serde_json::Value::String(
+                                    label_name,
+                                )]),
+                                serde_json::Value::Array(vec![serde_json::Value::String(
+                                    prop_name,
+                                )]),
+                            ],
+                        });
+                    }
+
+                    // Composite (multi-property) B-tree indexes.
+                    let mut composites = self.indexes.composite_btree.list();
+                    composites.sort_by(|a, b| a.0.cmp(&b.0).then_with(|| a.1.cmp(&b.1)));
+                    for (label_id, property_keys, _unique, opt_name) in composites {
+                        let label_name = self
+                            .catalog
+                            .get_label_name(label_id)?
+                            .unwrap_or_else(|| format!("Label_{}", label_id));
+                        let name = opt_name.unwrap_or_else(|| {
+                            format!("index_{}_{}", label_name, property_keys.join("_"))
+                        });
+                        let properties = serde_json::Value::Array(
+                            property_keys
+                                .into_iter()
+                                .map(serde_json::Value::String)
+                                .collect(),
+                        );
+                        index_rows.push(executor::Row {
+                            values: vec![
+                                serde_json::Value::String(name),
+                                serde_json::Value::String("RANGE".to_string()),
+                                serde_json::Value::String("NODE".to_string()),
+                                serde_json::Value::Array(vec![serde_json::Value::String(
+                                    label_name,
+                                )]),
+                                properties,
+                            ],
+                        });
+                    }
+
+                    return Ok(executor::ResultSet::new(
+                        vec![
+                            "name".to_string(),
+                            "type".to_string(),
+                            "entityType".to_string(),
+                            "labelsOrTypes".to_string(),
+                            "properties".to_string(),
+                        ],
+                        index_rows,
+                    ));
+                }
                 _ => {}
             }
         }

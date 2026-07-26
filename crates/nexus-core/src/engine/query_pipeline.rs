@@ -485,8 +485,12 @@ impl Engine {
             .clauses
             .iter()
             .any(|c| matches!(c, executor::parser::Clause::DropIndex(_)));
+        let has_show_indexes = ast
+            .clauses
+            .iter()
+            .any(|c| matches!(c, executor::parser::Clause::ShowIndexes));
 
-        if has_create_index || has_drop_index {
+        if has_create_index || has_drop_index || has_show_indexes {
             return self.execute_index_commands(ast);
         }
 

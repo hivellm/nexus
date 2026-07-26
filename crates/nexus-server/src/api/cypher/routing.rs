@@ -177,6 +177,7 @@ fn is_read_only_clause(c: &Clause) -> bool {
         | Clause::ReleaseSavepoint(_)
         | Clause::CreateIndex(_)
         | Clause::DropIndex(_)
+        | Clause::ShowIndexes
         | Clause::CreateConstraint(_)
         | Clause::DropConstraint(_)
         | Clause::ShowUsers

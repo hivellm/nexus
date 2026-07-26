@@ -18,4 +18,5 @@ mod regression_extended_relationships;
 mod regression_extended_simple;
 mod regression_extended_union;
 mod regression_tests;
+mod show_indexes_test;
 mod test_regression_fixes;

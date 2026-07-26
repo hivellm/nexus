@@ -137,6 +137,8 @@ pub enum Clause {
     ShowFunctions,
     /// SHOW CONSTRAINTS command
     ShowConstraints,
+    /// SHOW INDEXES command
+    ShowIndexes,
     /// SHOW QUERIES command
     ShowQueries,
     /// TERMINATE QUERY command

@@ -351,6 +351,9 @@ impl CypherParser {
                 } else if self.peek_keyword("CONSTRAINTS") {
                     self.parse_keyword()?; // consume "CONSTRAINTS"
                     Ok(Clause::ShowConstraints)
+                } else if self.peek_keyword("INDEXES") {
+                    self.parse_keyword()?; // consume "INDEXES"
+                    Ok(Clause::ShowIndexes)
                 } else if self.peek_keyword("QUERIES") {
                     self.parse_keyword()?; // consume "QUERIES"
                     Ok(Clause::ShowQueries)
@@ -361,7 +364,7 @@ impl CypherParser {
                     Ok(Clause::ShowApiKeys(show_api_keys_clause))
                 } else {
                     Err(self.error(
-                        "SHOW must be followed by DATABASES, USERS, USER, FUNCTIONS, CONSTRAINTS, QUERIES, or API KEYS",
+                        "SHOW must be followed by DATABASES, USERS, USER, FUNCTIONS, CONSTRAINTS, INDEXES, QUERIES, or API KEYS",
                     ))
                 }
             }
