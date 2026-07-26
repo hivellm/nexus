@@ -24,6 +24,15 @@ fn top_ids(reg: &FullTextRegistry, index: &str, query: &str, n: usize) -> Vec<u6
     results.into_iter().map(|r| r.node_id).collect()
 }
 
+// Each call gets its OWN isolated `TempDir` — these tests never share an
+// index directory. The intermittent Windows `PermissionDenied` flake this
+// suite once exhibited was NOT a test-isolation problem: it was a production
+// Tantivy writer/merge lifecycle race (a background merge outliving its
+// `IndexWriter` and colliding with a later generation's GC on mmap'd segment
+// files opened without `FILE_SHARE_DELETE`), fixed in `index/fulltext.rs`
+// via `wait_merging_threads()` + a bounded Windows-lock retry. Do not
+// "re-fix" a flake here by adding sharing/serialization — the isolation is
+// already correct and the real fix is production-side.
 fn seeded_registry() -> (FullTextRegistry, TempDir) {
     let dir = TempDir::new().unwrap();
     let reg = FullTextRegistry::new();

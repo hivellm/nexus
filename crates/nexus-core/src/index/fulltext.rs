@@ -9,7 +9,7 @@
 //! - Highlighting and snippet generation
 
 use super::fulltext_analyzer::{AnalyzerKind, resolve as resolve_analyzer};
-use crate::Result;
+use crate::{Error, Result};
 use parking_lot::RwLock;
 use serde::{Deserialize, Serialize};
 use std::path::Path;
@@ -153,6 +153,73 @@ impl Default for SearchOptions {
     }
 }
 
+/// True when `err` is the specific Tantivy I/O failure class this
+/// module retries: a `PermissionDenied` (Windows `ERROR_ACCESS_DENIED`
+/// / OS error 5) wrapped inside a Tantivy `Open{Read,Write}Error`'s
+/// `IoError` variant, or the top-level `TantivyError::IoError`. Every
+/// other error (corruption, invalid schema, poisoned lock, missing
+/// field, ...) is left alone and propagated on the first attempt —
+/// this must never become a generic "retry any Tantivy error" net.
+fn is_windows_lock_error(err: &Error) -> bool {
+    let io_err: &std::io::Error = match err {
+        Error::Tantivy(tantivy::TantivyError::OpenWriteError(
+            tantivy::directory::error::OpenWriteError::IoError { io_error, .. },
+        )) => io_error,
+        Error::Tantivy(tantivy::TantivyError::OpenReadError(
+            tantivy::directory::error::OpenReadError::IoError { io_error, .. },
+        )) => io_error,
+        Error::Tantivy(tantivy::TantivyError::IoError(io_error)) => io_error,
+        _ => return false,
+    };
+    io_err.kind() == std::io::ErrorKind::PermissionDenied
+}
+
+/// Bounded, exponential-backoff retry for a Tantivy writer generation
+/// (open writer → mutate → commit → [`tantivy::IndexWriter::wait_merging_threads`]).
+///
+/// Precedent: `storage::temp_guard::TempDirGuard::drop`
+/// retries `remove_dir_all` up to 5x (10ms → 160ms) to absorb the same
+/// underlying Windows behaviour — a sibling subsystem (here, Tantivy's
+/// own merge/GC machinery) can release its hold on a memory-mapped
+/// segment file *asynchronously* relative to the OS call that logically
+/// finished it. `wait_merging_threads()` at each call site closes the
+/// *logical* race: it guarantees no merge thread from this generation
+/// is still running when this call returns, so no orphaned background
+/// merge can outlive this method and race a later generation's commit.
+/// It cannot, however, force Windows to release the underlying kernel
+/// section/handle for a just-finished mmap in the same instant the
+/// owning thread joins — that release can lag by a short, bounded
+/// window, during which a sibling `CreateFileW` in the same directory
+/// (e.g. this same writer's own next segment-flush) can observe a
+/// transient `PermissionDenied`. Tantivy's `MmapDirectory` never opens
+/// its read-side `File` with `FILE_SHARE_DELETE` (see
+/// `mmap_directory.rs::open_mmap`), so there is no way to avoid the
+/// window at the `Directory` level short of forking Tantivy; retrying
+/// the whole write generation is the correct boundary this crate
+/// controls — a fresh attempt mints a brand-new random segment id
+/// (`SegmentId::generate_random`), so it targets a different file
+/// than whatever the previous attempt collided on.
+///
+/// Never retries any error other than [`is_windows_lock_error`] — a
+/// real corruption / invalid-argument / schema error propagates
+/// immediately on the first attempt.
+fn with_windows_lock_retry<T>(mut op: impl FnMut() -> Result<T>) -> Result<T> {
+    const MAX_ATTEMPTS: u32 = 5;
+    let mut backoff = std::time::Duration::from_millis(10);
+    let mut attempt = 0u32;
+    loop {
+        attempt += 1;
+        match op() {
+            Ok(v) => return Ok(v),
+            Err(e) if attempt < MAX_ATTEMPTS && is_windows_lock_error(&e) => {
+                std::thread::sleep(backoff);
+                backoff = backoff.saturating_mul(2);
+            }
+            Err(e) => return Err(e),
+        }
+    }
+}
+
 impl FullTextIndex {
     /// Create a new full-text search index using the Neo4j-default
     /// `standard` analyzer. Back-compat shim — prefer
@@ -253,23 +320,42 @@ impl FullTextIndex {
 
     /// Add a document to the index
     pub fn add_document(&self, params: DocumentParams) -> Result<()> {
-        let mut index_writer: tantivy::IndexWriter<tantivy::TantivyDocument> =
-            self.index.writer(50_000_000)?; // 50MB buffer
+        // The writer generation itself (open → add → commit → settle
+        // merges) is retried as a unit on the transient Windows lock
+        // class — see `with_windows_lock_retry`. Every call opens a
+        // fresh `IndexWriter` bound to its own `SegmentUpdater`
+        // generation. Tantivy's default merge policy (min 8 segments
+        // per level) can schedule a background merge as part of
+        // `commit()`, and `IndexWriter::drop` does NOT wait for it —
+        // only `wait_merging_threads()` does. Without that call, the
+        // merge thread survives past this method's return and can
+        // race a LATER call's independent `garbage_collect_files()`
+        // pass (which has no knowledge of this generation's in-flight
+        // merge). `wait_merging_threads()` closes that logical race;
+        // the retry wrapper absorbs the residual OS-level handle-
+        // release lag Windows can still exhibit even after the merge
+        // thread joins.
+        with_windows_lock_retry(|| {
+            let mut index_writer: tantivy::IndexWriter<tantivy::TantivyDocument> =
+                self.index.writer(50_000_000)?; // 50MB buffer
 
-        let mut doc = tantivy::TantivyDocument::new();
-        doc.add_u64(self.fields.node_id, params.node_id);
-        doc.add_u64(self.fields.label_id, params.label_id as u64);
-        doc.add_u64(self.fields.key_id, params.key_id as u64);
-        doc.add_text(self.fields.content, &params.content);
-        doc.add_text(self.fields.value, &params.value);
-        doc.add_text(
-            self.fields.language,
-            params.language.as_deref().unwrap_or("en"),
-        );
-        doc.add_f64(self.fields.boost, params.boost.unwrap_or(1.0));
+            let mut doc = tantivy::TantivyDocument::new();
+            doc.add_u64(self.fields.node_id, params.node_id);
+            doc.add_u64(self.fields.label_id, params.label_id as u64);
+            doc.add_u64(self.fields.key_id, params.key_id as u64);
+            doc.add_text(self.fields.content, &params.content);
+            doc.add_text(self.fields.value, &params.value);
+            doc.add_text(
+                self.fields.language,
+                params.language.as_deref().unwrap_or("en"),
+            );
+            doc.add_f64(self.fields.boost, params.boost.unwrap_or(1.0));
 
-        index_writer.add_document(doc)?;
-        index_writer.commit()?;
+            index_writer.add_document(doc)?;
+            index_writer.commit()?;
+            index_writer.wait_merging_threads()?;
+            Ok(())
+        })?;
 
         // Manual reload — the reader was built with `ReloadPolicy::Manual`
         // in `new()` so new segments aren't visible to searchers
@@ -297,22 +383,29 @@ impl FullTextIndex {
         if docs.is_empty() {
             return Ok(());
         }
-        let mut index_writer: tantivy::IndexWriter<tantivy::TantivyDocument> =
-            self.index.writer(50_000_000)?;
-        let mut total_bytes: u64 = 0;
-        for (node_id, label_id, key_id, content) in docs {
-            let mut doc = tantivy::TantivyDocument::new();
-            doc.add_u64(self.fields.node_id, *node_id);
-            doc.add_u64(self.fields.label_id, *label_id as u64);
-            doc.add_u64(self.fields.key_id, *key_id as u64);
-            doc.add_text(self.fields.content, content);
-            doc.add_text(self.fields.value, content);
-            doc.add_text(self.fields.language, "en");
-            doc.add_f64(self.fields.boost, 1.0);
-            index_writer.add_document(doc)?;
-            total_bytes += content.len() as u64;
-        }
-        index_writer.commit()?;
+        // See `add_document` / `with_windows_lock_retry` for why the
+        // whole writer generation is retried as a unit rather than
+        // just the commit call.
+        let total_bytes: u64 = with_windows_lock_retry(|| {
+            let mut index_writer: tantivy::IndexWriter<tantivy::TantivyDocument> =
+                self.index.writer(50_000_000)?;
+            let mut total_bytes: u64 = 0;
+            for (node_id, label_id, key_id, content) in docs {
+                let mut doc = tantivy::TantivyDocument::new();
+                doc.add_u64(self.fields.node_id, *node_id);
+                doc.add_u64(self.fields.label_id, *label_id as u64);
+                doc.add_u64(self.fields.key_id, *key_id as u64);
+                doc.add_text(self.fields.content, content);
+                doc.add_text(self.fields.value, content);
+                doc.add_text(self.fields.language, "en");
+                doc.add_f64(self.fields.boost, 1.0);
+                index_writer.add_document(doc)?;
+                total_bytes += content.len() as u64;
+            }
+            index_writer.commit()?;
+            index_writer.wait_merging_threads()?;
+            Ok(total_bytes)
+        })?;
         self.reader.reload()?;
         {
             let mut stats = self.stats.write();
@@ -330,13 +423,20 @@ impl FullTextIndex {
 
     /// Remove a document from the index
     pub fn remove_document(&self, node_id: u64, _label_id: u32, _key_id: u32) -> Result<()> {
-        let mut index_writer: tantivy::IndexWriter<tantivy::TantivyDocument> =
-            self.index.writer(50_000_000)?;
+        // See `add_document` / `with_windows_lock_retry` for why the
+        // whole writer generation is retried as a unit rather than
+        // just the commit call.
+        with_windows_lock_retry(|| {
+            let mut index_writer: tantivy::IndexWriter<tantivy::TantivyDocument> =
+                self.index.writer(50_000_000)?;
 
-        let term = Term::from_field_u64(self.fields.node_id, node_id);
-        index_writer.delete_term(term);
+            let term = Term::from_field_u64(self.fields.node_id, node_id);
+            index_writer.delete_term(term);
 
-        index_writer.commit()?;
+            index_writer.commit()?;
+            index_writer.wait_merging_threads()?;
+            Ok(())
+        })?;
 
         // Reload the reader so the next search stops seeing the
         // deleted document. Mirrors the manual reload `add_document`
@@ -520,10 +620,17 @@ impl FullTextIndex {
 
     /// Clear all documents from the index
     pub fn clear(&self) -> Result<()> {
-        let mut index_writer: tantivy::IndexWriter<tantivy::TantivyDocument> =
-            self.index.writer(50_000_000)?;
-        index_writer.delete_all_documents()?;
-        index_writer.commit()?;
+        // See `add_document` / `with_windows_lock_retry` for why the
+        // whole writer generation is retried as a unit rather than
+        // just the commit call.
+        with_windows_lock_retry(|| {
+            let mut index_writer: tantivy::IndexWriter<tantivy::TantivyDocument> =
+                self.index.writer(50_000_000)?;
+            index_writer.delete_all_documents()?;
+            index_writer.commit()?;
+            index_writer.wait_merging_threads()?;
+            Ok(())
+        })?;
 
         // Reset statistics
         let mut stats = self.stats.write();
@@ -549,10 +656,19 @@ impl FullTextIndex {
 
     /// Optimize the index
     pub fn optimize(&self) -> Result<()> {
-        let mut index_writer: tantivy::IndexWriter<tantivy::TantivyDocument> =
-            self.index.writer(50_000_000)?;
-        index_writer.commit()?;
-        Ok(())
+        // `optimize` exists specifically to encourage merges, so
+        // waiting for them to actually finish (rather than letting
+        // them run orphaned in the background past this call's
+        // return) is doubly required here — see `add_document` /
+        // `with_windows_lock_retry` for the Windows PermissionDenied
+        // race this closes.
+        with_windows_lock_retry(|| {
+            let mut index_writer: tantivy::IndexWriter<tantivy::TantivyDocument> =
+                self.index.writer(50_000_000)?;
+            index_writer.commit()?;
+            index_writer.wait_merging_threads()?;
+            Ok(())
+        })
     }
 }
 
