@@ -39,7 +39,7 @@ Every frame on the wire has the shape:
   [`Response`](#response), using `rmp-serde`'s default externally-tagged
   representation.
 - Maximum allowed body size is **64 MiB** by default
-  (`nexus_protocol::rpc::DEFAULT_MAX_FRAME_BYTES`). Operators can tune it
+  (`thunder::DEFAULT_MAX_FRAME_BYTES`). Operators can tune it
   via `rpc.max_frame_bytes` in config or the `NEXUS_RPC_MAX_FRAME_BYTES`
   env var. Oversized length prefixes are rejected before the server
   allocates the body buffer.
@@ -228,7 +228,7 @@ database exists but does not rebind the session.
 
 ## 6. Reserved ids and server push
 
-`u32::MAX` (`nexus_protocol::rpc::PUSH_ID`) is reserved for server-
+`u32::MAX` (`thunder::PUSH_ID`) is reserved for server-
 initiated push frames (future streaming Cypher, pub/sub notifications).
 Clients that use it as their own request id receive:
 
@@ -300,16 +300,18 @@ Environment overrides:
 
 ## 11. Reference implementations
 
-All six first-party SDKs implement this wire format. See each SDK's
-transport module for the concrete code — they're deliberately small and
-parallel so the wire shape can be eyeballed across languages:
+Since `phase11_thunder-client-migration` all six first-party SDKs speak this
+wire through the **published Thunder client package** for their language — the
+framing and codec live in Thunder now, so each SDK's transport module is a thin
+wrapper that maps Nexus's command tree and value model onto it (the wire shape
+stays eyeballable across languages, just one layer down in the Thunder package):
 
-- **Rust**: [`sdks/rust/src/transport/`](../../sdks/rust/src/transport/) — canonical reference, 930 LOC.
-- **TypeScript**: [`sdks/typescript/src/transports/`](../../sdks/typescript/src/transports/) — `msgpackr` framing.
-- **Python**: [`sdks/python/nexus_sdk/transport/`](../../sdks/python/nexus_sdk/transport/) — `asyncio` + `msgpack`.
-- **Go**: [`sdks/go/transport/`](../../sdks/go/transport/) — `vmihailenco/msgpack/v5` framing.
-- **C#**: [`sdks/csharp/Transports/`](../../sdks/csharp/Transports/) — `MessagePack-CSharp` typeless codec.
-- **PHP**: [`sdks/php/src/Transport/`](../../sdks/php/src/Transport/) — `rybakit/msgpack` body + hand-rolled framing.
+- **Rust**: [`sdks/rust/src/transport/`](../../sdks/rust/src/transport/) — wraps `thunder-rpc` (crates.io).
+- **TypeScript**: [`sdks/typescript/src/transports/`](../../sdks/typescript/src/transports/) — wraps `@hivehub/thunder` (npm).
+- **Python**: [`sdks/python/nexus_sdk/transport/`](../../sdks/python/nexus_sdk/transport/) — wraps `hivellm-thunder` (PyPI).
+- **Go**: [`sdks/go/transport/`](../../sdks/go/transport/) — wraps `github.com/hivellm/thunder-go`.
+- **C#**: [`sdks/csharp/Transports/`](../../sdks/csharp/Transports/) — wraps `HiveLLM.Thunder` (NuGet).
+- **PHP**: [`sdks/php/src/Transport/`](../../sdks/php/src/Transport/) — wraps `hivellm/thunder` (Packagist).
 
 Server: [`nexus-server/src/protocol/rpc/server.rs`](../../nexus-server/src/protocol/rpc/server.rs) (accept loop),
 [`nexus-server/src/protocol/rpc/dispatch/`](../../nexus-server/src/protocol/rpc/dispatch/) (command handlers).

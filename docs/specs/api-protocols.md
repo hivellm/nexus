@@ -933,7 +933,11 @@ Full command reference, wire-format notes, RESP2 downgrade matrix, and
 ## Native Binary RPC
 
 Nexus ships a **length-prefixed MessagePack RPC** on port `15475` as the
-preferred transport for first-party SDKs. It exists to eliminate the
+preferred transport for first-party SDKs. Since
+`phase10_thunder-server-migration` the wire is the shared **Thunder wire v1**
+(the [`thunder-rpc`](https://crates.io/crates/thunder-rpc) crate), byte-identical
+to the original hand-rolled Nexus RPC wire — see
+[`rpc-wire-format.md`](rpc-wire-format.md). It exists to eliminate the
 five costs HTTP + JSON pays on every request: HTTP framing overhead,
 JSON encode/decode on both sides, the impossibility of request
 multiplexing, the lack of a server-initiated push channel, and the

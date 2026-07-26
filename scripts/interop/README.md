@@ -5,6 +5,11 @@ every SDK, the same four steps — proof that a Thunder-based Nexus server and
 every Nexus client still agree on the wire, including a pre-Thunder client still
 in the wild (the `legacy` cell).
 
+**This is the required gate for any change to the RPC transport or an SDK's
+transport layer** — re-run it and keep every cell green before merging such a
+change. Canonical write-up (results, regression proof, rationale):
+[`docs/protocol/thunder-interop-matrix.md`](../../docs/protocol/thunder-interop-matrix.md).
+
 ```
 python scripts/interop/run-matrix.py            # every cell
 python scripts/interop/run-matrix.py python go  # a subset
