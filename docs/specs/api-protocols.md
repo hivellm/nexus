@@ -557,6 +557,17 @@ Nexus can be queried via MCP for AI/LLM integrations.
 }
 ```
 
+#### Host Header & DNS-Rebinding Protection
+
+The `/mcp` endpoint enforces DNS-rebinding protection and requires a `Host` header on every request:
+
+- **Host Header Required**: Requests without a `Host` header return HTTP 400 (Bad Request).
+- **Allowed Hosts (Default)**: By default, only `localhost`, `127.0.0.1`, and `::1` are permitted. Requests from other hostnames or IPs return HTTP 403 (Forbidden).
+- **Network Deployments**: If you expose `/mcp` on `0.0.0.0` or access it via a hostname/IP other than the defaults, configure allowed hosts explicitly (tracked as a follow-up: `phase19_expose-mcp-allowed-hosts-config`). Contact the project for guidance.
+- **No Client Change Required**: Clients connecting to `localhost:15474` (the default) are unaffected; the Host header is automatically supplied by HTTP clients.
+
+**Advertised Protocol Version**: The `/mcp` endpoint advertises MCP `ProtocolVersion` 2025-11-25. Client negotiation falls back to 2024-11-05 if needed, so existing clients remain compatible.
+
 #### Available Tools
 
 **1. nexus/query**

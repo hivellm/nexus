@@ -17,7 +17,7 @@ exclude = [
 ]
 
 [workspace.package]
-version = "2.5.0"
+version = "3.0.0"
 edition = "2024"
 authors = ["HiveLLM Contributors <team@hivellm.org>"]
 license = "Apache-2.0"
@@ -60,7 +60,7 @@ hyper = "1.5"
 hyper-util = "0.1"
 
 # MCP dependencies
-rmcp = { version = "0.8.1", features = ["server", "macros", "transport-streamable-http-server"] }
+rmcp = { version = "2.2.0", features = ["server", "transport-streamable-http-server"] }
 tokio-stream = { version = "0.1", features = ["sync"] }
 tokio-util = "0.7"
 async-trait = "0.1"

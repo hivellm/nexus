@@ -15,7 +15,7 @@ mod tests {
     use nexus_core::{Engine, executor::Executor};
     use parking_lot::RwLock;
     use rmcp::ServerHandler;
-    use rmcp::model::CallToolRequestParam;
+    use rmcp::model::CallToolRequestParams;
     use serde_json::json;
     use std::sync::Arc;
     use tokio::sync::RwLock as TokioRwLock;
@@ -131,10 +131,7 @@ mod tests {
     async fn test_handle_nexus_mcp_tool_unknown() {
         let (server, _ctx) = create_test_server().await;
 
-        let request = CallToolRequestParam {
-            name: "unknown_tool".into(),
-            arguments: None,
-        };
+        let request = CallToolRequestParams::new("unknown_tool");
 
         let result = handle_nexus_mcp_tool(request, server).await;
 
@@ -152,18 +149,15 @@ mod tests {
     async fn test_handle_nexus_mcp_tool_create_node() {
         let (server, _ctx) = create_test_server().await;
 
-        let request = CallToolRequestParam {
-            name: "create_node".into(),
-            arguments: Some(
-                json!({
-                    "labels": ["Person"],
-                    "properties": {"name": "Alice"}
-                })
-                .as_object()
-                .unwrap()
-                .clone(),
-            ),
-        };
+        let request = CallToolRequestParams::new("create_node").with_arguments(
+            json!({
+                "labels": ["Person"],
+                "properties": {"name": "Alice"}
+            })
+            .as_object()
+            .unwrap()
+            .clone(),
+        );
 
         let result = handle_nexus_mcp_tool(request, server).await;
 
@@ -181,17 +175,14 @@ mod tests {
     async fn test_handle_nexus_mcp_tool_execute_cypher() {
         let (server, _ctx) = create_test_server().await;
 
-        let request = CallToolRequestParam {
-            name: "execute_cypher".into(),
-            arguments: Some(
-                json!({
-                    "query": "RETURN 1 as test"
-                })
-                .as_object()
-                .unwrap()
-                .clone(),
-            ),
-        };
+        let request = CallToolRequestParams::new("execute_cypher").with_arguments(
+            json!({
+                "query": "RETURN 1 as test"
+            })
+            .as_object()
+            .unwrap()
+            .clone(),
+        );
 
         let result = handle_nexus_mcp_tool(request, server).await;
 
@@ -209,19 +200,16 @@ mod tests {
     async fn test_handle_nexus_mcp_tool_knn_search() {
         let (server, _ctx) = create_test_server().await;
 
-        let request = CallToolRequestParam {
-            name: "knn_search".into(),
-            arguments: Some(
-                json!({
-                    "label": "Person",
-                    "vector": [0.1, 0.2, 0.3],
-                    "k": 5
-                })
-                .as_object()
-                .unwrap()
-                .clone(),
-            ),
-        };
+        let request = CallToolRequestParams::new("knn_search").with_arguments(
+            json!({
+                "label": "Person",
+                "vector": [0.1, 0.2, 0.3],
+                "k": 5
+            })
+            .as_object()
+            .unwrap()
+            .clone(),
+        );
 
         let result = handle_nexus_mcp_tool(request, server).await;
 
@@ -260,19 +248,16 @@ mod tests {
             json!("fn main() { helper(); }\nfn helper() {}"),
         );
 
-        let request = CallToolRequestParam {
-            name: "graph_correlation_generate".into(),
-            arguments: Some(
-                json!({
-                    "graph_type": "Call",
-                    "files": files,
-                    "name": "Test Graph"
-                })
-                .as_object()
-                .unwrap()
-                .clone(),
-            ),
-        };
+        let request = CallToolRequestParams::new("graph_correlation_generate").with_arguments(
+            json!({
+                "graph_type": "Call",
+                "files": files,
+                "name": "Test Graph"
+            })
+            .as_object()
+            .unwrap()
+            .clone(),
+        );
 
         let result = handle_nexus_mcp_tool(request, server).await;
         assert!(result.is_ok());
@@ -296,18 +281,15 @@ mod tests {
         files.insert("mod_a.rs".to_string(), json!("use mod_b;"));
         files.insert("mod_b.rs".to_string(), json!(""));
 
-        let request = CallToolRequestParam {
-            name: "graph_correlation_generate".into(),
-            arguments: Some(
-                json!({
-                    "graph_type": "Dependency",
-                    "files": files
-                })
-                .as_object()
-                .unwrap()
-                .clone(),
-            ),
-        };
+        let request = CallToolRequestParams::new("graph_correlation_generate").with_arguments(
+            json!({
+                "graph_type": "Dependency",
+                "files": files
+            })
+            .as_object()
+            .unwrap()
+            .clone(),
+        );
 
         let result = handle_nexus_mcp_tool(request, server).await;
         assert!(result.is_ok());
@@ -317,18 +299,15 @@ mod tests {
     async fn test_graph_correlation_generate_invalid_type() {
         let (server, _ctx) = create_test_server().await;
 
-        let request = CallToolRequestParam {
-            name: "graph_correlation_generate".into(),
-            arguments: Some(
-                json!({
-                    "graph_type": "InvalidType",
-                    "files": {}
-                })
-                .as_object()
-                .unwrap()
-                .clone(),
-            ),
-        };
+        let request = CallToolRequestParams::new("graph_correlation_generate").with_arguments(
+            json!({
+                "graph_type": "InvalidType",
+                "files": {}
+            })
+            .as_object()
+            .unwrap()
+            .clone(),
+        );
 
         let result = handle_nexus_mcp_tool(request, server).await;
         assert!(result.is_err());
@@ -352,18 +331,15 @@ mod tests {
             "metadata": {}
         });
 
-        let request = CallToolRequestParam {
-            name: "graph_correlation_analyze".into(),
-            arguments: Some(
-                json!({
-                    "graph": graph,
-                    "analysis_type": "statistics"
-                })
-                .as_object()
-                .unwrap()
-                .clone(),
-            ),
-        };
+        let request = CallToolRequestParams::new("graph_correlation_analyze").with_arguments(
+            json!({
+                "graph": graph,
+                "analysis_type": "statistics"
+            })
+            .as_object()
+            .unwrap()
+            .clone(),
+        );
 
         let result = handle_nexus_mcp_tool(request, server).await;
         assert!(result.is_ok());
@@ -394,18 +370,15 @@ mod tests {
             "metadata": {}
         });
 
-        let request = CallToolRequestParam {
-            name: "graph_correlation_analyze".into(),
-            arguments: Some(
-                json!({
-                    "graph": graph,
-                    "analysis_type": "patterns"
-                })
-                .as_object()
-                .unwrap()
-                .clone(),
-            ),
-        };
+        let request = CallToolRequestParams::new("graph_correlation_analyze").with_arguments(
+            json!({
+                "graph": graph,
+                "analysis_type": "patterns"
+            })
+            .as_object()
+            .unwrap()
+            .clone(),
+        );
 
         let result = handle_nexus_mcp_tool(request, server).await;
         assert!(result.is_ok());
@@ -431,18 +404,15 @@ mod tests {
             "metadata": {}
         });
 
-        let request = CallToolRequestParam {
-            name: "graph_correlation_analyze".into(),
-            arguments: Some(
-                json!({
-                    "graph": graph,
-                    "analysis_type": "all"
-                })
-                .as_object()
-                .unwrap()
-                .clone(),
-            ),
-        };
+        let request = CallToolRequestParams::new("graph_correlation_analyze").with_arguments(
+            json!({
+                "graph": graph,
+                "analysis_type": "all"
+            })
+            .as_object()
+            .unwrap()
+            .clone(),
+        );
 
         let result = handle_nexus_mcp_tool(request, server).await;
         assert!(result.is_ok());
@@ -470,18 +440,15 @@ mod tests {
             "metadata": {}
         });
 
-        let request = CallToolRequestParam {
-            name: "graph_correlation_export".into(),
-            arguments: Some(
-                json!({
-                    "graph": graph,
-                    "format": "JSON"
-                })
-                .as_object()
-                .unwrap()
-                .clone(),
-            ),
-        };
+        let request = CallToolRequestParams::new("graph_correlation_export").with_arguments(
+            json!({
+                "graph": graph,
+                "format": "JSON"
+            })
+            .as_object()
+            .unwrap()
+            .clone(),
+        );
 
         let result = handle_nexus_mcp_tool(request, server).await;
         assert!(result.is_ok());
@@ -509,18 +476,15 @@ mod tests {
             "metadata": {}
         });
 
-        let request = CallToolRequestParam {
-            name: "graph_correlation_export".into(),
-            arguments: Some(
-                json!({
-                    "graph": graph,
-                    "format": "GraphML"
-                })
-                .as_object()
-                .unwrap()
-                .clone(),
-            ),
-        };
+        let request = CallToolRequestParams::new("graph_correlation_export").with_arguments(
+            json!({
+                "graph": graph,
+                "format": "GraphML"
+            })
+            .as_object()
+            .unwrap()
+            .clone(),
+        );
 
         let result = handle_nexus_mcp_tool(request, server).await;
         assert!(result.is_ok());
@@ -538,18 +502,15 @@ mod tests {
             "metadata": {}
         });
 
-        let request = CallToolRequestParam {
-            name: "graph_correlation_export".into(),
-            arguments: Some(
-                json!({
-                    "graph": graph,
-                    "format": "InvalidFormat"
-                })
-                .as_object()
-                .unwrap()
-                .clone(),
-            ),
-        };
+        let request = CallToolRequestParams::new("graph_correlation_export").with_arguments(
+            json!({
+                "graph": graph,
+                "format": "InvalidFormat"
+            })
+            .as_object()
+            .unwrap()
+            .clone(),
+        );
 
         let result = handle_nexus_mcp_tool(request, server).await;
         assert!(result.is_err());
@@ -559,10 +520,7 @@ mod tests {
     async fn test_graph_correlation_types() {
         let (server, _ctx) = create_test_server().await;
 
-        let request = CallToolRequestParam {
-            name: "graph_correlation_types".into(),
-            arguments: None,
-        };
+        let request = CallToolRequestParams::new("graph_correlation_types");
 
         let result = handle_nexus_mcp_tool(request, server).await;
         assert!(result.is_ok());

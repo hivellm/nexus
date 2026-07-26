@@ -4,7 +4,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use axum::response::Json;
-use rmcp::model::{CallToolRequestParam, CallToolResult, Content, ErrorData};
+use rmcp::model::{CallToolRequestParams, CallToolResult, ContentBlock, ErrorData};
 use serde_json::json;
 
 use crate::NexusServer;
@@ -16,7 +16,7 @@ use nexus_core::executor::Query as CypherQuery;
 
 /// Handle create node tool
 pub(super) async fn handle_create_node(
-    request: CallToolRequestParam,
+    request: CallToolRequestParams,
     server: Arc<NexusServer>,
 ) -> Result<CallToolResult, ErrorData> {
     let args = request
@@ -46,7 +46,7 @@ pub(super) async fn handle_create_node(
                 "labels": labels,
                 "properties": properties
             });
-            Ok(CallToolResult::success(vec![Content::text(
+            Ok(CallToolResult::success(vec![ContentBlock::text(
                 response.to_string(),
             )]))
         }
@@ -59,7 +59,7 @@ pub(super) async fn handle_create_node(
 
 /// Handle create relationship tool
 pub(super) async fn handle_create_relationship(
-    request: CallToolRequestParam,
+    request: CallToolRequestParams,
     server: Arc<NexusServer>,
 ) -> Result<CallToolResult, ErrorData> {
     let args = request
@@ -121,7 +121,7 @@ pub(super) async fn handle_create_relationship(
                             "rel_type": rel_type,
                             "properties": properties
                         });
-                        return Ok(CallToolResult::success(vec![Content::text(
+                        return Ok(CallToolResult::success(vec![ContentBlock::text(
                             response.to_string(),
                         )]));
                     }
@@ -141,7 +141,7 @@ pub(super) async fn handle_create_relationship(
 
 /// Handle execute Cypher tool
 pub(super) async fn handle_execute_cypher(
-    request: CallToolRequestParam,
+    request: CallToolRequestParams,
     server: Arc<NexusServer>,
 ) -> Result<CallToolResult, ErrorData> {
     let args = request
@@ -227,14 +227,14 @@ pub(super) async fn handle_execute_cypher(
         "execution_time_ms": execution_time_ms
     });
 
-    Ok(CallToolResult::success(vec![Content::text(
+    Ok(CallToolResult::success(vec![ContentBlock::text(
         response.to_string(),
     )]))
 }
 
 /// Handle KNN search tool
 pub(super) async fn handle_knn_search(
-    request: CallToolRequestParam,
+    request: CallToolRequestParams,
     server: Arc<NexusServer>,
 ) -> Result<CallToolResult, ErrorData> {
     let args = request
@@ -284,7 +284,7 @@ pub(super) async fn handle_knn_search(
                 "results": results_json
             });
 
-            Ok(CallToolResult::success(vec![Content::text(
+            Ok(CallToolResult::success(vec![ContentBlock::text(
                 response.to_string(),
             )]))
         }
@@ -320,7 +320,7 @@ pub(super) async fn handle_knn_search(
                 "results": results_json
             });
 
-            Ok(CallToolResult::success(vec![Content::text(
+            Ok(CallToolResult::success(vec![ContentBlock::text(
                 response.to_string(),
             )]))
         }
@@ -334,7 +334,7 @@ pub(super) async fn handle_knn_search(
 
 /// Handle get stats tool
 pub(super) async fn handle_get_stats(
-    _request: CallToolRequestParam,
+    _request: CallToolRequestParams,
     server: Arc<NexusServer>,
 ) -> Result<CallToolResult, ErrorData> {
     // Get stats from Engine
@@ -356,7 +356,7 @@ pub(super) async fn handle_get_stats(
                 "timestamp": chrono::Utc::now().to_rfc3339()
             });
 
-            Ok(CallToolResult::success(vec![Content::text(
+            Ok(CallToolResult::success(vec![ContentBlock::text(
                 response.to_string(),
             )]))
         }
@@ -373,7 +373,7 @@ pub(super) async fn handle_get_stats(
 
 /// Handle graph correlation generate tool
 pub(super) async fn handle_graph_correlation_generate(
-    request: CallToolRequestParam,
+    request: CallToolRequestParams,
     _server: Arc<NexusServer>,
 ) -> Result<CallToolResult, ErrorData> {
     use nexus_core::graph::correlation::{GraphCorrelationManager, GraphSourceData, GraphType};
@@ -452,14 +452,14 @@ pub(super) async fn handle_graph_correlation_generate(
         "edge_count": graph.edges.len()
     });
 
-    Ok(CallToolResult::success(vec![Content::text(
+    Ok(CallToolResult::success(vec![ContentBlock::text(
         response.to_string(),
     )]))
 }
 
 /// Handle graph correlation analyze tool
 pub(super) async fn handle_graph_correlation_analyze(
-    request: CallToolRequestParam,
+    request: CallToolRequestParams,
     _server: Arc<NexusServer>,
 ) -> Result<CallToolResult, ErrorData> {
     use nexus_core::graph::correlation::{
@@ -583,14 +583,14 @@ pub(super) async fn handle_graph_correlation_analyze(
         }
     }
 
-    Ok(CallToolResult::success(vec![Content::text(
+    Ok(CallToolResult::success(vec![ContentBlock::text(
         response.to_string(),
     )]))
 }
 
 /// Handle graph correlation export tool
 pub(super) async fn handle_graph_correlation_export(
-    request: CallToolRequestParam,
+    request: CallToolRequestParams,
     _server: Arc<NexusServer>,
 ) -> Result<CallToolResult, ErrorData> {
     use nexus_core::graph::correlation::{CorrelationGraph, ExportFormat, export_graph};
@@ -629,14 +629,14 @@ pub(super) async fn handle_graph_correlation_export(
         "content": exported
     });
 
-    Ok(CallToolResult::success(vec![Content::text(
+    Ok(CallToolResult::success(vec![ContentBlock::text(
         response.to_string(),
     )]))
 }
 
 /// Handle graph correlation types tool
 pub(super) async fn handle_graph_correlation_types(
-    _request: CallToolRequestParam,
+    _request: CallToolRequestParams,
     _server: Arc<NexusServer>,
 ) -> Result<CallToolResult, ErrorData> {
     let response = json!({
@@ -650,7 +650,7 @@ pub(super) async fn handle_graph_correlation_types(
         }
     });
 
-    Ok(CallToolResult::success(vec![Content::text(
+    Ok(CallToolResult::success(vec![ContentBlock::text(
         response.to_string(),
     )]))
 }

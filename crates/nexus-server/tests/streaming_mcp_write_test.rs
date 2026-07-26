@@ -19,7 +19,7 @@ use nexus_core::testing::TestContext;
 use nexus_core::{Engine, executor::Executor};
 use nexus_server::{NexusServer, config::RootUserConfig};
 use parking_lot::RwLock;
-use rmcp::model::CallToolRequestParam;
+use rmcp::model::CallToolRequestParams;
 use serde_json::{Value, json};
 use std::sync::Arc;
 use tokio::sync::RwLock as TokioRwLock;
@@ -106,10 +106,7 @@ async fn call_execute_cypher(
         args.insert("params".to_string(), p);
     }
 
-    let request = CallToolRequestParam {
-        name: "execute_cypher".into(),
-        arguments: Some(args),
-    };
+    let request = CallToolRequestParams::new("execute_cypher").with_arguments(args);
 
     let result = nexus_server::api::streaming::handle_nexus_mcp_tool(request, server.clone())
         .await

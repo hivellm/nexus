@@ -106,6 +106,10 @@ fn mcp_post_request(body: Value, session_id: Option<&str>) -> Request<Body> {
     let mut builder = Request::builder()
         .method(Method::POST)
         .uri("/mcp")
+        // rmcp >= 1.x enforces DNS-rebinding protection: every request must
+        // carry a `Host` header in the allowed list (default: localhost,
+        // 127.0.0.1, ::1). A real localhost HTTP/1.1 client always sends one.
+        .header(header::HOST, "localhost")
         .header(header::CONTENT_TYPE, "application/json")
         .header(header::ACCEPT, "application/json, text/event-stream");
     if let Some(session_id) = session_id {
