@@ -44,7 +44,16 @@ impl Executor {
         // Use existing result_set.rows if available (from UNWIND, Filter, etc), otherwise materialize from variables
         // CRITICAL FIX: In UNION context, always materialize from variables to ensure correct structure
         // The existing result_set.rows may have wrong column structure from previous operators
-        let rows = if !context.result_set.rows.is_empty()
+        //
+        // Rows drawn straight from `result_set.rows` are AUTHORITATIVE: an
+        // upstream operator (UNWIND, Filter, CALL subquery, UNION ALL) already
+        // produced the exact intended multiset. A plain RETURN must not
+        // deduplicate them — only `RETURN DISTINCT` collapses duplicates, and
+        // that is handled by a separate Distinct operator. The node-id dedup
+        // further down exists solely to absorb the spurious cartesian
+        // duplicates that the variable-materialization path can emit, so it
+        // must be skipped whenever the rows are authoritative.
+        let rows_are_authoritative = !context.result_set.rows.is_empty()
             && !context
                 .result_set
                 .columns
@@ -52,8 +61,8 @@ impl Executor {
             && !context
                 .result_set
                 .columns
-                .contains(&"__filter_created__".to_string())
-        {
+                .contains(&"__filter_created__".to_string());
+        let rows = if rows_are_authoritative {
             // Use existing rows only if they don't have filter markers (indicating they are real data rows)
             let existing_columns = context.result_set.columns.clone();
             context
@@ -299,12 +308,19 @@ impl Executor {
             false
         };
 
-        let unique_rows = if has_relationships || has_varying_primitives || has_synthetic_maps {
+        let unique_rows = if rows_are_authoritative
+            || has_relationships
+            || has_varying_primitives
+            || has_synthetic_maps
+        {
             // CRITICAL: Don't deduplicate when:
+            // 0. Rows are authoritative (came from result_set.rows — UNWIND,
+            //    Filter, CALL, UNION ALL already fixed the multiset)
             // 1. Rows contain relationships (same node with different relationships)
             // 2. Rows have different primitive values (e.g., from UNWIND)
             tracing::trace!(
-                "Project: skipping deduplication (has_relationships={}, has_varying_primitives={}), preserving {} rows",
+                "Project: skipping deduplication (authoritative={}, has_relationships={}, has_varying_primitives={}), preserving {} rows",
+                rows_are_authoritative,
                 has_relationships,
                 has_varying_primitives,
                 rows.len()
