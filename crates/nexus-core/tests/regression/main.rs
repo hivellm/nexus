@@ -4,6 +4,7 @@
 
 mod call_subquery_union_test;
 mod create_negative_numeric_literal_test;
+mod create_rel_with_set_phantom_node_test;
 mod dynamic_label_read_path_test;
 mod dynamic_rel_type_read_path_test;
 mod incoming_traversal_large_graph_test;

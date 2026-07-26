@@ -136,7 +136,19 @@ impl Engine {
                     let ext_policy = ast_conflict_policy_to_storage(create_clause.conflict_policy);
                     let mut ext_id_consumed = false;
                     let mut last_node_id: Option<u64> = None;
+                    // Indices of pattern elements already materialised as a
+                    // node by the `Relationship` arm below (it peeks
+                    // `i + 1` and creates that target node itself to wire
+                    // the edge). Without this, the loop's own `Node` arm
+                    // fires again on the very same index right after,
+                    // creating a second, unconnected copy and clobbering
+                    // the variable binding / `last_node_id` with the
+                    // orphan (the phantom-duplicate-target-node bug).
+                    let mut consumed_node_indices: HashSet<usize> = HashSet::new();
                     for (i, element) in create_clause.pattern.elements.iter().enumerate() {
+                        if consumed_node_indices.contains(&i) {
+                            continue;
+                        }
                         match element {
                             executor::parser::PatternElement::Node(node) => {
                                 let mut props = Map::new();
@@ -187,6 +199,18 @@ impl Engine {
                                             context.insert(var.clone(), vec![tid]);
                                         }
                                         last_node_id = Some(tid);
+                                        // Mark `i + 1` consumed so the loop's
+                                        // own `Node` arm does not re-create
+                                        // this same element on its next
+                                        // iteration. For a chained pattern
+                                        // like `(a)-[:R]->(b)-[:S]->(c)`, `b`
+                                        // (index `i + 1` here) is also the
+                                        // SOURCE of the next relationship —
+                                        // `last_node_id` already points at
+                                        // this connected node, so the next
+                                        // `Relationship` arm picks it up
+                                        // correctly without re-deriving it.
+                                        consumed_node_indices.insert(i + 1);
                                         tid
                                     }
                                     _ => {

@@ -423,6 +423,14 @@ ensuring the full pattern (nodes and edges) persists atomically. Anonymous nodes
 variable) can also anchor relationships. Multi-hop chains combine bound nodes (from the preceding
 `MATCH`) and inline-created nodes seamlessly.
 
+**CREATE semantics guarantee: each pattern element produces exactly one node.** A `CREATE` statement that
+combines a relationship pattern with write clauses (`SET`, `REMOVE`, `MERGE`, or `FOREACH` in the same
+query) produces exactly one instance of each node, even when the node appears in an inlined relationship
+pattern. Prior versions created a phantom duplicate in this scenario; the fix (3.0.0) ensures pattern
+materialization is atomic and non-duplicating. All query variables bind to the connected node, not an
+orphan. See `docs/data-corruption/CREATE-relationship-phantom-target-audit.md` for historical context
+and data-safety migration guidance.
+
 **Index and constraint maintenance (both CREATE forms).** A node created by a
 bare `CREATE` and one created by a `MATCH…CREATE` are treated identically:
 
