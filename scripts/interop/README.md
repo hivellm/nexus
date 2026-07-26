@@ -21,6 +21,14 @@ any cell that ran is red. A missing toolchain is an explicit **SKIP**, never a
 pass. Override a cell's launcher with `NEXUS_INTEROP_<CELL>` (e.g.
 `NEXUS_INTEROP_PHP=C:\php\php.exe`) when the name on PATH cannot be spawned.
 
+> **Windows / winget PHP gotcha.** The winget `PHP.PHP.8.3` `php.exe` (a ZTS
+> console build) refuses to launch a *script* under Python's `CreateProcess`
+> with `WinError 5` (Access Denied) — `php --version` and `php -l` work, running
+> a `.php` file does not. Point the override at the sibling **`php-win.exe`**,
+> which spawns cleanly:
+> `NEXUS_INTEROP_PHP=…\PHP.PHP.8.3_…\php-win.exe`. A normal `php` on PATH needs
+> no override.
+
 ## Client contract
 
 Each cell is a standalone program under [`clients/`](clients) that speaks:

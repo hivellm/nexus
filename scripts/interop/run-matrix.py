@@ -294,9 +294,15 @@ def run_cell(cell: Cell, timeout: float, target: tuple[str, int]) -> Result:
     for step in cell.setup:
         if not shutil.which(step[0]):
             return Result(cell.name, {}, skipped_reason=f"{step[0]} not on PATH")
-        done = subprocess.run(
-            step, cwd=cell.cwd, env=env, capture_output=True, text=True, timeout=timeout
-        )
+        try:
+            done = subprocess.run(
+                step, cwd=cell.cwd, env=env, capture_output=True, text=True, timeout=timeout
+            )
+        except OSError as exc:
+            # A launcher that resolves on PATH but cannot actually be spawned --
+            # e.g. a winget App Execution Alias stub -- lands here. Treat it like
+            # a missing toolchain; NEXUS_INTEROP_<CELL> points at the real exe.
+            return Result(cell.name, {}, skipped_reason=f"cannot spawn {step[0]}: {exc}")
         transcript.append(f"$ {' '.join(step)}\n{done.stdout}{done.stderr}")
         if done.returncode != 0:
             return Result(
@@ -314,6 +320,8 @@ def run_cell(cell: Cell, timeout: float, target: tuple[str, int]) -> Result:
     except subprocess.TimeoutExpired:
         return Result(cell.name, {}, skipped_reason=f"timed out after {timeout:.0f}s",
                       output="\n".join(transcript))
+    except OSError as exc:
+        return Result(cell.name, {}, skipped_reason=f"cannot spawn {cell.command[0]}: {exc}")
 
     transcript.append(f"$ {' '.join(argv)}\n{done.stdout}{done.stderr}")
     return Result(cell.name, parse_steps(done.stdout), output="\n".join(transcript))
