@@ -39,6 +39,14 @@ impl<'a> QueryPlanner<'a> {
         hints: &[QueryHint],
         order_by_clause: &Option<(Vec<String>, Vec<bool>)>,
         with_aggregation_where: &Option<Expression>, // WHERE from WITH with aggregation
+        // Variables already bound by a prior query segment (the clauses
+        // before a `WITH` in a segmented plan — see `plan_segmented`). Such
+        // a variable is already materialised in the execution context, so
+        // its node must NOT be re-scanned here (that would clobber the
+        // carried binding); it is treated as an Expand anchor instead. Empty
+        // for every single-segment (non-`WITH`-crossing) query, so existing
+        // plans are unaffected.
+        already_bound: &std::collections::HashSet<String>,
         operators: &mut Vec<Operator>,
     ) -> Result<()> {
         // CRITICAL: Insert UNWIND operators FIRST when they precede MATCH in the query
@@ -138,6 +146,16 @@ impl<'a> QueryPlanner<'a> {
         for (idx, element) in start_pattern.elements.iter().enumerate() {
             if let PatternElement::Node(node) = element {
                 if let Some(variable) = &node.variable {
+                    // A variable carried in from a prior `WITH` segment is
+                    // already materialised in the context. Never re-scan it —
+                    // that clobbers the carried binding. Skip even when it is
+                    // the pattern's first node (the `is_first_node` forcing
+                    // below must not override this); the Expand emitted by
+                    // `add_relationship_operators` uses it as the source
+                    // anchor and reads it from the live row instead.
+                    if already_bound.contains(variable) {
+                        continue;
+                    }
                     // CRITICAL: Check if this is the first node in the pattern
                     let is_first_node = Some(variable.clone()) == first_node_var;
 
@@ -402,12 +420,13 @@ impl<'a> QueryPlanner<'a> {
             std::slice::from_ref(start_pattern),
             first_is_optional,
             operators,
-            &std::collections::HashSet::new(), // No previously bound vars for first pattern
+            already_bound, // vars carried in from a prior WITH segment anchor the first Expand
         )?;
 
-        // Track variables bound by the first pattern (for OPTIONAL MATCH handling)
-        let mut previously_bound_vars: std::collections::HashSet<String> =
-            std::collections::HashSet::new();
+        // Track variables bound by the first pattern (for OPTIONAL MATCH
+        // handling). Seed it with the segment's carried-in bindings so
+        // additional comma-separated patterns also treat them as anchors.
+        let mut previously_bound_vars: std::collections::HashSet<String> = already_bound.clone();
         for element in &start_pattern.elements {
             if let PatternElement::Node(node) = element {
                 if let Some(var) = &node.variable {

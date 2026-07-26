@@ -94,6 +94,30 @@ impl<'a> QueryPlanner<'a> {
 
     /// Plan a Cypher query into optimized operators with caching
     pub fn plan_query(&mut self, query: &CypherQuery) -> Result<Vec<Operator>> {
+        // A `MATCH` that follows a `WITH` opens a new query segment whose
+        // pattern variables the "bucket" planner below would otherwise
+        // collapse into the pre-`WITH` match phase (phase7 §4.11). Route
+        // those queries through the segment planner, which plans each
+        // `WITH`-delimited segment in order and threads the carried bindings
+        // across the boundary. Every other query keeps the single-segment
+        // path unchanged.
+        if Self::has_match_after_with(query) {
+            return self.plan_segmented(query);
+        }
+        self.plan_query_bound(query, &std::collections::HashSet::new())
+    }
+
+    /// Core of [`Self::plan_query`], parameterised by the set of variables
+    /// already bound by a prior query segment. `already_bound` is empty for
+    /// a top-level (non-segmented) plan, so this is byte-for-byte the legacy
+    /// planner in that case; the segment planner calls it with the
+    /// accumulated carried bindings so a post-`WITH` `MATCH` expands from
+    /// them instead of re-scanning.
+    pub(super) fn plan_query_bound(
+        &mut self,
+        query: &CypherQuery,
+        already_bound: &std::collections::HashSet<String>,
+    ) -> Result<Vec<Operator>> {
         // Reset planner-level notifications: every plan starts with a
         // clean slate so the engine drains only the notes produced by
         // *this* query. Notifications from a prior call belong to the
@@ -293,10 +317,16 @@ impl<'a> QueryPlanner<'a> {
             }
         }
 
-        // Try to get cached plan first (for non-UNION queries)
-        if let Some(cached_plan) = self.plan_cache.get(query_hash) {
-            // Return cached operators (clone them since they're cached)
-            return Ok(cached_plan.operators.clone());
+        // Try to get cached plan first (for non-UNION queries). Skip the
+        // cache entirely when planning a segment with carried bindings: the
+        // same query hash yields DIFFERENT operators depending on which
+        // variables are already bound (a pre-bound anchor drops its scan),
+        // so a cache keyed on the hash alone would return the wrong plan.
+        if already_bound.is_empty() {
+            if let Some(cached_plan) = self.plan_cache.get(query_hash) {
+                // Return cached operators (clone them since they're cached)
+                return Ok(cached_plan.operators.clone());
+            }
         }
 
         let mut operators = Vec::new();
@@ -665,6 +695,7 @@ impl<'a> QueryPlanner<'a> {
                 &match_hints,
                 &order_by_clause,
                 &with_aggregation_where,
+                already_bound,
                 &mut operators,
             )?;
         }
@@ -1325,13 +1356,18 @@ impl<'a> QueryPlanner<'a> {
         // estimated cost is below the legacy `NodeByLabel + Filter`.
         let operators = self.try_rewrite_spatial_seek(query, operators);
 
-        // Cache the planned operators for future use
-        // Estimate cost using the improved cost model
-        let estimated_cost = self
-            .estimate_plan_cost(&operators)
-            .unwrap_or(operators.len() as f64);
-        self.plan_cache
-            .put(query_hash, operators.clone(), estimated_cost);
+        // Cache the planned operators for future use. Never cache a
+        // segment planned with carried bindings — its operators are
+        // specific to that `already_bound` set, not to the query hash, so
+        // caching it would poison later lookups of the same text.
+        if already_bound.is_empty() {
+            // Estimate cost using the improved cost model
+            let estimated_cost = self
+                .estimate_plan_cost(&operators)
+                .unwrap_or(operators.len() as f64);
+            self.plan_cache
+                .put(query_hash, operators.clone(), estimated_cost);
+        }
 
         Ok(operators)
     }
@@ -1345,6 +1381,94 @@ impl<'a> QueryPlanner<'a> {
     /// assumption breaks for reverse-direction patterns like
     /// `(b)-[:KNOWS]->(a)` where `a` is the bound anchor, and for
     /// standalone patterns with no bound anchor at all).
+    /// True when a `MATCH` clause textually follows a `WITH` clause. Such a
+    /// query must be planned segment-by-segment (phase7 §4.11): the bucket
+    /// planner would otherwise fold the post-`WITH` `MATCH` into the
+    /// pre-`WITH` pattern phase, and the `WITH` projection would then drop
+    /// every variable that `MATCH` introduced. Deliberately scoped to
+    /// `MATCH` only — `WITH … CREATE/MERGE/…` are separate concerns and keep
+    /// the single-segment path.
+    fn has_match_after_with(query: &CypherQuery) -> bool {
+        let mut seen_with = false;
+        for clause in &query.clauses {
+            match clause {
+                Clause::With(_) => seen_with = true,
+                Clause::Match(_) if seen_with => return true,
+                _ => {}
+            }
+        }
+        false
+    }
+
+    /// Plan a query that crosses one or more `WITH → MATCH` boundaries by
+    /// splitting it into `WITH`-delimited segments and planning each in
+    /// order. Every non-final segment ends with its `WITH` clause (the
+    /// projection that closes it); the trailing clauses form the final
+    /// segment. Each segment is planned by [`Self::plan_query_bound`] with
+    /// the set of variables the previous segment's `WITH` carried forward,
+    /// so a post-`WITH` `MATCH` expands from those bindings (or
+    /// Cartesian-joins a fresh scan against them) instead of re-scanning and
+    /// clobbering them. The per-segment operator lists are concatenated; the
+    /// executor runs them against one shared context, where each segment's
+    /// terminal projection leaves exactly the carried scope for the next.
+    fn plan_segmented(&mut self, query: &CypherQuery) -> Result<Vec<Operator>> {
+        // Split clauses into segments. A `WITH` closes the segment it ends.
+        let mut segments: Vec<Vec<Clause>> = Vec::new();
+        let mut current: Vec<Clause> = Vec::new();
+        for clause in &query.clauses {
+            current.push(clause.clone());
+            if matches!(clause, Clause::With(_)) {
+                segments.push(std::mem::take(&mut current));
+            }
+        }
+        if !current.is_empty() {
+            segments.push(current);
+        }
+
+        let mut all_ops: Vec<Operator> = Vec::new();
+        let mut bound: std::collections::HashSet<String> = std::collections::HashSet::new();
+        let seg_count = segments.len();
+        for (idx, seg_clauses) in segments.into_iter().enumerate() {
+            // A segment's terminal `WITH` restricts the scope to exactly the
+            // variables it projects — those become the next segment's
+            // carried bindings (replace, not accumulate, since `WITH` drops
+            // everything it does not re-export).
+            let seg_output = Self::segment_output_vars(&seg_clauses);
+            let seg_query = CypherQuery {
+                clauses: seg_clauses,
+                params: query.params.clone(),
+                graph_scope: query.graph_scope.clone(),
+            };
+            let seg_ops = self.plan_query_bound(&seg_query, &bound)?;
+            all_ops.extend(seg_ops);
+            if idx + 1 < seg_count {
+                bound = seg_output;
+            }
+        }
+        Ok(all_ops)
+    }
+
+    /// The variables a segment exports to the next one: the aliases (or bare
+    /// variable names) projected by the segment's terminal `WITH`. Returns
+    /// empty for the final segment (which ends in `RETURN` and has no
+    /// successor) or any segment not ending in `WITH`.
+    fn segment_output_vars(clauses: &[Clause]) -> std::collections::HashSet<String> {
+        let mut out = std::collections::HashSet::new();
+        if let Some(Clause::With(with)) = clauses.last() {
+            for item in &with.items {
+                if let Some(alias) = &item.alias {
+                    out.insert(alias.clone());
+                } else if let Expression::Variable(v) = &item.expression {
+                    out.insert(v.clone());
+                }
+                // A non-aliased non-variable projection (e.g. `WITH a.x`)
+                // is not a legal downstream identifier, so it contributes
+                // no carried binding.
+            }
+        }
+        out
+    }
+
     fn collect_pattern_variables(pattern: &Pattern) -> Vec<String> {
         let mut vars = Vec::new();
         for element in &pattern.elements {

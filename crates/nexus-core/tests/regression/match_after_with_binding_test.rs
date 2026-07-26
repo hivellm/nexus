@@ -73,13 +73,10 @@ fn multi_match_without_with_binds_both_control() {
 }
 
 #[test]
-#[ignore = "phase7 §4.11: bucket planner drops post-WITH MATCH bindings; \
-            needs segment-based planning (split clauses at WITH boundaries)"]
-fn with_then_match_binds_new_variables() {
+fn with_then_match_expand_binds_target() {
+    // Expand from the carried variable after WITH (the LDBC IS2 shape).
     let (mut engine, _ctx) = engine();
     seed(&mut engine);
-
-    // Expand from the carried variable after WITH.
     let carried = engine
         .execute_cypher(
             "MATCH (m:Message) WITH m \
@@ -91,9 +88,14 @@ fn with_then_match_binds_new_variables() {
         vec![Value::from(1), Value::from(100)],
         "post-WITH expand must bind post"
     );
+}
 
+#[test]
+fn with_literal_then_match_binds_fresh_scan() {
     // Fresh scan after a query-initial WITH: even an unrelated pattern must
-    // bind. This is the minimal trigger.
+    // bind (Cartesian against the carried scope). The minimal trigger.
+    let (mut engine, _ctx) = engine();
+    seed(&mut engine);
     let fresh = engine
         .execute_cypher("WITH 1 AS x MATCH (post:Post) RETURN x, post.id")
         .expect("query");
@@ -101,5 +103,38 @@ fn with_then_match_binds_new_variables() {
         fresh.rows[0].values,
         vec![Value::from(1), Value::from(100)],
         "post-WITH fresh scan must bind post"
+    );
+}
+
+#[test]
+fn with_carried_then_match_fresh_pattern_cartesians() {
+    // Fresh, unrelated pattern after WITH cartesians against the carried m.
+    let (mut engine, _ctx) = engine();
+    seed(&mut engine);
+    let rs = engine
+        .execute_cypher("MATCH (m:Message) WITH m MATCH (post:Post) RETURN m.id, post.id")
+        .expect("query");
+    assert_eq!(rs.rows[0].values, vec![Value::from(1), Value::from(100)]);
+}
+
+#[test]
+fn with_then_variable_length_expand_binds_target() {
+    // The original §4.11 filing: a *0.. variable-length expand from a
+    // WITH-carried source. `*0..` also yields the zero-hop row, so assert
+    // the one-hop Post is present rather than pinning the exact row set.
+    let (mut engine, _ctx) = engine();
+    seed(&mut engine);
+    let rs = engine
+        .execute_cypher(
+            "MATCH (m:Message) WITH m \
+             MATCH (m)-[:REPLY_OF*1..]->(post:Post) RETURN post.id",
+        )
+        .expect("query");
+    assert!(
+        rs.rows
+            .iter()
+            .any(|r| r.values.first() == Some(&Value::from(100))),
+        "variable-length expand after WITH must reach the Post, got {:?}",
+        rs.rows
     );
 }

@@ -170,7 +170,22 @@ gaps, then re-measure so the delta is attributable. Do not reorder §2 before §
       `tests/regression/incoming_traversal_large_graph_test.rs` (>10 000 edges + a late incoming edge;
       + reopen). Full lib + cypher + executor + storage + graph + regression green. Commit 88f78245.
 
-- [ ] 4.11 **A `MATCH` that follows a `WITH` does not bind the variables it introduces.**
+- [x] 4.11 **A `MATCH` that follows a `WITH` does not bind the variables it introduces.** DONE —
+      segment-based planning implemented. `plan_query` now detects a `MATCH` after a `WITH`
+      (`has_match_after_with`) and routes to `plan_segmented`, which splits the clause list at each
+      `WITH` boundary and plans every segment via `plan_query_bound(already_bound)` — threading the
+      carried bindings so a post-`WITH` `MATCH` expands from them (or Cartesian-joins a fresh scan)
+      instead of re-scanning. `plan_execution_strategy` gained an `already_bound` param that skips the
+      scan of a carried node var (treating it as an Expand anchor) and seeds `previously_bound_vars`.
+      The real blocker turned out to be `optimize_operator_order` (`cost.rs`), which re-bucketed ALL
+      operators and undid the segment order; it now treats `With`/`Project`/`Aggregate` as reorder
+      BARRIERS and optimizes only within each barrier-free run. Safety property: only MATCH-after-WITH
+      queries (previously 100% broken) enter the new path; every other plan is byte-identical.
+      Regression `tests/regression/match_after_with_binding_test.rs` (6 tests: carried expand, fresh
+      scan, cartesian, variable-length, + two controls). Verified edge cases: aggregation-in-mid-WITH
+      (Aggregate barrier keeps `count` correct), WITH DISTINCT, WITH WHERE, multi-WITH chain, OPTIONAL
+      after WITH. Full nexus-core suite green (2505 unit + all integration groups, 0 failed). Unblocks
+      LDBC IS2. — original root-cause writeup —
       ROOT-CAUSED (this session) and found to be MUCH broader than the original filing below. It is NOT
       specific to variable-length expands, `LIMIT`, or a carried source variable. **Minimal repro** (no
       SF0.1 needed — see `tests/regression/match_after_with_binding_test.rs`, `#[ignore]`d spec + two

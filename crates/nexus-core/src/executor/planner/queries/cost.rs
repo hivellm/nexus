@@ -578,17 +578,60 @@ impl<'a> QueryPlanner<'a> {
             return Ok(operators);
         }
 
-        // Check if there's a WITH operator followed immediately by a Filter
-        // If so, keep them together (WITH WHERE pattern) and skip optimization
-        for i in 0..operators.len() - 1 {
-            if matches!(&operators[i], Operator::With { .. }) {
-                if matches!(&operators[i + 1], Operator::Filter { .. }) {
-                    tracing::debug!(
-                        "Skipping operator optimization - WITH followed by Filter (WITH WHERE pattern)"
-                    );
-                    return Ok(operators);
+        // `With` and `Project` are projection BARRIERS: each restricts or
+        // rebinds the row scope. The bucket reorder below assumes a single
+        // match phase; run across a projection barrier it would hoist a
+        // later segment's scan/expand ahead of the projection that closes an
+        // earlier segment, collapsing a segmented `WITH → MATCH` plan
+        // (phase7 §4.11) back to the broken bucket order that drops the
+        // post-`WITH` bindings. So split the plan at every barrier and
+        // reorder only WITHIN each maximal barrier-free run, leaving the
+        // barriers pinned in place. For a single-segment query the only
+        // barrier is the trailing `Project` (plus an optional `WITH`), so
+        // the pre-barrier run is the whole match phase and the result is
+        // identical to the legacy whole-plan reorder. This also subsumes the
+        // former "WITH immediately followed by Filter" special case: the
+        // `With` barrier ends its run and the trailing `Filter` opens the
+        // next one, so the two stay adjacent without a bespoke guard.
+        // `Aggregate` is a barrier for the same reason as `With`/`Project`:
+        // it collapses the row stream, so a later segment's scan must never
+        // be hoisted ahead of it (that would aggregate over the Cartesian
+        // product instead of the pre-join rows). Position is unchanged for a
+        // normal aggregation query, where the Aggregate already sat after
+        // the scans.
+        let is_barrier = |op: &Operator| {
+            matches!(
+                op,
+                Operator::With { .. } | Operator::Project { .. } | Operator::Aggregate { .. }
+            )
+        };
+        let has_barrier = operators.iter().any(&is_barrier);
+        if has_barrier {
+            let mut result = Vec::with_capacity(operators.len());
+            let mut run: Vec<Operator> = Vec::new();
+            for op in operators {
+                if is_barrier(&op) {
+                    result.extend(self.optimize_operator_run(std::mem::take(&mut run))?);
+                    result.push(op);
+                } else {
+                    run.push(op);
                 }
             }
+            result.extend(self.optimize_operator_run(run)?);
+            return Ok(result);
+        }
+
+        self.optimize_operator_run(operators)
+    }
+
+    /// Reorder a single barrier-free operator run so every variable-binding
+    /// operator (scan / seek / expansion / per-row binder) precedes the
+    /// `Filter`s that reference it, cheapest scan first. Callers must not
+    /// pass a run containing a `With` or `Project` barrier —
+    /// [`Self::optimize_operator_order`] splits those out first.
+    fn optimize_operator_run(&self, operators: Vec<Operator>) -> Result<Vec<Operator>> {
+        if operators.len() <= 1 {
+            return Ok(operators);
         }
 
         // Check if a per-row binder (UNWIND or LOAD CSV) comes before any scan
