@@ -62,7 +62,7 @@ export class HttpTransport implements Transport {
   }
 
   async execute(req: TransportRequest): Promise<TransportResponse> {
-    const value = await this.dispatch(req.command, req.args);
+    const value = await this.dispatch(req.command, req.args, req.database);
     return { value };
   }
 
@@ -79,12 +79,18 @@ export class HttpTransport implements Transport {
     /* axios has no persistent socket to close. */
   }
 
-  private async dispatch(cmd: string, args: NexusValue[]): Promise<NexusValue> {
+  private async dispatch(
+    cmd: string,
+    args: NexusValue[],
+    database?: string,
+  ): Promise<NexusValue> {
     switch (cmd) {
       case 'CYPHER': {
         const query = asString(args[0], 'CYPHER', 0);
         const params = args[1] ? nexusToPlainJson(args[1]) : null;
-        const body = { query, parameters: params ?? null };
+        const body: Record<string, unknown> = { query, parameters: params ?? null };
+        // Per-database routing (server is stateless).
+        if (database) body.database = database;
         const { data } = await this.client.post('/cypher', body);
         return jsonToNexus(data);
       }
@@ -131,6 +137,30 @@ export class HttpTransport implements Transport {
         );
         return jsonToNexus(data);
       }
+      case 'DB_LIST': {
+        const { data } = await this.client.get('/databases');
+        return jsonToNexus(data);
+      }
+      case 'DB_CREATE': {
+        const name = asString(args[0], 'DB_CREATE', 0);
+        const { data } = await this.client.post('/databases', { name });
+        return jsonToNexus(data);
+      }
+      case 'DB_DROP': {
+        const name = asString(args[0], 'DB_DROP', 0);
+        const { data } = await this.client.delete(`/databases/${encodeURIComponent(name)}`);
+        return jsonToNexus(data);
+      }
+      case 'LABELS': {
+        // REST returns `{labels: [{name, id}]}`; the RPC surface (and the
+        // SDK's `getLabels`) expects a flat `{labels: [name]}`.
+        const { data } = await this.client.get('/schema/labels');
+        return jsonToNexus({ labels: schemaNames(data, 'labels') });
+      }
+      case 'REL_TYPES': {
+        const { data } = await this.client.get('/schema/rel_types');
+        return jsonToNexus({ types: schemaNames(data, 'types') });
+      }
       default:
         throw new Error(
           `HTTP fallback does not know how to route '${cmd}' — add an entry to sdks/typescript/src/transports/http.ts`
@@ -142,6 +172,15 @@ export class HttpTransport implements Transport {
 function asString(v: NexusValue | undefined, cmd: string, idx: number): string {
   if (v && v.kind === 'Str') return v.value;
   throw new Error(`HTTP fallback: '${cmd}' argument ${idx} must be a string`);
+}
+
+/** Flatten a `/schema/*` response (`{field: [{name, id}]}`) to `[name]`. */
+function schemaNames(data: unknown, field: string): string[] {
+  const items = (data as Record<string, unknown>)?.[field];
+  if (!Array.isArray(items)) return [];
+  return items.map((x) =>
+    typeof x === 'object' && x !== null ? String((x as { name?: unknown }).name ?? '') : String(x)
+  );
 }
 
 function nexusToPlainJson(v: NexusValue): unknown {

@@ -65,6 +65,12 @@ export interface TransportRequest {
   command: string;
   /** Positional arguments as already-encoded `NexusValue` entries. */
   args: NexusValue[];
+  /**
+   * Target database for a `CYPHER` command (client-side session state; the
+   * server is stateless and routes each request by this field). The HTTP
+   * transport threads it into the `/cypher` body; RPC currently ignores it.
+   */
+  database?: string;
 }
 
 /** A single response from the active transport. */
