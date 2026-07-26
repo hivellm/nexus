@@ -22,3 +22,4 @@ mod regression_tests;
 mod show_indexes_test;
 
 mod test_regression_fixes;
+mod write_where_id_filter_test;

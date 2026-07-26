@@ -272,8 +272,18 @@ impl Engine {
                         return_clause,
                     )?);
                 }
-                executor::parser::Clause::Where(_)
-                | executor::parser::Clause::With(_)
+                executor::parser::Clause::Where(where_clause) => {
+                    // A free-standing `WHERE` after a MATCH — e.g.
+                    // `MATCH ()-[r]->() WHERE id(r) = $x SET r.w = 1`.
+                    // Narrows/binds the matched variables by id before the
+                    // following SET/DELETE. Previously this errored outright.
+                    self.apply_write_id_filter(
+                        &where_clause.expression,
+                        &mut context,
+                        &mut rel_context,
+                    )?;
+                }
+                executor::parser::Clause::With(_)
                 | executor::parser::Clause::Unwind(_)
                 | executor::parser::Clause::Union(_)
                 | executor::parser::Clause::OrderBy(_)
@@ -844,6 +854,105 @@ impl Engine {
     }
 
     /// Process all node patterns in a MATCH clause (for multi-node patterns like (a), (b))
+    /// Apply a write-query `WHERE` predicate to the already-matched
+    /// bindings. Supports the `id(var) = <value>` shape and `AND`-chains of
+    /// it — how a client targets one relationship (or node) by id for a
+    /// following `SET` / `DELETE` (e.g. `MATCH ()-[r]->() WHERE id(r) = $x
+    /// SET r.w = 1`). Binds an as-yet-unbound `var` (the untyped
+    /// `()-[r]->()` case, which the pattern binder skips) to the entity
+    /// with that id, and narrows an already-bound `var` to the matching id.
+    /// Any other predicate shape errors — the write path rejected every
+    /// `WHERE` before this, so it can only ever widen what succeeds.
+    fn apply_write_id_filter(
+        &mut self,
+        predicate: &executor::parser::Expression,
+        context: &mut HashMap<String, Vec<u64>>,
+        rel_context: &mut HashMap<String, Vec<(u64, String)>>,
+    ) -> Result<()> {
+        use executor::parser::{BinaryOperator, Expression};
+        match predicate {
+            Expression::BinaryOp {
+                left,
+                op: BinaryOperator::And,
+                right,
+            } => {
+                self.apply_write_id_filter(left, context, rel_context)?;
+                self.apply_write_id_filter(right, context, rel_context)
+            }
+            Expression::BinaryOp {
+                left,
+                op: BinaryOperator::Equal,
+                right,
+            } => {
+                // Accept `id(var) = expr` or `expr = id(var)`.
+                let (var, value_expr) = match (Self::as_id_var(left), Self::as_id_var(right)) {
+                    (Some(v), _) => (v, right.as_ref()),
+                    (_, Some(v)) => (v, left.as_ref()),
+                    _ => {
+                        return Err(Error::CypherExecution(
+                            "WHERE in a write query only supports `id(var) = <value>`".to_string(),
+                        ));
+                    }
+                };
+                let id = self.eval_write_value(value_expr)?.as_u64().ok_or_else(|| {
+                    Error::CypherExecution(
+                        "id(...) comparison value must be an integer".to_string(),
+                    )
+                })?;
+                self.bind_or_filter_by_id(var, id, context, rel_context)
+            }
+            _ => Err(Error::CypherExecution(
+                "WHERE in a write query only supports `id(var) = <value>` predicates".to_string(),
+            )),
+        }
+    }
+
+    /// Extract `v` from an `id(v)` function-call expression.
+    fn as_id_var(expr: &executor::parser::Expression) -> Option<String> {
+        use executor::parser::Expression;
+        if let Expression::FunctionCall { name, args } = expr {
+            if name.eq_ignore_ascii_case("id") && args.len() == 1 {
+                if let Expression::Variable(v) = &args[0] {
+                    return Some(v.clone());
+                }
+            }
+        }
+        None
+    }
+
+    /// Bind `var` to the entity with `id` — resolving an unbound
+    /// relationship by id — or filter an already-bound `var` to that id.
+    fn bind_or_filter_by_id(
+        &mut self,
+        var: String,
+        id: u64,
+        context: &mut HashMap<String, Vec<u64>>,
+        rel_context: &mut HashMap<String, Vec<(u64, String)>>,
+    ) -> Result<()> {
+        if let Some(rels) = rel_context.get_mut(&var) {
+            rels.retain(|(rid, _)| *rid == id);
+            return Ok(());
+        }
+        if let Some(nodes) = context.get_mut(&var) {
+            nodes.retain(|n| *n == id);
+            return Ok(());
+        }
+        // Unbound — e.g. an untyped `()-[r]->()` whose relationship the
+        // pattern binder skipped (it needs a type). Resolve it by id.
+        if let Some(record) = self.get_relationship(id)? {
+            let type_name = self
+                .catalog
+                .get_type_name(record.type_id)?
+                .unwrap_or_default();
+            rel_context.insert(var, vec![(id, type_name)]);
+        } else {
+            // No such relationship: leave the binding empty so the
+            // downstream SET/DELETE/RETURN is a no-op rather than an error.
+            rel_context.insert(var, Vec::new());
+        }
+        Ok(())
+    }
+
     pub(super) fn process_match_clause_multi(
         &mut self,
         match_clause: &executor::parser::MatchClause,
@@ -853,12 +962,6 @@ impl Engine {
         if match_clause.optional {
             return Err(Error::CypherExecution(
                 "OPTIONAL MATCH not supported in write queries".to_string(),
-            ));
-        }
-
-        if match_clause.where_clause.is_some() {
-            return Err(Error::CypherExecution(
-                "MATCH with WHERE is not supported in write queries".to_string(),
             ));
         }
 
@@ -934,6 +1037,14 @@ impl Engine {
                     .or_default()
                     .extend(found);
             }
+        }
+
+        // Apply a WHERE attached to this MATCH (e.g. `MATCH (n) WHERE
+        // id(n) = $x`) after the pattern bound its variables. The
+        // free-standing `WHERE` form (a separate clause) is handled by the
+        // clause loop; both funnel through the same id-filter.
+        if let Some(where_clause) = &match_clause.where_clause {
+            self.apply_write_id_filter(&where_clause.expression, context, rel_context)?;
         }
 
         Ok(())
