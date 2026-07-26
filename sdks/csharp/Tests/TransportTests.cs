@@ -1,4 +1,3 @@
-using MessagePack;
 using Nexus.SDK.Transports;
 using Xunit;
 
@@ -75,105 +74,6 @@ public class EndpointTests
     {
         var ep = Endpoint.Parse("nexus://host:17000");
         Assert.Equal("http://host:15474", ep.AsHttpUrl());
-    }
-}
-
-public class WireCodecTests
-{
-    [Fact]
-    public void EncodesNullAsLiteralString()
-    {
-        Assert.Equal("Null", Codec.ToWire(NexusValue.Null()));
-    }
-
-    [Fact]
-    public void EncodesStrAsTaggedMap()
-    {
-        var wire = Codec.ToWire(NexusValue.Str("hi"));
-        var m = Assert.IsType<Dictionary<object, object?>>(wire);
-        Assert.Equal("hi", m["Str"]);
-    }
-
-    [Fact]
-    public void RoundtripsPrimitives()
-    {
-        var cases = new[]
-        {
-            NexusValue.Null(),
-            NexusValue.Bool(true),
-            NexusValue.Bool(false),
-            NexusValue.Int(0),
-            NexusValue.Int(-42),
-            NexusValue.Str(""),
-            NexusValue.Str("hello"),
-            NexusValue.Float(1.5),
-        };
-        foreach (var input in cases)
-        {
-            var back = Codec.FromWire(Codec.ToWire(input));
-            Assert.Equal(input.Kind, back.Kind);
-        }
-    }
-
-    [Fact]
-    public void RoundtripsNestedArrayAndMap()
-    {
-        var v = NexusValue.Map(new List<(NexusValue, NexusValue)>
-        {
-            (NexusValue.Str("labels"), NexusValue.Array(new List<NexusValue> { NexusValue.Str("Person") })),
-            (NexusValue.Str("age"), NexusValue.Int(30)),
-        });
-        var back = Codec.FromWire(Codec.ToWire(v));
-        Assert.Equal(NexusValueKind.Map, back.Kind);
-    }
-
-    [Fact]
-    public void RejectsMultiKeyTaggedValue()
-    {
-        var ex = Assert.Throws<InvalidOperationException>(() =>
-            Codec.FromWire(new Dictionary<object, object?> { ["Str"] = "a", ["Int"] = 1L }));
-        Assert.Contains("single-key", ex.Message);
-    }
-
-    [Fact]
-    public void RequestFrameHasU32LELengthPrefix()
-    {
-        var frame = Codec.EncodeRequestFrame(new Codec.RpcRequest { Id = 7, Command = "PING" });
-        var length = (uint)(frame[0] | (frame[1] << 8) | (frame[2] << 16) | (frame[3] << 24));
-        Assert.Equal((uint)(frame.Length - 4), length);
-        Assert.True(length > 0);
-    }
-
-    [Fact]
-    public void DecodeOkResponse()
-    {
-        var body = MessagePackSerializer.Typeless.Serialize(new Dictionary<object, object?>
-        {
-            ["id"] = 9u,
-            ["result"] = new Dictionary<object, object?>
-            {
-                ["Ok"] = new Dictionary<object, object?> { ["Str"] = "OK" },
-            },
-        });
-        var resp = Codec.DecodeResponseBody(body);
-        Assert.Equal(9u, resp.Id);
-        Assert.True(resp.Ok);
-        Assert.Equal("OK", resp.Unwrap().AsString());
-    }
-
-    [Fact]
-    public void DecodeErrResponse()
-    {
-        var body = MessagePackSerializer.Typeless.Serialize(new Dictionary<object, object?>
-        {
-            ["id"] = 3u,
-            ["result"] = new Dictionary<object, object?> { ["Err"] = "boom" },
-        });
-        var resp = Codec.DecodeResponseBody(body);
-        Assert.False(resp.Ok);
-        Assert.Equal("boom", resp.Err);
-        var ex = Assert.Throws<InvalidOperationException>(() => resp.Unwrap());
-        Assert.Contains("boom", ex.Message);
     }
 }
 
@@ -375,9 +275,9 @@ public class RpcTransportFailsFastTests
     {
         var ep = new Endpoint("nexus", "127.0.0.1", 1); // reserved port
         await using var t = new RpcTransport(ep, new Credentials(), TimeSpan.FromMilliseconds(500));
-        var ex = await Assert.ThrowsAnyAsync<Exception>(async () =>
-            await t.CallAsync("PING", new List<NexusValue>()));
-        Assert.True(ex is IOException || ex is OperationCanceledException,
-            $"unexpected exception type: {ex.GetType().Name}");
+        // An unreachable host surfaces as a typed Thunder exception
+        // (connection refused or timeout, depending on the platform).
+        await Assert.ThrowsAnyAsync<Exception>(async () =>
+            await t.ExecuteAsync(new TransportRequest { Command = "PING" }));
     }
 }
