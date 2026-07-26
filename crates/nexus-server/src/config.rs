@@ -41,6 +41,27 @@ pub struct Config {
     /// Populate via `NEXUS_CORS_ALLOWED_ORIGINS` (comma-separated origins)
     /// for deployments that intentionally serve cross-origin clients.
     pub cors_allowed_origins: Vec<String>,
+    /// Additional `Host` header values accepted by the `/mcp` endpoint's
+    /// DNS-rebinding guard (rmcp's `StreamableHttpServerConfig::
+    /// allowed_hosts`), beyond rmcp's own built-in default of
+    /// `localhost`, `127.0.0.1`, `::1`. Empty (the default) keeps that
+    /// built-in list untouched — deliberately NOT pre-populated with the
+    /// loopback values here, because passing an empty-but-explicit list
+    /// to `with_allowed_hosts` would disable every host instead of
+    /// falling through to rmcp's secure default. Populate via
+    /// `NEXUS_MCP_ALLOWED_HOSTS` (comma-separated hostnames or
+    /// `host:port` authorities) for deployments reached by a hostname or
+    /// IP other than localhost. See `create_mcp_router` in `main.rs` and
+    /// `docs/specs/api-protocols.md` § MCP Integration.
+    pub mcp_allowed_hosts: Vec<String>,
+    /// Escape hatch that disables the `/mcp` Host-header allow-list
+    /// entirely (`StreamableHttpServerConfig::disable_allowed_hosts()`),
+    /// removing DNS-rebinding protection so any `Host` header is
+    /// accepted. `false` by default. Set
+    /// `NEXUS_MCP_ALLOWED_HOSTS_DISABLE=true` to opt in — NOT recommended
+    /// for public deployments; prefer `mcp_allowed_hosts` /
+    /// `NEXUS_MCP_ALLOWED_HOSTS` instead.
+    pub mcp_allowed_hosts_disable: bool,
     /// Engine-side tunables (page cache, etc.) propagated from YAML.
     pub engine: nexus_core::EngineConfig,
     /// Root user configuration
@@ -303,6 +324,8 @@ impl Default for Config {
             request_timeout_secs: 30,
             rate_limit: RateLimitConfig::default(),
             cors_allowed_origins: Vec::new(),
+            mcp_allowed_hosts: Vec::new(),
+            mcp_allowed_hosts_disable: false,
             engine: nexus_core::EngineConfig::default(),
             root_user: RootUserConfig::default(),
             auth: AuthConfig::default(),
@@ -1088,6 +1111,25 @@ impl Config {
             })
             .unwrap_or_default();
 
+        // MCP `/mcp` DNS-rebinding Host allow-list. Empty (default) keeps
+        // rmcp's own secure default (localhost/127.0.0.1/::1) untouched;
+        // NEXUS_MCP_ALLOWED_HOSTS (comma-separated) extends it for network
+        // deployments, and NEXUS_MCP_ALLOWED_HOSTS_DISABLE removes the
+        // check entirely (not recommended for public deployments).
+        let mcp_allowed_hosts = std::env::var("NEXUS_MCP_ALLOWED_HOSTS")
+            .ok()
+            .map(|v| {
+                v.split(',')
+                    .map(|s| s.trim().to_string())
+                    .filter(|s| !s.is_empty())
+                    .collect::<Vec<String>>()
+            })
+            .unwrap_or_default();
+        let mcp_allowed_hosts_disable = std::env::var("NEXUS_MCP_ALLOWED_HOSTS_DISABLE")
+            .ok()
+            .and_then(|v| v.parse::<bool>().ok())
+            .unwrap_or(false);
+
         Self {
             addr,
             data_dir,
@@ -1095,6 +1137,8 @@ impl Config {
             request_timeout_secs,
             rate_limit,
             cors_allowed_origins,
+            mcp_allowed_hosts,
+            mcp_allowed_hosts_disable,
             engine,
             root_user,
             auth,

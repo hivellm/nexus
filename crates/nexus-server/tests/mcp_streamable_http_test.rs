@@ -24,6 +24,7 @@ use nexus_core::testing::TestContext;
 use nexus_core::{Engine, executor::Executor};
 use nexus_server::{NexusServer, config::RootUserConfig};
 use parking_lot::RwLock;
+use rmcp::transport::streamable_http_server::StreamableHttpServerConfig;
 use rmcp::transport::streamable_http_server::StreamableHttpService;
 use rmcp::transport::streamable_http_server::session::local::LocalSessionManager;
 use serde_json::{Value, json};
@@ -101,15 +102,24 @@ async fn create_test_server() -> (Arc<NexusServer>, TestContext) {
 
 /// Build a raw-JSON POST request for the MCP StreamableHTTP endpoint,
 /// with an optional `Mcp-Session-Id` header attached once a session has
-/// been negotiated by `initialize`.
+/// been negotiated by `initialize`. `Host` defaults to `localhost` — a
+/// real localhost HTTP/1.1 client always sends one, and it satisfies
+/// rmcp's default DNS-rebinding allow-list.
 fn mcp_post_request(body: Value, session_id: Option<&str>) -> Request<Body> {
+    mcp_post_request_with_host(body, session_id, "localhost")
+}
+
+/// Same as [`mcp_post_request`], but with an explicit `Host` header so
+/// tests can exercise rmcp's DNS-rebinding `allowed_hosts` allow/deny
+/// paths directly.
+fn mcp_post_request_with_host(body: Value, session_id: Option<&str>, host: &str) -> Request<Body> {
     let mut builder = Request::builder()
         .method(Method::POST)
         .uri("/mcp")
         // rmcp >= 1.x enforces DNS-rebinding protection: every request must
         // carry a `Host` header in the allowed list (default: localhost,
         // 127.0.0.1, ::1). A real localhost HTTP/1.1 client always sends one.
-        .header(header::HOST, "localhost")
+        .header(header::HOST, host)
         .header(header::CONTENT_TYPE, "application/json")
         .header(header::ACCEPT, "application/json, text/event-stream");
     if let Some(session_id) = session_id {
@@ -275,5 +285,113 @@ async fn test_streamable_http_transport_full_handshake() {
     assert!(
         call_json.get("result").is_some() && call_json.get("error").is_none(),
         "tools/call execute_cypher must succeed: {call_json:?}"
+    );
+}
+
+/// Shared `initialize` request body for the `allowed_hosts` tests below —
+/// the Host allow/deny check runs before any JSON-RPC method dispatch
+/// (`StreamableHttpService::handle`), so a fixed payload is enough to
+/// exercise both the accept and reject paths.
+fn initialize_request_json() -> Value {
+    json!({
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "initialize",
+        "params": {
+            "protocolVersion": "2024-11-05",
+            "capabilities": {},
+            "clientInfo": {"name": "nexus-test-client", "version": "0.0.0"}
+        }
+    })
+}
+
+/// A `Host` header explicitly added via `with_allowed_hosts` (config-driven
+/// `NEXUS_MCP_ALLOWED_HOSTS` in production) is accepted and negotiates a
+/// session, same as the default `localhost` path.
+#[tokio::test]
+async fn test_streamable_http_transport_allows_configured_extra_host() {
+    let (server, _ctx) = create_test_server().await;
+
+    let streamable = StreamableHttpService::new(
+        move || {
+            Ok(nexus_server::api::streaming::NexusMcpService::new(
+                server.clone(),
+            ))
+        },
+        LocalSessionManager::default().into(),
+        StreamableHttpServerConfig::default().with_allowed_hosts(["example.com"]),
+    );
+
+    let request = mcp_post_request_with_host(initialize_request_json(), None, "example.com");
+    let response = streamable.handle(request).await;
+    assert_eq!(
+        response.status(),
+        StatusCode::OK,
+        "a Host header explicitly added to allowed_hosts must be accepted"
+    );
+    assert!(
+        response.headers().contains_key("Mcp-Session-Id"),
+        "a successful initialize must negotiate a session"
+    );
+}
+
+/// A `Host` header outside a configured `allowed_hosts` list is still
+/// rejected with 403 — adding one host does not implicitly allow others.
+#[tokio::test]
+async fn test_streamable_http_transport_rejects_host_outside_allow_list() {
+    let (server, _ctx) = create_test_server().await;
+
+    let streamable = StreamableHttpService::new(
+        move || {
+            Ok(nexus_server::api::streaming::NexusMcpService::new(
+                server.clone(),
+            ))
+        },
+        LocalSessionManager::default().into(),
+        StreamableHttpServerConfig::default().with_allowed_hosts(["example.com"]),
+    );
+
+    let request = mcp_post_request_with_host(initialize_request_json(), None, "evil.com");
+    let response = streamable.handle(request).await;
+    assert_eq!(
+        response.status(),
+        StatusCode::FORBIDDEN,
+        "a Host header outside the configured allow-list must be rejected"
+    );
+}
+
+/// `StreamableHttpServerConfig::default()` (what `create_mcp_router` uses
+/// when no `NEXUS_MCP_ALLOWED_HOSTS` is configured) keeps accepting
+/// `localhost` and keeps rejecting a non-loopback Host — locking in the
+/// unchanged-by-default behavior this option was added alongside.
+#[tokio::test]
+async fn test_streamable_http_transport_default_allow_list_still_enforced() {
+    let (server, _ctx) = create_test_server().await;
+
+    let streamable = StreamableHttpService::new(
+        move || {
+            Ok(nexus_server::api::streaming::NexusMcpService::new(
+                server.clone(),
+            ))
+        },
+        LocalSessionManager::default().into(),
+        StreamableHttpServerConfig::default(),
+    );
+
+    let localhost_request =
+        mcp_post_request_with_host(initialize_request_json(), None, "localhost");
+    let localhost_response = streamable.handle(localhost_request).await;
+    assert_eq!(
+        localhost_response.status(),
+        StatusCode::OK,
+        "rmcp's built-in default allow-list must still accept localhost"
+    );
+
+    let remote_request = mcp_post_request_with_host(initialize_request_json(), None, "evil.com");
+    let remote_response = streamable.handle(remote_request).await;
+    assert_eq!(
+        remote_response.status(),
+        StatusCode::FORBIDDEN,
+        "rmcp's built-in default allow-list must still reject a non-loopback Host"
     );
 }

@@ -517,8 +517,34 @@ async fn async_main(_worker_threads: usize) -> anyhow::Result<()> {
     // up through `auth.enabled`; cluster mode piggy-backs on it.
     let cluster_enabled = config.cluster.enabled;
 
+    // rmcp's `StreamableHttpServerConfig` default `allowed_hosts` list
+    // (localhost/127.0.0.1/::1) 403s any other `Host` header. A server
+    // bound to a non-loopback address with no allow-list configured will
+    // silently reject every remote MCP client until an operator notices
+    // the 403s — warn at startup instead so the gap surfaces immediately.
+    if !config.addr.ip().is_loopback()
+        && config.mcp_allowed_hosts.is_empty()
+        && !config.mcp_allowed_hosts_disable
+    {
+        warn!(
+            "/mcp is bound on non-loopback address {} but NEXUS_MCP_ALLOWED_HOSTS is unset; \
+             rmcp's DNS-rebinding guard will return 403 for any Host header other than \
+             localhost/127.0.0.1/::1. Set NEXUS_MCP_ALLOWED_HOSTS (comma-separated hostnames \
+             or host:port authorities) to the values remote clients will send, or \
+             NEXUS_MCP_ALLOWED_HOSTS_DISABLE=true to disable the check (not recommended for \
+             public deployments).",
+            config.addr
+        );
+    }
+
     // Create MCP router with StreamableHTTP transport
-    let mcp_router = create_mcp_router(nexus_server.clone(), cluster_enabled).await?;
+    let mcp_router = create_mcp_router(
+        nexus_server.clone(),
+        cluster_enabled,
+        config.mcp_allowed_hosts.clone(),
+        config.mcp_allowed_hosts_disable,
+    )
+    .await?;
 
     // Health + Prometheus now read `server.start_time` and
     // `server.metrics` via State<Arc<NexusServer>> (phase2e); the
@@ -1180,24 +1206,43 @@ async fn async_main(_worker_threads: usize) -> anyhow::Result<()> {
     Ok(())
 }
 
-/// Create MCP router with StreamableHTTP transport
+/// Create MCP router with StreamableHTTP transport.
+///
+/// `mcp_allowed_hosts` / `mcp_allowed_hosts_disable` configure rmcp's
+/// DNS-rebinding `Host` allow-list (see `config::Config::mcp_allowed_hosts`
+/// for the env var / default semantics): `disable` wins outright
+/// (`disable_allowed_hosts()`); otherwise a non-empty list replaces rmcp's
+/// built-in default via `with_allowed_hosts`; an empty list keeps
+/// `StreamableHttpServerConfig::default()` exactly as before this option
+/// existed.
 async fn create_mcp_router(
     nexus_server: Arc<NexusServer>,
     cluster_enabled: bool,
+    mcp_allowed_hosts: Vec<String>,
+    mcp_allowed_hosts_disable: bool,
 ) -> anyhow::Result<Router<Arc<NexusServer>>> {
     use hyper::service::Service;
     use hyper_util::service::TowerToHyperService;
+    use rmcp::transport::streamable_http_server::StreamableHttpServerConfig;
     use rmcp::transport::streamable_http_server::StreamableHttpService;
     use rmcp::transport::streamable_http_server::session::local::LocalSessionManager;
 
     // Create MCP service handler
     let server = nexus_server.clone();
 
+    let streamable_config = if mcp_allowed_hosts_disable {
+        StreamableHttpServerConfig::default().disable_allowed_hosts()
+    } else if !mcp_allowed_hosts.is_empty() {
+        StreamableHttpServerConfig::default().with_allowed_hosts(mcp_allowed_hosts)
+    } else {
+        StreamableHttpServerConfig::default()
+    };
+
     // Create StreamableHTTP service
     let streamable_service = StreamableHttpService::new(
         move || Ok(crate::api::streaming::NexusMcpService::new(server.clone())),
         LocalSessionManager::default().into(),
-        Default::default(),
+        streamable_config,
     );
 
     // Convert to axum service and create router
@@ -1426,7 +1471,7 @@ mod tests {
         ));
 
         // Test that MCP router can be created (standalone mode; cluster off)
-        let result = create_mcp_router(server, false).await;
+        let result = create_mcp_router(server, false, Vec::new(), false).await;
         assert!(result.is_ok());
 
         let _router = result.unwrap();
@@ -1561,7 +1606,7 @@ mod tests {
         ));
 
         // Test that we can create the MCP router (standalone mode)
-        let mcp_router_result = create_mcp_router(server.clone(), false).await;
+        let mcp_router_result = create_mcp_router(server.clone(), false, Vec::new(), false).await;
         assert!(mcp_router_result.is_ok());
 
         let _mcp_router = mcp_router_result.unwrap();
