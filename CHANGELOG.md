@@ -15,6 +15,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > carry these fixes. The remediation is tracked across 27 `phase0_fix-*`
 > tasks and will land incrementally under this release.
 
+### Added — `phase7_opencypher-gap-closure` (openCypher TCK conformance + dynamic labels/types on reads)
+
+- **Dynamic labels and relationship types now resolve at execution time in MATCH patterns.** `MATCH (n:$label)` and `MATCH (a)-[:$type]->(b)` resolve `$label` and `$type` parameters against the query envelope at runtime (STRING = single label/type; LIST<STRING> = label intersection / type union; NULL/empty → zero rows). Relationship types in variable-length paths are also dynamic: `MATCH (a)-[:$type*1..5]->(b)` matches edges of the resolved type(s). **New syntax for write-side dynamic types**: `CREATE (a)-[r:$type]->(b)`, `MERGE` with `$type`. See `docs/specs/cypher-subset.md` § Dynamic labels and relationship types.
+- **`SHOW INDEXES`** now introspects registered property and composite indexes, returning name, type, entityType, labelsOrTypes, and properties. Complements the existing `SHOW CONSTRAINTS` for schema inspection.
+- **Three correctness fixes tied to the conformance measurement:**
+  - *Fully-anonymous relationship counting*: `MATCH ()-[:TYPE]->() RETURN count(*)` now counts every matching relationship instead of deduplicating by target node.
+  - *Required Expand no-match semantics*: a required (non-OPTIONAL) pattern expansion that finds no matching relationships drops the input row entirely instead of emitting a phantom partial row with the expansion's variables bound to NULL.
+  - *Labelled scan lock-in*: `MATCH (n:Label)` returns only nodes carrying that label; `MATCH (n)` returns all nodes. This was already correct and is locked in by regression tests.
+- **openCypher TCK conformance baseline taken.** The runner vendored the upstream openCypher TCK corpus (220 files, 1615 scenarios → 3868 outline-expanded), implemented side-effect counters and error taxonomy, and measured a first baseline. **3868 scenarios → 509 passed (13.2%), 3175 failed, 184 skipped.** This is a *strict conformance* metric against the specification (distinct from the 300/300 Neo4j differential suite). See `docs/compatibility/OPENCYPHER_TCK_REPORT.md` for per-category breakdown and reproduction instructions.
+
 ### Changed — `phase10_thunder-server-migration` (native RPC now runs on `thunder-rpc`)
 
 - **The native binary RPC server (port 15475) was migrated from a

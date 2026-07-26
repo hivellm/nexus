@@ -57,6 +57,14 @@ MATCH (a)SIMPLE  ( ()-[:KNOWS]->() ){1,5}(b)   -- no edge AND no node revisits
 
 -- Multiple patterns
 MATCH (a:Person)-[:KNOWS]->(b:Person)-[:WORKS_AT]->(c:Company)
+
+-- Labelled scan returns only that label
+MATCH (n:Person) RETURN n
+-- Returns only nodes with the Person label, not unlabelled or other-labelled nodes
+
+-- Unlabelled scan returns all nodes
+MATCH (n) RETURN n
+-- Returns every node in the database regardless of labels
 ```
 
 **Pattern Syntax**:
@@ -302,6 +310,10 @@ returns one row with the identity value (`count(*)`/`count(x)` = 0). This holds
 for multi-hop relationship patterns too: `count(*)` over
 `MATCH (a)-[:R1]->(b)-[:R2]->(c)` reports the true number of matching paths — `0`
 when any hop is absent — never a phantom count.
+
+**Fully-anonymous relationships.** A fully-anonymous relationship pattern with no
+node or relationship variables — `MATCH ()-[:TYPE]->() RETURN count(*)` — counts
+every matching relationship, not just the unique target nodes. Prior behavior under-counted by deduplicating rows incorrectly; the fix ensures each relationship is counted exactly once.
 
 **Argument-domain & overflow errors.** These operations return a bounded Cypher
 error (never a panic or a silently wrapped value) on out-of-range input:
@@ -838,6 +850,29 @@ operator after the first OPTIONAL pattern's scan when no prior
 driver exists. The operator is a no-op when the scan produced
 rows.
 
+#### Required MATCH semantics (non-OPTIONAL Expand)
+
+A required (non-OPTIONAL) pattern expansion that finds no matching
+relationships drops the input row entirely, rather than emitting a phantom
+partial row with the expansion's variables bound to `NULL`:
+
+```cypher
+-- If no edge exists from any Person to any Message:
+MATCH (p:Person), (m:Message), (post:Post)
+MATCH (m)-[:REPLY_OF]->(post)
+RETURN p, m, post
+-- Returns zero rows (no phantom [<p>, <m>, NULL] rows)
+```
+
+Use `OPTIONAL MATCH` to preserve rows with `NULL` bindings:
+
+```cypher
+MATCH (p:Person), (m:Message), (post:Post)
+OPTIONAL MATCH (m)-[:REPLY_OF]->(post)
+RETURN p, m, post
+-- Returns rows with post = NULL if the optional edge doesn't exist
+```
+
 ### UNWIND Clause
 
 ```cypher
@@ -958,6 +993,14 @@ DROP INDEX ON :Person(email)
 
 -- Drop index if exists
 DROP INDEX IF EXISTS ON :Person(name)
+
+-- Show all indexes
+SHOW INDEXES
+-- Returns: name, type, entityType, labelsOrTypes, properties
+
+-- Show indexes and filter by label
+SHOW INDEXES
+-- Can be followed by a WHERE clause if needed in application code
 ```
 
 ### Constraint Management
@@ -2134,21 +2177,51 @@ is 64 MiB; exceeding it raises `ERR_BYTES_TOO_LARGE`.
 
 **Base64 payload bounded allocation:** Base64-encoded BYTES literals and `$parameter` values are validated on their **encoded length** before decoding (before per-property size checks apply), rejecting oversized inputs with a Cypher error. This prevents a query from allocating multi-gigabyte buffers via a large base64 string in a literal or parameter binding.
 
-### Dynamic labels on writes
+### Dynamic labels and relationship types
 
-`$param` is accepted wherever a label appears in a write clause:
+`$param` is accepted wherever a label or relationship type appears in read and write clauses.
+
+#### Labels and types — read side (MATCH patterns)
+
+```cypher
+-- Match nodes with a dynamic label
+MATCH (n:$label)
+WHERE n.id = 42
+RETURN n
+
+-- Variable-length paths with dynamic types
+MATCH (a)-[:$reltype*1..5]->(b)
+RETURN a, b
+
+-- Multiple dynamic relationship types (union)
+MATCH (a)-[:R1|$type2|R3]->(b)
+RETURN a, b
+```
+
+Dynamic labels and types in reads resolve at execution time against query parameters:
+- **STRING parameter:** single label/type
+- **LIST<STRING> parameter:** multiple labels (node must carry ALL as a label intersection), or union of relationship types (matched if edge is any of the types)
+- **NULL, missing, empty, or non-STRING:** returns zero rows (no error)
+- A LIST containing non-STRING elements raises `ERR_INVALID_LABEL` / `ERR_INVALID_RELATIONSHIP_TYPE`
+
+#### Labels and types — write side
+
+`$param` is accepted wherever a label or relationship type appears in a write clause:
 
 ```cypher
 CREATE (n:$label)
 CREATE (n:Base:$role)
 SET n:$label
 REMOVE n:$label
+
+CREATE (a)-[r:$type]->(b)
+MERGE (a)-[r:$reltype]->(b) ON CREATE SET r.created = true
 ```
 
-The parameter may be a STRING (single label) or a LIST<STRING>
-(expands to multiple labels in order). Rejected with
-`ERR_INVALID_LABEL`: NULL, empty string, empty list, non-STRING
-list element, or a label string containing characters outside
+The parameter may be a STRING (single label/type) or a LIST<STRING>
+(expands to multiple labels/types in order). Rejected with
+`ERR_INVALID_LABEL` / `ERR_INVALID_RELATIONSHIP_TYPE`: NULL, empty string, empty list, non-STRING
+list element, or a label/type string containing characters outside
 `[A-Za-z_][A-Za-z0-9_]*`.
 
 ### Composite B-tree indexes

@@ -1,13 +1,15 @@
 # openCypher TCK Conformance Report
 
 Measured pass/fail/skip over the vendored upstream openCypher TCK corpus. This is a
-*conformance* number against the specification — distinct from the differential
-Neo4j suite in `scripts/compatibility/`. Regenerate with the entry point below.
+**strict openCypher-TCK conformance metric** — distinct from the differential
+Neo4j suite (`scripts/compatibility/test-neo4j-nexus-compatibility-200.ps1`, which
+measures agreement with one specific implementation on a curated query set). The TCK
+number reflects spec-compliance against the authoritative test corpus with no partial credit.
 
 - **Pinned upstream commit:** `677cbafabb8c3c5eed458fd3b1ec0daec8d67d23`
 - **Corpus:** `crates/nexus-core/tests/tck/opencypher/features/` (see `VENDOR.md`)
 - **Reproduce:** `NEXUS_TCK=1 cargo +nightly test -p nexus-core --test tck_opencypher --all-features`
-  or `scripts/compatibility/run-opencypher-tck.ps1`.
+  or `scripts/compatibility/run-opencypher-tck.ps1`
 
 ## Outcome model
 
@@ -18,7 +20,7 @@ exercise) or the scenario was skip-listed. Skips are counted, never hidden.
 
 ## Totals
 
-**3868 scenarios — 506 passed (13.1%), 3178 failed, 184 skipped.**
+**3868 scenarios — 509 passed (13.2%), 3175 failed, 184 skipped.**
 
 ## Per-category
 
@@ -32,8 +34,8 @@ exercise) or the scenario was skip-listed. Skips are counted, never hidden.
 | `clauses/merge` | 16 | 50 | 9 | 75 | 21.3% |
 | `clauses/remove` | 6 | 27 | 0 | 33 | 18.2% |
 | `clauses/return` | 12 | 49 | 2 | 63 | 19.0% |
-| `clauses/return-orderby` | 11 | 22 | 2 | 35 | 31.4% |
-| `clauses/return-skip-limit` | 6 | 17 | 8 | 31 | 19.4% |
+| `clauses/return-orderby` | 13 | 20 | 2 | 35 | 37.1% |
+| `clauses/return-skip-limit` | 7 | 16 | 8 | 31 | 22.6% |
 | `clauses/set` | 1 | 50 | 2 | 53 | 1.9% |
 | `clauses/union` | 6 | 6 | 0 | 12 | 50.0% |
 | `clauses/unwind` | 5 | 7 | 2 | 14 | 35.7% |
@@ -61,7 +63,7 @@ exercise) or the scenario was skip-listed. Skips are counted, never hidden.
 | `expressions/typeConversion` | 19 | 27 | 1 | 47 | 40.4% |
 | `useCases/countingSubgraphMatches` | 0 | 11 | 0 | 11 | 0.0% |
 | `useCases/triadicSelection` | 0 | 0 | 19 | 19 | 0.0% |
-| **total** | **506** | **3178** | **184** | **3868** | **13.1%** |
+| **total** | **509** | **3175** | **184** | **3868** | **13.2%** |
 
 ## Skip-list (deliberately un-evaluated)
 

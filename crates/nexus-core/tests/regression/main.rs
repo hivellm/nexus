@@ -7,6 +7,7 @@ mod create_negative_numeric_literal_test;
 mod dynamic_label_read_path_test;
 mod dynamic_rel_type_read_path_test;
 mod incoming_traversal_large_graph_test;
+mod label_scan_filter_test;
 mod match_after_with_binding_test;
 mod match_create_multi_pattern_test;
 mod match_merge_multi_pattern_test;
@@ -19,6 +20,7 @@ mod regression_extended_relationships;
 mod regression_extended_simple;
 mod regression_extended_union;
 mod regression_tests;
+mod required_expand_no_phantom_partial_row_test;
 mod show_indexes_test;
 
 mod test_regression_fixes;

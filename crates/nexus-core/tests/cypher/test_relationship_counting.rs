@@ -185,3 +185,66 @@ fn test_relationship_direction_with_labels() -> Result<(), Error> {
 
     Ok(())
 }
+
+#[test]
+fn test_fully_anonymous_relationship_pattern_counts_every_relationship() -> Result<(), Error> {
+    let (mut engine, _ctx) = setup_isolated_test_engine()?;
+
+    // 2 shared B nodes, 5 A nodes, each with a single outgoing :REL to one
+    // of the 2 B nodes: 5 relationships fanning in to only 2 distinct
+    // targets. A fully-anonymous pattern (no rel var, no endpoint labels)
+    // must still count all 5 relationships, not the 2 distinct targets.
+    engine.execute_cypher("CREATE (:B {name: 'B1'})")?;
+    engine.execute_cypher("CREATE (:B {name: 'B2'})")?;
+    engine.execute_cypher("CREATE (:A {name: 'A1'})")?;
+    engine.execute_cypher("CREATE (:A {name: 'A2'})")?;
+    engine.execute_cypher("CREATE (:A {name: 'A3'})")?;
+    engine.execute_cypher("CREATE (:A {name: 'A4'})")?;
+    engine.execute_cypher("CREATE (:A {name: 'A5'})")?;
+    engine.refresh_executor()?;
+
+    for (a_name, b_name) in [
+        ("A1", "B1"),
+        ("A2", "B1"),
+        ("A3", "B1"),
+        ("A4", "B2"),
+        ("A5", "B2"),
+    ] {
+        engine.execute_cypher(&format!(
+            "MATCH (a:A {{name: '{a_name}'}}), (b:B {{name: '{b_name}'}}) CREATE (a)-[:REL]->(b)"
+        ))?;
+    }
+    engine.refresh_executor()?;
+
+    // Fully-anonymous pattern: no rel var, no endpoint labels.
+    let anon = engine.execute_cypher("MATCH ()-[:REL]->() RETURN count(*) AS count")?;
+    assert_eq!(anon.rows.len(), 1, "Should return 1 row");
+    let anon_count = anon.rows[0].values[0].as_i64().unwrap();
+    assert_eq!(
+        anon_count, 5,
+        "Fully-anonymous pattern should count every REL relationship (5), got {}",
+        anon_count
+    );
+
+    // Control: bound rel var, already correct before this fix.
+    let bound = engine.execute_cypher("MATCH ()-[r:REL]->() RETURN count(r) AS count")?;
+    assert_eq!(bound.rows.len(), 1, "Should return 1 row");
+    let bound_count = bound.rows[0].values[0].as_i64().unwrap();
+    assert_eq!(
+        bound_count, 5,
+        "rel_var-bound pattern should count every REL relationship (5), got {}",
+        bound_count
+    );
+
+    // Control: labelled endpoints, already correct before this fix.
+    let labelled = engine.execute_cypher("MATCH (:A)-[:REL]->(:B) RETURN count(*) AS count")?;
+    assert_eq!(labelled.rows.len(), 1, "Should return 1 row");
+    let labelled_count = labelled.rows[0].values[0].as_i64().unwrap();
+    assert_eq!(
+        labelled_count, 5,
+        "Labelled-endpoint pattern should count every REL relationship (5), got {}",
+        labelled_count
+    );
+
+    Ok(())
+}
