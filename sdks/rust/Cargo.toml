@@ -6,7 +6,7 @@
 # module still imports as `nexus_sdk` (see `[lib] name` below)
 # so existing code stays source-compatible.
 name = "nexus-graph-sdk"
-version = "2.5.0"
+version = "3.0.0"
 edition = "2024"
 authors = ["Nexus Contributors"]
 description = "Official Rust SDK for Nexus graph database"
