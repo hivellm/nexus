@@ -6,17 +6,9 @@ import {
   endpointToString,
   parseEndpoint,
 } from '../src/transports/endpoint';
-import {
-  decodeResponseBody,
-  encodeRequestFrame,
-  fromWireValue,
-  rpcResponseToTransport,
-  toWireValue,
-} from '../src/transports/codec';
 import { mapCommand, jsonToNexus, nexusToJson } from '../src/transports/command-map';
 import { buildTransport, parseTransportMode } from '../src/transports/index';
 import { nx } from '../src/transports/types';
-import { pack } from 'msgpackr';
 
 describe('endpoint parser', () => {
   it('defaults to nexus://127.0.0.1:15475', () => {
@@ -76,97 +68,12 @@ describe('endpoint parser', () => {
   });
 });
 
-describe('wire codec — NexusValue', () => {
-  it('encodes Null as the literal string "Null"', () => {
-    expect(toWireValue(nx.Null())).toBe('Null');
-  });
-
-  it('encodes Str as { Str: "…" }', () => {
-    expect(toWireValue(nx.Str('hi'))).toEqual({ Str: 'hi' });
-  });
-
-  it('encodes Int as { Int: bigint }', () => {
-    const wire = toWireValue(nx.Int(42)) as { Int: bigint };
-    expect(typeof wire.Int).toBe('bigint');
-    expect(wire.Int).toBe(42n);
-  });
-
-  it('encodes Bool / Float / Bytes / Array / Map', () => {
-    expect(toWireValue(nx.Bool(true))).toEqual({ Bool: true });
-    expect(toWireValue(nx.Float(1.5))).toEqual({ Float: 1.5 });
-    const bytesWire = toWireValue(nx.Bytes(new Uint8Array([1, 2, 3]))) as { Bytes: Uint8Array };
-    expect(bytesWire.Bytes).toBeInstanceOf(Uint8Array);
-    expect([...bytesWire.Bytes]).toEqual([1, 2, 3]);
-    const arrWire = toWireValue(nx.Array([nx.Int(1), nx.Str('two')])) as { Array: unknown[] };
-    expect(arrWire.Array.length).toBe(2);
-    const mapWire = toWireValue(nx.Map([[nx.Str('k'), nx.Int(99)]])) as { Map: unknown[][] };
-    expect(mapWire.Map.length).toBe(1);
-  });
-
-  it('roundtrips every primitive variant through fromWireValue', () => {
-    // `Int` is normalised to bigint after the round trip because
-    // MessagePack carries 64-bit integers as bigint; `nexusToJson`
-    // folds safe integers back to number on the user-facing boundary.
-    const cases: Array<[ReturnType<typeof nx[keyof typeof nx]>, ReturnType<typeof nx[keyof typeof nx]>]> = [
-      [nx.Null(), nx.Null()],
-      [nx.Bool(false), nx.Bool(false)],
-      [nx.Bool(true), nx.Bool(true)],
-      [nx.Int(0), nx.Int(0n)],
-      [nx.Str(''), nx.Str('')],
-      [nx.Str('hello'), nx.Str('hello')],
-      [nx.Float(3.14), nx.Float(3.14)],
-      [nx.Bytes(new Uint8Array([0, 255])), nx.Bytes(new Uint8Array([0, 255]))],
-    ];
-    for (const [input, expected] of cases) {
-      const back = fromWireValue(toWireValue(input));
-      expect(back).toEqual(expected);
-    }
-  });
-
-  it('roundtrips nested Array + Map', () => {
-    const v = nx.Map([
-      [nx.Str('labels'), nx.Array([nx.Str('Person')])],
-      [nx.Str('age'), nx.Int(30n)],
-    ]);
-    const back = fromWireValue(toWireValue(v));
-    expect(back).toEqual(v);
-  });
-
-  it('rejects a multi-key tagged value', () => {
-    expect(() => fromWireValue({ Str: 'a', Int: 1n })).toThrow(/single-key/);
-  });
-
-  it('rejects an unknown tag', () => {
-    expect(() => fromWireValue({ Widget: 'x' })).toThrow(/unknown NexusValue tag/);
-  });
-});
-
-describe('wire codec — Request frame', () => {
-  it('produces u32 LE length prefix + msgpack body', () => {
-    const frame = encodeRequestFrame({ id: 7, command: 'PING', args: [] });
-    const length = new DataView(frame.buffer, frame.byteOffset, frame.byteLength).getUint32(0, true);
-    expect(length).toBe(frame.length - 4);
-    expect(length).toBeGreaterThan(0);
-  });
-
-  it('decodes an Ok response', () => {
-    const body = pack({ id: 9, result: { Ok: { Str: 'OK' } } });
-    const resp = decodeResponseBody(body);
-    expect(resp.id).toBe(9);
-    expect(resp.result.ok).toBe(true);
-    if (resp.result.ok) expect(resp.result.value).toEqual(nx.Str('OK'));
-    const transport = rpcResponseToTransport(resp);
-    expect(transport.value).toEqual(nx.Str('OK'));
-  });
-
-  it('decodes an Err response and rpcResponseToTransport throws', () => {
-    const body = pack({ id: 3, result: { Err: 'boom' } });
-    const resp = decodeResponseBody(body);
-    expect(resp.result.ok).toBe(false);
-    if (!resp.result.ok) expect(resp.result.message).toBe('boom');
-    expect(() => rpcResponseToTransport(resp)).toThrow(/boom/);
-  });
-});
+// The wire codec (NexusValue ↔ MessagePack framing) now lives in
+// `@hivehub/thunder`; the SDK's RPC transport wraps Thunder's client
+// instead of owning the codec, so the former `wire codec` describe blocks
+// were removed with `src/transports/codec.ts`. Thunder ships its own
+// codec conformance tests. The endpoint / command-map / transport-select
+// behaviour below is the SDK's own and stays here.
 
 describe('command map', () => {
   it('maps graph.cypher with query only', () => {

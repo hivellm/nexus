@@ -56,9 +56,9 @@
   },
   "homepage": "https://github.com/hivellm/nexus/tree/main/sdks/typescript#readme",
   "dependencies": {
+    "@hivehub/thunder": "^0.2.2",
     "axios": "^1.6.2",
-    "axios-retry": "^4.0.0",
-    "msgpackr": "^1.11.10"
+    "axios-retry": "^4.0.0"
   },
   "devDependencies": {
     "@types/node": "^20.10.0",
