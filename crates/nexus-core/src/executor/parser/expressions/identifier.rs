@@ -57,6 +57,49 @@ impl CypherParser {
                 self.consume_char(); // consume '*'
                 self.skip_whitespace();
                 // count(*) has no arguments - empty args list means count all
+            } else if matches!(
+                identifier.to_lowercase().as_str(),
+                "any" | "all" | "none" | "single"
+            ) {
+                // phase21_tck-quantifier-in-where-parser — list-predicate
+                // quantifiers `any/all/none/single(x IN list WHERE pred)`.
+                // Mirrors the filter() IN..WHERE special form above, but
+                // (a) WHERE is REQUIRED per the openCypher grammar for
+                // these four (filter()'s WHERE is optional), and (b) the
+                // evaluator (fn_list.rs) expects three discrete
+                // `FunctionCall` args — [variable-name-as-string-literal,
+                // list expression, predicate] — rather than a single
+                // ListComprehension node, so we push three args directly
+                // instead of folding them into one expression.
+                let variable = self.parse_identifier()?;
+                self.skip_whitespace();
+
+                if !self.peek_keyword("IN") {
+                    return Err(Error::CypherSyntax(format!(
+                        "Expected IN keyword in {identifier}() at line {}, column {}",
+                        self.line, self.column
+                    )));
+                }
+                self.expect_keyword("IN")?;
+                self.skip_whitespace();
+
+                let list_expression = self.parse_expression()?;
+                self.skip_whitespace();
+
+                if !self.peek_keyword("WHERE") {
+                    return Err(Error::CypherSyntax(format!(
+                        "Expected WHERE keyword in {identifier}() at line {}, column {}",
+                        self.line, self.column
+                    )));
+                }
+                self.expect_keyword("WHERE")?;
+                self.skip_whitespace();
+
+                let predicate = self.parse_expression()?;
+
+                args.push(Expression::Literal(Literal::String(variable)));
+                args.push(list_expression);
+                args.push(predicate);
             } else {
                 // Check for DISTINCT keyword (for COUNT(DISTINCT ...))
                 let has_distinct = if self.peek_keyword("DISTINCT") {

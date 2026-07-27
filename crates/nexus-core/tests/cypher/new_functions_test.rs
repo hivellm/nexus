@@ -113,41 +113,15 @@ fn test_extract_function_null() {
 // PREDICATE FUNCTIONS: all, any, none, single
 // ============================================================================
 
-#[test]
-fn test_all_function_null() {
-    let (mut engine, _ctx) = setup_isolated_test_engine().unwrap();
-
-    // all with NULL should return false
-    let result = execute_query(&mut engine, "RETURN all(null, null, null) AS a");
-    assert!(!get_single_value(&result).as_bool().unwrap());
-}
-
-#[test]
-fn test_any_function_null() {
-    let (mut engine, _ctx) = setup_isolated_test_engine().unwrap();
-
-    // any with NULL should return false
-    let result = execute_query(&mut engine, "RETURN any(null, null, null) AS a");
-    assert!(!get_single_value(&result).as_bool().unwrap());
-}
-
-#[test]
-fn test_none_function_null() {
-    let (mut engine, _ctx) = setup_isolated_test_engine().unwrap();
-
-    // none with NULL should return true (empty list)
-    let result = execute_query(&mut engine, "RETURN none(null, null, null) AS n");
-    assert!(get_single_value(&result).as_bool().unwrap());
-}
-
-#[test]
-fn test_single_function_null() {
-    let (mut engine, _ctx) = setup_isolated_test_engine().unwrap();
-
-    // single with NULL should return false
-    let result = execute_query(&mut engine, "RETURN single(null, null, null) AS s");
-    assert!(!get_single_value(&result).as_bool().unwrap());
-}
+// NOTE (phase21_tck-quantifier-in-where-parser): the four `test_*_function_null`
+// tests were REMOVED. They exercised a non-standard variadic form
+// `any/all/none/single(null, null, null)` that openCypher does not define —
+// these are strictly list-predicate quantifiers, `any/all/none/single(x IN
+// list WHERE predicate)`. Supporting the correct quantifier grammar is
+// incompatible with the invented variadic form (the parser now requires
+// `<var> IN <list> WHERE <pred>`), so the old tests encoded wrong behavior and
+// were dropped. Quantifier coverage now lives in
+// tests/cypher/test_quantifier_predicates.rs.
 
 // ============================================================================
 // TYPE CONVERSION: toDate

@@ -30,6 +30,7 @@ mod test_create_with_return;
 mod test_create_without_return;
 mod test_filter_function;
 mod test_multiple_relationship_types;
+mod test_quantifier_predicates;
 mod test_regex_functions;
 mod test_relationship_counting;
 mod test_size_function;
