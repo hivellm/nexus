@@ -15,9 +15,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > carry these fixes. The remediation is tracked across 27 `phase0_fix-*`
 > tasks and will land incrementally under this release.
 
-### Added — openCypher semantic-analysis pass (undefined-variable rejection)
+### Added — openCypher semantic-analysis pass
 
-- **A static semantic-analysis stage now runs after parsing and before planning.** Its first check rejects references to variables that are bound nowhere in the query — `MATCH (a) RETURN b` or `MATCH (a) WHERE c.x > 1 RETURN a` now raise a `SyntaxError` (openCypher `UndefinedVariable`) instead of silently returning wrong or empty rows. The pass is deliberately conservative: it over-collects binders (so it can only ever miss an error, never invent one) and skips queries containing constructs whose scoping it does not yet model (`UNION`, `CALL {…}` subqueries, `CALL` procedures, `LOAD CSV`). Additional scope, aggregation-placement, and argument checks will land incrementally under this stage.
+- **A static semantic-analysis stage now runs after parsing and before planning**, rejecting queries that are structurally parseable but violate openCypher semantic rules with a `SyntaxError` carrying the standard detail token, instead of silently returning wrong/empty rows. The pass is deliberately conservative — it over-collects binders (so it can only ever miss an error, never invent one) and skips queries containing constructs whose scoping it does not yet model (`UNION`, `CALL {…}` subqueries, `CALL` procedures, `LOAD CSV`). Checks landed so far:
+  - **`UndefinedVariable`** — a reference to a variable bound nowhere (`MATCH (a) RETURN b`, `MATCH (a) WHERE c.x > 1 RETURN a`).
+  - **`VariableTypeConflict`** — a name used as both a node and a relationship (`MATCH (a) MATCH ()-[a]-()`).
+  - **`VariableAlreadyBound`** — a `CREATE` that re-declares an already-bound variable with labels or properties (`MATCH (a) CREATE (a {x: 1})`, `CREATE (n:Foo) CREATE (n:Bar)-[:R]->()`).
+  - **`NestedAggregation`** — an aggregate nested inside another aggregate (`RETURN count(count(*))`).
+  - **`InvalidAggregation`** — an aggregate used inside `WHERE` (`WHERE count(a) > 1`; aggregating filters must use `WITH … WHERE`).
+  - **`NegativeIntegerArgument` / `NonConstantExpression`** — a negative integer literal or a variable-dependent `SKIP`/`LIMIT` (`SKIP -1`, `SKIP n.count`).
+  Further checks (aggregation-expression ambiguity, `UNION` column structure, `DELETE` target validity) land incrementally under this stage.
 
 ### Added — openCypher SET conformance (whole-entity property replace)
 
