@@ -214,7 +214,11 @@ impl Executor {
                         };
 
                         if step == 0 {
-                            return Some(Ok(Value::Array(Vec::new())));
+                            // phase21_tck-missing-functions — openCypher: a
+                            // zero step is a runtime error, not an empty list.
+                            return Some(Err(Error::CypherExecution(
+                                "step argument to range() cannot be zero".to_string(),
+                            )));
                         }
 
                         return Some(match Self::build_range(start, end, step) {
@@ -231,9 +235,18 @@ impl Executor {
                         Ok(v) => v,
                         Err(e) => return Some(Err(e)),
                     };
-                    if let Value::Array(mut arr) = value {
-                        arr.reverse();
-                        return Some(Ok(Value::Array(arr)));
+                    match value {
+                        Value::Array(mut arr) => {
+                            arr.reverse();
+                            return Some(Ok(Value::Array(arr)));
+                        }
+                        // phase21_tck-missing-functions — reverse(string)
+                        // reverses the characters (by Unicode scalar).
+                        Value::String(s) => {
+                            return Some(Ok(Value::String(s.chars().rev().collect())));
+                        }
+                        Value::Null => return Some(Ok(Value::Null)),
+                        _ => {}
                     }
                 }
                 Some(Ok(Value::Null))

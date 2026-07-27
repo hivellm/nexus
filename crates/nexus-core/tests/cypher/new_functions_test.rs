@@ -215,3 +215,87 @@ fn test_functions_combined() {
     assert!((result.rows[0].values[1].as_f64().unwrap() - 1.0).abs() < 0.0001);
     assert_eq!(result.rows[0].values[2].as_str().unwrap(), "2025-11-12");
 }
+
+// ============================================================================
+// phase21_tck-missing-functions: reverse(string), range(step=0) error,
+// sign/cot/haversin/rand, properties()
+// ============================================================================
+
+#[test]
+fn reverse_string_reverses_characters() {
+    let (mut engine, _ctx) = setup_isolated_test_engine().unwrap();
+    let r = execute_query(&mut engine, "RETURN reverse('abc') AS r");
+    assert_eq!(get_single_value(&r).as_str(), Some("cba"));
+}
+
+#[test]
+fn range_with_zero_step_errors() {
+    let (mut engine, _ctx) = setup_isolated_test_engine().unwrap();
+    assert!(
+        engine.execute_cypher("RETURN range(1, 5, 0) AS r").is_err(),
+        "range() with step 0 must error"
+    );
+}
+
+#[test]
+fn sign_returns_minus_one_zero_one() {
+    let (mut engine, _ctx) = setup_isolated_test_engine().unwrap();
+    assert_eq!(
+        get_single_value(&execute_query(&mut engine, "RETURN sign(-3.0) AS r")).as_i64(),
+        Some(-1)
+    );
+    assert_eq!(
+        get_single_value(&execute_query(&mut engine, "RETURN sign(0) AS r")).as_i64(),
+        Some(0)
+    );
+    assert_eq!(
+        get_single_value(&execute_query(&mut engine, "RETURN sign(2.5) AS r")).as_i64(),
+        Some(1)
+    );
+}
+
+#[test]
+fn cot_and_haversin() {
+    let (mut engine, _ctx) = setup_isolated_test_engine().unwrap();
+    let cot = get_single_value(&execute_query(&mut engine, "RETURN cot(1.0) AS r"))
+        .as_f64()
+        .unwrap();
+    assert!((cot - (1.0_f64 / 1.0_f64.tan())).abs() < 1e-9);
+    let hav = get_single_value(&execute_query(&mut engine, "RETURN haversin(0.0) AS r"))
+        .as_f64()
+        .unwrap();
+    assert!(hav.abs() < 1e-9, "haversin(0) should be 0");
+}
+
+#[test]
+fn rand_is_in_unit_interval() {
+    let (mut engine, _ctx) = setup_isolated_test_engine().unwrap();
+    let v = get_single_value(&execute_query(&mut engine, "RETURN rand() AS r"))
+        .as_f64()
+        .unwrap();
+    assert!((0.0..1.0).contains(&v), "rand() must be in [0,1), got {v}");
+}
+
+#[test]
+fn properties_of_map_and_node() {
+    let (mut engine, _ctx) = setup_isolated_test_engine().unwrap();
+    // literal map
+    let m = execute_query(&mut engine, "RETURN properties({a: 1, b: 2}) AS r");
+    let obj = get_single_value(&m).as_object().unwrap();
+    assert_eq!(obj.get("a").and_then(|v| v.as_i64()), Some(1));
+    assert_eq!(obj.get("b").and_then(|v| v.as_i64()), Some(2));
+    // node: internal markers stripped
+    engine
+        .create_node(
+            vec!["P".to_string()],
+            serde_json::json!({ "name": "Alice" }),
+        )
+        .unwrap();
+    let n = execute_query(&mut engine, "MATCH (p:P) RETURN properties(p) AS r");
+    let nobj = get_single_value(&n).as_object().unwrap();
+    assert_eq!(nobj.get("name").and_then(|v| v.as_str()), Some("Alice"));
+    assert!(
+        !nobj.keys().any(|k| k.starts_with('_')),
+        "internal markers must be stripped: {nobj:?}"
+    );
+}

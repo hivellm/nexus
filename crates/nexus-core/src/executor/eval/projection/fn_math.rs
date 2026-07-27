@@ -548,6 +548,103 @@ impl Executor {
                     serde_json::Number::from_f64(std::f64::consts::E).unwrap(),
                 )))
             }
+            // phase21_tck-missing-functions — `sign(x)` returns -1, 0, or 1
+            // depending on the sign of `x` (INTEGER result). NULL propagates;
+            // invalid types raise the same `TypeMismatch` every other math
+            // arm above raises via `value_to_number`. `f64::signum` is NOT
+            // used directly because it maps `0.0.signum() == 1.0`, which
+            // would wrongly report `sign(0) == 1` instead of `0`.
+            "sign" => {
+                if let Some(arg) = args.first() {
+                    let value = match self.evaluate_projection_expression(row, context, arg) {
+                        Ok(v) => v,
+                        Err(e) => return Some(Err(e)),
+                    };
+                    if value.is_null() {
+                        return Some(Ok(Value::Null));
+                    }
+                    let num = match self.value_to_number(&value) {
+                        Ok(n) => n,
+                        Err(e) => return Some(Err(e)),
+                    };
+                    let sign: i64 = if num > 0.0 {
+                        1
+                    } else if num < 0.0 {
+                        -1
+                    } else {
+                        0
+                    };
+                    return Some(Ok(Value::Number(sign.into())));
+                }
+                Some(Ok(Value::Null))
+            }
+            // phase21_tck-missing-functions — `rand()` returns a FLOAT in
+            // `[0, 1)` from the thread-local RNG. No arguments, so no NULL
+            // to propagate (same shape as `randomuuid()` in fn_graph.rs).
+            "rand" => {
+                let value = rand::random::<f64>();
+                Some(
+                    serde_json::Number::from_f64(value)
+                        .map(Value::Number)
+                        .ok_or_else(|| Error::TypeMismatch {
+                            expected: "number".to_string(),
+                            actual: "non-finite".to_string(),
+                        }),
+                )
+            }
+            // phase21_tck-missing-functions — `cot(x)` is the cotangent,
+            // `1 / tan(x)`. NULL/type handling mirrors `tan` above.
+            "cot" => {
+                if let Some(arg) = args.first() {
+                    let value = match self.evaluate_projection_expression(row, context, arg) {
+                        Ok(v) => v,
+                        Err(e) => return Some(Err(e)),
+                    };
+                    if value.is_null() {
+                        return Some(Ok(Value::Null));
+                    }
+                    let num = match self.value_to_number(&value) {
+                        Ok(n) => n,
+                        Err(e) => return Some(Err(e)),
+                    };
+                    return Some(
+                        serde_json::Number::from_f64(1.0 / num.tan())
+                            .map(Value::Number)
+                            .ok_or_else(|| Error::TypeMismatch {
+                                expected: "number".to_string(),
+                                actual: "non-finite".to_string(),
+                            }),
+                    );
+                }
+                Some(Ok(Value::Null))
+            }
+            // phase21_tck-missing-functions — `haversin(x)` is the
+            // haversine function, `(1 - cos(x)) / 2`, used in great-circle
+            // distance formulas. NULL/type handling mirrors `cos` above.
+            "haversin" => {
+                if let Some(arg) = args.first() {
+                    let value = match self.evaluate_projection_expression(row, context, arg) {
+                        Ok(v) => v,
+                        Err(e) => return Some(Err(e)),
+                    };
+                    if value.is_null() {
+                        return Some(Ok(Value::Null));
+                    }
+                    let num = match self.value_to_number(&value) {
+                        Ok(n) => n,
+                        Err(e) => return Some(Err(e)),
+                    };
+                    return Some(
+                        serde_json::Number::from_f64((1.0 - num.cos()) / 2.0)
+                            .map(Value::Number)
+                            .ok_or_else(|| Error::TypeMismatch {
+                                expected: "number".to_string(),
+                                actual: "non-finite".to_string(),
+                            }),
+                    );
+                }
+                Some(Ok(Value::Null))
+            }
             _ => None,
         }
     }

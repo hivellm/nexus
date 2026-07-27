@@ -25,6 +25,42 @@ impl Executor {
         args: &[parser::Expression],
     ) -> Option<Result<Value>> {
         match name {
+            // phase21_tck-missing-functions — properties(x): the property
+            // map of a node / relationship, or the map itself. Internal
+            // markers (`_nexus_*`) are stripped; for a relationship the
+            // `type` alias (a dup of the rel type, not a real property) is
+            // also stripped. NULL propagates.
+            "properties" => {
+                let value = match args.first() {
+                    Some(arg) => match self.evaluate_projection_expression(row, context, arg) {
+                        Ok(v) => v,
+                        Err(e) => return Some(Err(e)),
+                    },
+                    None => return Some(Ok(Value::Null)),
+                };
+                match value {
+                    Value::Null => Some(Ok(Value::Null)),
+                    Value::Object(obj) => {
+                        let is_rel =
+                            crate::executor::is_relationship_value(&Value::Object(obj.clone()));
+                        let mut out = serde_json::Map::new();
+                        for (k, v) in obj {
+                            if k.starts_with('_') {
+                                continue;
+                            }
+                            if is_rel && k == "type" {
+                                continue;
+                            }
+                            out.insert(k, v);
+                        }
+                        Some(Ok(Value::Object(out)))
+                    }
+                    other => Some(Err(Error::TypeMismatch {
+                        expected: "node, relationship, or map".to_string(),
+                        actual: format!("{other:?}"),
+                    })),
+                }
+            }
             // phase6_opencypher-quickwins §8 — runtime evaluator
             // for the synthetic `__label_predicate__(var, 'Label')`
             // the parser emits for `var:Label` in WHERE /
