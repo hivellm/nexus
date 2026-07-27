@@ -213,7 +213,10 @@ impl Executor {
                     actual: "modulo by zero".to_string(),
                 });
             }
-            if let Some(m) = li.checked_rem_euclid(ri) {
+            // openCypher `%` is the TRUNCATED remainder (sign follows the
+            // dividend): `-3 % 2 = -1`, not the Euclidean `1`. Rust's `%`
+            // (`checked_rem`) is exactly that.
+            if let Some(m) = li.checked_rem(ri) {
                 return Ok(Value::Number(serde_json::Number::from(m)));
             }
         }
@@ -228,8 +231,9 @@ impl Executor {
             });
         }
 
-        // Use f64::rem_euclid for modulo operation
-        let result = l.rem_euclid(r);
+        // Truncated remainder (sign follows the dividend), matching
+        // openCypher — Rust's `%` on f64 is fmod, not Euclidean.
+        let result = l % r;
 
         serde_json::Number::from_f64(result)
             .map(Value::Number)

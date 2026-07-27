@@ -58,9 +58,11 @@ fn test_parse_multiplicative_operators() {
     let op = parser.parse_multiplicative_operator().unwrap();
     assert_eq!(op, BinaryOperator::Modulo);
 
+    // `^` (power) is NOT a multiplicative operator — it binds tighter and is
+    // right-associative, so it is parsed by `parse_power_expression`, not at
+    // the multiplicative level.
     let mut parser = CypherParser::new("^".to_string());
-    let op = parser.parse_multiplicative_operator().unwrap();
-    assert_eq!(op, BinaryOperator::Power);
+    assert!(parser.parse_multiplicative_operator().is_none());
 }
 
 #[test]

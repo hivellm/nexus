@@ -269,16 +269,39 @@ impl CypherParser {
             });
         }
 
-        // Check for comparison operators (=, <>, <, <=, >, >=)
+        // Check for comparison operators (=, <>, <, <=, >, >=), with
+        // CHAINING: `a < b < c` desugars to `a < b AND b < c` (and extends,
+        // `a < b < c < d` → `a<b AND b<c AND c<d`). Each link reuses the
+        // previous right-hand operand as its left-hand operand.
         self.skip_whitespace();
         if let Some(op) = self.parse_comparison_operator() {
             self.skip_whitespace();
-            let right = self.parse_additive_expression()?;
-            return Ok(Expression::BinaryOp {
+            let mut right = self.parse_additive_expression()?;
+            let mut result = Expression::BinaryOp {
                 left: Box::new(left),
                 op,
-                right: Box::new(right),
-            });
+                right: Box::new(right.clone()),
+            };
+            loop {
+                self.skip_whitespace();
+                let Some(next_op) = self.parse_comparison_operator() else {
+                    break;
+                };
+                self.skip_whitespace();
+                let next_right = self.parse_additive_expression()?;
+                let link = Expression::BinaryOp {
+                    left: Box::new(right),
+                    op: next_op,
+                    right: Box::new(next_right.clone()),
+                };
+                result = Expression::BinaryOp {
+                    left: Box::new(result),
+                    op: BinaryOperator::And,
+                    right: Box::new(link),
+                };
+                right = next_right;
+            }
+            return Ok(result);
         }
 
         Ok(left)
@@ -328,21 +351,50 @@ impl CypherParser {
         Ok(left)
     }
 
-    /// Parse unary expressions
+    /// Parse unary expressions.
+    ///
+    /// Unary `+`/`-` bind LOOSER than `^` (so `-2^2` is `-(2^2)` = -4) and
+    /// tighter than `*`/`/`/`%`. The operand recurses through
+    /// `parse_unary_expression` so a signed exponent (`2^-3`) and stacked
+    /// signs (`- -x`) parse, and falls through to `parse_power_expression`.
     pub(super) fn parse_unary_expression(&mut self) -> Result<Expression> {
         self.skip_whitespace();
 
         // Check for unary operators
         if let Some(op) = self.parse_unary_operator() {
             self.skip_whitespace();
-            let operand = self.parse_simple_expression()?;
+            let operand = self.parse_unary_expression()?;
             return Ok(Expression::UnaryOp {
                 op,
                 operand: Box::new(operand),
             });
         }
 
-        self.parse_simple_expression()
+        self.parse_power_expression()
+    }
+
+    /// Parse a power expression `base ^ exponent`.
+    ///
+    /// `^` binds tighter than unary and multiplicative operators and is
+    /// RIGHT-associative: `2^3^2` = `2^(3^2)` = 512. The exponent recurses
+    /// through `parse_unary_expression`, which yields both the right
+    /// associativity and a signed exponent (`2^-3`).
+    pub(super) fn parse_power_expression(&mut self) -> Result<Expression> {
+        let base = self.parse_simple_expression()?;
+
+        self.skip_whitespace();
+        if self.peek_char() == Some('^') {
+            self.consume_char();
+            self.skip_whitespace();
+            let exponent = self.parse_unary_expression()?;
+            Ok(Expression::BinaryOp {
+                left: Box::new(base),
+                op: BinaryOperator::Power,
+                right: Box::new(exponent),
+            })
+        } else {
+            Ok(base)
+        }
     }
 
     /// Parse comparison operator only (not AND/OR)
@@ -491,10 +543,9 @@ impl CypherParser {
                 self.consume_char();
                 Some(BinaryOperator::Modulo)
             }
-            Some('^') => {
-                self.consume_char();
-                Some(BinaryOperator::Power)
-            }
+            // `^` is NOT multiplicative — it is parsed by
+            // `parse_power_expression` (tighter binding than `*`/unary,
+            // right-associative).
             _ => None,
         }
     }

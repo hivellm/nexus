@@ -1,9 +1,9 @@
 ## 1. Implementation
-- [ ] 1.1 ^ right-assoc + precedence
-- [ ] 1.2 % truncated remainder
-- [ ] 1.3 comparison chaining
+- [x] 1.1 ^ right-assoc + precedence — `^` removed from `parse_multiplicative_operator` and given its own `parse_power_expression` level (precedence.rs) that binds tighter than unary and `*`/`/`/`%` and is RIGHT-associative (the exponent recurses through `parse_unary_expression`, giving both right-assoc and a signed exponent `2^-2`). `parse_unary_expression` now falls through to `parse_power_expression` and recurses on its operand so `-2^2` parses as `-(2^2)`. Verified: `2^3^2`=512, `2^2^3`=256, `-2^2`=-4, `2*3^2`=18, `2^-2`=0.25.
+- [x] 1.2 % truncated remainder — `modulo_values` (eval/arithmetic.rs) switched from Euclidean (`checked_rem_euclid`/`f64::rem_euclid`) to truncated remainder (`checked_rem`/`%`), so the sign follows the dividend per openCypher. Verified: `-3 % 2` = -1 (was +1), `3 % -2` = 1.
+- [x] 1.3 comparison chaining — `parse_comparison_expression` now loops the comparison-operator branch, desugaring `a < b < c` into `a < b AND b < c` (extends to any length; each link reuses the previous right operand as its left). Verified with the discriminating case `1 < 3 < 2` → false (chaining) vs the left-assoc interpretation, plus `1 <= 2 <= 2 <= 3` → true. Single comparisons and explicit `AND` are unaffected (the loop stops at a non-comparison token).
 
 ## 2. Tail (docs + tests — check or waive with tailWaiver)
-- [ ] 2.1 Update or create documentation covering the implementation
-- [ ] 2.2 Write tests covering the new behavior
-- [ ] 2.3 Run tests and confirm they pass
+- [x] 2.1 Update or create documentation covering the implementation (doc comments on `parse_power_expression`/`parse_unary_expression`/the comparison-chaining block/the modulo sites; rationale + anchors here)
+- [x] 2.2 Write tests covering the new behavior (tests/cypher/parser_precedence_test.rs — 6 tests: right-assoc, tighter-than-unary, tighter-than-*, signed exponent, truncated modulo, comparison chaining incl. the discriminating case)
+- [x] 2.3 Run tests and confirm they pass (cypher 456/0; lib 2540/0; clippy/fmt clean. The workspace gate surfaced ONE stale unit test — `parser::tests::tokens::test_parse_multiplicative_operators` asserted `^` was a multiplicative operator, the exact behaviour this task corrects — updated to assert `^` is NOT multiplicative; re-run green.)
