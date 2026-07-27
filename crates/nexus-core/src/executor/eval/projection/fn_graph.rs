@@ -213,6 +213,46 @@ impl Executor {
                 }
                 Some(Ok(Value::Null))
             }
+            // phase21_tck-missing-functions — startNode(rel) / endNode(rel):
+            // the start / end node of a relationship. A relationship VALUE
+            // carries only its own id (`_nexus_id`, plus type + props); the
+            // endpoints live on the stored record, so — exactly like
+            // `type(rel)` above — we read the relationship record for its
+            // `src_id` / `dst_id` and materialise the endpoint as a full
+            // node value. NULL propagates; a non-relationship (a node, or
+            // anything without a rel marker) yields NULL rather than
+            // mis-reading its id as a relationship id.
+            "startnode" | "endnode" => {
+                let Some(arg) = args.first() else {
+                    return Some(Ok(Value::Null));
+                };
+                let value = match self.evaluate_projection_expression(row, context, arg) {
+                    Ok(v) => v,
+                    Err(e) => return Some(Err(e)),
+                };
+                if matches!(value, Value::Null) {
+                    return Some(Ok(Value::Null));
+                }
+                if !crate::executor::is_relationship_value(&value) {
+                    return Some(Ok(Value::Null));
+                }
+                let rel_id = match &value {
+                    Value::Object(obj) => obj.get("_nexus_id").and_then(|v| v.as_u64()),
+                    _ => None,
+                };
+                let Some(rid) = rel_id else {
+                    return Some(Ok(Value::Null));
+                };
+                let Ok(rel_record) = self.store().read_rel(rid) else {
+                    return Some(Ok(Value::Null));
+                };
+                let node_id = if name == "startnode" {
+                    rel_record.src_id
+                } else {
+                    rel_record.dst_id
+                };
+                Some(self.read_node_as_value(node_id))
+            }
             // phase4_cypher-parity-quick-wins §2.1 — `elementId()` returns
             // a Neo4j-5-style *opaque* stable string instead of the raw
             // internal 64-bit id that `id()` still exposes. Real Neo4j

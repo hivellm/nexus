@@ -299,3 +299,34 @@ fn properties_of_map_and_node() {
         "internal markers must be stripped: {nobj:?}"
     );
 }
+
+#[test]
+fn start_node_and_end_node_return_endpoints() {
+    let (mut engine, _ctx) = setup_isolated_test_engine().unwrap();
+    execute_query(
+        &mut engine,
+        "CREATE (a:P {name: 'A'})-[:KNOWS]->(b:P {name: 'B'})",
+    );
+    engine.refresh_executor().unwrap();
+
+    let s = execute_query(
+        &mut engine,
+        "MATCH (a:P)-[r:KNOWS]->(b:P) RETURN startNode(r) AS s",
+    );
+    let sobj = get_single_value(&s).as_object().unwrap();
+    assert_eq!(sobj.get("name").and_then(|v| v.as_str()), Some("A"));
+
+    let e = execute_query(
+        &mut engine,
+        "MATCH (a:P)-[r:KNOWS]->(b:P) RETURN endNode(r) AS e",
+    );
+    let eobj = get_single_value(&e).as_object().unwrap();
+    assert_eq!(eobj.get("name").and_then(|v| v.as_str()), Some("B"));
+}
+
+#[test]
+fn start_node_end_node_null_propagates() {
+    let (mut engine, _ctx) = setup_isolated_test_engine().unwrap();
+    assert!(get_single_value(&execute_query(&mut engine, "RETURN startNode(null) AS s")).is_null());
+    assert!(get_single_value(&execute_query(&mut engine, "RETURN endNode(null) AS e")).is_null());
+}
