@@ -23,7 +23,7 @@
 use std::collections::HashSet;
 
 use crate::executor::parser::ast::{
-    Clause, CypherQuery, Expression, ForeachClause, MatchClause, Pattern, PatternElement,
+    Clause, CypherQuery, Expression, ForeachClause, Literal, MatchClause, Pattern, PatternElement,
     ReturnItem, UnwindClause,
 };
 
@@ -45,6 +45,7 @@ pub fn validate(query: &CypherQuery) -> crate::Result<()> {
     check_variable_type_conflicts(query)?;
     check_variable_already_bound(query)?;
     check_aggregation_placement(query)?;
+    check_skip_limit_arguments(query)?;
 
     let mut binders = HashSet::new();
     collect_query_binders(query, &mut binders);
@@ -427,6 +428,59 @@ fn child_exprs(expr: &Expression) -> Vec<&Expression> {
     }
 }
 
+// ── SKIP / LIMIT arguments ─────────────────────────────────────────────
+
+/// Reject two always-illegal `SKIP`/`LIMIT` arguments that are statically
+/// provable: a negative integer literal (`SKIP -1` → `NegativeIntegerArgument`)
+/// and an argument that depends on a row variable (`SKIP n.count` →
+/// `NonConstantExpression`). Parameters (`SKIP $n`), which are constant at
+/// runtime, and other non-literal forms are left alone — a negative parameter
+/// value can only be detected at runtime, and this compile-time pass does not
+/// have it.
+fn check_skip_limit_arguments(query: &CypherQuery) -> crate::Result<()> {
+    for clause in &query.clauses {
+        match clause {
+            Clause::Skip(s) => check_skip_limit_count(&s.count)?,
+            Clause::Limit(l) => check_skip_limit_count(&l.count)?,
+            _ => {}
+        }
+    }
+    Ok(())
+}
+
+fn check_skip_limit_count(count: &Expression) -> crate::Result<()> {
+    // A plain or sign-folded integer literal: reject when negative, accept
+    // when non-negative.
+    let as_int = match count {
+        Expression::Literal(Literal::Integer(n)) => Some(*n),
+        other => match other.fold_signed_numeric_literal() {
+            Some(Literal::Integer(n)) => Some(n),
+            _ => None,
+        },
+    };
+    if let Some(n) = as_int {
+        if n < 0 {
+            return Err(negative_integer_argument());
+        }
+        return Ok(());
+    }
+
+    // Anything that reads a row variable cannot be a constant limit.
+    if expr_references_variable(count) {
+        return Err(non_constant_expression());
+    }
+    Ok(())
+}
+
+/// True when the expression reads any bound variable (a bare `Variable` or a
+/// `PropertyAccess`, directly or nested).
+fn expr_references_variable(expr: &Expression) -> bool {
+    match expr {
+        Expression::Variable(_) | Expression::PropertyAccess { .. } => true,
+        _ => child_exprs(expr).into_iter().any(expr_references_variable),
+    }
+}
+
 // ── Binder collection ──────────────────────────────────────────────────
 
 /// Add every variable name bound anywhere in `query` to `binders`.
@@ -574,7 +628,6 @@ fn collect_pattern_element_binders(element: &PatternElement, binders: &mut HashS
 /// list predicates (whose bound name is the first argument, a string
 /// literal), `EXISTS { … }` patterns, and `COLLECT { … }` subqueries.
 fn collect_expr_binders(expr: &Expression, binders: &mut HashSet<String>) {
-    use crate::executor::parser::ast::Literal;
     match expr {
         Expression::ListComprehension {
             variable,
@@ -874,6 +927,20 @@ fn invalid_aggregation_in_where() -> crate::Error {
     )
 }
 
+fn negative_integer_argument() -> crate::Error {
+    crate::Error::CypherSyntax(
+        "NegativeIntegerArgument: SKIP/LIMIT requires a non-negative integer".to_string(),
+    )
+}
+
+fn non_constant_expression() -> crate::Error {
+    crate::Error::CypherSyntax(
+        "NonConstantExpression: SKIP/LIMIT must be a constant, not an expression that depends \
+         on variables"
+            .to_string(),
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1040,6 +1107,26 @@ mod tests {
         assert_ok("MATCH (a) WITH count(a) AS c WHERE c > 10 RETURN c");
         // A non-aggregate call wrapping an aggregate is not nested aggregation.
         assert_ok("MATCH (a) RETURN size(collect(a)) AS n");
+    }
+
+    #[test]
+    fn negative_skip_limit_literal_is_rejected() {
+        assert_token("MATCH (n) RETURN n SKIP -1", "NegativeIntegerArgument");
+        assert_token("MATCH (n) RETURN n LIMIT -5", "NegativeIntegerArgument");
+    }
+
+    #[test]
+    fn variable_dependent_skip_limit_is_rejected() {
+        assert_token("MATCH (n) RETURN n SKIP n.count", "NonConstantExpression");
+    }
+
+    #[test]
+    fn constant_skip_limit_passes() {
+        assert_ok("MATCH (n) RETURN n SKIP 5");
+        assert_ok("MATCH (n) RETURN n LIMIT 10");
+        assert_ok("MATCH (n) RETURN n SKIP 0");
+        // Parameters are constant at runtime — not statically rejectable.
+        assert_ok("MATCH (n) RETURN n SKIP $s LIMIT $l");
     }
 
     #[test]
