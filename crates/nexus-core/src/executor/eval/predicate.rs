@@ -55,26 +55,42 @@ impl Executor {
                         self.compare_values(&left_val, &right_val, |a, b| a >= b)
                     }
                     parser::BinaryOperator::And => {
-                        let left_bool = self.value_to_bool(&left_val)?;
-                        let right_bool = self.value_to_bool(&right_val)?;
-                        Ok(left_bool && right_bool)
+                        // 3VL: NULL result drops the row in a WHERE filter.
+                        let l = self.logical_operand(&left_val)?;
+                        let r = self.logical_operand(&right_val)?;
+                        Ok(Self::and_3vl(l, r).unwrap_or(false))
                     }
                     parser::BinaryOperator::Or => {
-                        let left_bool = self.value_to_bool(&left_val)?;
-                        let right_bool = self.value_to_bool(&right_val)?;
-                        Ok(left_bool || right_bool)
+                        let l = self.logical_operand(&left_val)?;
+                        let r = self.logical_operand(&right_val)?;
+                        Ok(Self::or_3vl(l, r).unwrap_or(false))
+                    }
+                    parser::BinaryOperator::Xor => {
+                        let l = self.logical_operand(&left_val)?;
+                        let r = self.logical_operand(&right_val)?;
+                        Ok(Self::xor_3vl(l, r).unwrap_or(false))
                     }
                     parser::BinaryOperator::StartsWith => {
+                        // 3VL: a NULL operand yields NULL → drop the row.
+                        if left_val.is_null() || right_val.is_null() {
+                            return Ok(false);
+                        }
                         let left_str = self.value_to_string(&left_val);
                         let right_str = self.value_to_string(&right_val);
                         Ok(left_str.starts_with(&right_str))
                     }
                     parser::BinaryOperator::EndsWith => {
+                        if left_val.is_null() || right_val.is_null() {
+                            return Ok(false);
+                        }
                         let left_str = self.value_to_string(&left_val);
                         let right_str = self.value_to_string(&right_val);
                         Ok(left_str.ends_with(&right_str))
                     }
                     parser::BinaryOperator::Contains => {
+                        if left_val.is_null() || right_val.is_null() {
+                            return Ok(false);
+                        }
                         let left_str = self.value_to_string(&left_val);
                         let right_str = self.value_to_string(&right_val);
                         Ok(left_str.contains(&right_str))
@@ -118,8 +134,9 @@ impl Executor {
                 let operand_val = self.evaluate_expression(node, operand, context)?;
                 match op {
                     parser::UnaryOperator::Not => {
-                        let bool_val = self.value_to_bool(&operand_val)?;
-                        Ok(!bool_val)
+                        // 3VL: NOT NULL → NULL → drop the row in a WHERE filter.
+                        let operand = self.logical_operand(&operand_val)?;
+                        Ok(Self::not_3vl(operand).unwrap_or(false))
                     }
                     _ => Ok(false),
                 }
@@ -299,14 +316,19 @@ impl Executor {
 
                 match op {
                     parser::BinaryOperator::And => {
-                        let left_bool = self.value_to_bool(&left_val)?;
-                        let right_bool = self.value_to_bool(&right_val)?;
-                        Ok(Value::Bool(left_bool && right_bool))
+                        let l = self.logical_operand(&left_val)?;
+                        let r = self.logical_operand(&right_val)?;
+                        Ok(Self::tri_bool_to_value(Self::and_3vl(l, r)))
                     }
                     parser::BinaryOperator::Or => {
-                        let left_bool = self.value_to_bool(&left_val)?;
-                        let right_bool = self.value_to_bool(&right_val)?;
-                        Ok(Value::Bool(left_bool || right_bool))
+                        let l = self.logical_operand(&left_val)?;
+                        let r = self.logical_operand(&right_val)?;
+                        Ok(Self::tri_bool_to_value(Self::or_3vl(l, r)))
+                    }
+                    parser::BinaryOperator::Xor => {
+                        let l = self.logical_operand(&left_val)?;
+                        let r = self.logical_operand(&right_val)?;
+                        Ok(Self::tri_bool_to_value(Self::xor_3vl(l, r)))
                     }
                     parser::BinaryOperator::Equal => {
                         if left_val.is_null() || right_val.is_null() {
@@ -490,6 +512,81 @@ impl Executor {
             Value::Null => Ok(false),
             Value::Array(arr) => Ok(!arr.is_empty()),
             Value::Object(obj) => Ok(!obj.is_empty()),
+        }
+    }
+
+    /// Coerce a value to a three-valued logical operand: `Some(true)`,
+    /// `Some(false)`, or `None` (Cypher `NULL`). Unlike the lenient
+    /// [`Self::value_to_bool`] (used for WHERE-filter truthiness and CASE
+    /// conditions), Cypher's logical operators are STRICT about operand type:
+    /// `123 AND true` is an error, not a coercion. Only `BOOLEAN` and `NULL`
+    /// are valid operands to `AND`/`OR`/`NOT`.
+    pub(in crate::executor) fn logical_operand(&self, value: &Value) -> Result<Option<bool>> {
+        match value {
+            Value::Bool(b) => Ok(Some(*b)),
+            Value::Null => Ok(None),
+            other => Err(Error::CypherSyntax(format!(
+                "InvalidArgumentType: logical operator expected BOOLEAN or NULL, got {}",
+                Self::value_type_name(other)
+            ))),
+        }
+    }
+
+    /// Short human-readable Cypher type name for error messages.
+    pub(in crate::executor) fn value_type_name(value: &Value) -> &'static str {
+        match value {
+            Value::Null => "NULL",
+            Value::Bool(_) => "BOOLEAN",
+            Value::Number(n) => {
+                if n.is_i64() || n.is_u64() {
+                    "INTEGER"
+                } else {
+                    "FLOAT"
+                }
+            }
+            Value::String(_) => "STRING",
+            Value::Array(_) => "LIST",
+            Value::Object(_) => "MAP",
+        }
+    }
+
+    /// Kleene AND: `false` dominates, then `NULL`, else `true`.
+    pub(in crate::executor) fn and_3vl(a: Option<bool>, b: Option<bool>) -> Option<bool> {
+        match (a, b) {
+            (Some(false), _) | (_, Some(false)) => Some(false),
+            (Some(true), Some(true)) => Some(true),
+            _ => None,
+        }
+    }
+
+    /// Kleene OR: `true` dominates, then `NULL`, else `false`.
+    pub(in crate::executor) fn or_3vl(a: Option<bool>, b: Option<bool>) -> Option<bool> {
+        match (a, b) {
+            (Some(true), _) | (_, Some(true)) => Some(true),
+            (Some(false), Some(false)) => Some(false),
+            _ => None,
+        }
+    }
+
+    /// Kleene NOT: `NULL` propagates.
+    pub(in crate::executor) fn not_3vl(a: Option<bool>) -> Option<bool> {
+        a.map(|v| !v)
+    }
+
+    /// Kleene XOR: `NULL` on either side propagates; otherwise `a != b`.
+    pub(in crate::executor) fn xor_3vl(a: Option<bool>, b: Option<bool>) -> Option<bool> {
+        match (a, b) {
+            (Some(x), Some(y)) => Some(x != y),
+            _ => None,
+        }
+    }
+
+    /// Wrap a three-valued logical result into a Cypher `Value`
+    /// (`Some(b)` → `Bool`, `None` → `Null`).
+    pub(in crate::executor) fn tri_bool_to_value(o: Option<bool>) -> Value {
+        match o {
+            Some(b) => Value::Bool(b),
+            None => Value::Null,
         }
     }
 

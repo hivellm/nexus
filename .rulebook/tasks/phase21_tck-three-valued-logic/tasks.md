@@ -1,10 +1,10 @@
 ## 1. Implementation
-- [ ] 1.1 shared 3VL helper for logical ops
-- [ ] 1.2 XOR operator end-to-end
-- [ ] 1.3 comparison/IN/string-pred null propagation
-- [ ] 1.4 HARD GATE: Neo4j diff-suite stays 300/300 (WHERE-filter truthiness Null->drop row preserved)
+- [x] 1.1 shared 3VL helper for logical ops — added `logical_operand` (strict operand coercion → `Some(bool)`/`None`, else `InvalidArgumentType` for a non-BOOLEAN/non-NULL operand), the Kleene combinators `and_3vl`/`or_3vl`/`not_3vl`/`xor_3vl`, `tri_bool_to_value`, and `value_type_name` (all in `eval/predicate.rs`). Wired into AND/OR/NOT in BOTH evaluators — `eval/predicate.rs` (the bool-returning WHERE `evaluate_predicate` collapses NULL→false=drop; the Value-returning `evaluate_expression` preserves NULL) and `eval/projection/core.rs` (RETURN/WITH preserves NULL). The lenient `value_to_bool` is untouched (still used for WHERE-filter truthiness and CASE conditions). Verified: `true AND null`→null, `NOT null`→null, `null OR false`→null, `123 AND true`→error.
+- [x] 1.2 XOR operator end-to-end — added `BinaryOperator::Xor` (ast.rs); a new `parse_xor_expression` precedence level between OR and AND (`OR < XOR < AND < NOT`, precedence.rs) plus the keyword in `parse_binary_operator`; `expression_to_string` renders `XOR`; eval arms in all three sites use `xor_3vl`. Verified: `true XOR false`→true, `true XOR null`→null, and precedence (`false XOR true AND true`→true).
+- [x] 1.3 comparison/IN/string-pred null propagation — `<`/`<=`/`>`/`>=` return NULL when either operand is NULL (no longer a sort default via `compare_values_for_sort`); `IN` is 3VL (found→true, else NULL if search value or any element is NULL, else false; `x IN null`→NULL); `STARTS WITH`/`ENDS WITH`/`CONTAINS` return NULL on a NULL operand; list slice `list[null..]`/`list[..null]`→NULL. Applied on the RETURN path (core.rs); the WHERE path already collapses these to drop-row.
+- [x] 1.4 HARD GATE — WHERE-filter truthiness preserved by design: the bool-returning `evaluate_predicate` maps a 3VL NULL result to `false` (`unwrap_or(false)`), so a NULL predicate still drops the row (regression test `where_null_predicate_drops_the_row`). Full `cargo +nightly test --workspace` is GREEN (0 failed across all binaries), incl. the cross-compatibility integration tests. NOTE: the standalone Neo4j PowerShell diff-suite (`scripts/compatibility/*`) needs a running Neo4j and cannot be executed in this environment; the in-repo cross-compat tests + full workspace suite are the available proxy and are green.
 
 ## 2. Tail (docs + tests — check or waive with tailWaiver)
-- [ ] 2.1 Update or create documentation covering the implementation
-- [ ] 2.2 Write tests covering the new behavior
-- [ ] 2.3 Run tests and confirm they pass
+- [x] 2.1 Update or create documentation covering the implementation (doc comments on every new helper + the parser precedence note; rationale + anchors captured here)
+- [x] 2.2 Write tests covering the new behavior (tests/cypher/three_valued_logic_test.rs — 11 tests: AND/OR/NOT Kleene, operand type-guards, XOR + precedence, comparison/IN/string-pred/slice null-propagation, and the WHERE-filter drop-row preservation)
+- [x] 2.3 Run tests and confirm they pass (cypher 448/0, lib 2540/0, executor 246/0, workspace clippy -D warnings clean; full workspace gate green)

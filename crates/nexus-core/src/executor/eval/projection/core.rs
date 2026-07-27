@@ -253,6 +253,8 @@ impl Executor {
                                         idx.min(array_len) as usize
                                     }
                                 }
+                                // 3VL: a NULL slice bound makes the whole slice NULL.
+                                Value::Null => return Ok(Value::Null),
                                 _ => 0,
                             }
                         } else {
@@ -285,6 +287,8 @@ impl Executor {
                                         idx.min(array_len) as usize
                                     }
                                 }
+                                // 3VL: a NULL slice bound makes the whole slice NULL.
+                                Value::Null => return Ok(Value::Null),
                                 _ => arr.len(),
                             }
                         } else {
@@ -386,43 +390,80 @@ impl Executor {
                             Ok(Value::Bool(left_val != right_val))
                         }
                     }
-                    parser::BinaryOperator::LessThan => Ok(Value::Bool(
-                        self.compare_values_for_sort(&left_val, &right_val)
-                            == std::cmp::Ordering::Less,
-                    )),
-                    parser::BinaryOperator::LessThanOrEqual => Ok(Value::Bool(matches!(
-                        self.compare_values_for_sort(&left_val, &right_val),
-                        std::cmp::Ordering::Less | std::cmp::Ordering::Equal
-                    ))),
-                    parser::BinaryOperator::GreaterThan => Ok(Value::Bool(
-                        self.compare_values_for_sort(&left_val, &right_val)
-                            == std::cmp::Ordering::Greater,
-                    )),
-                    parser::BinaryOperator::GreaterThanOrEqual => Ok(Value::Bool(matches!(
-                        self.compare_values_for_sort(&left_val, &right_val),
-                        std::cmp::Ordering::Greater | std::cmp::Ordering::Equal
-                    ))),
+                    parser::BinaryOperator::LessThan => {
+                        // 3VL: ordering against NULL is unknown → NULL, never a
+                        // sort default (`compare_values_for_sort` sorts NULL as
+                        // least, which is right for ORDER BY but wrong for `<`).
+                        if left_val.is_null() || right_val.is_null() {
+                            return Ok(Value::Null);
+                        }
+                        Ok(Value::Bool(
+                            self.compare_values_for_sort(&left_val, &right_val)
+                                == std::cmp::Ordering::Less,
+                        ))
+                    }
+                    parser::BinaryOperator::LessThanOrEqual => {
+                        if left_val.is_null() || right_val.is_null() {
+                            return Ok(Value::Null);
+                        }
+                        Ok(Value::Bool(matches!(
+                            self.compare_values_for_sort(&left_val, &right_val),
+                            std::cmp::Ordering::Less | std::cmp::Ordering::Equal
+                        )))
+                    }
+                    parser::BinaryOperator::GreaterThan => {
+                        if left_val.is_null() || right_val.is_null() {
+                            return Ok(Value::Null);
+                        }
+                        Ok(Value::Bool(
+                            self.compare_values_for_sort(&left_val, &right_val)
+                                == std::cmp::Ordering::Greater,
+                        ))
+                    }
+                    parser::BinaryOperator::GreaterThanOrEqual => {
+                        if left_val.is_null() || right_val.is_null() {
+                            return Ok(Value::Null);
+                        }
+                        Ok(Value::Bool(matches!(
+                            self.compare_values_for_sort(&left_val, &right_val),
+                            std::cmp::Ordering::Greater | std::cmp::Ordering::Equal
+                        )))
+                    }
                     parser::BinaryOperator::And => {
-                        let result =
-                            self.value_to_bool(&left_val)? && self.value_to_bool(&right_val)?;
-                        Ok(Value::Bool(result))
+                        let l = self.logical_operand(&left_val)?;
+                        let r = self.logical_operand(&right_val)?;
+                        Ok(Self::tri_bool_to_value(Self::and_3vl(l, r)))
                     }
                     parser::BinaryOperator::Or => {
-                        let result =
-                            self.value_to_bool(&left_val)? || self.value_to_bool(&right_val)?;
-                        Ok(Value::Bool(result))
+                        let l = self.logical_operand(&left_val)?;
+                        let r = self.logical_operand(&right_val)?;
+                        Ok(Self::tri_bool_to_value(Self::or_3vl(l, r)))
+                    }
+                    parser::BinaryOperator::Xor => {
+                        let l = self.logical_operand(&left_val)?;
+                        let r = self.logical_operand(&right_val)?;
+                        Ok(Self::tri_bool_to_value(Self::xor_3vl(l, r)))
                     }
                     parser::BinaryOperator::StartsWith => {
+                        if left_val.is_null() || right_val.is_null() {
+                            return Ok(Value::Null);
+                        }
                         let left_str = self.value_to_string(&left_val);
                         let right_str = self.value_to_string(&right_val);
                         Ok(Value::Bool(left_str.starts_with(&right_str)))
                     }
                     parser::BinaryOperator::EndsWith => {
+                        if left_val.is_null() || right_val.is_null() {
+                            return Ok(Value::Null);
+                        }
                         let left_str = self.value_to_string(&left_val);
                         let right_str = self.value_to_string(&right_val);
                         Ok(Value::Bool(left_str.ends_with(&right_str)))
                     }
                     parser::BinaryOperator::Contains => {
+                        if left_val.is_null() || right_val.is_null() {
+                            return Ok(Value::Null);
+                        }
                         let left_str = self.value_to_string(&left_val);
                         let right_str = self.value_to_string(&right_val);
                         Ok(Value::Bool(left_str.contains(&right_str)))
@@ -441,17 +482,24 @@ impl Executor {
                         self.power_values(&left_val, &right_val)
                     }
                     parser::BinaryOperator::In => {
-                        // IN operator: left IN right (where right is a list)
-                        // Check if left_val is in the right_val list
+                        // 3VL IN: found → true; else NULL if the search value
+                        // or any list element is NULL (unknown membership);
+                        // else false. `x IN null` → NULL.
                         match &right_val {
                             Value::Array(list) => {
-                                // Check if left_val is in the list
-                                Ok(Value::Bool(list.iter().any(|item| item == &left_val)))
+                                if list.iter().any(|item| item == &left_val) {
+                                    Ok(Value::Bool(true))
+                                } else if left_val.is_null()
+                                    || list.iter().any(|item| item.is_null())
+                                {
+                                    Ok(Value::Null)
+                                } else {
+                                    Ok(Value::Bool(false))
+                                }
                             }
-                            _ => {
-                                // Right side is not a list, return false
-                                Ok(Value::Bool(false))
-                            }
+                            Value::Null => Ok(Value::Null),
+                            // Right side is not a list — no membership.
+                            _ => Ok(Value::Bool(false)),
                         }
                     }
                     _ => Ok(Value::Null),
@@ -460,7 +508,9 @@ impl Executor {
             parser::Expression::UnaryOp { op, operand } => {
                 let value = self.evaluate_projection_expression(row, context, operand)?;
                 match op {
-                    parser::UnaryOperator::Not => Ok(Value::Bool(!self.value_to_bool(&value)?)),
+                    parser::UnaryOperator::Not => Ok(Self::tri_bool_to_value(Self::not_3vl(
+                        self.logical_operand(&value)?,
+                    ))),
                     parser::UnaryOperator::Minus => {
                         let number = self.value_to_number(&value)?;
                         serde_json::Number::from_f64(-number)

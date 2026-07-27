@@ -1312,6 +1312,8 @@ pub enum BinaryOperator {
     And,
     /// Logical OR
     Or,
+    /// Logical XOR (exclusive or)
+    Xor,
     /// String concatenation
     Concat,
     /// IN operator

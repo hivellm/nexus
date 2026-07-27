@@ -42,6 +42,7 @@ mod test_substring_negative;
 mod test_sum_empty_match;
 mod test_temporal_arithmetic;
 mod test_where_in;
+mod three_valued_logic_test;
 mod unbounded_alloc_guard_test;
 mod unwind_tests;
 mod where_case_comprehension_predicate_test;

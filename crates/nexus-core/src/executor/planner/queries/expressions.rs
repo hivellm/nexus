@@ -143,6 +143,7 @@ impl<'a> QueryPlanner<'a> {
                     BinaryOperator::GreaterThanOrEqual => ">=",
                     BinaryOperator::And => "AND",
                     BinaryOperator::Or => "OR",
+                    BinaryOperator::Xor => "XOR",
                     BinaryOperator::Add => "+",
                     BinaryOperator::Subtract => "-",
                     BinaryOperator::Multiply => "*",

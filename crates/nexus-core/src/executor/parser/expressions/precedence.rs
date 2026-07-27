@@ -9,15 +9,34 @@ use crate::{Error, Result};
 impl CypherParser {
     /// Parse OR expressions (lowest precedence)
     pub(super) fn parse_or_expression(&mut self) -> Result<Expression> {
-        let mut left = self.parse_and_expression()?;
+        let mut left = self.parse_xor_expression()?;
 
         while self.peek_keyword("OR") {
+            self.parse_keyword()?;
+            self.skip_whitespace();
+            let right = self.parse_xor_expression()?;
+            left = Expression::BinaryOp {
+                left: Box::new(left),
+                op: BinaryOperator::Or,
+                right: Box::new(right),
+            };
+        }
+
+        Ok(left)
+    }
+
+    /// Parse XOR expressions (binds tighter than OR, looser than AND — the
+    /// openCypher operator precedence order is `OR < XOR < AND < NOT`).
+    pub(super) fn parse_xor_expression(&mut self) -> Result<Expression> {
+        let mut left = self.parse_and_expression()?;
+
+        while self.peek_keyword("XOR") {
             self.parse_keyword()?;
             self.skip_whitespace();
             let right = self.parse_and_expression()?;
             left = Expression::BinaryOp {
                 left: Box::new(left),
-                op: BinaryOperator::Or,
+                op: BinaryOperator::Xor,
                 right: Box::new(right),
             };
         }
@@ -369,10 +388,13 @@ impl CypherParser {
     pub(super) fn parse_binary_operator(&mut self) -> Option<BinaryOperator> {
         self.skip_whitespace();
 
-        // Check for keyword operators first (AND, OR)
+        // Check for keyword operators first (AND, XOR, OR)
         if self.peek_keyword("AND") {
             self.parse_keyword().ok()?;
             return Some(BinaryOperator::And);
+        } else if self.peek_keyword("XOR") {
+            self.parse_keyword().ok()?;
+            return Some(BinaryOperator::Xor);
         } else if self.peek_keyword("OR") {
             self.parse_keyword().ok()?;
             return Some(BinaryOperator::Or);
