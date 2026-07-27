@@ -1,0 +1,9 @@
+## 1. Implementation
+- [ ] 1.1 label count per-statement
+- [ ] 1.2 overwrite +1/-1 property counting
+- [ ] 1.3 null-valued keys excluded from counts
+
+## 2. Tail (docs + tests — check or waive with tailWaiver)
+- [ ] 2.1 Update or create documentation covering the implementation
+- [ ] 2.2 Write tests covering the new behavior
+- [ ] 2.3 Run tests and confirm they pass
