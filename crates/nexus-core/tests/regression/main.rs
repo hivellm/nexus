@@ -11,6 +11,7 @@ mod incoming_traversal_large_graph_test;
 mod label_scan_filter_test;
 mod match_after_with_binding_test;
 mod match_create_multi_pattern_test;
+mod match_create_rel_aggregating_return_test;
 mod match_merge_multi_pattern_test;
 mod node_property_named_type_test;
 mod regression_extended_create;

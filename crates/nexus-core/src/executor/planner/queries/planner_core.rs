@@ -844,17 +844,23 @@ impl<'a> QueryPlanner<'a> {
             }
         }
 
-        // Add CREATE operators AFTER MATCH/Filter but BEFORE Project
+        // Add CREATE operators AFTER MATCH/Filter but BEFORE Project OR Aggregate
         // This ensures CREATE runs after all nodes are matched but before
-        // the RETURN projection destroys the node objects with _nexus_id
+        // the RETURN projection (or aggregation) destroys the node objects
+        // with _nexus_id. Aggregate must be included here for the same reason
+        // WITH-insertion above matches `Project | Aggregate` (phase6 §5.3):
+        // an aggregating RETURN/WITH collapses rows and overwrites
+        // `context.variables` before CREATE would otherwise run, silently
+        // dropping the write (e.g. `MATCH (a),(b) CREATE (a)-[:R]->(b)
+        // RETURN count(*)`).
         if !create_patterns.is_empty() {
-            // Find the position of the first Project operator
-            let project_pos = operators
+            // Find the position of the first Project or Aggregate operator
+            let sink_pos = operators
                 .iter()
-                .position(|op| matches!(op, Operator::Project { .. }));
+                .position(|op| matches!(op, Operator::Project { .. } | Operator::Aggregate { .. }));
 
-            // Insert CREATE operators before Project (or at end if no Project)
-            let insert_pos = project_pos.unwrap_or(operators.len());
+            // Insert CREATE operators before Project/Aggregate (or at end if no sink)
+            let insert_pos = sink_pos.unwrap_or(operators.len());
             for (i, (create_pattern, external_id_expr, conflict_policy)) in
                 create_patterns.into_iter().enumerate()
             {
