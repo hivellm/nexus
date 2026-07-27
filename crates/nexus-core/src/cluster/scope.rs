@@ -120,6 +120,9 @@ fn scope_clause(clause: &mut Clause, ns: &UserNamespace) {
                     // property names (not labels/types), so they need the
                     // same treatment as `SET target.prop = value`.
                     SetItem::MapMerge { map, .. } => scope_expression(map, ns),
+                    // Whole-entity replace RHS is scoped identically to
+                    // the `+=` merge map above.
+                    SetItem::Replace { value, .. } => scope_expression(value, ns),
                 }
             }
         }

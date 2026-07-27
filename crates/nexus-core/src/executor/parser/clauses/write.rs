@@ -100,8 +100,21 @@ impl CypherParser {
         let mut items = Vec::new();
 
         loop {
-            // Parse identifier (variable name)
-            let target = self.parse_identifier()?;
+            // Parse target (variable name). `SET (n).prop = v` / `SET (n) =
+            // {...}` / `SET (n) += {...}` — the parenthetical form is
+            // semantically identical to the bare variable; unwrap the
+            // parens down to the inner variable name before dispatching on
+            // the operator that follows.
+            let target = if self.peek_char() == Some('(') {
+                self.consume_char();
+                self.skip_whitespace();
+                let inner = self.parse_identifier()?;
+                self.skip_whitespace();
+                self.expect_char(')')?;
+                inner
+            } else {
+                self.parse_identifier()?
+            };
             self.skip_whitespace();
 
             // Check if we have a property assignment (node.property = value)
@@ -154,9 +167,19 @@ impl CypherParser {
                 self.skip_whitespace();
                 let map = self.parse_expression()?;
                 items.push(SetItem::MapMerge { target, map });
+            } else if self.peek_char() == Some('=') {
+                // `SET lhs = rhsExpr` whole-entity property replace.
+                // Distinct from `+=` (already matched above): every
+                // existing property is dropped first, then exactly the
+                // RHS map's keys are applied.
+                self.consume_char();
+                self.skip_whitespace();
+                let value = self.parse_expression()?;
+                items.push(SetItem::Replace { target, value });
             } else {
                 return Err(Error::storage(
-                    "SET clause: expected property assignment or label".to_string(),
+                    "SET clause: expected property assignment, label, or map replacement"
+                        .to_string(),
                 ));
             }
 

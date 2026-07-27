@@ -1801,6 +1801,110 @@ impl Engine {
                         }
                     }
                 }
+                // `SET lhs = rhsExpr` whole-entity property replace. Every
+                // existing key NOT present in the evaluated RHS map is
+                // dropped first; every key IN the map is then applied with
+                // the same overwrite accounting as the `SET n.k = v` /
+                // `SET n += {...}` arms above.
+                executor::parser::SetItem::Replace { target, value } => {
+                    let node_ids = context
+                        .get(target)
+                        .ok_or_else(|| {
+                            Error::CypherExecution(format!(
+                                "Unknown variable '{}' in SET clause",
+                                target
+                            ))
+                        })?
+                        .clone();
+
+                    // `SET n = m` — copy another bound node's CURRENT
+                    // property bag (including edits already staged earlier
+                    // in this same SET clause) instead of routing through
+                    // `evaluate_set_expression`, which only resolves bare
+                    // variables against UNWIND row bindings.
+                    let other_ids = match value {
+                        executor::parser::Expression::Variable(other) if other != target => {
+                            context.get(other).cloned()
+                        }
+                        _ => None,
+                    };
+
+                    for (idx, node_id) in node_ids.iter().copied().enumerate() {
+                        let new_props: Map<String, Value> = if let Some(other_ids) = &other_ids {
+                            let source_id =
+                                other_ids.get(idx).or_else(|| other_ids.first()).copied();
+                            match source_id {
+                                Some(sid) => {
+                                    if let Some(staged) = state_map.get(&sid) {
+                                        staged.properties.clone()
+                                    } else {
+                                        self.load_node_properties_map(sid)?
+                                    }
+                                }
+                                None => Map::new(),
+                            }
+                        } else {
+                            let state = self.ensure_node_state(node_id, &mut state_map)?;
+                            let evaluated =
+                                self.evaluate_set_expression(value, target, &state.properties)?;
+                            match evaluated {
+                                // `SET n = null` clears every property — an
+                                // absent map keeps nothing.
+                                Value::Null => Map::new(),
+                                Value::Object(m) => m,
+                                other => {
+                                    return Err(Error::CypherExecution(format!(
+                                        "ERR_SET_NON_MAP: SET {} = <rhs> requires a MAP or NULL \
+                                         (got {})",
+                                        target,
+                                        match other {
+                                            Value::Bool(_) => "BOOLEAN",
+                                            Value::Number(n) => {
+                                                if n.is_i64() || n.is_u64() {
+                                                    "INTEGER"
+                                                } else {
+                                                    "FLOAT"
+                                                }
+                                            }
+                                            Value::String(_) => "STRING",
+                                            Value::Array(_) => "LIST",
+                                            _ => "?",
+                                        }
+                                    )));
+                                }
+                            }
+                        };
+
+                        let state = self.ensure_node_state(node_id, &mut state_map)?;
+                        let stale_keys: Vec<String> = state
+                            .properties
+                            .keys()
+                            .filter(|k| !new_props.contains_key(*k))
+                            .cloned()
+                            .collect();
+                        for k in stale_keys {
+                            if state.properties.remove(&k).is_some() {
+                                properties_removed += 1;
+                            }
+                        }
+                        for (k, v) in new_props.into_iter() {
+                            if matches!(v, Value::Null) {
+                                if state.properties.remove(&k).is_some() {
+                                    properties_removed += 1;
+                                }
+                            } else {
+                                let overwrote = state
+                                    .properties
+                                    .insert(k, v)
+                                    .is_some_and(|old| !old.is_null());
+                                properties_set += 1;
+                                if overwrote {
+                                    properties_removed += 1;
+                                }
+                            }
+                        }
+                    }
+                }
             }
         }
 

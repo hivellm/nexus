@@ -15,6 +15,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > carry these fixes. The remediation is tracked across 27 `phase0_fix-*`
 > tasks and will land incrementally under this release.
 
+### Added — openCypher SET conformance (whole-entity property replace)
+
+- **`SET n = {map}` now performs a whole-entity property replace**: every existing property on the target node that is not a key of the RHS map is removed, then the map's keys are applied (an explicit `null` value in the map also removes that key). The RHS may be a map literal, a bound node/map variable (`SET n = m` copies `m`'s current properties onto `n`), or a map parameter (`SET n = $props`). Distinct from the existing `SET n += {map}` merge form, which keeps keys not mentioned by the map.
+- **Parenthetical `SET` targets** — `SET (n).prop = v` and `SET (n) = {map}` now parse and apply identically to the bare-variable form.
+- See `docs/specs/cypher-subset.md` § SET for examples and current limitations (relationship whole-replace and `OPTIONAL MATCH` + write clauses are not yet supported).
+
 ### Added — `phase7_opencypher-gap-closure` (openCypher TCK conformance + dynamic labels/types on reads)
 
 - **Dynamic labels and relationship types now resolve at execution time in MATCH patterns.** `MATCH (n:$label)` and `MATCH (a)-[:$type]->(b)` resolve `$label` and `$type` parameters against the query envelope at runtime (STRING = single label/type; LIST<STRING> = label intersection / type union; NULL/empty → zero rows). Relationship types in variable-length paths are also dynamic: `MATCH (a)-[:$type*1..5]->(b)` matches edges of the resolved type(s). **New syntax for write-side dynamic types**: `CREATE (a)-[r:$type]->(b)`, `MERGE` with `$type`. See `docs/specs/cypher-subset.md` § Dynamic labels and relationship types.

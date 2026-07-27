@@ -465,7 +465,37 @@ SET n.age = 31, n.city = 'NYC'
 -- Add label
 MATCH (n:Person {name: 'Alice'})
 SET n:Employee
+
+-- Parenthetical target — semantically identical to the bare-variable form
+MATCH (n:Person {name: 'Alice'})
+SET (n).age = 31
+
+-- Merge a map into the existing property bag: keys in the map overwrite
+-- (non-null values) or remove (explicit null values); keys NOT mentioned
+-- in the map are left untouched.
+MATCH (n:Person {name: 'Alice'})
+SET n += {age: 31, city: 'NYC'}
+
+-- Whole-entity property replace: every property currently on the node
+-- that is NOT a key of the map is removed, then the map's keys are
+-- applied (an explicit null value in the map also removes that key).
+-- The RHS may be a map literal, a bound node/map variable (copies that
+-- entity's current property bag), or a map parameter (`SET n = $props`).
+MATCH (n:Person {name: 'Alice'})
+SET n = {name: 'Alice', age: 31}
 ```
+
+**Current limitations:**
+- Whole-entity replace (`SET x = {...}`) and the parenthetical target form
+  are implemented for **node** variables only; `SET r = {map}` on a
+  relationship variable is not yet supported (only the `+=` merge form is —
+  `SET r += {map}`).
+- `OPTIONAL MATCH` combined with any write clause (`SET`/`REMOVE`/`MERGE`/
+  `FOREACH`) is rejected outright by the write path. This means the
+  openCypher `Set4` conformance-suite scenario that expects a `SET` on an
+  unmatched `OPTIONAL MATCH` target to be a silent no-op is not yet
+  reachable — it needs `OPTIONAL MATCH` support in the write pipeline
+  first, which is a separate, broader gap than `SET` itself.
 
 ### DELETE
 

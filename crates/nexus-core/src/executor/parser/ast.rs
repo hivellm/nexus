@@ -264,6 +264,18 @@ pub enum SetItem {
         /// Map expression to merge
         map: Expression,
     },
+    /// `SET lhs = rhsExpr` — whole-entity property replace. Every
+    /// existing property on the target is removed first, then exactly
+    /// the keys present in `rhsExpr` (a map literal, a bound node/map
+    /// variable, or a map parameter) are applied. Distinct from
+    /// [`SetItem::MapMerge`], which keeps existing keys not mentioned
+    /// by the RHS.
+    Replace {
+        /// Target variable
+        target: String,
+        /// Expression evaluating to the replacement property map
+        value: Expression,
+    },
 }
 
 /// DELETE clause for deleting nodes and relationships

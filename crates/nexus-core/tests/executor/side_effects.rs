@@ -409,3 +409,169 @@ fn set_map_merge_counts_each_non_null_key() {
     assert_eq!(effects.properties_set, 2, "both merged keys count");
     assert_eq!(effects.properties_removed, 0);
 }
+
+#[test]
+fn set_whole_entity_replace_drops_property_not_in_map() {
+    let ctx = TestContext::new();
+    let mut engine = Engine::with_isolated_catalog(ctx.path()).expect("engine init");
+
+    engine
+        .execute_cypher("CREATE (n:ReplaceNode {name: 'A', name2: 'B'})")
+        .expect("seed CREATE must succeed");
+
+    let result = engine
+        .execute_cypher("MATCH (n:ReplaceNode {name: 'A'}) SET n = {name: 'B', baz: 'C'}")
+        .expect("SET = map replace must succeed");
+
+    let effects = result.side_effects;
+    assert_eq!(
+        effects.properties_set, 2,
+        "`name` (overwritten) and `baz` (new) both count as +properties"
+    );
+    assert_eq!(
+        effects.properties_removed, 2,
+        "`name`'s old value (overwrite) and `name2` (absent from the new map) both count \
+         as -properties"
+    );
+
+    let projected = engine
+        .execute_cypher("MATCH (n:ReplaceNode) RETURN n.name, n.name2, n.baz")
+        .expect("RETURN must succeed");
+    let row = &projected.rows[0].values;
+    assert_eq!(row[0].as_str(), Some("B"), "name was overwritten");
+    assert!(
+        row[1].is_null(),
+        "name2 was not in the replacement map and must be gone, got {:?}",
+        row[1]
+    );
+    assert_eq!(row[2].as_str(), Some("C"), "baz was added by the replace");
+}
+
+#[test]
+fn set_whole_entity_replace_from_node_variable_copies_properties() {
+    let ctx = TestContext::new();
+    let mut engine = Engine::with_isolated_catalog(ctx.path()).expect("engine init");
+
+    engine
+        .execute_cypher(
+            "CREATE (:ReplaceSrc {city: 'Berlin', zip: 10115}) \
+             CREATE (:ReplaceDst {name: 'keep-me'})",
+        )
+        .expect("seed CREATE must succeed");
+
+    engine
+        .execute_cypher("MATCH (n:ReplaceSrc), (m:ReplaceDst) SET m = n")
+        .expect("SET m = n (node variable copy) must succeed");
+
+    let projected = engine
+        .execute_cypher("MATCH (m:ReplaceDst) RETURN m.city, m.zip, m.name")
+        .expect("RETURN must succeed");
+    let row = &projected.rows[0].values;
+    assert_eq!(
+        row[0].as_str(),
+        Some("Berlin"),
+        "m adopted n's `city` property"
+    );
+    assert_eq!(row[1].as_i64(), Some(10115), "m adopted n's `zip` property");
+    assert!(
+        row[2].is_null(),
+        "m's original `name` property is gone — replace does not merge, got {:?}",
+        row[2]
+    );
+}
+
+#[test]
+fn set_parenthetical_target_applies_property() {
+    let ctx = TestContext::new();
+    let mut engine = Engine::with_isolated_catalog(ctx.path()).expect("engine init");
+
+    engine
+        .execute_cypher("CREATE (n:ParenSetNode {age: 1})")
+        .expect("seed CREATE must succeed");
+
+    let result = engine
+        .execute_cypher("MATCH (n:ParenSetNode) SET (n).age = 2")
+        .expect("SET (n).prop = v must parse and apply");
+
+    assert_eq!(
+        result.side_effects.properties_set, 1,
+        "the parenthetical target form counts identically to `SET n.age = v`"
+    );
+
+    let projected = engine
+        .execute_cypher("MATCH (n:ParenSetNode) RETURN n.age")
+        .expect("RETURN must succeed");
+    assert_eq!(
+        projected.rows[0].values[0].as_i64(),
+        Some(2),
+        "the property was actually updated through the parenthetical target"
+    );
+}
+
+#[test]
+fn set_whole_entity_replace_empty_map_clears_all_properties() {
+    let ctx = TestContext::new();
+    let mut engine = Engine::with_isolated_catalog(ctx.path()).expect("engine init");
+
+    engine
+        .execute_cypher("CREATE (n:T {name: 'A', name2: 'B'})")
+        .expect("seed CREATE must succeed");
+
+    let result = engine
+        .execute_cypher("MATCH (n:T) SET n = {}")
+        .expect("SET n = {} must succeed");
+
+    let effects = result.side_effects;
+    assert_eq!(
+        effects.properties_set, 0,
+        "an empty replacement map sets nothing"
+    );
+    assert_eq!(
+        effects.properties_removed, 2,
+        "both pre-existing properties are dropped when replaced by an empty map"
+    );
+
+    let projected = engine
+        .execute_cypher("MATCH (n:T) RETURN n.name, n.name2")
+        .expect("RETURN must succeed");
+    let row = &projected.rows[0].values;
+    assert!(row[0].is_null(), "name must be gone, got {:?}", row[0]);
+    assert!(row[1].is_null(), "name2 must be gone, got {:?}", row[1]);
+}
+
+#[test]
+fn set_whole_entity_replace_null_map_value_removes_key() {
+    let ctx = TestContext::new();
+    let mut engine = Engine::with_isolated_catalog(ctx.path()).expect("engine init");
+
+    engine
+        .execute_cypher("CREATE (n:T {name: 'A', name2: 'B'})")
+        .expect("seed CREATE must succeed");
+
+    let result = engine
+        .execute_cypher("MATCH (n:T {name: 'A'}) SET n = {name: 'B', name2: null, baz: 'C'}")
+        .expect("SET n = {..., name2: null, ...} must succeed");
+
+    let effects = result.side_effects;
+    assert_eq!(
+        effects.properties_set, 2,
+        "`name` (overwritten) and `baz` (new) count as +properties"
+    );
+    assert_eq!(
+        effects.properties_removed, 2,
+        "`name`'s old value (overwrite) and `name2` (explicit null in the RHS map) both \
+         count as -properties"
+    );
+
+    let projected = engine
+        .execute_cypher("MATCH (n:T) RETURN n.name, n.name2, n.baz")
+        .expect("RETURN must succeed");
+    let row = &projected.rows[0].values;
+    assert_eq!(row[0].as_str(), Some("B"), "name was overwritten");
+    assert!(
+        row[1].is_null(),
+        "name2 had an explicit null value in the RHS map and must be gone, got {:?}",
+        row[1]
+    );
+    assert_eq!(row[2].as_str(), Some("C"), "baz was added");
+}
