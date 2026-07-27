@@ -1,119 +1,20 @@
-//! `impl QueryPlanner` constructor, builder shims, and `plan_query` —
-//! the top-level planning entry point.
+//! `QueryPlanner::plan_query_bound` — the core single-segment planning
+//! pass: clause extraction, pattern/WHERE/WITH/CREATE/UNWIND bucketing,
+//! aggregation-function recognition, and the no-pattern
+//! RETURN/CALL-procedure tail. This is the single largest function in
+//! the planner — every clause kind lands in exactly one match arm here
+//! — so it stays whole in its own file rather than being split further.
 
-use super::*;
+use super::super::*;
 
 impl<'a> QueryPlanner<'a> {
-    /// Create a new query planner without an R-tree registry handle.
-    ///
-    /// Plans built by this constructor never emit `Operator::SpatialSeek`
-    /// — every spatial predicate falls back to `NodeByLabel + Filter`.
-    /// Use [`QueryPlanner::with_rtree`] to opt into the rewriter from
-    /// callers that hold a registry handle (`Engine::execute_*` paths).
-    pub fn new(catalog: &'a Catalog, label_index: &'a LabelIndex, knn_index: &'a KnnIndex) -> Self {
-        Self {
-            catalog,
-            label_index,
-            knn_index,
-            rtree_registry: None,
-            property_index: None,
-            composite_index: None,
-            plan_cache: QueryPlanCache::new(1000, Duration::from_secs(300)), // 1000 plans, 5min TTL
-            aggregation_cache: AggregationCache::new(500, Duration::from_secs(180)), // 500 results, 3min TTL
-            notifications: Vec::new(),
-        }
-    }
-
-    /// Drain the notifications accumulated during the most recent
-    /// `plan_query` call. Call site (`Engine::execute_*`) attaches the
-    /// drained vector to the resulting `ResultSet` so the HTTP layer
-    /// can copy it into the `/cypher` response envelope. The internal
-    /// vector is replaced with an empty one — reusing the same
-    /// planner for a follow-up query is safe.
-    pub fn take_notifications(&mut self) -> Vec<Notification> {
-        std::mem::take(&mut self.notifications)
-    }
-
-    /// Builder shim: install an R-tree registry handle so the
-    /// spatial-seek rewriter (phase6_spatial-planner-seek §2) can
-    /// look up which `(label, property)` pairs have a registered
-    /// index. Idiomatic call: `QueryPlanner::new(...).with_rtree(reg)`.
-    pub fn with_rtree(
-        mut self,
-        registry: std::sync::Arc<crate::index::rtree::RTreeRegistry>,
-    ) -> Self {
-        self.rtree_registry = Some(registry);
-        self
-    }
-
-    /// Builder shim: install a property-index handle so
-    /// `USING INDEX <var>:<Label>(<prop>)` hints can be validated at
-    /// plan time (phase7_planner-using-index-hints). When the named
-    /// `(label, property)` pair has no registered index the planner
-    /// raises `ERR_USING_INDEX_NOT_FOUND`. Without a handle the hint
-    /// is accepted silently, matching the legacy behaviour of
-    /// callers that have no `IndexManager` reference (planner unit
-    /// tests, the standalone `Executor::parse_and_plan`).
-    pub fn with_property_index(mut self, idx: &'a crate::index::PropertyIndex) -> Self {
-        self.property_index = Some(idx);
-        self
-    }
-
-    /// Builder shim: install a composite B-tree index registry handle
-    /// so an inline multi-property selector (`MATCH (n:L {a: 1, b:
-    /// 2})`) can seek a registered composite index / NODE KEY
-    /// constraint instead of falling back to a single-property index
-    /// seek or a full label scan. Idiomatic call:
-    /// `QueryPlanner::new(...).with_composite_index(reg)`. Without a
-    /// handle the planner never emits `Operator::CompositeBtreeSeek`,
-    /// matching the legacy behaviour of callers with no index handle.
-    pub fn with_composite_index(
-        mut self,
-        registry: &'a crate::index::composite_btree::CompositeBtreeRegistry,
-    ) -> Self {
-        self.composite_index = Some(registry);
-        self
-    }
-
-    /// Generate a hash for query caching based on query structure
-    pub(super) fn hash_query(&self, query: &CypherQuery) -> u64 {
-        use std::collections::hash_map::DefaultHasher;
-
-        let mut hasher = DefaultHasher::new();
-
-        // Hash the clauses (this captures the query structure)
-        for clause in &query.clauses {
-            clause.hash(&mut hasher);
-        }
-
-        // Hash parameters if they affect planning (for now, ignore runtime parameters)
-        // In a full implementation, we'd hash parameter types but not values
-
-        hasher.finish()
-    }
-
-    /// Plan a Cypher query into optimized operators with caching
-    pub fn plan_query(&mut self, query: &CypherQuery) -> Result<Vec<Operator>> {
-        // A `MATCH` that follows a `WITH` opens a new query segment whose
-        // pattern variables the "bucket" planner below would otherwise
-        // collapse into the pre-`WITH` match phase (phase7 §4.11). Route
-        // those queries through the segment planner, which plans each
-        // `WITH`-delimited segment in order and threads the carried bindings
-        // across the boundary. Every other query keeps the single-segment
-        // path unchanged.
-        if Self::has_match_after_with(query) {
-            return self.plan_segmented(query);
-        }
-        self.plan_query_bound(query, &std::collections::HashSet::new())
-    }
-
     /// Core of [`Self::plan_query`], parameterised by the set of variables
     /// already bound by a prior query segment. `already_bound` is empty for
     /// a top-level (non-segmented) plan, so this is byte-for-byte the legacy
     /// planner in that case; the segment planner calls it with the
     /// accumulated carried bindings so a post-`WITH` `MATCH` expands from
     /// them instead of re-scanning.
-    pub(super) fn plan_query_bound(
+    pub(in super::super) fn plan_query_bound(
         &mut self,
         query: &CypherQuery,
         already_bound: &std::collections::HashSet<String>,
@@ -1384,138 +1285,5 @@ impl<'a> QueryPlanner<'a> {
         }
 
         Ok(operators)
-    }
-
-    /// Collect every variable a pattern introduces — node variables,
-    /// relationship variables, and the variables of any quantified-group
-    /// members — with no positional skip. Used to compute an OPTIONAL
-    /// MATCH's nullable-variable set as a set difference against
-    /// variables already bound by prior clauses, instead of assuming the
-    /// pattern's first node is always the already-bound anchor (that
-    /// assumption breaks for reverse-direction patterns like
-    /// `(b)-[:KNOWS]->(a)` where `a` is the bound anchor, and for
-    /// standalone patterns with no bound anchor at all).
-    /// True when a `MATCH` clause textually follows a `WITH` clause. Such a
-    /// query must be planned segment-by-segment (phase7 §4.11): the bucket
-    /// planner would otherwise fold the post-`WITH` `MATCH` into the
-    /// pre-`WITH` pattern phase, and the `WITH` projection would then drop
-    /// every variable that `MATCH` introduced. Deliberately scoped to
-    /// `MATCH` only — `WITH … CREATE/MERGE/…` are separate concerns and keep
-    /// the single-segment path.
-    fn has_match_after_with(query: &CypherQuery) -> bool {
-        let mut seen_with = false;
-        for clause in &query.clauses {
-            match clause {
-                Clause::With(_) => seen_with = true,
-                Clause::Match(_) if seen_with => return true,
-                _ => {}
-            }
-        }
-        false
-    }
-
-    /// Plan a query that crosses one or more `WITH → MATCH` boundaries by
-    /// splitting it into `WITH`-delimited segments and planning each in
-    /// order. Every non-final segment ends with its `WITH` clause (the
-    /// projection that closes it); the trailing clauses form the final
-    /// segment. Each segment is planned by [`Self::plan_query_bound`] with
-    /// the set of variables the previous segment's `WITH` carried forward,
-    /// so a post-`WITH` `MATCH` expands from those bindings (or
-    /// Cartesian-joins a fresh scan against them) instead of re-scanning and
-    /// clobbering them. The per-segment operator lists are concatenated; the
-    /// executor runs them against one shared context, where each segment's
-    /// terminal projection leaves exactly the carried scope for the next.
-    fn plan_segmented(&mut self, query: &CypherQuery) -> Result<Vec<Operator>> {
-        // Split clauses into segments. A `WITH` closes the segment it ends.
-        let mut segments: Vec<Vec<Clause>> = Vec::new();
-        let mut current: Vec<Clause> = Vec::new();
-        for clause in &query.clauses {
-            current.push(clause.clone());
-            if matches!(clause, Clause::With(_)) {
-                segments.push(std::mem::take(&mut current));
-            }
-        }
-        if !current.is_empty() {
-            segments.push(current);
-        }
-
-        let mut all_ops: Vec<Operator> = Vec::new();
-        let mut bound: std::collections::HashSet<String> = std::collections::HashSet::new();
-        let seg_count = segments.len();
-        for (idx, seg_clauses) in segments.into_iter().enumerate() {
-            // A segment's terminal `WITH` restricts the scope to exactly the
-            // variables it projects — those become the next segment's
-            // carried bindings (replace, not accumulate, since `WITH` drops
-            // everything it does not re-export).
-            let seg_output = Self::segment_output_vars(&seg_clauses);
-            let seg_query = CypherQuery {
-                clauses: seg_clauses,
-                params: query.params.clone(),
-                graph_scope: query.graph_scope.clone(),
-            };
-            let seg_ops = self.plan_query_bound(&seg_query, &bound)?;
-            all_ops.extend(seg_ops);
-            if idx + 1 < seg_count {
-                bound = seg_output;
-            }
-        }
-        Ok(all_ops)
-    }
-
-    /// The variables a segment exports to the next one: the aliases (or bare
-    /// variable names) projected by the segment's terminal `WITH`. Returns
-    /// empty for the final segment (which ends in `RETURN` and has no
-    /// successor) or any segment not ending in `WITH`.
-    fn segment_output_vars(clauses: &[Clause]) -> std::collections::HashSet<String> {
-        let mut out = std::collections::HashSet::new();
-        if let Some(Clause::With(with)) = clauses.last() {
-            for item in &with.items {
-                if let Some(alias) = &item.alias {
-                    out.insert(alias.clone());
-                } else if let Expression::Variable(v) = &item.expression {
-                    out.insert(v.clone());
-                }
-                // A non-aliased non-variable projection (e.g. `WITH a.x`)
-                // is not a legal downstream identifier, so it contributes
-                // no carried binding.
-            }
-        }
-        out
-    }
-
-    fn collect_pattern_variables(pattern: &Pattern) -> Vec<String> {
-        let mut vars = Vec::new();
-        for element in &pattern.elements {
-            match element {
-                PatternElement::Node(node) => {
-                    if let Some(var) = &node.variable {
-                        vars.push(var.clone());
-                    }
-                }
-                PatternElement::Relationship(rel) => {
-                    if let Some(var) = &rel.variable {
-                        vars.push(var.clone());
-                    }
-                }
-                PatternElement::QuantifiedGroup(group) => {
-                    for inner in &group.inner {
-                        match inner {
-                            PatternElement::Node(n) => {
-                                if let Some(var) = &n.variable {
-                                    vars.push(var.clone());
-                                }
-                            }
-                            PatternElement::Relationship(r) => {
-                                if let Some(var) = &r.variable {
-                                    vars.push(var.clone());
-                                }
-                            }
-                            PatternElement::QuantifiedGroup(_) => {}
-                        }
-                    }
-                }
-            }
-        }
-        vars
     }
 }
