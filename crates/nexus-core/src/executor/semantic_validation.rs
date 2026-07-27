@@ -43,6 +43,7 @@ pub fn validate(query: &CypherQuery) -> crate::Result<()> {
     }
 
     check_variable_type_conflicts(query)?;
+    check_variable_already_bound(query)?;
 
     let mut binders = HashSet::new();
     collect_query_binders(query, &mut binders);
@@ -142,6 +143,119 @@ fn collect_typed_element_vars(
         PatternElement::QuantifiedGroup(g) => {
             for inner in &g.inner {
                 collect_typed_element_vars(inner, node_vars, rel_vars);
+            }
+        }
+    }
+}
+
+// ── Variable already bound (CREATE re-declaration) ─────────────────────
+
+/// Reject a `CREATE` that re-declares an already-bound variable by giving it
+/// labels or a property map (`MATCH (a) CREATE (a {x: 1})`,
+/// `CREATE (n:Foo) CREATE (n:Bar)-[:R]->()`). Adding structure to a node whose
+/// variable is already bound is never legal; a bare reference endpoint
+/// (`MATCH (a) CREATE (a)-[:R]->(b)`) carries no labels/properties and is left
+/// alone.
+///
+/// The check requires a monotonic scope so "already bound" is exact, so it
+/// bails out entirely when the query contains a `WITH` (which can project a
+/// variable out of scope, making a later `CREATE (a:X)` a legal fresh bind).
+/// The bare standalone `CREATE (a)` form is intentionally not flagged here.
+fn check_variable_already_bound(query: &CypherQuery) -> crate::Result<()> {
+    if query.clauses.iter().any(|c| matches!(c, Clause::With(_))) {
+        return Ok(());
+    }
+
+    let mut bound: HashSet<String> = HashSet::new();
+    for clause in &query.clauses {
+        match clause {
+            Clause::Create(c) => check_create_pattern_rebind(&c.pattern, &mut bound)?,
+            Clause::Match(m) => add_pattern_vars(&m.pattern, &mut bound),
+            Clause::Merge(m) => add_pattern_vars(&m.pattern, &mut bound),
+            Clause::Unwind(u) => {
+                bound.insert(u.variable.clone());
+            }
+            Clause::Foreach(f) => {
+                bound.insert(f.variable.clone());
+            }
+            _ => {}
+        }
+    }
+    Ok(())
+}
+
+/// Walk a `CREATE` pattern in order, flagging any node that re-declares an
+/// already-bound variable with structure, then recording each variable so a
+/// later element in the same pattern (`(n:Foo)-[]->(), (n:Bar)-[]->()`) is
+/// caught too.
+fn check_create_pattern_rebind(
+    pattern: &Pattern,
+    bound: &mut HashSet<String>,
+) -> crate::Result<()> {
+    if let Some(path) = &pattern.path_variable {
+        bound.insert(path.clone());
+    }
+    for element in &pattern.elements {
+        check_create_element_rebind(element, bound)?;
+    }
+    Ok(())
+}
+
+fn check_create_element_rebind(
+    element: &PatternElement,
+    bound: &mut HashSet<String>,
+) -> crate::Result<()> {
+    match element {
+        PatternElement::Node(n) => {
+            if let Some(v) = &n.variable {
+                let has_structure =
+                    !n.labels.is_empty() || n.properties.is_some() || n.external_id_expr.is_some();
+                if has_structure && bound.contains(v) {
+                    return Err(variable_already_bound(v));
+                }
+                bound.insert(v.clone());
+            }
+        }
+        PatternElement::Relationship(r) => {
+            if let Some(v) = &r.variable {
+                bound.insert(v.clone());
+            }
+        }
+        PatternElement::QuantifiedGroup(g) => {
+            for inner in &g.inner {
+                check_create_element_rebind(inner, bound)?;
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Record every node/relationship/path variable a pattern binds (used to seed
+/// the "already bound" set from `MATCH`/`MERGE` clauses; no checking).
+fn add_pattern_vars(pattern: &Pattern, bound: &mut HashSet<String>) {
+    if let Some(path) = &pattern.path_variable {
+        bound.insert(path.clone());
+    }
+    for element in &pattern.elements {
+        add_element_vars(element, bound);
+    }
+}
+
+fn add_element_vars(element: &PatternElement, bound: &mut HashSet<String>) {
+    match element {
+        PatternElement::Node(n) => {
+            if let Some(v) = &n.variable {
+                bound.insert(v.clone());
+            }
+        }
+        PatternElement::Relationship(r) => {
+            if let Some(v) = &r.variable {
+                bound.insert(v.clone());
+            }
+        }
+        PatternElement::QuantifiedGroup(g) => {
+            for inner in &g.inner {
+                add_element_vars(inner, bound);
             }
         }
     }
@@ -573,6 +687,13 @@ fn variable_type_conflict(name: &str) -> crate::Error {
     ))
 }
 
+fn variable_already_bound(name: &str) -> crate::Error {
+    crate::Error::CypherSyntax(format!(
+        "VariableAlreadyBound: variable `{name}` is already bound and cannot be \
+         re-declared with labels or properties"
+    ))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -670,6 +791,37 @@ mod tests {
         assert_ok("MATCH (a)-[r]->(a) RETURN a");
         // `a` bound as a node in two separate patterns — legal.
         assert_ok("MATCH (a) MATCH (a)-[r]->(b) RETURN a, b");
+    }
+
+    /// A SyntaxError carrying the `VariableAlreadyBound` token.
+    fn assert_already_bound(query: &str) {
+        let err = run(query).expect_err(&format!("expected VariableAlreadyBound for: {query}"));
+        assert_eq!(
+            format!("{:?}", err.opencypher_kind()),
+            "SyntaxError",
+            "{query} must classify as SyntaxError"
+        );
+        assert!(
+            err.to_string().contains("VariableAlreadyBound"),
+            "{query}: message must contain VariableAlreadyBound, got: {err}"
+        );
+    }
+
+    #[test]
+    fn create_redeclaring_a_bound_variable_with_structure_is_rejected() {
+        // Adding properties to an already-bound node.
+        assert_already_bound("MATCH (a) CREATE (a {name: 'foo'}) RETURN a");
+        // Re-declaring across two CREATE clauses with a new label.
+        assert_already_bound("CREATE (n:Foo) CREATE (n:Bar)-[:OWNS]->(:Dog)");
+    }
+
+    #[test]
+    fn create_referencing_a_bound_variable_as_endpoint_passes() {
+        // Bare reference endpoints carry no structure — legal.
+        assert_ok("MATCH (a) CREATE (a)-[:R]->(b) RETURN b");
+        assert_ok("MATCH (a), (b) CREATE (a)-[:KNOWS]->(b)");
+        // Fresh variables with labels are not re-declarations.
+        assert_ok("CREATE (a:X)-[:R]->(b:Y)");
     }
 
     #[test]
