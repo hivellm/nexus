@@ -378,6 +378,40 @@ impl CypherParser {
             )));
         };
 
+        // Bracket-less anonymous relationship (openCypher TCK): the entire
+        // `[...]` detail block may be omitted — `-->`, `--`, `<--`. This
+        // degrades to no variable / no types / no properties / no
+        // quantifier, otherwise identical to `-[]->` / `-[]-` / `<-[]-`.
+        if self.peek_char() != Some('[') {
+            self.expect_char('-')?;
+            let right_arrow = if self.peek_char() == Some('>') {
+                self.consume_char();
+                true
+            } else {
+                false
+            };
+
+            let direction = match (left_arrow, right_arrow) {
+                (true, false) => RelationshipDirection::Incoming, // <--
+                (false, true) => RelationshipDirection::Outgoing, // -->
+                (false, false) => RelationshipDirection::Both,    // --
+                (true, true) => {
+                    return Err(Error::CypherSyntax(format!(
+                        "Invalid relationship direction <--> at line 1, column {}",
+                        self.pos + 1
+                    )));
+                }
+            };
+
+            return Ok(RelationshipPattern {
+                variable: None,
+                types: Vec::new(),
+                direction,
+                properties: None,
+                quantifier: None,
+            });
+        }
+
         self.expect_char('[')?;
         self.skip_whitespace();
 
@@ -536,10 +570,16 @@ impl CypherParser {
             types.push(self.parse_type_name()?);
 
             // Additional types can be separated by '|' (e.g., :TYPE1|TYPE2)
+            // or by '|:' (e.g., :TYPE1|:TYPE2) — openCypher permits each
+            // alternative to repeat the leading colon.
             self.skip_whitespace();
             while self.peek_char() == Some('|') {
                 self.consume_char(); // consume '|'
                 self.skip_whitespace();
+                if self.peek_char() == Some(':') {
+                    self.consume_char(); // consume optional ':' before alternative
+                    self.skip_whitespace();
+                }
                 types.push(self.parse_type_name()?);
                 self.skip_whitespace();
             }

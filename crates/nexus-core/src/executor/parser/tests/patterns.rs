@@ -462,3 +462,131 @@ fn qpp_bare_parens_without_quantifier_is_not_qpp() {
         "no QPP should be emitted for `(a)(b)` without a quantifier"
     );
 }
+
+#[test]
+fn test_parse_bracketless_relationship_outgoing() {
+    // openCypher TCK: the `[...]` detail may be omitted entirely.
+    let mut parser = CypherParser::new("MATCH (a)-->(b) RETURN a".to_string());
+    let query = parser.parse().unwrap();
+    match &query.clauses[0] {
+        Clause::Match(match_clause) => match &match_clause.pattern.elements[1] {
+            PatternElement::Relationship(rel) => {
+                assert_eq!(rel.direction, RelationshipDirection::Outgoing);
+                assert_eq!(rel.variable, None);
+                assert!(rel.types.is_empty());
+                assert!(rel.properties.is_none());
+                assert_eq!(rel.quantifier, None);
+            }
+            _ => panic!("Expected relationship"),
+        },
+        _ => panic!("Expected match clause"),
+    }
+}
+
+#[test]
+fn test_parse_bracketless_relationship_undirected() {
+    let mut parser = CypherParser::new("MATCH (a)--(b) RETURN a".to_string());
+    let query = parser.parse().unwrap();
+    match &query.clauses[0] {
+        Clause::Match(match_clause) => match &match_clause.pattern.elements[1] {
+            PatternElement::Relationship(rel) => {
+                assert_eq!(rel.direction, RelationshipDirection::Both);
+                assert_eq!(rel.variable, None);
+                assert!(rel.types.is_empty());
+            }
+            _ => panic!("Expected relationship"),
+        },
+        _ => panic!("Expected match clause"),
+    }
+}
+
+#[test]
+fn test_parse_bracketless_relationship_incoming() {
+    let mut parser = CypherParser::new("MATCH (a)<--(b) RETURN a".to_string());
+    let query = parser.parse().unwrap();
+    match &query.clauses[0] {
+        Clause::Match(match_clause) => match &match_clause.pattern.elements[1] {
+            PatternElement::Relationship(rel) => {
+                assert_eq!(rel.direction, RelationshipDirection::Incoming);
+                assert_eq!(rel.variable, None);
+                assert!(rel.types.is_empty());
+            }
+            _ => panic!("Expected relationship"),
+        },
+        _ => panic!("Expected match clause"),
+    }
+}
+
+#[test]
+fn test_parse_bracketless_relationship_chain() {
+    // Bracket-less relationships must chain like bracketed ones: `(a)--(b)--(c)`.
+    let mut parser = CypherParser::new("MATCH (a)--(b)--(c) RETURN a".to_string());
+    let query = parser.parse().unwrap();
+    match &query.clauses[0] {
+        Clause::Match(match_clause) => {
+            assert_eq!(match_clause.pattern.elements.len(), 5);
+            let rel_count = match_clause
+                .pattern
+                .elements
+                .iter()
+                .filter(|e| matches!(e, PatternElement::Relationship(_)))
+                .count();
+            assert_eq!(rel_count, 2);
+        }
+        _ => panic!("Expected match clause"),
+    }
+}
+
+#[test]
+fn test_parse_bracketed_relationship_still_works_after_bracketless_support() {
+    // Regression guard: bracketed forms must not be affected by the new
+    // bracket-less branch.
+    let mut parser = CypherParser::new("MATCH (a)-[r:KNOWS]->(b) RETURN a".to_string());
+    let query = parser.parse().unwrap();
+    match &query.clauses[0] {
+        Clause::Match(match_clause) => match &match_clause.pattern.elements[1] {
+            PatternElement::Relationship(rel) => {
+                assert_eq!(rel.variable.as_deref(), Some("r"));
+                assert_eq!(rel.types, vec!["KNOWS"]);
+                assert_eq!(rel.direction, RelationshipDirection::Outgoing);
+            }
+            _ => panic!("Expected relationship"),
+        },
+        _ => panic!("Expected match clause"),
+    }
+}
+
+#[test]
+fn test_parse_variable_length_relationship_still_works() {
+    // Regression guard: `-[:T*]-` (variable-length, bracketed) must keep
+    // working after the bracket-less branch is added.
+    let mut parser = CypherParser::new("MATCH (a)-[:KNOWS*]->(b) RETURN a".to_string());
+    let query = parser.parse().unwrap();
+    match &query.clauses[0] {
+        Clause::Match(match_clause) => match &match_clause.pattern.elements[1] {
+            PatternElement::Relationship(rel) => {
+                assert_eq!(rel.types, vec!["KNOWS"]);
+                assert_eq!(rel.quantifier, Some(RelationshipQuantifier::ZeroOrMore));
+            }
+            _ => panic!("Expected relationship"),
+        },
+        _ => panic!("Expected match clause"),
+    }
+}
+
+#[test]
+fn test_parse_relationship_type_alternation_colon_prefixed() {
+    // openCypher permits each alternative in a type-alternation list to
+    // repeat the leading colon: `[:A|:B]`.
+    let mut parser = CypherParser::new("MATCH (a)-[r:KNOWS|:WORKS_WITH]->(b) RETURN a".to_string());
+    let query = parser.parse().unwrap();
+    match &query.clauses[0] {
+        Clause::Match(match_clause) => match &match_clause.pattern.elements[1] {
+            PatternElement::Relationship(rel) => {
+                assert_eq!(rel.types, vec!["KNOWS", "WORKS_WITH"]);
+            }
+            _ => panic!("Expected relationship pattern"),
+        },
+        _ => panic!("Expected match clause"),
+    }
+}

@@ -23,6 +23,7 @@ mod test_aggregation_virtual_row;
 mod test_array_concatenation;
 mod test_array_indexing;
 mod test_array_slicing;
+mod test_bracketless_relationships;
 mod test_call_procedures;
 mod test_collect_aggregation;
 mod test_create_arrow_direction;
