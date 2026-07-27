@@ -11,12 +11,12 @@
 # uses the binary itself (`nexus-server --healthcheck`).
 #
 # HOW TO BUILD (single arch, local):
-#   docker build -t hivehub/nexus:2.5.0 -t hivehub/nexus:latest .
+#   docker build -t hivehub/nexus:3.0.0-alpha .
 #
 # HOW TO BUILD + PUBLISH MULTI-ARCH (Docker Hub — hivehub/nexus):
 #   docker login
 #   docker buildx build --platform linux/amd64,linux/arm64 \
-#     -t hivehub/nexus:2.5.0 -t hivehub/nexus:latest --push .
+#     -t hivehub/nexus:3.0.0-alpha --push .
 #
 #   Each platform builds NATIVELY (arm64 under qemu/binfmt on an amd64
 #   host — same pattern as the Synap Dockerfile). No cross-toolchain:
@@ -34,7 +34,7 @@
 #     -e NEXUS_ROOT_USERNAME=admin \
 #     -e NEXUS_ROOT_PASSWORD=secure_password \
 #     -e NEXUS_AUTH_ENABLED=true \
-#     hivehub/nexus:2.5.0
+#     hivehub/nexus:3.0.0-alpha
 #
 #   # Using docker-compose (recommended):
 #   docker-compose up -d
@@ -137,7 +137,7 @@ FROM scratch
 # match the pushed tag.
 LABEL org.opencontainers.image.title="Nexus" \
       org.opencontainers.image.description="High-performance property graph database with native vector search (KNN/HNSW)" \
-      org.opencontainers.image.version="2.5.0" \
+      org.opencontainers.image.version="3.0.0-alpha" \
       org.opencontainers.image.vendor="HiveLLM" \
       org.opencontainers.image.source="https://github.com/hivellm/nexus" \
       org.opencontainers.image.documentation="https://github.com/hivellm/nexus/blob/main/README.md" \
