@@ -995,6 +995,7 @@ RETURN n, team
 - Inline property constraints, including correlated ones like `(b {id: a.id})`
 - Relationship types (single or union `:R1|R2|R3`), and directionality (→, ←, -)
 - Relationship variables that can be bound and reused (reused rel obeys Cypher isomorphism — no rel satisfies two pattern hops)
+- Variable-length relationships (e.g. `[:TYPE*1..3]`, `[*2]`, `[*0..1]`) with per-hop type and directionality filtering; zero-length matching when min is 0; relationship isomorphism across the variable-length segment; inline relationship properties applied per traversed edge. Bare `*` means `*1..` (openCypher default). The engine-wide 64-hop ceiling (see § Variable-length path bounded depth) applies to the max bound; a min bound above 64 can therefore never match
 - Comma-separated pattern parts (each part anchors independently from outer variables)
 - Anonymous nodes (no variable required)
 - Inner WHERE clause (evaluated per candidate; `NULL` result excludes candidate, not `false`)
@@ -1005,7 +1006,7 @@ RETURN n, team
 - `EXISTS { ... }` returns `NULL` only if ALL attempts to match hit a `NULL` correlated variable and no path succeeded
 
 **Not yet supported:**
-- Variable-length relationships inside EXISTS (e.g. `[:TYPE*1..3]`) — returns an error
+- Named relationship variables on a variable-length relationship inside EXISTS (e.g. `EXISTS { (a)-[r:T*]->(b) }`) — returns an explicit error (would require binding a `LIST<RELATIONSHIP>`)
 - Quantified path patterns (QPP, e.g. `((a)-[:R]->(b))+`) inside EXISTS — returns an explicit "not implemented" error in all cases
 - OPTIONAL MATCH inside EXISTS
 

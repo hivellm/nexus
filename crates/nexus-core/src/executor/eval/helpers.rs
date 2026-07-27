@@ -6,6 +6,7 @@
 
 use super::super::context::{ExecutionContext, RelationshipInfo};
 use super::super::engine::Executor;
+use super::super::operators::path::MAX_VAR_LENGTH_PATH_DEPTH;
 use super::super::parser;
 use super::super::push_with_row_cap;
 use super::super::types::{Direction, Row};
@@ -66,6 +67,35 @@ impl ExistsOutcome {
             Self::Null => Value::Null,
         }
     }
+}
+
+/// Loop-invariant arguments for [`Executor::exists_probe_var_length`]'s
+/// depth-first walk of a variable-length relationship hop. Everything
+/// here stays fixed across the whole recursive walk of one `-[:T*m..n]->`
+/// segment; only the binding, frontier node id, depth, and the shared
+/// `bound_relationships` set change per recursive call. Bundled into one
+/// borrowed struct so the recursive function itself stays under
+/// clippy's argument-count lint without duplicating any of these values.
+struct ExistsVarLengthWalk<'a> {
+    context: &'a ExecutionContext,
+    elements: &'a [parser::PatternElement],
+    /// Index of the `Relationship` element itself within `elements` —
+    /// the following node lives at `elements[pos + 1]`
+    /// (`next_node`, cached separately below) and the rest of the
+    /// pattern resumes at `pos + 2` once a witness for this segment is
+    /// found.
+    pos: usize,
+    rel: &'a parser::RelationshipPattern,
+    next_node: &'a parser::NodePattern,
+    min_hops: usize,
+    max_hops: usize,
+    /// `false` when the declared relationship type(s) never resolved
+    /// to a real catalog type id — see the doc comment on
+    /// [`Executor::exists_probe_var_length`].
+    can_extend: bool,
+    type_ids: &'a [u32],
+    direction: Direction,
+    where_clause: Option<&'a parser::Expression>,
 }
 
 impl Executor {
@@ -1332,14 +1362,92 @@ impl Executor {
                         type_ids.push(id);
                     }
                 }
-                if !rel.types.is_empty() && type_ids.is_empty() {
-                    return Ok(ExistsOutcome::False);
-                }
                 let direction = match rel.direction {
                     parser::RelationshipDirection::Outgoing => Direction::Outgoing,
                     parser::RelationshipDirection::Incoming => Direction::Incoming,
                     parser::RelationshipDirection::Both => Direction::Both,
                 };
+
+                if let Some(quantifier) = &rel.quantifier {
+                    // A named relationship variable on a variable-length
+                    // hop binds a LIST<RELATIONSHIP> in full Cypher; the
+                    // probe only ever materialises a single relationship
+                    // value per hop variable. Reject clearly rather than
+                    // bind something wrong.
+                    if rel.variable.is_some() {
+                        return Err(Error::CypherExecution(
+                            "ERR_VAR_LENGTH_REL_VARIABLE_NOT_IMPLEMENTED: a named \
+                             relationship variable on a variable-length relationship \
+                             inside EXISTS is not supported (it binds a \
+                             LIST<RELATIONSHIP> in full Cypher); use an anonymous \
+                             variable-length relationship instead"
+                                .to_string(),
+                        ));
+                    }
+                    let (min_hops, max_hops) = match quantifier {
+                        // openCypher defines a bare `*` as `*1..` (one
+                        // or more), NOT `*0..` — deliberately diverging
+                        // here from `execute_variable_length_path`
+                        // (path.rs:489), whose `ZeroOrMore => (0,
+                        // usize::MAX)` is a pre-existing MATCH-side
+                        // off-by-one left untouched (out of scope for
+                        // this probe). Getting this right at THIS call
+                        // site matters more than bug-for-bug parity:
+                        // without it, `EXISTS { (a)-[:T*]->() }` would
+                        // be unconditionally true for every node (the
+                        // zero-length case accepts the anchor itself
+                        // against an unconstrained target). Explicit
+                        // zero-length ranges (`*0..1`, `*0..`) are
+                        // untouched — they already carry their own
+                        // literal `0` lower bound via `Range`/parsed
+                        // quantifiers, not this arm.
+                        parser::RelationshipQuantifier::ZeroOrMore => (1, usize::MAX),
+                        parser::RelationshipQuantifier::OneOrMore => (1, usize::MAX),
+                        parser::RelationshipQuantifier::ZeroOrOne => (0, 1),
+                        parser::RelationshipQuantifier::Exact(n) => (*n, *n),
+                        parser::RelationshipQuantifier::Range(min, max) => (*min, *max),
+                    };
+                    // Mirrors `execute_variable_length_path`'s own
+                    // clamp (path.rs) — an unbounded `*`/`+` quantifier
+                    // faces the identical exponential-trail-count
+                    // hazard that constant exists to cap; without it a
+                    // no-witness probe over a dense, cyclic graph must
+                    // exhaust every isomorphic trail before returning
+                    // `False`, and an uncapped depth could also make
+                    // `EXISTS` witness a path longer than `MATCH`'s own
+                    // variable-length operator would ever allow.
+                    let max_hops = max_hops.min(MAX_VAR_LENGTH_PATH_DEPTH);
+                    // A declared type list that resolved to zero ids
+                    // means the type has never been assigned to any
+                    // relationship: no hop of length >= 1 can ever be
+                    // taken, but a zero-length match (`min_hops == 0`)
+                    // is still evaluated on its own merits below.
+                    let can_extend = rel.types.is_empty() || !type_ids.is_empty();
+                    let walk = ExistsVarLengthWalk {
+                        context,
+                        elements,
+                        pos,
+                        rel,
+                        next_node,
+                        min_hops,
+                        max_hops,
+                        can_extend,
+                        type_ids: &type_ids,
+                        direction,
+                        where_clause,
+                    };
+                    return self.exists_probe_var_length(
+                        &walk,
+                        binding,
+                        anchor_id,
+                        0,
+                        bound_relationships,
+                    );
+                }
+
+                if !rel.types.is_empty() && type_ids.is_empty() {
+                    return Ok(ExistsOutcome::False);
+                }
 
                 // Authoritative store adjacency — never
                 // `relationship_index()`, which is not authoritative
@@ -1433,6 +1541,132 @@ impl Executor {
                     .to_string(),
             )),
         }
+    }
+
+    /// Depth-first walk of a variable-length relationship hop
+    /// (`-[:T*min..max]->`) inside an `EXISTS` pattern.
+    ///
+    /// `current_id` is the frontier node reached after `depth` hops
+    /// from the segment's starting anchor. At every depth within
+    /// `[walk.min_hops, walk.max_hops]` the walk first tries accepting
+    /// `current_id` itself against `walk.next_node`'s constraints —
+    /// the zero-length case (`depth == min_hops == 0`) binds the
+    /// pattern's target straight to the segment's anchor, consuming no
+    /// edge — then, if `depth < walk.max_hops`, extends by one more
+    /// hop. An unbounded `max_hops` (`usize::MAX` for bare `*` / `+`,
+    /// clamped to `MAX_VAR_LENGTH_PATH_DEPTH` by the caller — see
+    /// [`Self::exists_probe`]) needs no further artificial cap here:
+    /// `bound_relationships` below forbids re-entering an
+    /// already-consumed edge, so no DFS branch can exceed the graph's
+    /// distinct live-edge count within that ceiling.
+    ///
+    /// `walk.can_extend` is `false` when the declared relationship
+    /// type(s) never resolved to a real catalog type id — no hop of
+    /// length >= 1 is possible in that case, but the zero-length case
+    /// at `depth == 0` is still tried when `min_hops == 0` (an
+    /// unmatched type still allows `*0..n` to degrade to "target is
+    /// the anchor itself").
+    ///
+    /// Isomorphism (`bound_relationships`) is enforced exactly as for
+    /// a fixed-length hop: an edge id is inserted before recursing
+    /// into the extension that consumes it and removed again on
+    /// backtrack, so it becomes unavailable to every later hop in the
+    /// CURRENT witness candidate — including hops belonging to a
+    /// different pattern component — without leaking across sibling
+    /// candidates.
+    fn exists_probe_var_length(
+        &self,
+        walk: &ExistsVarLengthWalk<'_>,
+        binding: HashMap<String, Value>,
+        current_id: u64,
+        depth: usize,
+        bound_relationships: &mut HashSet<u64>,
+    ) -> Result<ExistsOutcome> {
+        let mut saw_null = false;
+
+        if depth >= walk.min_hops {
+            match self.exists_accept_node_candidate(
+                &binding,
+                walk.context,
+                walk.next_node,
+                current_id,
+            )? {
+                ExistsAcceptOutcome::Rejected => {}
+                ExistsAcceptOutcome::Null => saw_null = true,
+                ExistsAcceptOutcome::Accepted(next_binding) => {
+                    match self.exists_probe(
+                        walk.context,
+                        walk.elements,
+                        walk.pos + 2,
+                        next_binding,
+                        Some(current_id),
+                        bound_relationships,
+                        walk.where_clause,
+                    )? {
+                        ExistsOutcome::True => return Ok(ExistsOutcome::True),
+                        ExistsOutcome::Null => saw_null = true,
+                        ExistsOutcome::False => {}
+                    }
+                }
+            }
+        }
+
+        if walk.can_extend && depth < walk.max_hops {
+            // Authoritative store adjacency — never `relationship_index()`.
+            let relationships =
+                self.find_relationships(current_id, walk.type_ids, walk.direction, None)?;
+            for rel_info in &relationships {
+                // Cypher relationship-isomorphism, enforced across the
+                // whole var-length segment (and beyond it, into the
+                // rest of the pattern): an edge already consumed by an
+                // earlier hop in this witness candidate can't satisfy
+                // a later one.
+                if bound_relationships.contains(&rel_info.id) {
+                    continue;
+                }
+                if !self.exists_relationship_properties_match(
+                    &binding,
+                    walk.context,
+                    walk.rel.properties.as_ref(),
+                    rel_info,
+                )? {
+                    continue;
+                }
+
+                let hop_target = match walk.direction {
+                    Direction::Outgoing => rel_info.target_id,
+                    Direction::Incoming => rel_info.source_id,
+                    Direction::Both => {
+                        if rel_info.source_id == current_id {
+                            rel_info.target_id
+                        } else {
+                            rel_info.source_id
+                        }
+                    }
+                };
+
+                bound_relationships.insert(rel_info.id);
+                let outcome = self.exists_probe_var_length(
+                    walk,
+                    binding.clone(),
+                    hop_target,
+                    depth + 1,
+                    bound_relationships,
+                )?;
+                bound_relationships.remove(&rel_info.id);
+                match outcome {
+                    ExistsOutcome::True => return Ok(ExistsOutcome::True),
+                    ExistsOutcome::Null => saw_null = true,
+                    ExistsOutcome::False => {}
+                }
+            }
+        }
+
+        Ok(if saw_null {
+            ExistsOutcome::Null
+        } else {
+            ExistsOutcome::False
+        })
     }
 
     pub(in crate::executor) fn extract_property(entity: &Value, property: &str) -> Value {
@@ -2305,6 +2539,320 @@ mod tests {
             "NULL inner WHERE must make EXISTS false"
         );
         assert_eq!(result.rows[0].values[0], json!("a"));
+    }
+
+    #[test]
+    fn exists_bare_star_var_length_finds_a_two_hop_chain() {
+        let (mut executor, _ctx) = create_test_executor();
+
+        let create = Query {
+            cypher: "CREATE (a:ExistsProbeAD {name: 'a'})-[:AD1]->(b:ExistsProbeAD {name: 'b'})-\
+                     [:AD1]->(c:ExistsProbeAD {name: 'c'})"
+                .to_string(),
+            params: HashMap::new(),
+        };
+        executor.execute(&create).expect("create should succeed");
+
+        let matches = Query {
+            cypher: "MATCH (a:ExistsProbeAD {name: 'a'}) \
+                     WHERE EXISTS { (a)-[:AD1*]->(:ExistsProbeAD {name: 'c'}) } \
+                     RETURN a.name AS name"
+                .to_string(),
+            params: HashMap::new(),
+        };
+        let result = executor.execute(&matches).expect("match should succeed");
+        assert_eq!(result.rows.len(), 1);
+        assert_eq!(result.rows[0].values[0], json!("a"));
+
+        let no_match = Query {
+            cypher: "MATCH (a:ExistsProbeAD {name: 'a'}) \
+                     WHERE EXISTS { (a)-[:AD1*]->(:ExistsProbeAD {name: 'never'}) } \
+                     RETURN a.name AS name"
+                .to_string(),
+            params: HashMap::new(),
+        };
+        let result = executor.execute(&no_match).expect("match should succeed");
+        assert_eq!(result.rows.len(), 0);
+    }
+
+    #[test]
+    fn exists_bare_star_var_length_has_a_lower_bound_of_one() {
+        let (mut executor, _ctx) = create_test_executor();
+
+        // openCypher's bare `*` means `*1..` (one or more), not
+        // `*0..`. An isolated node with no `:X` edges at all must NOT
+        // satisfy `EXISTS { (a)-[:X*]->() }` — the zero-length case
+        // (accepting the anchor itself against an unconstrained
+        // target) must not be reachable for a bare `*`.
+        let create_isolated = Query {
+            cypher: "CREATE (a:ExistsProbeAE {name: 'a'})".to_string(),
+            params: HashMap::new(),
+        };
+        executor
+            .execute(&create_isolated)
+            .expect("create should succeed");
+
+        let isolated_query = Query {
+            cypher: "MATCH (a:ExistsProbeAE {name: 'a'}) \
+                     WHERE EXISTS { (a)-[:X*]->() } \
+                     RETURN a.name AS name"
+                .to_string(),
+            params: HashMap::new(),
+        };
+        let result = executor
+            .execute(&isolated_query)
+            .expect("match should succeed");
+        assert_eq!(
+            result.rows.len(),
+            0,
+            "an isolated node has no witness for a bare `*` (min 1 hop)"
+        );
+
+        let create_edge = Query {
+            cypher: "CREATE (b:ExistsProbeAE {name: 'b'})-[:X]->(c:ExistsProbeAE {name: 'c'})"
+                .to_string(),
+            params: HashMap::new(),
+        };
+        executor
+            .execute(&create_edge)
+            .expect("create should succeed");
+
+        let edge_query = Query {
+            cypher: "MATCH (b:ExistsProbeAE {name: 'b'}) \
+                     WHERE EXISTS { (b)-[:X*]->() } \
+                     RETURN b.name AS name"
+                .to_string(),
+            params: HashMap::new(),
+        };
+        let result = executor.execute(&edge_query).expect("match should succeed");
+        assert_eq!(result.rows.len(), 1, "one real edge is a valid witness");
+        assert_eq!(result.rows[0].values[0], json!("b"));
+    }
+
+    #[test]
+    fn exists_bounded_var_length_respects_the_max_hop() {
+        let (mut executor, _ctx) = create_test_executor();
+
+        let create = Query {
+            cypher: "CREATE (a:ExistsProbeX {name: 'a'})-[:X1]->(b:ExistsProbeX {name: 'b'})-\
+                     [:X1]->(c:ExistsProbeX {name: 'c'})-[:X1]->(d:ExistsProbeX {name: 'd'})"
+                .to_string(),
+            params: HashMap::new(),
+        };
+        executor.execute(&create).expect("create should succeed");
+
+        // `c` sits within the 1..2 bound (2 hops).
+        let within_bound = Query {
+            cypher: "MATCH (a:ExistsProbeX {name: 'a'}) \
+                     WHERE EXISTS { (a)-[:X1*1..2]->(:ExistsProbeX {name: 'c'}) } \
+                     RETURN a.name AS name"
+                .to_string(),
+            params: HashMap::new(),
+        };
+        let result = executor
+            .execute(&within_bound)
+            .expect("match should succeed");
+        assert_eq!(result.rows.len(), 1);
+        assert_eq!(result.rows[0].values[0], json!("a"));
+
+        // `d` is only reachable via a 3-hop path, past the `*1..2` max.
+        let past_bound = Query {
+            cypher: "MATCH (a:ExistsProbeX {name: 'a'}) \
+                     WHERE EXISTS { (a)-[:X1*1..2]->(:ExistsProbeX {name: 'd'}) } \
+                     RETURN a.name AS name"
+                .to_string(),
+            params: HashMap::new(),
+        };
+        let result = executor.execute(&past_bound).expect("match should succeed");
+        assert_eq!(
+            result.rows.len(),
+            0,
+            "the only path to `d` is 3 hops, past the *1..2 max"
+        );
+    }
+
+    #[test]
+    fn exists_exact_var_length_requires_the_exact_hop_count() {
+        let (mut executor, _ctx) = create_test_executor();
+
+        let create = Query {
+            cypher: "CREATE (a:ExistsProbeY {name: 'a'})-[:Y1]->(b:ExistsProbeY {name: 'b'})-\
+                     [:Y1]->(c:ExistsProbeY {name: 'c'})"
+                .to_string(),
+            params: HashMap::new(),
+        };
+        executor.execute(&create).expect("create should succeed");
+
+        let one_hop_neighbor = Query {
+            cypher: "MATCH (a:ExistsProbeY {name: 'a'}) \
+                     WHERE EXISTS { (a)-[:Y1*2]->(:ExistsProbeY {name: 'b'}) } \
+                     RETURN a.name AS name"
+                .to_string(),
+            params: HashMap::new(),
+        };
+        let result = executor
+            .execute(&one_hop_neighbor)
+            .expect("match should succeed");
+        assert_eq!(result.rows.len(), 0, "`b` is 1 hop away, not exactly 2");
+
+        let two_hop_neighbor = Query {
+            cypher: "MATCH (a:ExistsProbeY {name: 'a'}) \
+                     WHERE EXISTS { (a)-[:Y1*2]->(:ExistsProbeY {name: 'c'}) } \
+                     RETURN a.name AS name"
+                .to_string(),
+            params: HashMap::new(),
+        };
+        let result = executor
+            .execute(&two_hop_neighbor)
+            .expect("match should succeed");
+        assert_eq!(result.rows.len(), 1, "`c` is exactly 2 hops away");
+        assert_eq!(result.rows[0].values[0], json!("a"));
+    }
+
+    #[test]
+    fn exists_zero_length_var_length_matches_the_anchor_itself() {
+        let (mut executor, _ctx) = create_test_executor();
+
+        let create = Query {
+            cypher: "CREATE (a:ExistsProbeZ {name: 'a'})".to_string(),
+            params: HashMap::new(),
+        };
+        executor.execute(&create).expect("create should succeed");
+
+        // No `:Z1` relationship was ever created, so the type never
+        // resolves in the catalog — the zero-length case must still
+        // be evaluated on its own merits and match `a` against
+        // itself, consuming no edge.
+        let query = Query {
+            cypher: "MATCH (a:ExistsProbeZ {name: 'a'}) \
+                     WHERE EXISTS { (a)-[:Z1*0..1]->(:ExistsProbeZ {name: 'a'}) } \
+                     RETURN a.name AS name"
+                .to_string(),
+            params: HashMap::new(),
+        };
+        let result = executor.execute(&query).expect("match should succeed");
+        assert_eq!(result.rows.len(), 1);
+        assert_eq!(result.rows[0].values[0], json!("a"));
+    }
+
+    #[test]
+    fn exists_undirected_var_length_traverses_both_ways() {
+        let (mut executor, _ctx) = create_test_executor();
+
+        // Both edges are stored Outgoing (a -> b -> c); probing
+        // undirected from `c` must still walk them backwards to `a`.
+        let create = Query {
+            cypher: "CREATE (a:ExistsProbeAA {name: 'a'})-[:AA1]->\
+                     (b:ExistsProbeAA {name: 'b'})-[:AA1]->(c:ExistsProbeAA {name: 'c'})"
+                .to_string(),
+            params: HashMap::new(),
+        };
+        executor.execute(&create).expect("create should succeed");
+
+        let query = Query {
+            cypher: "MATCH (c:ExistsProbeAA {name: 'c'}) \
+                     WHERE EXISTS { (c)-[:AA1*]-(:ExistsProbeAA {name: 'a'}) } \
+                     RETURN c.name AS name"
+                .to_string(),
+            params: HashMap::new(),
+        };
+        let result = executor.execute(&query).expect("match should succeed");
+        assert_eq!(result.rows.len(), 1);
+        assert_eq!(result.rows[0].values[0], json!("c"));
+    }
+
+    #[test]
+    fn exists_var_length_isomorphism_blocks_reusing_the_only_edge() {
+        let (mut executor, _ctx) = create_test_executor();
+
+        // Exactly one edge in the graph, stored directed a -> b.
+        // BOTH segments are undirected (`-`, not `->`): the `+`
+        // var-length segment (min 1 hop) must consume the only edge
+        // to reach `b`, and the fixed hop that follows is undirected
+        // too, so — without relationship-isomorphism enforcement — it
+        // could walk the SAME edge backwards from `b` to `a` and be
+        // satisfied. A directed fixed hop would fail here for an
+        // unrelated reason (no OUTGOING edge from `b`) without ever
+        // exercising the isomorphism check, which is why this test
+        // deliberately keeps both segments undirected.
+        let create = Query {
+            cypher: "CREATE (a:ExistsProbeAB {name: 'a'})-[:AB1]->(b:ExistsProbeAB {name: 'b'})"
+                .to_string(),
+            params: HashMap::new(),
+        };
+        executor.execute(&create).expect("create should succeed");
+
+        let query = Query {
+            cypher: "MATCH (a:ExistsProbeAB {name: 'a'}) \
+                     WHERE EXISTS { (a)-[:AB1+]-()-[:AB1]-() } \
+                     RETURN a.name AS name"
+                .to_string(),
+            params: HashMap::new(),
+        };
+        let result = executor.execute(&query).expect("match should succeed");
+        assert_eq!(
+            result.rows.len(),
+            0,
+            "the only edge can't satisfy both the undirected var-length segment \
+             and the undirected fixed hop that follows it"
+        );
+    }
+
+    #[test]
+    fn not_exists_composes_with_var_length_relationships() {
+        let (mut executor, _ctx) = create_test_executor();
+
+        let create = Query {
+            cypher: "CREATE (a:ExistsProbeAC {name: 'a'})-[:AC1]->(b:ExistsProbeAC {name: 'b'})"
+                .to_string(),
+            params: HashMap::new(),
+        };
+        executor.execute(&create).expect("create should succeed");
+
+        // Only a 1-hop path exists; an exact-2-hop probe is false, so
+        // NOT EXISTS must be true.
+        let query = Query {
+            cypher: "MATCH (a:ExistsProbeAC {name: 'a'}) \
+                     WHERE NOT EXISTS { (a)-[:AC1*2]->() } \
+                     RETURN a.name AS name"
+                .to_string(),
+            params: HashMap::new(),
+        };
+        let result = executor.execute(&query).expect("match should succeed");
+        assert_eq!(result.rows.len(), 1);
+        assert_eq!(result.rows[0].values[0], json!("a"));
+    }
+
+    #[test]
+    fn exists_named_rel_variable_on_var_length_relationship_is_rejected() {
+        let (mut executor, _ctx) = create_test_executor();
+
+        let create = Query {
+            cypher: "CREATE (a:ExistsProbeAF {name: 'a'})-[:AF1]->(b:ExistsProbeAF {name: 'b'})"
+                .to_string(),
+            params: HashMap::new(),
+        };
+        executor.execute(&create).expect("create should succeed");
+
+        // A named relationship variable on a variable-length hop would
+        // bind a LIST<RELATIONSHIP> in full Cypher, which this probe
+        // does not support — it must fail loudly, not silently bind a
+        // single relationship value or ignore the variable.
+        let query = Query {
+            cypher: "MATCH (a:ExistsProbeAF {name: 'a'}) \
+                     WHERE EXISTS { (a)-[r:AF1*]->() } \
+                     RETURN a.name AS name"
+                .to_string(),
+            params: HashMap::new(),
+        };
+        let err = executor
+            .execute(&query)
+            .expect_err("a named rel-var on a var-length relationship must be rejected");
+        assert!(
+            err.to_string()
+                .contains("ERR_VAR_LENGTH_REL_VARIABLE_NOT_IMPLEMENTED"),
+            "unexpected error message: {err}"
+        );
     }
 
     #[test]

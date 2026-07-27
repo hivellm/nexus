@@ -31,7 +31,13 @@ pub(in crate::executor) struct Path {
 /// BFS operator and the `QuantifiedExpand` operator have independent
 /// state shapes). A legitimate bounded quantifier like `[*1..5]` stays
 /// well under this cap and is unaffected.
-const MAX_VAR_LENGTH_PATH_DEPTH: usize = 64;
+///
+/// `pub(in crate::executor)` (not private) so the `EXISTS` pattern
+/// probe's own variable-length walk (`eval::helpers::exists_probe_var_length`)
+/// shares the exact same ceiling instead of duplicating the literal —
+/// an unbounded `*`/`+` quantifier inside `EXISTS` faces the identical
+/// exponential-trail-count hazard this constant exists to cap.
+pub(in crate::executor) const MAX_VAR_LENGTH_PATH_DEPTH: usize = 64;
 
 impl Executor {
     pub(in crate::executor) fn find_relationships(
