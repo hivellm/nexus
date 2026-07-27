@@ -960,13 +960,54 @@ FOREACH (x IN [1, 2, 3] |
 ### EXISTS Subqueries
 
 ```cypher
--- Existential pattern check
+-- Existential pattern check (depth-first graph probe)
 MATCH (n:Person)
 WHERE EXISTS {
   MATCH (n)-[:KNOWS]->(:Person {city: 'NYC'})
 }
 RETURN n
+
+-- Multi-hop pattern (walks chains via adjacency lists)
+MATCH (n:Person)
+WHERE EXISTS {
+  MATCH (n)-[:MANAGES]->()-[:MANAGES]->(m:Person {seniority: 'executive'})
+}
+RETURN n
+
+-- Inner WHERE filters candidates (subquery semantics)
+MATCH (n:Person)
+WHERE EXISTS {
+  MATCH (n)-[r:KNOWS]->(friend)
+  WHERE friend.age > 30
+}
+RETURN n
+
+-- Correlated properties (outer-row binding visible inside)
+MATCH (n:Person), (team:Team)
+WHERE EXISTS {
+  MATCH (n)-[:MEMBER_OF]->(t:Team {name: team.name})
+}
+RETURN n, team
 ```
+
+**Supported pattern elements:**
+- Node labels and multiple labels (`:L1:L2` = intersection; bare node matches all)
+- Inline property constraints, including correlated ones like `(b {id: a.id})`
+- Relationship types (single or union `:R1|R2|R3`), and directionality (→, ←, -)
+- Relationship variables that can be bound and reused (reused rel obeys Cypher isomorphism — no rel satisfies two pattern hops)
+- Comma-separated pattern parts (each part anchors independently from outer variables)
+- Anonymous nodes (no variable required)
+- Inner WHERE clause (evaluated per candidate; `NULL` result excludes candidate, not `false`)
+
+**Three-valued logic:**
+- Outer variable bound to `NULL` → predicate returns `NULL` (filters as false under `WHERE`, composes correctly under `NOT EXISTS`)
+- Inner `WHERE` returning `NULL` → candidate excluded (like `false`)
+- `EXISTS { ... }` returns `NULL` only if ALL attempts to match hit a `NULL` correlated variable and no path succeeded
+
+**Not yet supported:**
+- Variable-length relationships inside EXISTS (e.g. `[:TYPE*1..3]`) — returns an error
+- Quantified path patterns (QPP, e.g. `((a)-[:R]->(b))+`) inside EXISTS — returns an explicit "not implemented" error in all cases
+- OPTIONAL MATCH inside EXISTS
 
 ### CASE Expressions
 

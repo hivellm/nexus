@@ -12,7 +12,61 @@ use super::super::types::{Direction, Row};
 use crate::storage::RecordStore;
 use crate::{Error, Result};
 use serde_json::{Map, Value};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
+
+/// Candidate-resolution outcome for the node that anchors a fresh
+/// component of an `EXISTS { … }` pattern probe (the pattern's first
+/// element, or a node that starts a new comma-separated pattern part).
+/// `Null` signals that the anchor is correlated to an outer variable
+/// that is bound but currently `NULL` — under Cypher's three-valued
+/// logic this must propagate a `NULL` result rather than `false`.
+enum ExistsAnchor {
+    Null,
+    Ids(Vec<u64>),
+}
+
+/// Outcome of testing a single candidate node against a pattern node's
+/// constraints (labels, properties, and — when the pattern reuses an
+/// already-bound variable name — identity with the existing binding).
+enum ExistsAcceptOutcome {
+    /// The candidate satisfies every constraint; carries the row
+    /// extended with the node's variable (unchanged if it was already
+    /// bound).
+    Accepted(HashMap<String, Value>),
+    /// The candidate fails a structural constraint (deleted, wrong
+    /// label, property mismatch, or conflicts with an existing
+    /// same-name binding).
+    Rejected,
+    /// The pattern reuses a variable name that is already bound in the
+    /// row to `NULL` (e.g. correlated to an unmatched `OPTIONAL
+    /// MATCH`) — under three-valued logic the candidate's fate is
+    /// unknown, not rejected.
+    Null,
+}
+
+/// Three-valued result of probing an `EXISTS` pattern (or a sub-step of
+/// one): `True` once a witness binding is found, `False` when the
+/// search is exhausted without one, and `Null` when a required
+/// correlated variable was `NULL` along every path that was tried and
+/// no path produced `True`. Mirrors Cypher's `NULL` propagation for
+/// pattern predicates: `NULL` composes correctly under `NOT` and is
+/// filtered out (treated as not-true) by `WHERE`, exactly like any
+/// other `NULL` boolean expression.
+enum ExistsOutcome {
+    True,
+    False,
+    Null,
+}
+
+impl ExistsOutcome {
+    fn into_value(self) -> Value {
+        match self {
+            Self::True => Value::Bool(true),
+            Self::False => Value::Bool(false),
+            Self::Null => Value::Null,
+        }
+    }
+}
 
 impl Executor {
     pub(in crate::executor) fn evaluate_expression_in_context(
@@ -861,100 +915,524 @@ impl Executor {
         }
     }
 
-    /// Check if a pattern exists in the current context
-    pub(in crate::executor) fn check_pattern_exists(
+    /// Evaluate `EXISTS { pattern [WHERE expr] }` (and the bare
+    /// pattern-predicate form the parser lowers to the same AST node)
+    /// against live graph state.
+    ///
+    /// The pattern is walked from `row`'s already-bound variables via
+    /// the authoritative store adjacency (`find_relationships`, never
+    /// `relationship_index()` — that index is non-authoritative for
+    /// correctness). The anchor of each connected component (the
+    /// pattern's first element, and every node that starts a fresh
+    /// comma-separated pattern part) is resolved from the outer
+    /// binding when its variable is already in scope (correlated
+    /// subquery semantics); otherwise it is enumerated from the store.
+    /// Every relationship hop binds its target node fresh per
+    /// candidate, checking type(s), direction, and the target node's
+    /// label/property constraints, and observes Cypher's relationship-
+    /// isomorphism rule: no single witness binding reuses the same
+    /// relationship id in two different hops. `EXISTS` is true iff at
+    /// least one complete binding satisfies both the pattern's
+    /// structural constraints and the optional inner `WHERE`, which is
+    /// evaluated per candidate binding — a candidate that fails
+    /// `WHERE` does not abort the probe, the walk simply continues to
+    /// the next candidate. The search is depth-first and short-
+    /// circuits on the first witness.
+    ///
+    /// Returns `Value::Null` (never plain `Value::Bool(false)`) when a
+    /// correlated outer variable the pattern depends on is bound to
+    /// `NULL` along every path tried, and no path produced a witness:
+    /// three-valued logic — a pattern predicate over unknown input is
+    /// itself unknown, not false. `Value::Null` composes correctly
+    /// under `NOT` and is filtered out by `WHERE` exactly like any
+    /// other `NULL` boolean expression.
+    pub(in crate::executor) fn evaluate_exists_pattern(
         &self,
         row: &HashMap<String, Value>,
         context: &ExecutionContext,
         pattern: &parser::Pattern,
-    ) -> Result<bool> {
-        // For EXISTS, we need to check if the pattern matches in the current context
-        // This checks if nodes and relationships actually exist
-
-        // If pattern is empty, return false
+        where_clause: Option<&parser::Expression>,
+    ) -> Result<Value> {
         if pattern.elements.is_empty() {
-            return Ok(false);
+            // Defensive-only: the parser never produces an empty
+            // pattern.
+            return Ok(Value::Bool(false));
+        }
+        let mut bound_relationships: HashSet<u64> = HashSet::new();
+        let outcome = self.exists_probe(
+            context,
+            &pattern.elements,
+            0,
+            row.clone(),
+            None,
+            &mut bound_relationships,
+            where_clause,
+        )?;
+        Ok(outcome.into_value())
+    }
+
+    /// Resolve the candidate node id(s) that anchor a fresh component
+    /// of an `EXISTS` pattern (the very first element, or a node that
+    /// starts a new comma-separated pattern part).
+    fn exists_resolve_anchor(
+        &self,
+        binding: &HashMap<String, Value>,
+        context: &ExecutionContext,
+        node: &parser::NodePattern,
+    ) -> Result<ExistsAnchor> {
+        if let Some(var) = &node.variable {
+            if let Some(value) = binding.get(var) {
+                return Ok(Self::exists_anchor_from_single_value(value));
+            }
+            if let Some(value) = context.get_variable(var) {
+                // `update_variables_from_rows` stores every variable as
+                // `Value::Array(values)` — one entry per materialised
+                // row — not a single scalar. Expand it into the full
+                // candidate id list instead of feeding the array
+                // itself to `extract_entity_id` (which only recognises
+                // a single node/relationship object and would silently
+                // resolve to zero candidates).
+                return Ok(match value {
+                    Value::Null => ExistsAnchor::Null,
+                    Value::Array(values) => ExistsAnchor::Ids(
+                        values.iter().filter_map(Self::extract_entity_id).collect(),
+                    ),
+                    other => Self::exists_anchor_from_single_value(other),
+                });
+            }
+        }
+        // Fresh variable (or anonymous node): enumerate candidate ids
+        // directly from the store/label index — never through
+        // `execute_node_by_label` / `execute_all_nodes_scan`, which
+        // materialise a full JSON `Value` per node and hard-error via
+        // `Error::OutOfMemory` above `MAX_INTERMEDIATE_ROWS`. The
+        // remaining labels/properties are re-checked per candidate in
+        // `exists_accept_node_candidate`.
+        let ids = self.exists_enumerate_candidate_ids(node.labels.first().map(String::as_str))?;
+        Ok(ExistsAnchor::Ids(ids))
+    }
+
+    /// Resolve a single already-bound row value to an anchor: `NULL`
+    /// propagates as `ExistsAnchor::Null`; a node/relationship object
+    /// resolves to its id; anything else (bound to a non-entity value)
+    /// yields zero candidates.
+    fn exists_anchor_from_single_value(value: &Value) -> ExistsAnchor {
+        if value.is_null() {
+            ExistsAnchor::Null
+        } else {
+            match Self::extract_entity_id(value) {
+                Some(id) => ExistsAnchor::Ids(vec![id]),
+                None => ExistsAnchor::Ids(Vec::new()),
+            }
+        }
+    }
+
+    /// Enumerate live node ids for a fresh `EXISTS` pattern anchor:
+    /// the label bitmap when `label` is declared, otherwise every live
+    /// node id in the store. Returns raw ids only — no per-node JSON
+    /// materialisation — so a large unlabeled anchor cannot blow the
+    /// `MAX_INTERMEDIATE_ROWS` ceiling the way `execute_all_nodes_scan`
+    /// would.
+    fn exists_enumerate_candidate_ids(&self, label: Option<&str>) -> Result<Vec<u64>> {
+        if let Some(label) = label {
+            return match self.catalog().get_label_id(label) {
+                Ok(label_id) => {
+                    let bitmap = self.label_index().get_nodes(label_id)?;
+                    Ok(bitmap.iter().map(u64::from).collect())
+                }
+                Err(_) => Ok(Vec::new()), // label never assigned to any node
+            };
+        }
+        let store = self.store();
+        let total_nodes = store.node_count();
+        let mut ids = Vec::new();
+        for node_id in 0..total_nodes {
+            if let Ok(record) = store.read_node(node_id) {
+                if !record.is_deleted() {
+                    ids.push(node_id);
+                }
+            }
+        }
+        Ok(ids)
+    }
+
+    /// Verify `candidate_id` satisfies a pattern node's label/property
+    /// constraints and, when the node's variable is already present in
+    /// `binding` (correlated re-use — e.g. a closed triangle
+    /// `(a)-->(b)-->(a)`, or a hop target that reuses an outer
+    /// variable name), that the existing binding agrees with
+    /// `candidate_id`.
+    ///
+    /// Reads the candidate exactly once: a single `store.read_node`
+    /// backs the liveness check, the label check, and (when accepted)
+    /// the property load reused for both the inline property-map match
+    /// and the binding's materialised node value.
+    fn exists_accept_node_candidate(
+        &self,
+        binding: &HashMap<String, Value>,
+        context: &ExecutionContext,
+        node: &parser::NodePattern,
+        candidate_id: u64,
+    ) -> Result<ExistsAcceptOutcome> {
+        let store = self.store();
+        let record = match store.read_node(candidate_id) {
+            Ok(r) => r,
+            Err(_) => return Ok(ExistsAcceptOutcome::Rejected),
+        };
+        if record.is_deleted() {
+            return Ok(ExistsAcceptOutcome::Rejected);
         }
 
-        // Get the first node from the pattern
-        if let Some(parser::PatternElement::Node(first_node)) = pattern.elements.first() {
-            // If the node has a variable, check if it exists in the current row/context
-            if let Some(var_name) = &first_node.variable {
-                // Check if variable exists in current row
-                if let Some(Value::Object(obj)) = row.get(var_name) {
-                    // If it's a valid node object, check relationships if pattern has them
-                    if let Some(Value::Number(node_id_val)) = obj.get("_nexus_id") {
-                        let node_id = node_id_val
-                            .as_u64()
-                            .ok_or_else(|| Error::InvalidId("Invalid node ID".to_string()))?;
-
-                        // If pattern has only one element (just a node), it exists
-                        if pattern.elements.len() == 1 {
-                            return Ok(true);
-                        }
-
-                        // Pattern has relationships - actually check if they exist
-                        // Look for relationship element in pattern
-                        for (i, element) in pattern.elements.iter().enumerate() {
-                            if let parser::PatternElement::Relationship(rel) = element {
-                                // Get relationship types to match
-                                let type_ids: Vec<u32> = if rel.types.is_empty() {
-                                    // No types specified = match all types
-                                    vec![]
-                                } else {
-                                    rel.types
-                                        .iter()
-                                        .filter_map(|t| {
-                                            self.catalog().get_type_id(t).ok().flatten()
-                                        })
-                                        .collect()
-                                };
-
-                                // Determine direction
-                                let direction = match rel.direction {
-                                    parser::RelationshipDirection::Outgoing => Direction::Outgoing,
-                                    parser::RelationshipDirection::Incoming => Direction::Incoming,
-                                    parser::RelationshipDirection::Both => Direction::Both,
-                                };
-
-                                // Fetch relationships for this node
-                                // find_relationships already filters by type_ids and direction
-                                let relationships = self.find_relationships(
-                                    node_id, &type_ids, direction,
-                                    None, // No cache for EXISTS checks
-                                )?;
-
-                                // If no matching relationships found, pattern doesn't exist
-                                if relationships.is_empty() {
-                                    return Ok(false);
-                                }
-
-                                // At least one relationship exists
-                                return Ok(true);
-                            }
-                        }
-
-                        // No relationship element found in pattern
-                        return Ok(true);
-                    }
+        let label_names = self.catalog().get_labels_from_bitmap(record.label_bits)?;
+        if !node.labels.is_empty() {
+            for required in &node.labels {
+                if !label_names.iter().any(|l| l == required) {
+                    return Ok(ExistsAcceptOutcome::Rejected);
                 }
-
-                // Check if variable exists in context variables
-                if let Some(Value::Array(nodes)) = context.variables.get(var_name) {
-                    if !nodes.is_empty() {
-                        return Ok(true);
-                    }
-                }
-            } else {
-                // No variable - pattern exists if we can find matching nodes
-                // For simplicity, if no variable is specified, assume pattern might exist
-                // This is a basic implementation
-                return Ok(true);
             }
         }
 
-        // Pattern doesn't match
-        Ok(false)
+        if let Some(var) = &node.variable {
+            if let Some(existing) = binding.get(var) {
+                if existing.is_null() {
+                    return Ok(ExistsAcceptOutcome::Null);
+                }
+                match Self::extract_entity_id(existing) {
+                    Some(existing_id) if existing_id == candidate_id => {}
+                    _ => return Ok(ExistsAcceptOutcome::Rejected),
+                }
+            }
+        }
+
+        let properties_value = store
+            .load_node_properties_with_ptr(candidate_id, record.prop_ptr)?
+            .unwrap_or_else(|| Value::Object(Map::new()));
+        let mut node_map = match properties_value {
+            Value::Object(map) => map,
+            other => {
+                let mut map = Map::new();
+                map.insert("value".to_string(), other);
+                map
+            }
+        };
+        node_map.insert("_nexus_id".to_string(), Value::Number(candidate_id.into()));
+        node_map.insert(
+            "_nexus_labels".to_string(),
+            Value::Array(label_names.into_iter().map(Value::String).collect()),
+        );
+        let node_value = Value::Object(node_map);
+        drop(store);
+
+        if !self.exists_node_properties_match(
+            binding,
+            context,
+            node.properties.as_ref(),
+            &node_value,
+        )? {
+            return Ok(ExistsAcceptOutcome::Rejected);
+        }
+
+        let mut next = binding.clone();
+        if let Some(var) = &node.variable {
+            next.entry(var.clone()).or_insert(node_value);
+        }
+        Ok(ExistsAcceptOutcome::Accepted(next))
+    }
+
+    /// Evaluate a pattern node's inline property map (`{prop: expr}`)
+    /// against an already-materialised candidate node value. Each
+    /// expected value is evaluated with the full projection evaluator
+    /// (not just literals), so a property constraint may reference
+    /// outer-row/correlated variables, e.g.
+    /// `EXISTS { (a)-->(b {id: a.id}) }`. A `NULL` on either side never
+    /// matches (mirrors Cypher's `NULL = x` → `NULL` under WHERE
+    /// truthiness).
+    fn exists_node_properties_match(
+        &self,
+        binding: &HashMap<String, Value>,
+        context: &ExecutionContext,
+        properties: Option<&parser::PropertyMap>,
+        node_value: &Value,
+    ) -> Result<bool> {
+        let Some(props) = properties else {
+            return Ok(true);
+        };
+        if props.properties.is_empty() {
+            return Ok(true);
+        }
+        for (key, expected_expr) in &props.properties {
+            let expected = self.evaluate_projection_expression(binding, context, expected_expr)?;
+            let actual = Self::extract_property(node_value, key);
+            if actual.is_null()
+                || expected.is_null()
+                || !self.values_equal_for_comparison(&actual, &expected)
+            {
+                return Ok(false);
+            }
+        }
+        Ok(true)
+    }
+
+    /// Evaluate a pattern relationship's inline property map against a
+    /// candidate relationship. Mirrors `exists_node_properties_match`.
+    fn exists_relationship_properties_match(
+        &self,
+        binding: &HashMap<String, Value>,
+        context: &ExecutionContext,
+        properties: Option<&parser::PropertyMap>,
+        rel_info: &RelationshipInfo,
+    ) -> Result<bool> {
+        let Some(props) = properties else {
+            return Ok(true);
+        };
+        if props.properties.is_empty() {
+            return Ok(true);
+        }
+        let rel_value = self.read_relationship_as_value(rel_info)?;
+        for (key, expected_expr) in &props.properties {
+            let expected = self.evaluate_projection_expression(binding, context, expected_expr)?;
+            let actual = Self::extract_property(&rel_value, key);
+            if actual.is_null()
+                || expected.is_null()
+                || !self.values_equal_for_comparison(&actual, &expected)
+            {
+                return Ok(false);
+            }
+        }
+        Ok(true)
+    }
+
+    /// Depth-first walk of an `EXISTS` pattern's element list, starting
+    /// at `elements[pos]`.
+    ///
+    /// A `Node` reached here always starts a fresh component: by
+    /// construction of `parse_pattern_until_where_or_brace`, the only
+    /// element positions that dispatch to this arm are `pos == 0` and
+    /// a `Node` immediately following another `Node` — the flat
+    /// encoding of a comma-separated independent pattern part, e.g.
+    /// `EXISTS { (a)-->(b), (c)-->(d) }`. Every `Node` that is the
+    /// target of a relationship hop is consumed inline by the
+    /// `Relationship` arm below via `elements.get(pos + 1)`, so it
+    /// never reaches this dispatch.
+    ///
+    /// `anchor_id` is the id of the most recently bound node, used by
+    /// the `Relationship` arm to expand from; it is `None` exactly
+    /// when `pos` lands on a fresh-component `Node` (the arm resolves
+    /// its own anchor and ignores the parameter). `bound_relationships`
+    /// carries the set of relationship ids already consumed by earlier
+    /// hops in the CURRENT witness candidate (across every component,
+    /// not just the current one) — Cypher's relationship-isomorphism
+    /// rule: a single pattern match never traverses the same edge
+    /// twice. Entries are inserted before recursing into a hop and
+    /// removed again on backtrack, so sibling candidates at the same
+    /// or an earlier position see the set as it was before that hop
+    /// was tried.
+    ///
+    /// Returns `ExistsOutcome::True` on the first witness found
+    /// (short-circuiting); otherwise `ExistsOutcome::Null` if any
+    /// explored path hit a correlated `NULL` and no witness was found,
+    /// else `ExistsOutcome::False`.
+    fn exists_probe(
+        &self,
+        context: &ExecutionContext,
+        elements: &[parser::PatternElement],
+        pos: usize,
+        binding: HashMap<String, Value>,
+        anchor_id: Option<u64>,
+        bound_relationships: &mut HashSet<u64>,
+        where_clause: Option<&parser::Expression>,
+    ) -> Result<ExistsOutcome> {
+        let Some(element) = elements.get(pos) else {
+            // Pattern fully walked — the accumulated binding is a
+            // complete match. It is a witness iff it also satisfies
+            // the inner WHERE (vacuously true when there is none).
+            // The inner WHERE is a subquery filter: a NULL result
+            // excludes the candidate row exactly like false does, so
+            // it yields False here — unlike a NULL correlated pattern
+            // variable, which makes the whole predicate Null.
+            return match where_clause {
+                Some(expr) => Ok(
+                    if self.evaluate_predicate_on_row(&binding, context, expr)? {
+                        ExistsOutcome::True
+                    } else {
+                        ExistsOutcome::False
+                    },
+                ),
+                None => Ok(ExistsOutcome::True),
+            };
+        };
+
+        match element {
+            parser::PatternElement::Node(node) => {
+                let candidates = match self.exists_resolve_anchor(&binding, context, node)? {
+                    ExistsAnchor::Null => return Ok(ExistsOutcome::Null),
+                    ExistsAnchor::Ids(ids) => ids,
+                };
+                let mut saw_null = false;
+                for candidate_id in candidates {
+                    match self.exists_accept_node_candidate(
+                        &binding,
+                        context,
+                        node,
+                        candidate_id,
+                    )? {
+                        ExistsAcceptOutcome::Rejected => {}
+                        ExistsAcceptOutcome::Null => saw_null = true,
+                        ExistsAcceptOutcome::Accepted(next_binding) => {
+                            match self.exists_probe(
+                                context,
+                                elements,
+                                pos + 1,
+                                next_binding,
+                                Some(candidate_id),
+                                bound_relationships,
+                                where_clause,
+                            )? {
+                                ExistsOutcome::True => return Ok(ExistsOutcome::True),
+                                ExistsOutcome::Null => saw_null = true,
+                                ExistsOutcome::False => {}
+                            }
+                        }
+                    }
+                }
+                Ok(if saw_null {
+                    ExistsOutcome::Null
+                } else {
+                    ExistsOutcome::False
+                })
+            }
+            parser::PatternElement::Relationship(rel) => {
+                let Some(anchor_id) = anchor_id else {
+                    // A Relationship can only follow a Node in a
+                    // well-formed pattern; defensive-only.
+                    return Ok(ExistsOutcome::False);
+                };
+                let Some(parser::PatternElement::Node(next_node)) = elements.get(pos + 1) else {
+                    // The grammar always pairs a relationship with a
+                    // following node; defensive-only.
+                    return Ok(ExistsOutcome::False);
+                };
+
+                // Resolve each declared type via a plain (read-only)
+                // catalog lookup — NEVER `get_or_create_type` here:
+                // this is a read path (WHERE-clause evaluation), and
+                // interning a brand-new type id into the LMDB catalog
+                // as a side effect of probing a pattern would corrupt
+                // catalog state for a query that creates nothing. A
+                // type name that has never been assigned to any
+                // relationship simply contributes no id; if NONE of
+                // the declared names resolve, the hop cannot match
+                // anything (an empty `type_ids` list would instead be
+                // reinterpreted by `find_relationships` as "match
+                // every type", a false positive), so the probe fails
+                // this hop without touching the catalog.
+                let mut type_ids: Vec<u32> = Vec::with_capacity(rel.types.len());
+                for type_name in &rel.types {
+                    if let Some(id) = self.catalog().get_type_id(type_name)? {
+                        type_ids.push(id);
+                    }
+                }
+                if !rel.types.is_empty() && type_ids.is_empty() {
+                    return Ok(ExistsOutcome::False);
+                }
+                let direction = match rel.direction {
+                    parser::RelationshipDirection::Outgoing => Direction::Outgoing,
+                    parser::RelationshipDirection::Incoming => Direction::Incoming,
+                    parser::RelationshipDirection::Both => Direction::Both,
+                };
+
+                // Authoritative store adjacency — never
+                // `relationship_index()`, which is not authoritative
+                // for correctness.
+                let relationships = self.find_relationships(
+                    anchor_id, &type_ids, direction, None, // No cache for EXISTS probes
+                )?;
+
+                let mut saw_null = false;
+                for rel_info in &relationships {
+                    // Cypher relationship-isomorphism: a witness
+                    // binding never traverses the same edge twice
+                    // (e.g. a self-loop can't satisfy two consecutive
+                    // hops, and an undirected `--` re-scan of the same
+                    // edge from the other side doesn't count as a
+                    // second hop).
+                    if bound_relationships.contains(&rel_info.id) {
+                        continue;
+                    }
+                    if !self.exists_relationship_properties_match(
+                        &binding,
+                        context,
+                        rel.properties.as_ref(),
+                        rel_info,
+                    )? {
+                        continue;
+                    }
+
+                    let mut hop_binding = binding.clone();
+                    if let Some(var) = &rel.variable {
+                        if let Some(existing) = hop_binding.get(var) {
+                            match Self::extract_entity_id(existing) {
+                                Some(existing_id) if existing_id == rel_info.id => {}
+                                _ => continue,
+                            }
+                        } else {
+                            hop_binding
+                                .insert(var.clone(), self.read_relationship_as_value(rel_info)?);
+                        }
+                    }
+
+                    let target_id = match direction {
+                        Direction::Outgoing => rel_info.target_id,
+                        Direction::Incoming => rel_info.source_id,
+                        Direction::Both => {
+                            if rel_info.source_id == anchor_id {
+                                rel_info.target_id
+                            } else {
+                                rel_info.source_id
+                            }
+                        }
+                    };
+
+                    match self.exists_accept_node_candidate(
+                        &hop_binding,
+                        context,
+                        next_node,
+                        target_id,
+                    )? {
+                        ExistsAcceptOutcome::Rejected => {}
+                        ExistsAcceptOutcome::Null => saw_null = true,
+                        ExistsAcceptOutcome::Accepted(next_binding) => {
+                            bound_relationships.insert(rel_info.id);
+                            let outcome = self.exists_probe(
+                                context,
+                                elements,
+                                pos + 2,
+                                next_binding,
+                                Some(target_id),
+                                bound_relationships,
+                                where_clause,
+                            )?;
+                            bound_relationships.remove(&rel_info.id);
+                            match outcome {
+                                ExistsOutcome::True => return Ok(ExistsOutcome::True),
+                                ExistsOutcome::Null => saw_null = true,
+                                ExistsOutcome::False => {}
+                            }
+                        }
+                    }
+                }
+                Ok(if saw_null {
+                    ExistsOutcome::Null
+                } else {
+                    ExistsOutcome::False
+                })
+            }
+            parser::PatternElement::QuantifiedGroup(_) => Err(Error::CypherExecution(
+                "ERR_QPP_NOT_IMPLEMENTED: quantified path patterns inside EXISTS subqueries \
+                 need the QPP operator"
+                    .to_string(),
+            )),
+        }
     }
 
     pub(in crate::executor) fn extract_property(entity: &Value, property: &str) -> Value {
@@ -1155,8 +1633,679 @@ mod tests {
     //! budget.
 
     use super::*;
+    use crate::executor::Query;
     use crate::testing::create_test_executor;
     use serde_json::json;
+
+    #[test]
+    fn exists_true_when_matching_relationship_present() {
+        let (mut executor, _ctx) = create_test_executor();
+
+        let create = Query {
+            cypher: "CREATE (a:ExistsProbeA {name: 'a'})-[:EXISTS_PROBE_REL]->\
+                     (b:ExistsProbeA {name: 'b'})"
+                .to_string(),
+            params: HashMap::new(),
+        };
+        executor.execute(&create).expect("create should succeed");
+
+        let query = Query {
+            cypher: "MATCH (a:ExistsProbeA {name: 'a'}) \
+                     WHERE EXISTS { (a)-[:EXISTS_PROBE_REL]->() } \
+                     RETURN a.name AS name"
+                .to_string(),
+            params: HashMap::new(),
+        };
+        let result = executor.execute(&query).expect("match should succeed");
+
+        assert_eq!(result.rows.len(), 1);
+        assert_eq!(result.rows[0].values[0], json!("a"));
+    }
+
+    #[test]
+    fn exists_false_when_no_matching_relationship() {
+        let (mut executor, _ctx) = create_test_executor();
+
+        let create = Query {
+            cypher: "CREATE (a:ExistsProbeB {name: 'a'})".to_string(),
+            params: HashMap::new(),
+        };
+        executor.execute(&create).expect("create should succeed");
+
+        let query = Query {
+            cypher: "MATCH (a:ExistsProbeB {name: 'a'}) \
+                     WHERE EXISTS { (a)-[:EXISTS_PROBE_REL_B]->() } \
+                     RETURN a.name AS name"
+                .to_string(),
+            params: HashMap::new(),
+        };
+        let result = executor.execute(&query).expect("match should succeed");
+
+        assert_eq!(result.rows.len(), 0);
+    }
+
+    #[test]
+    fn not_exists_negates_the_pattern_probe() {
+        let (mut executor, _ctx) = create_test_executor();
+
+        let create = Query {
+            cypher: "CREATE (a:ExistsProbeC {name: 'a'})-[:EXISTS_PROBE_REL_C]->\
+                     (b:ExistsProbeC {name: 'b'}), (c:ExistsProbeC {name: 'c'})"
+                .to_string(),
+            params: HashMap::new(),
+        };
+        executor.execute(&create).expect("create should succeed");
+
+        let query = Query {
+            cypher: "MATCH (n:ExistsProbeC) \
+                     WHERE NOT EXISTS { (n)-[:EXISTS_PROBE_REL_C]->() } \
+                     RETURN n.name AS name ORDER BY name"
+                .to_string(),
+            params: HashMap::new(),
+        };
+        let result = executor.execute(&query).expect("match should succeed");
+
+        let names: Vec<&str> = result
+            .rows
+            .iter()
+            .map(|row| row.values[0].as_str().expect("name is a string"))
+            .collect();
+        assert_eq!(names, vec!["b", "c"]);
+    }
+
+    #[test]
+    fn exists_probes_multi_hop_chains() {
+        let (mut executor, _ctx) = create_test_executor();
+
+        let create = Query {
+            cypher: "CREATE (a:ExistsProbeD {name: 'a'})-[:STEP1]->\
+                     (b:ExistsProbeD {name: 'b'})-[:STEP2]->(c:ExistsProbeD {name: 'c'}), \
+                     (x:ExistsProbeD {name: 'x'})-[:STEP1]->(y:ExistsProbeD {name: 'y'})"
+                .to_string(),
+            params: HashMap::new(),
+        };
+        executor.execute(&create).expect("create should succeed");
+
+        let query = Query {
+            cypher: "MATCH (n:ExistsProbeD) \
+                     WHERE EXISTS { (n)-[:STEP1]->()-[:STEP2]->() } \
+                     RETURN n.name AS name"
+                .to_string(),
+            params: HashMap::new(),
+        };
+        let result = executor.execute(&query).expect("match should succeed");
+
+        // `x` has a STEP1 hop but its target `y` has no outgoing STEP2,
+        // so only the full two-hop chain from `a` is a witness.
+        assert_eq!(result.rows.len(), 1);
+        assert_eq!(result.rows[0].values[0], json!("a"));
+    }
+
+    #[test]
+    fn exists_inner_where_filters_candidate_bindings() {
+        let (mut executor, _ctx) = create_test_executor();
+
+        let create = Query {
+            cypher: "CREATE (a:ExistsProbeE {name: 'a'})-[:KNOWS]->\
+                     (b:ExistsProbeE {name: 'b', age: 10}), \
+                     (a)-[:KNOWS]->(c:ExistsProbeE {name: 'c', age: 30})"
+                .to_string(),
+            params: HashMap::new(),
+        };
+        executor.execute(&create).expect("create should succeed");
+
+        let matches = Query {
+            cypher: "MATCH (a:ExistsProbeE {name: 'a'}) \
+                     WHERE EXISTS { (a)-[:KNOWS]->(x) WHERE x.age > 20 } \
+                     RETURN a.name AS name"
+                .to_string(),
+            params: HashMap::new(),
+        };
+        let result = executor.execute(&matches).expect("match should succeed");
+        assert_eq!(result.rows.len(), 1, "one KNOWS target has age > 20");
+        assert_eq!(result.rows[0].values[0], json!("a"));
+
+        let no_matches = Query {
+            cypher: "MATCH (a:ExistsProbeE {name: 'a'}) \
+                     WHERE EXISTS { (a)-[:KNOWS]->(x) WHERE x.age > 100 } \
+                     RETURN a.name AS name"
+                .to_string(),
+            params: HashMap::new(),
+        };
+        let result = executor.execute(&no_matches).expect("match should succeed");
+        assert_eq!(
+            result.rows.len(),
+            0,
+            "no KNOWS target satisfies the inner WHERE"
+        );
+    }
+
+    #[test]
+    fn exists_respects_the_correlated_outer_variable() {
+        let (mut executor, _ctx) = create_test_executor();
+
+        let create = Query {
+            cypher: "CREATE (a:ExistsProbeF {name: 'a'})-[:REL_F]->\
+                     (t:ExistsProbeF {name: 'target'}), (b:ExistsProbeF {name: 'b'})"
+                .to_string(),
+            params: HashMap::new(),
+        };
+        executor.execute(&create).expect("create should succeed");
+
+        let query = Query {
+            cypher: "MATCH (n:ExistsProbeF) \
+                     WHERE EXISTS { (n)-[:REL_F]->() } \
+                     RETURN n.name AS name"
+                .to_string(),
+            params: HashMap::new(),
+        };
+        let result = executor.execute(&query).expect("match should succeed");
+
+        // Only `a` (bound to the outer `n`) has an outgoing REL_F; `b`
+        // and `target` do not. This proves the probe is evaluated
+        // against each row's own correlated binding, not a single
+        // global existence check.
+        assert_eq!(result.rows.len(), 1);
+        assert_eq!(result.rows[0].values[0], json!("a"));
+    }
+
+    #[test]
+    fn exists_returns_null_when_correlated_variable_is_null() {
+        let (mut executor, _ctx) = create_test_executor();
+
+        let create = Query {
+            cypher: "CREATE (a:ExistsProbeG {name: 'a'})".to_string(),
+            params: HashMap::new(),
+        };
+        executor.execute(&create).expect("create should succeed");
+
+        let query = Query {
+            cypher: "MATCH (a:ExistsProbeG {name: 'a'}) \
+                     OPTIONAL MATCH (a)-[:NEVER_CREATED]->(m:ExistsProbeG) \
+                     RETURN EXISTS { (m)-[:ALSO_NEVER_CREATED]->() } AS result"
+                .to_string(),
+            params: HashMap::new(),
+        };
+        let result = executor.execute(&query).expect("match should succeed");
+
+        // `m` is bound but NULL (the OPTIONAL MATCH found nothing), so
+        // the pattern correlated to it cannot be probed: the predicate
+        // is unknown (NULL), not false — and evaluation must not crash.
+        assert_eq!(result.rows.len(), 1);
+        assert_eq!(result.rows[0].values[0], Value::Null);
+    }
+
+    #[test]
+    fn exists_matches_comma_separated_pattern_parts() {
+        let (mut executor, _ctx) = create_test_executor();
+
+        let create = Query {
+            cypher: "CREATE (a:ExistsProbeH {name: 'a'})-[:H1]->(b:ExistsProbeH {name: 'b'}), \
+                     (c:ExistsProbeH {name: 'c'})-[:H2]->(d:ExistsProbeH {name: 'd'})"
+                .to_string(),
+            params: HashMap::new(),
+        };
+        executor.execute(&create).expect("create should succeed");
+
+        // The first pattern part is correlated to the outer `n`; the
+        // second is an independent, freshly-anchored comma-separated
+        // part (label + inline property, no shared variable). Both
+        // must be satisfied simultaneously.
+        let matches = Query {
+            cypher: "MATCH (n:ExistsProbeH {name: 'a'}) \
+                     WHERE EXISTS { (n)-[:H1]->(), (:ExistsProbeH {name: 'c'})-[:H2]->() } \
+                     RETURN n.name AS name"
+                .to_string(),
+            params: HashMap::new(),
+        };
+        let result = executor.execute(&matches).expect("match should succeed");
+        assert_eq!(result.rows.len(), 1);
+        assert_eq!(result.rows[0].values[0], json!("a"));
+
+        let no_match = Query {
+            cypher: "MATCH (n:ExistsProbeH {name: 'a'}) \
+                     WHERE EXISTS { \
+                         (n)-[:H1]->(), \
+                         (:ExistsProbeH {name: 'c'})-[:NEVER_CREATED_H2]->() \
+                     } \
+                     RETURN n.name AS name"
+                .to_string(),
+            params: HashMap::new(),
+        };
+        let result = executor.execute(&no_match).expect("match should succeed");
+        assert_eq!(
+            result.rows.len(),
+            0,
+            "second comma-separated part has no matching relationship"
+        );
+    }
+
+    #[test]
+    fn exists_probes_incoming_direction() {
+        let (mut executor, _ctx) = create_test_executor();
+
+        let create = Query {
+            cypher: "CREATE (a:ExistsProbeI {name: 'a'})-[:INTO]->(b:ExistsProbeI {name: 'b'})"
+                .to_string(),
+            params: HashMap::new(),
+        };
+        executor.execute(&create).expect("create should succeed");
+
+        let query = Query {
+            cypher: "MATCH (b:ExistsProbeI {name: 'b'}) \
+                     WHERE EXISTS { (b)<-[:INTO]-() } \
+                     RETURN b.name AS name"
+                .to_string(),
+            params: HashMap::new(),
+        };
+        let result = executor.execute(&query).expect("match should succeed");
+        assert_eq!(result.rows.len(), 1);
+        assert_eq!(result.rows[0].values[0], json!("b"));
+    }
+
+    #[test]
+    fn exists_probes_both_direction_from_either_endpoint() {
+        let (mut executor, _ctx) = create_test_executor();
+
+        let create = Query {
+            cypher: "CREATE (a:ExistsProbeJ {name: 'a'})-[:LINK]->(b:ExistsProbeJ {name: 'b'})"
+                .to_string(),
+            params: HashMap::new(),
+        };
+        executor.execute(&create).expect("create should succeed");
+
+        // Undirected `--` must find the edge starting from EITHER
+        // endpoint: `a` takes the `source_id == anchor_id` branch of
+        // the Both target-selection logic, `b` takes the other.
+        let query = Query {
+            cypher: "MATCH (n:ExistsProbeJ) \
+                     WHERE EXISTS { (n)-[:LINK]-() } \
+                     RETURN n.name AS name ORDER BY name"
+                .to_string(),
+            params: HashMap::new(),
+        };
+        let result = executor.execute(&query).expect("match should succeed");
+
+        let names: Vec<&str> = result
+            .rows
+            .iter()
+            .map(|row| row.values[0].as_str().expect("name is a string"))
+            .collect();
+        assert_eq!(names, vec!["a", "b"]);
+    }
+
+    #[test]
+    fn exists_enforces_relationship_isomorphism_on_a_single_edge() {
+        let (mut executor, _ctx) = create_test_executor();
+
+        // Exactly one edge in the whole graph: a two-hop undirected
+        // probe from `a` must NOT be satisfiable by re-traversing that
+        // same edge from the other side.
+        let create = Query {
+            cypher:
+                "CREATE (a:ExistsProbeK {name: 'a'})-[:ONLY_EDGE]->(b:ExistsProbeK {name: 'b'})"
+                    .to_string(),
+            params: HashMap::new(),
+        };
+        executor.execute(&create).expect("create should succeed");
+
+        let query = Query {
+            cypher: "MATCH (n:ExistsProbeK {name: 'a'}) \
+                     WHERE EXISTS { (n)--()--() } \
+                     RETURN n.name AS name"
+                .to_string(),
+            params: HashMap::new(),
+        };
+        let result = executor.execute(&query).expect("match should succeed");
+        assert_eq!(
+            result.rows.len(),
+            0,
+            "the only edge cannot satisfy both hops of a two-hop probe"
+        );
+    }
+
+    #[test]
+    fn exists_enforces_relationship_isomorphism_on_a_self_loop() {
+        let (mut executor, _ctx) = create_test_executor();
+
+        let create = Query {
+            cypher: "CREATE (a:ExistsProbeL {name: 'a'})".to_string(),
+            params: HashMap::new(),
+        };
+        executor.execute(&create).expect("create should succeed");
+        let create_loop = Query {
+            cypher: "MATCH (a:ExistsProbeL {name: 'a'}) CREATE (a)-[:SELF_LOOP]->(a)".to_string(),
+            params: HashMap::new(),
+        };
+        executor
+            .execute(&create_loop)
+            .expect("create should succeed");
+
+        // The self-loop is the only :SELF_LOOP edge from `a`; a
+        // two-hop probe must not be able to traverse it twice.
+        let query = Query {
+            cypher: "MATCH (n:ExistsProbeL {name: 'a'}) \
+                     WHERE EXISTS { (n)-[:SELF_LOOP]->()-[:SELF_LOOP]->() } \
+                     RETURN n.name AS name"
+                .to_string(),
+            params: HashMap::new(),
+        };
+        let result = executor.execute(&query).expect("match should succeed");
+        assert_eq!(
+            result.rows.len(),
+            0,
+            "the self-loop cannot satisfy both hops of a two-hop probe"
+        );
+    }
+
+    #[test]
+    fn exists_inline_node_property_map_filters_targets() {
+        let (mut executor, _ctx) = create_test_executor();
+
+        let create = Query {
+            cypher: "CREATE (a:ExistsProbeM {name: 'a'})-[:KNOWS]->\
+                     (b:ExistsProbeM {name: 'b', age: 10}), \
+                     (a)-[:KNOWS]->(c:ExistsProbeM {name: 'c', age: 30})"
+                .to_string(),
+            params: HashMap::new(),
+        };
+        executor.execute(&create).expect("create should succeed");
+
+        let matches = Query {
+            cypher: "MATCH (a:ExistsProbeM {name: 'a'}) \
+                     WHERE EXISTS { (a)-[:KNOWS]->({age: 30}) } \
+                     RETURN a.name AS name"
+                .to_string(),
+            params: HashMap::new(),
+        };
+        let result = executor.execute(&matches).expect("match should succeed");
+        assert_eq!(result.rows.len(), 1);
+        assert_eq!(result.rows[0].values[0], json!("a"));
+
+        let no_match = Query {
+            cypher: "MATCH (a:ExistsProbeM {name: 'a'}) \
+                     WHERE EXISTS { (a)-[:KNOWS]->({age: 99}) } \
+                     RETURN a.name AS name"
+                .to_string(),
+            params: HashMap::new(),
+        };
+        let result = executor.execute(&no_match).expect("match should succeed");
+        assert_eq!(result.rows.len(), 0);
+    }
+
+    #[test]
+    fn exists_correlated_inline_property_map_matches_outer_variable() {
+        let (mut executor, _ctx) = create_test_executor();
+
+        let create = Query {
+            cypher: "CREATE (a:ExistsProbeN {name: 'a', id: 1})-[:SELF_REF]->\
+                     (b:ExistsProbeN {name: 'b', id: 1}), \
+                     (a)-[:SELF_REF]->(c:ExistsProbeN {name: 'c', id: 2})"
+                .to_string(),
+            params: HashMap::new(),
+        };
+        executor.execute(&create).expect("create should succeed");
+
+        // The inline property expression `a.id` references the outer,
+        // correlated `a` — only the target that shares `a`'s id
+        // qualifies.
+        let query = Query {
+            cypher: "MATCH (a:ExistsProbeN {name: 'a'}) \
+                     WHERE EXISTS { (a)-[:SELF_REF]->(x {id: a.id}) } \
+                     RETURN a.name AS name"
+                .to_string(),
+            params: HashMap::new(),
+        };
+        let result = executor.execute(&query).expect("match should succeed");
+        assert_eq!(result.rows.len(), 1);
+        assert_eq!(result.rows[0].values[0], json!("a"));
+    }
+
+    #[test]
+    fn exists_null_property_expression_never_matches() {
+        let (mut executor, _ctx) = create_test_executor();
+
+        let create = Query {
+            cypher: "CREATE (a:ExistsProbeO {name: 'a'})-[:REL_O]->\
+                     (b:ExistsProbeO {name: 'b', tag: 'x'})"
+                .to_string(),
+            params: HashMap::new(),
+        };
+        executor.execute(&create).expect("create should succeed");
+
+        // `a.missing_prop` evaluates to NULL (the property doesn't
+        // exist on `a`); a NULL expected value must never match, even
+        // though `b.tag` is a concrete non-null value.
+        let query = Query {
+            cypher: "MATCH (a:ExistsProbeO {name: 'a'}) \
+                     WHERE EXISTS { (a)-[:REL_O]->({tag: a.missing_prop}) } \
+                     RETURN a.name AS name"
+                .to_string(),
+            params: HashMap::new(),
+        };
+        let result = executor.execute(&query).expect("match should succeed");
+        assert_eq!(result.rows.len(), 0);
+    }
+
+    #[test]
+    fn exists_label_constraint_on_hop_target() {
+        let (mut executor, _ctx) = create_test_executor();
+
+        let create = Query {
+            cypher: "CREATE (a:ExistsProbeP {name: 'a'})-[:REL_P]->(c:ExistsProbeP {name: 'c'})"
+                .to_string(),
+            params: HashMap::new(),
+        };
+        executor.execute(&create).expect("create should succeed");
+
+        let matches = Query {
+            cypher: "MATCH (a:ExistsProbeP {name: 'a'}) \
+                     WHERE EXISTS { (a)-[:REL_P]->(:ExistsProbeP) } \
+                     RETURN a.name AS name"
+                .to_string(),
+            params: HashMap::new(),
+        };
+        let result = executor.execute(&matches).expect("match should succeed");
+        assert_eq!(result.rows.len(), 1);
+        assert_eq!(result.rows[0].values[0], json!("a"));
+
+        let create_wrong_label = Query {
+            cypher: "CREATE (a:ExistsProbeP2 {name: 'a'})-[:REL_P2]->(b:ExistsProbeQ2 {name: 'b'})"
+                .to_string(),
+            params: HashMap::new(),
+        };
+        executor
+            .execute(&create_wrong_label)
+            .expect("create should succeed");
+
+        let no_match = Query {
+            cypher: "MATCH (a:ExistsProbeP2 {name: 'a'}) \
+                     WHERE EXISTS { (a)-[:REL_P2]->(:ExistsProbeP2) } \
+                     RETURN a.name AS name"
+                .to_string(),
+            params: HashMap::new(),
+        };
+        let result = executor.execute(&no_match).expect("match should succeed");
+        assert_eq!(
+            result.rows.len(),
+            0,
+            "the only REL_P2 target carries the wrong label"
+        );
+    }
+
+    #[test]
+    fn exists_relationship_variable_reuse_requires_same_edge() {
+        let (mut executor, _ctx) = create_test_executor();
+
+        let create = Query {
+            cypher: "CREATE (a:ExistsProbeR {name: 'a'})-[:REL_R {weight: 10}]->\
+                     (b:ExistsProbeR {name: 'b'})"
+                .to_string(),
+            params: HashMap::new(),
+        };
+        executor.execute(&create).expect("create should succeed");
+
+        // The relationship variable materialises into the binding and
+        // is queryable from the inner WHERE.
+        let binds = Query {
+            cypher: "MATCH (a:ExistsProbeR {name: 'a'}) \
+                     WHERE EXISTS { (a)-[r:REL_R]->() WHERE r.weight > 5 } \
+                     RETURN a.name AS name"
+                .to_string(),
+            params: HashMap::new(),
+        };
+        let result = executor.execute(&binds).expect("match should succeed");
+        assert_eq!(result.rows.len(), 1);
+        assert_eq!(result.rows[0].values[0], json!("a"));
+
+        let create_two_edges = Query {
+            cypher: "CREATE (a:ExistsProbeS {name: 'a'})-[:REL_S]->(b:ExistsProbeS {name: 'b'}), \
+                     (a)-[:REL_S]->(c:ExistsProbeS {name: 'c'})"
+                .to_string(),
+            params: HashMap::new(),
+        };
+        executor
+            .execute(&create_two_edges)
+            .expect("create should succeed");
+
+        // `a` has two distinct :REL_S edges (to `b` and to `c`).
+        // Reusing the same relationship variable `r` across both
+        // comma-separated parts demands the SAME edge id for both —
+        // impossible here, since the edge to `b` and the edge to `c`
+        // are different relationships.
+        let reuse_mismatch = Query {
+            cypher: "MATCH (a:ExistsProbeS {name: 'a'}) \
+                     WHERE EXISTS { \
+                         (a)-[r:REL_S]->(:ExistsProbeS {name: 'b'}), \
+                         (a)-[r:REL_S]->(:ExistsProbeS {name: 'c'}) \
+                     } \
+                     RETURN a.name AS name"
+                .to_string(),
+            params: HashMap::new(),
+        };
+        let result = executor
+            .execute(&reuse_mismatch)
+            .expect("match should succeed");
+        assert_eq!(
+            result.rows.len(),
+            0,
+            "reusing `r` across parts requires literally the same edge"
+        );
+    }
+
+    #[test]
+    fn exists_triangle_correlation_closes_back_to_anchor() {
+        let (mut executor, _ctx) = create_test_executor();
+
+        let create = Query {
+            cypher: "CREATE (a:ExistsProbeT {name: 'a'})-[:TRI]->(b:ExistsProbeT {name: 'b'})"
+                .to_string(),
+            params: HashMap::new(),
+        };
+        executor.execute(&create).expect("create should succeed");
+        let close_triangle = Query {
+            cypher: "MATCH (a:ExistsProbeT {name: 'a'}), (b:ExistsProbeT {name: 'b'}) \
+                     CREATE (b)-[:TRI]->(a)"
+                .to_string(),
+            params: HashMap::new(),
+        };
+        executor
+            .execute(&close_triangle)
+            .expect("create should succeed");
+
+        let closes = Query {
+            cypher: "MATCH (a:ExistsProbeT {name: 'a'}) \
+                     WHERE EXISTS { (a)-[:TRI]->()-[:TRI]->(a) } \
+                     RETURN a.name AS name"
+                .to_string(),
+            params: HashMap::new(),
+        };
+        let result = executor.execute(&closes).expect("match should succeed");
+        assert_eq!(result.rows.len(), 1);
+        assert_eq!(result.rows[0].values[0], json!("a"));
+
+        let create_open_chain = Query {
+            cypher: "CREATE (x:ExistsProbeU {name: 'x'})-[:TRI]->\
+                     (y:ExistsProbeU {name: 'y'})-[:TRI]->(z:ExistsProbeU {name: 'z'})"
+                .to_string(),
+            params: HashMap::new(),
+        };
+        executor
+            .execute(&create_open_chain)
+            .expect("create should succeed");
+
+        let does_not_close = Query {
+            cypher: "MATCH (x:ExistsProbeU {name: 'x'}) \
+                     WHERE EXISTS { (x)-[:TRI]->()-[:TRI]->(x) } \
+                     RETURN x.name AS name"
+                .to_string(),
+            params: HashMap::new(),
+        };
+        let result = executor
+            .execute(&does_not_close)
+            .expect("match should succeed");
+        assert_eq!(
+            result.rows.len(),
+            0,
+            "the open chain never closes back to x"
+        );
+    }
+
+    #[test]
+    fn exists_inner_where_references_outer_variable() {
+        let (mut executor, _ctx) = create_test_executor();
+
+        let create = Query {
+            cypher: "CREATE (a:ExistsProbeV {name: 'a', age: 20})-[:KNOWS]->\
+                     (b:ExistsProbeV {name: 'b', age: 25}), \
+                     (a)-[:KNOWS]->(c:ExistsProbeV {name: 'c', age: 15})"
+                .to_string(),
+            params: HashMap::new(),
+        };
+        executor.execute(&create).expect("create should succeed");
+
+        let query = Query {
+            cypher: "MATCH (a:ExistsProbeV {name: 'a'}) \
+                     WHERE EXISTS { (a)-[:KNOWS]->(x) WHERE x.age > a.age } \
+                     RETURN a.name AS name"
+                .to_string(),
+            params: HashMap::new(),
+        };
+        let result = executor.execute(&query).expect("match should succeed");
+        assert_eq!(result.rows.len(), 1, "b.age (25) exceeds a.age (20)");
+        assert_eq!(result.rows[0].values[0], json!("a"));
+    }
+
+    #[test]
+    fn exists_null_inner_where_filters_like_false() {
+        let (mut executor, _ctx) = create_test_executor();
+
+        let create = Query {
+            cypher: "CREATE (a:ExistsProbeW {name: 'a'})-[:OWNS_W]->(c:ExistsProbeW {name: 'c'})"
+                .to_string(),
+            params: HashMap::new(),
+        };
+        executor.execute(&create).expect("create should succeed");
+
+        // `x.missing > 1` is NULL for every candidate (the property
+        // doesn't exist). A NULL inner WHERE excludes the candidate
+        // exactly like false, so EXISTS is false — and NOT EXISTS
+        // must therefore return the row, not swallow it as NULL.
+        let query = Query {
+            cypher: "MATCH (a:ExistsProbeW {name: 'a'}) \
+                     WHERE NOT EXISTS { (a)-[:OWNS_W]->(x) WHERE x.missing > 1 } \
+                     RETURN a.name AS name"
+                .to_string(),
+            params: HashMap::new(),
+        };
+        let result = executor.execute(&query).expect("match should succeed");
+        assert_eq!(
+            result.rows.len(),
+            1,
+            "NULL inner WHERE must make EXISTS false"
+        );
+        assert_eq!(result.rows[0].values[0], json!("a"));
+    }
 
     #[test]
     fn apply_cartesian_product_rejects_when_budget_is_absurdly_low() {

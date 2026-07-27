@@ -531,63 +531,7 @@ impl Executor {
             parser::Expression::Exists {
                 pattern,
                 where_clause,
-            } => {
-                // Check if the pattern exists in the current context
-                let pattern_exists = self.check_pattern_exists(row, context, pattern)?;
-
-                // If pattern doesn't exist, return false
-                if !pattern_exists {
-                    return Ok(Value::Bool(false));
-                }
-
-                // If WHERE clause is present, evaluate it
-                if let Some(where_expr) = where_clause {
-                    // Create a context with pattern variables for WHERE evaluation
-                    let mut exists_row = row.clone();
-
-                    // Extract variables from pattern and add to row context
-                    for element in &pattern.elements {
-                        match element {
-                            parser::PatternElement::Node(node) => {
-                                if let Some(var) = &node.variable {
-                                    // Try to get variable from current row or context
-                                    if let Some(value) = row.get(var) {
-                                        exists_row.insert(var.clone(), value.clone());
-                                    } else if let Some(value) = context.get_variable(var) {
-                                        exists_row.insert(var.clone(), value.clone());
-                                    }
-                                }
-                            }
-                            parser::PatternElement::Relationship(rel) => {
-                                if let Some(var) = &rel.variable {
-                                    if let Some(value) = row.get(var) {
-                                        exists_row.insert(var.clone(), value.clone());
-                                    } else if let Some(value) = context.get_variable(var) {
-                                        exists_row.insert(var.clone(), value.clone());
-                                    }
-                                }
-                            }
-                            parser::PatternElement::QuantifiedGroup(_) => {
-                                return Err(Error::CypherExecution(
-                                    "ERR_QPP_NOT_IMPLEMENTED: quantified path \
-                                     patterns inside EXISTS subqueries need the \
-                                     QPP operator (tracked as follow-up task)"
-                                        .to_string(),
-                                ));
-                            }
-                        }
-                    }
-
-                    // Evaluate WHERE condition
-                    let condition_value =
-                        self.evaluate_projection_expression(&exists_row, context, where_expr)?;
-                    let condition_true = self.value_to_bool(&condition_value)?;
-
-                    Ok(Value::Bool(condition_true))
-                } else {
-                    Ok(Value::Bool(pattern_exists))
-                }
-            }
+            } => self.evaluate_exists_pattern(row, context, pattern, where_clause.as_deref()),
             parser::Expression::CollectSubquery { inner } => {
                 self.evaluate_collect_subquery(row, context, inner)
             }
