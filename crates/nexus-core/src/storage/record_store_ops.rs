@@ -549,7 +549,13 @@ impl RecordStore {
         // Added to `properties_created` only where a record is actually
         // written (never on a `ConflictPolicy::Match`/`Replace` that resolves
         // to an existing node).
-        let inline_prop_count = properties.as_object().map(|m| m.len() as u64).unwrap_or(0);
+        // openCypher `+properties` skips null-valued map keys: `CREATE (n
+        // {id: 12, name: null})` is `+properties 1`, because a property set to
+        // null is absent. Count only non-null values.
+        let inline_prop_count = properties
+            .as_object()
+            .map(|m| m.values().filter(|v| !v.is_null()).count() as u64)
+            .unwrap_or(0);
         // ── External-id path ──────────────────────────────────────────────────
         //
         // peek-then-allocate:
@@ -584,8 +590,12 @@ impl RecordStore {
                     self.write_node(node_id, &record)?;
                     wtxn.commit()?;
                     self.nodes_created.fetch_add(1, Ordering::SeqCst);
-                    self.labels_created
-                        .fetch_add(label_bits.count_ones() as u64, Ordering::SeqCst);
+                    // openCypher `+labels` counts DISTINCT labels added across
+                    // the whole statement, not per (node,label): `CREATE
+                    // (:L),(:L)` is `+labels 1`. Accumulate the UNION of every
+                    // created node's label bits; `labels_created()` returns its
+                    // `count_ones()`.
+                    self.labels_created.fetch_or(label_bits, Ordering::SeqCst);
                     self.properties_created
                         .fetch_add(inline_prop_count, Ordering::SeqCst);
                     return Ok(node_id);
@@ -674,8 +684,10 @@ impl RecordStore {
         }
 
         self.nodes_created.fetch_add(1, Ordering::SeqCst);
-        self.labels_created
-            .fetch_add(label_bits.count_ones() as u64, Ordering::SeqCst);
+        // Union of created-node label bits (distinct `+labels` per statement) —
+        // see `create_node_with_label_bits_inner`'s external-id branch and
+        // `labels_created()`.
+        self.labels_created.fetch_or(label_bits, Ordering::SeqCst);
         self.properties_created
             .fetch_add(inline_prop_count, Ordering::SeqCst);
         Ok(node_id)
@@ -724,7 +736,13 @@ impl RecordStore {
                 .unwrap_or(false);
         // Side-effect count (openCypher TCK `+properties`): captured before
         // `properties` is moved into `store_properties` below.
-        let inline_prop_count = properties.as_object().map(|m| m.len() as u64).unwrap_or(0);
+        // openCypher `+properties` skips null-valued map keys: `CREATE (n
+        // {id: 12, name: null})` is `+properties 1`, because a property set to
+        // null is absent. Count only non-null values.
+        let inline_prop_count = properties
+            .as_object()
+            .map(|m| m.values().filter(|v| !v.is_null()).count() as u64)
+            .unwrap_or(0);
 
         // Store properties first to get property pointer (if needed)
         record.prop_ptr = if has_properties {

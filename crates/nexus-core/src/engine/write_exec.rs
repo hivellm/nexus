@@ -1691,8 +1691,19 @@ impl Engine {
                                 properties_removed += 1;
                             }
                         } else {
-                            state.properties.insert(property.clone(), json_value);
+                            // openCypher counts overwriting a property that
+                            // already holds a value as BOTH `+properties 1`
+                            // and `-properties 1` (the old value is removed,
+                            // the new one set); a brand-new key is `+1` only
+                            // (`Set1[1][2]` vs `Set1[3]`).
+                            let overwrote = state
+                                .properties
+                                .insert(property.clone(), json_value)
+                                .is_some_and(|old| !old.is_null());
                             properties_set += 1;
+                            if overwrote {
+                                properties_removed += 1;
+                            }
                         }
                     }
                 }
@@ -1754,8 +1765,16 @@ impl Engine {
                                             properties_removed += 1;
                                         }
                                     } else {
-                                        state.properties.insert(k, v);
+                                        // Same overwrite accounting as the
+                                        // scalar `SET n.p = v` path above.
+                                        let overwrote = state
+                                            .properties
+                                            .insert(k, v)
+                                            .is_some_and(|old| !old.is_null());
                                         properties_set += 1;
+                                        if overwrote {
+                                            properties_removed += 1;
+                                        }
                                     }
                                 }
                             }

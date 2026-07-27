@@ -74,12 +74,14 @@ pub struct RecordStore {
     /// executor. Reset per query by the engine; read to populate
     /// `ResultSet::side_effects`.
     pub(super) relationships_created: Arc<AtomicU64>,
-    /// Total node labels set at creation since the last reset — the
-    /// `count_ones()` of each created node's `label_bits`. Same `Arc`
-    /// sharing rationale as the counters above (executor clones the store).
-    /// The openCypher TCK counts labels on CREATE-d nodes toward `+labels`,
-    /// so this is stitched into `ResultSet::side_effects.labels_added`
-    /// alongside the engine-level `SET n:Label` count. Reset per query.
+    /// UNION of every created node's `label_bits` since the last reset (this
+    /// atomic is `fetch_or`-ed, not incremented). `labels_created()` returns
+    /// its `count_ones()`, i.e. the number of DISTINCT labels added — the
+    /// openCypher TCK counts labels on CREATE-d nodes toward `+labels` per
+    /// statement (`CREATE (:L),(:L)` → 1). Same `Arc` sharing rationale as the
+    /// counters above (executor clones the store). Stitched into
+    /// `ResultSet::side_effects.labels_added` alongside the engine-level `SET
+    /// n:Label` count. Reset per query.
     pub(super) labels_created: Arc<AtomicU64>,
     /// Total inline properties written at creation since the last reset —
     /// the map-key count of each created node's and relationship's inline
@@ -438,14 +440,17 @@ impl RecordStore {
         self.relationships_created.store(0, Ordering::SeqCst);
     }
 
-    /// Node labels set at creation since the last
-    /// [`RecordStore::reset_labels_created`] — summed `label_bits.count_ones()`
-    /// over created nodes. Stitched into `side_effects.labels_added`.
+    /// Number of DISTINCT node labels set at creation since the last
+    /// [`RecordStore::reset_labels_created`]. The backing atomic accumulates
+    /// the UNION of every created node's `label_bits` (via `fetch_or`), so
+    /// `CREATE (:L),(:L)` reports `+labels 1`, not 2 — matching the openCypher
+    /// TCK, which counts distinct labels per statement. Stitched into
+    /// `side_effects.labels_added`.
     pub fn labels_created(&self) -> u64 {
-        self.labels_created.load(Ordering::SeqCst)
+        u64::from(self.labels_created.load(Ordering::SeqCst).count_ones())
     }
 
-    /// Zero the create-labels counter. Called at query start so the count
+    /// Zero the create-labels bitmap. Called at query start so the count
     /// reported on a `ResultSet` covers only that query.
     pub fn reset_labels_created(&self) {
         self.labels_created.store(0, Ordering::SeqCst);

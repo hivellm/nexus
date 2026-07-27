@@ -1,9 +1,9 @@
 ## 1. Implementation
-- [ ] 1.1 label count per-statement
-- [ ] 1.2 overwrite +1/-1 property counting
-- [ ] 1.3 null-valued keys excluded from counts
+- [x] 1.1 label count per-statement — `+labels` counts DISTINCT labels added across the statement, not per (node,label). The CREATE storage counter (`record_store_ops.rs`, both the external-id and plain branches of `create_node_with_label_bits_inner`) now accumulates the UNION of created-node `label_bits` via `fetch_or` instead of summing `count_ones()`; `RecordStore::labels_created()` returns that union's `count_ones()`. Verified against the TCK: `CREATE (:L),(:L)`→1, `CREATE (:A:B:C:D)`→4, `CREATE (:B:A:D),(:B:C),(:D:E:B)`→5. The SET-label path (`write_exec.rs`) was already correct (only counts labels not already present).
+- [x] 1.2 overwrite +1/-1 property counting — setting a property that already holds a (non-null) value now counts BOTH `+properties 1` and `-properties 1` (the old value is removed, the new set); a brand-new key stays `+1` only. Applied at both `write_exec.rs` write sites: the scalar `SET n.p = v` path and the `SET n += {map}` merge path, using the `HashMap::insert` return value to detect the overwrite. Verified: Set1[1] (`SET n.name='Michael'` over existing)→+1/-1; Set1[3] (new key)→+1/0.
+- [x] 1.3 null-valued keys excluded from counts — inline-property counting (`record_store_ops.rs`, both node and relationship create paths) now counts only non-null map values, matching openCypher where a property set to null is absent. Verified: `CREATE (n {id:12, name:null})`→`+properties 1` (Create1[11]). `n.name` still evaluates to null in results (null-property read semantics unchanged); only the COUNT changed.
 
 ## 2. Tail (docs + tests — check or waive with tailWaiver)
-- [ ] 2.1 Update or create documentation covering the implementation
-- [ ] 2.2 Write tests covering the new behavior
-- [ ] 2.3 Run tests and confirm they pass
+- [x] 2.1 Update or create documentation covering the implementation (doc comments rewritten on `labels_created`/its field and every changed counter site; rationale + TCK anchors captured here)
+- [x] 2.2 Write tests covering the new behavior (tests/cypher/side_effect_counting_test.rs — 7 tests mapping the exact TCK scenarios: Create1[4/5/6], Set3[3], Set1[1/3], Create1[11])
+- [x] 2.3 Run tests and confirm they pass (cypher 431/0, executor 246/0 incl. the pre-existing side_effects group 19/0 unregressed; clippy/fmt clean; full workspace gate running)
