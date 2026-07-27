@@ -20,7 +20,8 @@
 
 mod tck_common;
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
+use std::io::Write as _;
 use std::sync::Mutex;
 
 use cucumber::{World, event, gherkin, given, then, when};
@@ -30,8 +31,9 @@ use nexus_core::OpenCypherErrorKind;
 use nexus_core::executor::ResultSet;
 use nexus_core::executor::types::SideEffects;
 use nexus_core::testing::{TestContext, setup_isolated_test_engine};
+use serde_json::Value;
 
-use tck_common::compare_table;
+use tck_common::{compare_table, tck_cell_to_json};
 
 /// Pinned upstream commit the corpus was vendored from. Keep in sync with
 /// `tests/tck/opencypher/VENDOR.md`; the report embeds it so a moving
@@ -57,6 +59,15 @@ pub struct TckWorld {
     last_result: Option<ResultSet>,
     last_error: Option<String>,
     last_error_kind: Option<OpenCypherErrorKind>,
+    /// The most recently executed query text (`having executed:` /
+    /// `executing query:` / `executing control query:`). Captured purely
+    /// for the failure-instrumentation JSONL log (see `log_failure`) — it
+    /// does not affect pass/fail behavior.
+    last_query: Option<String>,
+    /// Parameters staged by a `Given parameters are:` step, consumed
+    /// (drained) by the very next query execution — matching the TCK's
+    /// "applies to the next statement" semantics.
+    params: HashMap<String, Value>,
 }
 
 impl std::fmt::Debug for TckWorld {
@@ -69,6 +80,7 @@ impl std::fmt::Debug for TckWorld {
             )
             .field("last_error", &self.last_error)
             .field("last_error_kind", &self.last_error_kind)
+            .field("last_query", &self.last_query)
             .finish()
     }
 }
@@ -80,16 +92,26 @@ impl TckWorld {
             .expect("engine not initialised — every Scenario must open with a graph step")
     }
 
+    /// Runs `cypher`, consuming (draining) any parameters staged by a prior
+    /// `Given parameters are:` step. Panics on failure — used for setup
+    /// steps (`having executed:`) where the query is assumed to succeed.
     fn run_cypher(&mut self, cypher: &str) -> ResultSet {
         let cypher = cypher.trim();
+        self.last_query = Some(cypher.to_string());
+        let params = std::mem::take(&mut self.params);
         self.engine()
-            .execute_cypher(cypher)
+            .execute_cypher_with_params(cypher, params)
             .unwrap_or_else(|e| panic!("setup query `{cypher}` failed: {e}"))
     }
 
+    /// Runs `cypher` under test, consuming (draining) any parameters staged
+    /// by a prior `Given parameters are:` step, and records the outcome
+    /// (result or error) on `self` instead of panicking.
     fn try_run_cypher(&mut self, cypher: &str) {
         let cypher = cypher.trim();
-        match self.engine().execute_cypher(cypher) {
+        self.last_query = Some(cypher.to_string());
+        let params = std::mem::take(&mut self.params);
+        match self.engine().execute_cypher_with_params(cypher, params) {
             Ok(rs) => {
                 self.last_result = Some(rs);
                 self.last_error = None;
@@ -130,6 +152,30 @@ fn having_executed(world: &mut TckWorld, step: &gherkin::Step) {
     let _ = world.run_cypher(docstring);
 }
 
+/// `Given parameters are:` — a two-column table (`| key | value |`) staged
+/// on the World and consumed (drained) by the very next query execution
+/// (`having executed:` / `executing query:` / `executing control query:`),
+/// matching the TCK's "applies to the next statement" semantics. Values are
+/// TCK-literal cells parsed with the same parser used for expected result
+/// tables.
+#[given(regex = r"^parameters are:$")]
+fn parameters_are(world: &mut TckWorld, step: &gherkin::Step) {
+    let table = step
+        .table
+        .as_ref()
+        .expect("`parameters are:` requires a table");
+    for row in &table.rows {
+        assert_eq!(
+            row.len(),
+            2,
+            "parameters row must be `| key | value |`, got {row:?}"
+        );
+        let key = row[0].trim().to_string();
+        let value = tck_cell_to_json(row[1].trim());
+        world.params.insert(key, value);
+    }
+}
+
 #[when(regex = r"^executing query:$")]
 fn executing_query(world: &mut TckWorld, step: &gherkin::Step) {
     let docstring = step
@@ -137,6 +183,14 @@ fn executing_query(world: &mut TckWorld, step: &gherkin::Step) {
         .as_ref()
         .expect("`executing query:` requires a docstring");
     world.try_run_cypher(docstring);
+}
+
+/// `When executing control query:` — an alias of `executing query:` used by
+/// the TCK to re-verify graph state after a write scenario via an
+/// independent read query. Same execution + assertion path.
+#[when(regex = r"^executing control query:$")]
+fn executing_control_query(world: &mut TckWorld, step: &gherkin::Step) {
+    executing_query(world, step);
 }
 
 #[then(regex = r"^the result should be, in any order:$")]
@@ -319,12 +373,6 @@ fn skip_reason(scenario: &gherkin::Scenario) -> Option<&'static str> {
         if t.contains("binary-tree-") {
             return Some("named fixture graph (binary-tree-N) not supported");
         }
-        if t.starts_with("parameters are") {
-            return Some("query parameters not wired into the harness");
-        }
-        if t.starts_with("executing control query") {
-            return Some("control-query reference comparison not supported");
-        }
     }
     None
 }
@@ -341,6 +389,131 @@ fn record_skip(category: String, reason: &'static str) {
         .expect("skip-reasons mutex poisoned")
         .entry(reason)
         .or_insert(0) += 1;
+}
+
+// ─────────────────── Per-scenario failure log (JSONL) ───────────────────
+//
+// F-004 (docs/analysis/tck/01-measurement-and-methodology.md): the `after`
+// hook only ever tallied a count, discarding every failure's diagnostic
+// message. This turns each `StepFailed` / `BeforeHookFailed` scenario into
+// one JSONL line — pure observability, it does not affect the pass/fail/skip
+// tallies above.
+
+/// Serializes writes to the failure log — scenarios can run concurrently
+/// under cucumber's default runner, and a bare `File::open`+`write` race
+/// could interleave two JSON lines into one corrupt line.
+static FAILLOG_LOCK: Mutex<()> = Mutex::new(());
+
+/// Path to the JSONL failure log, configurable so CI/local runs can
+/// redirect it without touching the harness. Defaults under `target/` so
+/// it is never accidentally committed.
+fn failure_log_path() -> String {
+    std::env::var("NEXUS_TCK_FAILLOG").unwrap_or_else(|_| "target/tck-failures.jsonl".to_string())
+}
+
+/// Truncates (or creates) the failure log once at the start of a run so a
+/// fresh invocation always produces a clean baseline instead of appending
+/// onto a stale file from a previous run.
+fn reset_failure_log() {
+    let path = failure_log_path();
+    if let Some(parent) = std::path::Path::new(&path).parent() {
+        if !parent.as_os_str().is_empty() {
+            if let Err(e) = std::fs::create_dir_all(parent) {
+                eprintln!(
+                    "warning: failed to create TCK fail-log directory {}: {e}",
+                    parent.display()
+                );
+                return;
+            }
+        }
+    }
+    let _guard = FAILLOG_LOCK.lock().expect("fail-log mutex poisoned");
+    if let Err(e) = std::fs::OpenOptions::new()
+        .create(true)
+        .write(true)
+        .truncate(true)
+        .open(&path)
+    {
+        eprintln!("warning: failed to reset TCK fail-log {path}: {e}");
+    }
+}
+
+/// Extracts a human-readable message from a finished-scenario event, or
+/// `None` for `StepPassed` / `StepSkipped` (nothing to log).
+fn failure_message(finished: &event::ScenarioFinished) -> Option<String> {
+    match finished {
+        event::ScenarioFinished::StepFailed(_, _, err) => Some(err.to_string()),
+        event::ScenarioFinished::BeforeHookFailed(info) => {
+            Some(format!("before-hook failed: {}", coerce_panic_info(info)))
+        }
+        event::ScenarioFinished::StepPassed | event::ScenarioFinished::StepSkipped => None,
+    }
+}
+
+/// Best-effort extraction of a panic payload's message. Mirrors the same
+/// `Box<dyn Any + Send>` downcast convention `std::panic::catch_unwind` (and
+/// `cucumber` internally) uses for step panics — the panic macros hand
+/// through either an owned `String` or a `&'static str` payload.
+fn coerce_panic_info(info: &event::Info) -> String {
+    info.downcast_ref::<String>()
+        .cloned()
+        .or_else(|| info.downcast_ref::<&str>().map(|s| (*s).to_string()))
+        .unwrap_or_else(|| "(could not resolve panic payload)".to_string())
+}
+
+/// Appends one JSONL line for a failed scenario: `category`, `feature_path`,
+/// `scenario_name`, the last-executed `query`, the failure `message`, and
+/// the World's `last_error` / `last_error_kind` (if the World survived to
+/// the `after` hook — it always does here, since there is no `.before()`
+/// hook that could fail it away).
+fn log_failure(
+    category: &str,
+    feature: &gherkin::Feature,
+    scenario: &gherkin::Scenario,
+    finished: &event::ScenarioFinished,
+    world: Option<&TckWorld>,
+) {
+    let Some(message) = failure_message(finished) else {
+        return;
+    };
+    let feature_path = feature
+        .path
+        .as_ref()
+        .map(|p| p.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    let entry = serde_json::json!({
+        "category": category,
+        "feature_path": feature_path,
+        "scenario_name": scenario.name,
+        "query": world.and_then(|w| w.last_query.clone()),
+        "message": message,
+        "last_error": world.and_then(|w| w.last_error.clone()),
+        "last_error_kind": world
+            .and_then(|w| w.last_error_kind)
+            .map(|k| format!("{k:?}")),
+    });
+    let line = match serde_json::to_string(&entry) {
+        Ok(l) => l,
+        Err(e) => {
+            eprintln!("warning: failed to serialise TCK fail-log entry: {e}");
+            return;
+        }
+    };
+
+    let path = failure_log_path();
+    let _guard = FAILLOG_LOCK.lock().expect("fail-log mutex poisoned");
+    match std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&path)
+    {
+        Ok(mut file) => {
+            if let Err(e) = writeln!(file, "{line}") {
+                eprintln!("warning: failed to append TCK fail-log entry to {path}: {e}");
+            }
+        }
+        Err(e) => eprintln!("warning: failed to open TCK fail-log {path}: {e}"),
+    }
 }
 
 fn pct(pass: u64, total: u64) -> String {
@@ -470,6 +643,8 @@ fn main() {
         return;
     }
 
+    reset_failure_log();
+
     // 8 MiB worker stack: the default 1 MiB Windows main-thread stack has
     // overflowed on the cucumber runtime + tokio + Engine setup in CI.
     let handle = std::thread::Builder::new()
@@ -490,8 +665,9 @@ fn main() {
                 > = cucumber::cli::Opts::default();
                 let _ = TckWorld::cucumber()
                     .with_cli(cli)
-                    .after(|feature, _rule, _scenario, ev, _world| {
+                    .after(|feature, _rule, scenario, ev, world| {
                         let category = category_of(feature);
+                        log_failure(&category, feature, scenario, ev, world.as_deref());
                         record(category, ev);
                         async {}.boxed_local()
                     })
