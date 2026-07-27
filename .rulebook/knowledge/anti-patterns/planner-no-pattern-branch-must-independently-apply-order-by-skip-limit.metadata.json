@@ -1,0 +1,22 @@
+{
+  "id": "planner-no-pattern-branch-must-independently-apply-order-by-skip-limit",
+  "type": "anti-pattern",
+  "title": "Cypher planner's no-pattern branch must independently re-apply ORDER BY / SKIP / LIMIT",
+  "category": "cypher-planner",
+  "description": "QueryPlanner::plan_query collects ORDER BY/LIMIT/SKIP into shared locals while walking query.clauses, but those locals are only converted into Sort/Skip/Limit operators by plan_execution_strategy, called only when the query has a MATCH/MERGE pattern. Any no-pattern query shape (CALL proc() YIELD col RETURN col ORDER BY col, standalone CALL ... YIELD ... ORDER BY with no RETURN, bare RETURN/UNWIND without MATCH) falls into a separate no-pattern branch that built Project/Aggregate + Limit but never Sort — ORDER BY was silently dropped. SKIP had no handling anywhere in the planner at all (confirmed as a separate, pre-existing, system-wide gap via a MATCH ... ORDER BY ... SKIP control test), and was deliberately left unfixed for the pattern-based path — only wired into the no-pattern branch to match the narrower task scope.",
+  "example": "// crates/nexus-core/src/executor/planner/queries/planner_core.rs\n// BEFORE (bug): no-pattern branch builds Project + Limit only\nif patterns.is_empty() && (!return_items.is_empty() || !unwind_operators.is_empty()) {\n    // ... builds Operator::Project / Operator::Aggregate ...\n    if let Some(limit) = limit_count {\n        operators.push(Operator::Limit { count: limit });\n    }\n    // order_by_clause / skip_count silently never consumed here\n}\n\n// AFTER (fix): ORDER BY, then SKIP, then LIMIT — standard openCypher order\nif let Some((columns, ascending)) = order_by_clause.clone() {\n    operators.push(Operator::Sort { columns, ascending });\n}\nif let Some(skip) = skip_count {\n    operators.push(Operator::Skip { count: skip });\n}\nif let Some(limit) = limit_count {\n    operators.push(Operator::Limit { count: limit });\n}",
+  "whenToUse": "Audit every terminal branch of plan_query (plan_execution_strategy for pattern-based queries, the patterns.is_empty() && !return_items.is_empty() branch, and the patterns.is_empty() && CallProcedure branch) whenever a new clause-collection local is added to the shared clause-walking loop. A variable being populated does not mean every downstream branch reads it — the compiler will not warn.",
+  "whenNotToUse": "Do not assume a fix in one no-pattern branch also covers the MATCH/pattern path, or vice versa. Do not silently widen a narrowly-scoped fix (e.g. \"procedure YIELD projections\") to cover the pattern-based path without a separate, explicitly-scoped task — the blast radius (aggregation slicing, UNION post-processing, WITH pipelines) is much larger.",
+  "createdAt": "2026-07-21T00:00:00.000Z",
+  "tags": [
+    "executor",
+    "planner",
+    "order-by",
+    "skip",
+    "limit",
+    "call-procedure",
+    "yield",
+    "phase0_fix-order-by-on-call-yield"
+  ],
+  "source": "manual"
+}

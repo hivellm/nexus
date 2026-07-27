@@ -1,0 +1,13 @@
+{
+  "id": 1,
+  "slug": "native-rpc-wire-format-4-byte-le-length-prefix-messagepack-body",
+  "title": "Native RPC wire format: 4-byte LE length prefix + MessagePack body",
+  "status": "proposed",
+  "date": "2026-04-18",
+  "relatedTasks": [
+    "phase1_nexus-rpc-binary-protocol",
+    "phase2_sdk-rpc-transport-default",
+    "phase3_rpc-protocol-docs-benchmarks"
+  ],
+  "supersededBy": null
+}

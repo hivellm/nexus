@@ -4,8 +4,8 @@ use std::sync::Arc;
 
 use rmcp::ServerHandler;
 use rmcp::model::{
-    CallToolRequestParam, CallToolResult, ErrorData, Implementation, ListResourcesResult,
-    ListToolsResult, ProtocolVersion, ServerCapabilities, ServerInfo,
+    CallToolRequestParams, CallToolResult, ErrorData, Implementation, ListResourcesResult,
+    ListToolsResult, PaginatedRequestParams, ServerCapabilities, ServerInfo,
 };
 use rmcp::service::RequestContext;
 
@@ -30,38 +30,30 @@ impl NexusMcpService {
 
 impl ServerHandler for NexusMcpService {
     fn get_info(&self) -> ServerInfo {
-        ServerInfo {
-            protocol_version: ProtocolVersion::default(),
-            capabilities: ServerCapabilities::builder()
-                .enable_tools()
-                .build(),
-            server_info: Implementation {
-                name: "nexus-server".to_string(),
-                title: Some("Nexus Graph Database Server".to_string()),
-                version: env!("CARGO_PKG_VERSION").to_string(),
-                website_url: Some("https://github.com/hivellm/nexus".to_string()),
-                icons: None,
-            },
-            instructions: Some("Nexus Graph Database - High-performance property graph database with native vector search and MCP integration.".to_string()),
-        }
+        ServerInfo::new(ServerCapabilities::builder().enable_tools().build())
+            .with_server_info(
+                Implementation::new("nexus-server", env!("CARGO_PKG_VERSION"))
+                    .with_title("Nexus Graph Database Server")
+                    .with_website_url("https://github.com/hivellm/nexus"),
+            )
+            .with_instructions(
+                "Nexus Graph Database - High-performance property graph database with native vector search and MCP integration.",
+            )
     }
 
     async fn list_tools(
         &self,
-        _request: Option<rmcp::model::PaginatedRequestParam>,
+        _request: Option<PaginatedRequestParams>,
         _context: RequestContext<rmcp::RoleServer>,
     ) -> Result<ListToolsResult, ErrorData> {
         let tools = get_nexus_mcp_tools();
 
-        Ok(ListToolsResult {
-            tools,
-            next_cursor: None,
-        })
+        Ok(ListToolsResult::with_all_items(tools))
     }
 
     async fn call_tool(
         &self,
-        request: CallToolRequestParam,
+        request: CallToolRequestParams,
         _context: RequestContext<rmcp::RoleServer>,
     ) -> Result<CallToolResult, ErrorData> {
         handle_nexus_mcp_tool(request, self.server.clone()).await
@@ -69,12 +61,9 @@ impl ServerHandler for NexusMcpService {
 
     async fn list_resources(
         &self,
-        _request: Option<rmcp::model::PaginatedRequestParam>,
+        _request: Option<PaginatedRequestParams>,
         _context: RequestContext<rmcp::RoleServer>,
     ) -> Result<ListResourcesResult, ErrorData> {
-        Ok(ListResourcesResult {
-            resources: vec![],
-            next_cursor: None,
-        })
+        Ok(ListResourcesResult::with_all_items(vec![]))
     }
 }

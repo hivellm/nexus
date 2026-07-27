@@ -168,7 +168,6 @@ impl Engine {
             self.storage
                 .create_node_with_label_bits(tx, label_bits, properties.clone())?
         };
-
         // 3.4: Track every external-id reservation made during a session
         // transaction so the rollback path can undo them.  Only relevant
         // when `external_id.is_some()` AND the policy actually reserved a
@@ -183,6 +182,13 @@ impl Engine {
         if let Some(tracker) = created_nodes_tracker {
             tracker.push(node_id);
         }
+
+        // Register every property key with the catalog so `db.propertyKeys()`
+        // (and any other catalog-driven key introspection) sees it — mirrors
+        // the label registration a few lines above. See
+        // `Catalog::register_property_keys` for why this can't just live in
+        // DDL.
+        self.catalog.register_property_keys(&properties);
 
         // For session transactions, defer index updates until commit (Phase 1 optimization)
         // For non-session transactions, update immediately
@@ -253,6 +259,11 @@ impl Engine {
         // registered spatial index whose label/property matches.
         self.spatial_autopopulate_node(node_id, &label_ids, &properties)?;
 
+        // phase20_knn-write-path-wiring §2.2 — auto-populate every
+        // registered KNN (vector) index whose label/property matches,
+        // mirroring the spatial hook immediately above.
+        self.knn_autopopulate_node(node_id, &label_ids, &properties)?;
+
         Ok(node_id)
     }
 
@@ -312,59 +323,150 @@ impl Engine {
             return Err(Error::NotFound(format!("Node {} not found", id)));
         }
 
-        // Get or create label IDs
-        let mut label_bits = 0u64;
+        // Resolve label ids for the constraint checks below.
         let mut label_ids = Vec::new();
         for label in &labels {
-            let label_id = self.catalog.get_or_create_label(label)?;
-            if label_id < 64 {
-                label_bits |= 1u64 << label_id;
-            }
-            label_ids.push(label_id);
+            label_ids.push(self.catalog.get_or_create_label(label)?);
         }
 
         // Check constraints before updating node (exclude current node from uniqueness check)
         self.check_constraints(&label_ids, &properties, Some(id))?;
         self.enforce_extended_node_constraints(&label_ids, &properties, Some(id))?;
 
-        // Start from the EXISTING record so we preserve first_rel_ptr (the head
-        // of the relationship chain), flags, etc. Building a blank
-        // `NodeRecord::new()` here would zero first_rel_ptr and orphan the
-        // node's relationships (data-integrity bug related to issue #4).
-        let mut node_record = self.storage.read_node(id)?;
-        node_record.label_bits = label_bits;
-
-        // Store properties and get property pointer
-        node_record.prop_ptr =
-            if properties.is_object() && !properties.as_object().unwrap().is_empty() {
-                self.storage
-                    .property_store
-                    .write()
-                    .unwrap()
-                    .store_properties(id, storage::property_store::EntityType::Node, properties)?
-            } else {
-                0
-            };
-
-        // Write updated record
-        let mut tx = self.transaction_manager.write().begin_write()?;
-        self.storage.write_node(id, &node_record)?;
-        self.transaction_manager.write().commit(&mut tx)?;
-
-        // Update statistics
-        for label in &labels {
-            if let Ok(label_id) = self.catalog.get_or_create_label(label) {
-                self.catalog.increment_node_count(label_id)?;
-            }
-        }
-
-        Ok(())
+        // phase0_fix-update-node-index-divergence — route through the same
+        // write + full index-refresh path the Cypher SET path uses
+        // (`persist_node_state`) instead of writing the record and property
+        // blob directly. The old direct write updated neither the label-bitmap
+        // index, the typed property B-tree, nor the FTS / spatial indexes, so a
+        // node updated here became permanently unfindable by its new value (and
+        // a stale seek on the OLD value still matched). `persist_node_state`
+        // captures the pre-write old state, writes the new properties (via
+        // `update_node_properties`, which preserves `first_rel_ptr`) and labels,
+        // then refreshes every covering index — keeping REST `PUT /data/nodes`,
+        // RPC `UPDATE_NODE`, and RESP3 `NODE.UPDATE` consistent with Cypher SET.
+        let properties_map = match properties {
+            serde_json::Value::Object(map) => map,
+            _ => serde_json::Map::new(),
+        };
+        let state = super::NodeWriteState {
+            properties: properties_map,
+            labels: labels.into_iter().collect(),
+        };
+        self.persist_node_state(id, state)
     }
 
-    /// Delete a node by ID
+    /// Soft-delete a single relationship by id (bare Cypher `DELETE r`).
+    ///
+    /// Returns `true` if a live relationship was deleted, `false` if it was
+    /// absent or already soft-deleted (idempotent — a double `DELETE r` is a
+    /// clean no-op). Mirrors the `mark_deleted` + `write_rel` (inside a write
+    /// transaction) + relationship-index upkeep that `delete_node_relationships`
+    /// uses for DETACH DELETE, but for exactly one edge. Exposed on `Engine` so
+    /// every protocol (Cypher/REST/RPC/RESP3) can delete an edge from one place.
+    pub fn delete_relationship(&mut self, rel_id: u64) -> Result<bool> {
+        let rel_record = match self.storage.read_rel(rel_id) {
+            Ok(r) => r,
+            Err(_) => return Ok(false),
+        };
+        if rel_record.is_deleted() {
+            return Ok(false);
+        }
+
+        let mut deleted_record = rel_record;
+        deleted_record.mark_deleted();
+
+        let mut tx = self.transaction_manager.write().begin_write()?;
+        self.storage.write_rel(rel_id, &deleted_record)?;
+        self.transaction_manager.write().commit(&mut tx)?;
+
+        // Keep the (perf-hint) relationship index consistent, exactly as
+        // `delete_node_relationships` does. Best-effort: a stale index entry is
+        // a performance concern, never a correctness one.
+        if let Err(e) = self.cache.relationship_index().remove_relationship(
+            rel_id,
+            rel_record.src_id,
+            rel_record.dst_id,
+            rel_record.type_id,
+        ) {
+            tracing::warn!(
+                "Failed to update relationship index on relationship delete: {}",
+                e
+            );
+        }
+
+        // phase0_fix-delete-path-index-cleanup M-1 — free the edge's
+        // property-store blob so the property store stops leaking across
+        // create/delete cycles. Best-effort: never abort the delete.
+        if let Err(e) = self.storage.delete_relationship_properties(rel_id) {
+            tracing::warn!("freeing property blob failed on delete of relationship {rel_id}: {e}");
+        }
+
+        // Side-effect counter (openCypher TCK `-relationships`): only the
+        // actual-deletion path reaches here — an already-deleted or missing
+        // edge returned `Ok(false)` above, so re-deleting is not counted.
+        self.side_effects.relationships_deleted += 1;
+
+        Ok(true)
+    }
+
+    /// Delete a node by ID.
+    ///
+    /// Refuses to delete a node that still has a live relationship (either
+    /// outgoing or incoming) pointing at it — see
+    /// `node_has_live_relationship` for why `first_rel_ptr != 0` alone is
+    /// not a sufficient check. DETACH callers must call
+    /// [`Engine::delete_node_relationships`] first so this check sees zero
+    /// remaining relationships and passes through.
+    ///
+    /// # Errors
+    ///
+    /// Returns `Error::CypherExecution` if the node still has a live
+    /// relationship attached.
     pub fn delete_node(&mut self, id: u64) -> Result<bool> {
         // Check if node exists
         if let Ok(Some(node_record)) = self.get_node(id) {
+            // phase0_fix-delete-node-dangling-relationships §3.1/§3.2 —
+            // refuse a hard delete while a live relationship (either
+            // direction) still points at this node. `first_rel_ptr` alone
+            // (checked previously only in `match_exec.rs`) tracks OUTGOING
+            // relationships exclusively — `create_relationship` never sets
+            // it on the destination node (see `record_store_ops.rs`) — so
+            // an incoming-only node was able to slip past that guard and be
+            // hard-deleted while a live edge still referenced it, leaving
+            // the edge dangling. Checked here so every caller (Cypher, REST,
+            // RPC, RESP3) inherits the same guard from one place.
+            if self.node_has_live_relationship(id)? {
+                return Err(Error::CypherExecution(
+                    "Cannot DELETE node with existing relationships; use DETACH DELETE".to_string(),
+                ));
+            }
+
+            // phase0_fix-delete-path-index-cleanup — `delete_node` used to free
+            // the record but never walk the index layer that create populated.
+            // Read the properties once, while the record's prop_ptr still points
+            // at the live blob, then evict every stale entry:
+            //   H-1: the composite B-tree (NODE KEY / composite). Node ids are
+            //        never recycled and the NODE KEY existence check does not
+            //        skip soft-deleted rows, so a leftover tuple would
+            //        permanently and falsely reject re-creating the same tuple.
+            //   M-3: the typed property B-tree, so it carries no dead entries.
+            {
+                let mut label_ids = Vec::new();
+                for bit in 0..64u32 {
+                    if (node_record.label_bits & (1u64 << bit)) != 0 {
+                        label_ids.push(bit);
+                    }
+                }
+                if let Ok(Some(props)) = self.storage.load_node_properties(id) {
+                    if let Err(e) = self.unindex_composite_tuples(id, &label_ids, &props) {
+                        tracing::warn!(
+                            "composite-index eviction failed on delete of node {id}: {e}"
+                        );
+                    }
+                    self.unindex_node_properties(id, &label_ids, &props);
+                }
+            }
+
             // Remove node from label index before marking as deleted
             // This removes the node from all labels it belongs to
             self.indexes.label_index.remove_node(id)?;
@@ -378,6 +480,18 @@ impl Engine {
             // phase6_spatial-index-autopopulate §4 — evict from every
             // spatial index that contains the node.
             self.spatial_evict_node(id);
+            // phase20_knn-write-path-wiring §2.2 — evict the node's
+            // vector from the KNN index, mirroring the spatial evict
+            // immediately above.
+            self.knn_evict_node(id);
+
+            // phase0_fix-delete-path-index-cleanup M-1 — free the node's
+            // property-store blob. Without this the property store only ever
+            // grew across create/delete cycles (a slow, unbounded storage
+            // leak). Best-effort: a failure here must not abort the delete.
+            if let Err(e) = self.storage.delete_node_properties(id) {
+                tracing::warn!("freeing property blob failed on delete of node {id}: {e}");
+            }
 
             // Mark node as deleted
             let mut deleted_record = node_record;
@@ -396,30 +510,73 @@ impl Engine {
                 }
             }
 
+            // Side-effect counter (openCypher TCK `-nodes`): reached only on
+            // the actual-deletion path — a missing node returned `Ok(false)`
+            // below and a node with live relationships errored above.
+            self.side_effects.nodes_deleted += 1;
+
             Ok(true)
         } else {
             Ok(false)
         }
     }
 
+    /// Returns `true` if any live (non-deleted) relationship references
+    /// `node_id` as either endpoint (source or destination). O(degree).
+    ///
+    /// Both directions come from the store's authoritative adjacency index
+    /// (`storage::adjacency_index`), maintained inside `RecordStore::write_rel`
+    /// — the single funnel every relationship-record mutation passes through —
+    /// and rebuilt from the records when the store is opened. Each candidate is
+    /// still read back and re-checked against the record, so an index entry can
+    /// never resurrect a deleted edge; the index only decides WHICH records are
+    /// worth reading.
+    ///
+    /// This replaces the previous two-tier shape: a best-effort walk of
+    /// `first_rel_ptr` (outgoing only, and deliberately distrusted — it bailed
+    /// to the scan on any unexpected chain state) followed by an
+    /// O(total relationships) scan that had to decide every `false`, because
+    /// INCOMING edges had no reverse adjacency at all. See
+    /// phase0_perf-store-reverse-incoming-adjacency-index.
+    fn node_has_live_relationship(&self, node_id: u64) -> Result<bool> {
+        for rel_id in self.storage.connected_relationships(node_id) {
+            if let Ok(rel) = self.storage.read_rel(rel_id) {
+                if !rel.is_deleted() && (rel.src_id == node_id || rel.dst_id == node_id) {
+                    return Ok(true);
+                }
+            }
+        }
+        Ok(false)
+    }
+
     /// Delete all relationships connected to a node (for DETACH DELETE)
     pub fn delete_node_relationships(&mut self, node_id: u64) -> Result<()> {
         let mut tx = self.transaction_manager.write().begin_write()?;
 
-        // Find all relationships connected to this node
-        let total_rels = self.storage.relationship_count();
+        // O(degree): both directions come from the store's authoritative
+        // adjacency index (maintained in `RecordStore::write_rel`, rebuilt on
+        // open). Each candidate is re-read and re-checked against the record,
+        // so the index only decides which records are worth reading — it never
+        // decides that a deleted edge is live. Previously a full
+        // O(total relationships) scan, because DETACH DELETE must find EVERY
+        // connected edge and INCOMING edges had no reverse adjacency at all.
+        // See phase0_perf-store-reverse-incoming-adjacency-index.
         let mut rels_to_delete = Vec::new();
-
-        for rel_id in 0..total_rels {
+        for rel_id in self.storage.connected_relationships(node_id) {
             if let Ok(rel_record) = self.storage.read_rel(rel_id) {
-                if !rel_record.is_deleted() {
-                    // Check if this relationship is connected to the node
-                    if rel_record.src_id == node_id || rel_record.dst_id == node_id {
-                        rels_to_delete.push(rel_id);
-                    }
+                if !rel_record.is_deleted()
+                    && (rel_record.src_id == node_id || rel_record.dst_id == node_id)
+                {
+                    rels_to_delete.push(rel_id);
                 }
             }
         }
+
+        // Side-effect count (openCypher TCK `-relationships`): `rels_to_delete`
+        // was pre-filtered to live, connected edges above, so a `DELETE r, n`
+        // that named an edge already removed in the relationship pass does not
+        // double-count it here.
+        let deleted_rel_count = rels_to_delete.len() as u64;
 
         // Mark all connected relationships as deleted
         for rel_id in rels_to_delete {
@@ -438,10 +595,20 @@ impl Engine {
                     tracing::warn!("Failed to update relationship index on deletion: {}", e);
                     // Don't fail the operation, just log the warning
                 }
+
+                // phase0_fix-delete-path-index-cleanup M-1 — free the edge's
+                // property-store blob so DETACH DELETE stops leaking property
+                // storage across create/delete cycles. Best-effort.
+                if let Err(e) = self.storage.delete_relationship_properties(rel_id) {
+                    tracing::warn!(
+                        "freeing property blob failed on DETACH delete of relationship {rel_id}: {e}"
+                    );
+                }
             }
         }
 
         self.transaction_manager.write().commit(&mut tx)?;
+        self.side_effects.relationships_deleted += deleted_rel_count;
         Ok(())
     }
 }

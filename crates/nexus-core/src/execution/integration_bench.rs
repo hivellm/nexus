@@ -125,6 +125,7 @@ pub fn benchmark_executor_creation() -> Result<()> {
         enable_numa_caching: false,
         enable_lock_free_structures: true,
         cypher_concurrency: 4,
+        cartesian_product_max_bytes: ExecutorConfig::default().cartesian_product_max_bytes,
     };
 
     let _executor = Executor::new_with_config(
@@ -149,6 +150,7 @@ pub fn benchmark_executor_creation() -> Result<()> {
         enable_numa_caching: false,
         enable_lock_free_structures: false,
         cypher_concurrency: 1,
+        cartesian_product_max_bytes: ExecutorConfig::default().cartesian_product_max_bytes,
     };
 
     let _executor =

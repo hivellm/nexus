@@ -63,9 +63,16 @@ export class NexusClient {
   private readonly transport: Transport;
   private readonly endpoint: Endpoint;
   private readonly mode: TransportMode;
+  /**
+   * Client-side session database. The server is stateless (the
+   * `/session/database` routes were removed), so `switchDatabase` updates
+   * this and every `executeCypher` stamps it for per-database routing.
+   */
+  private currentDatabase: string;
 
   constructor(config: NexusConfig = {}) {
     this.debug = config.debug ?? false;
+    this.currentDatabase = config.database ?? 'neo4j';
 
     const credentials: TransportCredentials = {
       apiKey: config.auth?.apiKey,
@@ -138,17 +145,22 @@ export class NexusClient {
     if (params && Object.keys(params).length > 0) {
       args.push(paramsToNexus(params));
     }
-    const req: TransportRequest = { command: 'CYPHER', args };
+    const req: TransportRequest = {
+      command: 'CYPHER',
+      args,
+      database: this.currentDatabase,
+    };
     const resp = await this.transport.execute(req);
     return extractQueryResult(resp.value);
   }
 
   async createNode(labels: string[], properties: NodeProperties): Promise<Node> {
     const labelsStr = labels.map((l) => `:${l}`).join('');
-    const cypher = `CREATE (n${labelsStr} $props) RETURN n`;
-    const result = await this.executeCypher(cypher, { props: properties });
+    const { clause, params } = inlineProps(properties as Record<string, unknown>, 'p');
+    const cypher = `CREATE (n${labelsStr}${clause}) RETURN n`;
+    const result = await this.executeCypher(cypher, params);
     if (result.rows.length === 0) throw new NexusSDKError('Failed to create node');
-    return result.rows[0].n as Node;
+    return rawToNode(result.rows[0].n);
   }
 
   /**
@@ -213,7 +225,7 @@ export class NexusClient {
 
   async getNode(id: number): Promise<Node | null> {
     const result = await this.executeCypher('MATCH (n) WHERE id(n) = $id RETURN n', { id });
-    return result.rows.length > 0 ? (result.rows[0].n as Node) : null;
+    return result.rows.length > 0 ? rawToNode(result.rows[0].n) : null;
   }
 
   async updateNode(id: number, properties: NodeProperties): Promise<Node> {
@@ -222,7 +234,7 @@ export class NexusClient {
       { id, props: properties }
     );
     if (result.rows.length === 0) throw new NexusSDKError('Node not found');
-    return result.rows[0].n as Node;
+    return rawToNode(result.rows[0].n);
   }
 
   async deleteNode(id: number, detach = false): Promise<void> {
@@ -238,20 +250,23 @@ export class NexusClient {
     limit?: number
   ): Promise<Node[]> {
     let cypher = `MATCH (n:${label})`;
+    const params: Record<string, unknown> = {};
     if (properties && Object.keys(properties).length > 0) {
+      const props = properties as Record<string, unknown>;
       cypher +=
         ' WHERE ' +
-        Object.keys(properties)
-          .map((key) => `n.${key} = $props.${key}`)
+        Object.keys(props)
+          .map((key, i) => {
+            const p = `p${i}`;
+            params[p] = props[key];
+            return `n.${key} = $${p}`;
+          })
           .join(' AND ');
     }
     cypher += ' RETURN n';
     if (limit) cypher += ` LIMIT ${limit}`;
-    const result = await this.executeCypher(
-      cypher,
-      properties ? { props: properties } : undefined
-    );
-    return result.rows.map((row) => row.n as Node);
+    const result = await this.executeCypher(cypher, params);
+    return result.rows.map((row) => rawToNode(row.n));
   }
 
   async createRelationship(
@@ -260,14 +275,18 @@ export class NexusClient {
     type: string,
     properties?: RelationshipProperties
   ): Promise<Relationship> {
-    const cypher = properties
-      ? `MATCH (a), (b) WHERE id(a) = $startId AND id(b) = $endId CREATE (a)-[r:${type} $props]->(b) RETURN r`
-      : `MATCH (a), (b) WHERE id(a) = $startId AND id(b) = $endId CREATE (a)-[r:${type}]->(b) RETURN r`;
-    const params: Record<string, unknown> = { startId: startNodeId, endId: endNodeId };
-    if (properties) params.props = properties;
+    const { clause, params: propParams } = properties
+      ? inlineProps(properties as Record<string, unknown>, 'p')
+      : { clause: '', params: {} };
+    const cypher = `MATCH (a), (b) WHERE id(a) = $startId AND id(b) = $endId CREATE (a)-[r:${type}${clause}]->(b) RETURN r`;
+    const params: Record<string, unknown> = {
+      startId: startNodeId,
+      endId: endNodeId,
+      ...propParams,
+    };
     const result = await this.executeCypher(cypher, params);
     if (result.rows.length === 0) throw new NexusSDKError('Failed to create relationship');
-    return result.rows[0].r as Relationship;
+    return rawToRelationship(result.rows[0].r, startNodeId, endNodeId);
   }
 
   async getRelationship(id: number): Promise<Relationship | null> {
@@ -275,7 +294,7 @@ export class NexusClient {
       'MATCH ()-[r]->() WHERE id(r) = $id RETURN r',
       { id }
     );
-    return result.rows.length > 0 ? (result.rows[0].r as Relationship) : null;
+    return result.rows.length > 0 ? rawToRelationship(result.rows[0].r) : null;
   }
 
   async deleteRelationship(id: number): Promise<void> {
@@ -340,13 +359,19 @@ export class NexusClient {
       throw new NexusSDKError('DB_LIST: expected object response');
     }
     const obj = json as Record<string, unknown>;
-    const databases = Array.isArray(obj.databases) ? (obj.databases as DatabaseInfo[]) : [];
+    const databases = Array.isArray(obj.databases)
+      ? obj.databases.map((db) =>
+          typeof db === 'object' && db !== null
+            ? String((db as { name?: unknown }).name ?? '')
+            : String(db),
+        )
+      : [];
     const defaultDatabase =
-      typeof obj.defaultDatabase === 'string'
-        ? obj.defaultDatabase
-        : typeof obj.default === 'string'
-          ? obj.default
-          : 'default';
+      typeof obj.default_database === 'string'
+        ? obj.default_database
+        : typeof obj.defaultDatabase === 'string'
+          ? obj.defaultDatabase
+          : 'neo4j';
     return { databases, defaultDatabase };
   }
 
@@ -355,46 +380,65 @@ export class NexusClient {
       command: 'DB_CREATE',
       args: [nx.Str(name)],
     });
-    return asSuccessMessage(nexusToJson(resp.value), name);
+    const json = asSuccessMessage(nexusToJson(resp.value), name);
+    if (!json.success) throw new NexusSDKError(json.message || `Failed to create '${name}'`);
+    return json;
   }
 
   async getDatabase(name: string): Promise<DatabaseInfo> {
-    // No dedicated RPC verb — fold through a Cypher `SHOW DATABASE $name`.
-    const result = await this.executeCypher('SHOW DATABASE $name', { name });
-    if (result.rows.length === 0) {
-      throw new NexusSDKError(`Database '${name}' not found`);
-    }
-    return result.rows[0] as unknown as DatabaseInfo;
+    // The single-database REST route returns a stub with empty
+    // path/counts; the list carries the fully-populated records.
+    const resp = await this.transport.execute({ command: 'DB_LIST', args: [] });
+    const json = nexusToJson(resp.value) as { databases?: unknown };
+    const raw = Array.isArray(json.databases)
+      ? (json.databases as Array<Record<string, unknown>>).find((db) => db.name === name)
+      : undefined;
+    if (!raw) throw new NexusSDKError(`Database '${name}' not found`);
+    return {
+      name: String(raw.name ?? name),
+      path: String(raw.path ?? ''),
+      createdAt: Number(raw.created_at ?? 0),
+      nodeCount: Number(raw.node_count ?? 0),
+      relationshipCount: Number(raw.relationship_count ?? 0),
+      storageSize: Number(raw.storage_size ?? 0),
+    };
   }
 
   async dropDatabase(name: string): Promise<DropDatabaseResponse> {
+    if (name === this.currentDatabase) {
+      throw new NexusSDKError(
+        `cannot drop database '${name}': it is the current session database (switch away first)`,
+      );
+    }
     const resp = await this.transport.execute({
       command: 'DB_DROP',
       args: [nx.Str(name)],
     });
     const json = asSuccessMessage(nexusToJson(resp.value), name);
+    if (!json.success) throw new NexusSDKError(json.message || `Failed to drop '${name}'`);
     return { success: json.success, message: json.message };
   }
 
+  /**
+   * Current session database. The server is stateless, so this returns the
+   * client-side value set by {@link switchDatabase} (default `neo4j`).
+   */
   async getCurrentDatabase(): Promise<string> {
-    const resp = await this.transport.execute({ command: 'DB_CURRENT', args: [] });
-    const json = nexusToJson(resp.value);
-    if (typeof json === 'string') return json;
-    if (typeof json === 'object' && json !== null) {
-      const obj = json as Record<string, unknown>;
-      if (typeof obj.database === 'string') return obj.database;
-      if (typeof obj.name === 'string') return obj.name;
-    }
-    throw new NexusSDKError(`DB_CURRENT: unexpected response shape`);
+    return this.currentDatabase;
   }
 
+  /**
+   * Switch the client's session to a different database. Validates it
+   * exists, then updates the client-side session so subsequent
+   * {@link executeCypher} calls route to it (the server is stateless).
+   */
   async switchDatabase(name: string): Promise<SwitchDatabaseResponse> {
-    const resp = await this.transport.execute({
-      command: 'DB_USE',
-      args: [nx.Str(name)],
-    });
-    const json = asSuccessMessage(nexusToJson(resp.value), name);
-    return { success: json.success, message: json.message };
+    const { databases } = await this.listDatabases();
+    if (!databases.includes(name)) {
+      throw new NexusSDKError(`database '${name}' does not exist`);
+    }
+    this.currentDatabase = name;
+    return { success: true, message: `Switched to database '${name}'` };
   }
 }
 
@@ -434,6 +478,11 @@ function extractQueryResult(value: NexusValue): QueryResult {
     throw new NexusSDKError('CYPHER: expected object response');
   }
   const obj = json as Record<string, unknown>;
+  // Surface a server-side execution/parse error instead of silently
+  // returning an empty result set (which callers misread as "0 rows").
+  if (typeof obj.error === 'string' && obj.error.length > 0) {
+    throw new NexusSDKError(obj.error);
+  }
   const columns = Array.isArray(obj.columns)
     ? obj.columns.map((c) => String(c))
     : [];
@@ -463,6 +512,74 @@ function asStringArray(json: unknown, field: string): string[] {
     if (Array.isArray(obj[field])) return (obj[field] as unknown[]).map(String);
   }
   return [];
+}
+
+/**
+ * Build an inline property map with per-key parameter references
+ * (`{k1: $prefix0, k2: $prefix1}`) plus the matching parameter values.
+ * The server does not accept a whole-map parameter (`CREATE (n $props)`)
+ * but does accept individual value parameters, so write helpers inline
+ * the keys and parameterise only the values.
+ */
+function inlineProps(
+  props: Record<string, unknown>,
+  prefix: string,
+): { clause: string; params: Record<string, unknown> } {
+  const keys = Object.keys(props);
+  if (keys.length === 0) return { clause: '', params: {} };
+  const params: Record<string, unknown> = {};
+  const pairs = keys.map((key, i) => {
+    const p = `${prefix}${i}`;
+    params[p] = props[key];
+    return `${key}: $${p}`;
+  });
+  return { clause: ` {${pairs.join(', ')}}`, params };
+}
+
+/** Reserved keys the server folds into a node/relationship value. */
+const NEXUS_ID_KEY = '_nexus_id';
+const NEXUS_LABELS_KEY = '_nexus_labels';
+const NEXUS_REL_TYPE_KEY = '_nexus_rel_type';
+
+/**
+ * Convert a raw server node value (`{_nexus_id, _nexus_labels, ...props}`)
+ * into the SDK's `Node` shape (`{id, labels, properties}`).
+ */
+function rawToNode(raw: unknown): Node {
+  const obj = (raw ?? {}) as Record<string, unknown>;
+  const properties: NodeProperties = {};
+  for (const [k, v] of Object.entries(obj)) {
+    if (k === NEXUS_ID_KEY || k === NEXUS_LABELS_KEY) continue;
+    properties[k] = v as NodeProperties[string];
+  }
+  return {
+    id: Number(obj[NEXUS_ID_KEY] ?? 0),
+    labels: Array.isArray(obj[NEXUS_LABELS_KEY])
+      ? (obj[NEXUS_LABELS_KEY] as unknown[]).map(String)
+      : [],
+    properties,
+  };
+}
+
+/**
+ * Convert a raw server relationship value (`{_nexus_id, _nexus_rel_type,
+ * type, ...props}`) into the SDK's `Relationship` shape. The endpoints are
+ * not carried in the value, so callers that know them pass them in.
+ */
+function rawToRelationship(raw: unknown, startNodeId = 0, endNodeId = 0): Relationship {
+  const obj = (raw ?? {}) as Record<string, unknown>;
+  const properties: RelationshipProperties = {};
+  for (const [k, v] of Object.entries(obj)) {
+    if (k === NEXUS_ID_KEY || k === NEXUS_REL_TYPE_KEY || k === 'type') continue;
+    properties[k] = v as RelationshipProperties[string];
+  }
+  return {
+    id: Number(obj[NEXUS_ID_KEY] ?? 0),
+    type: String(obj[NEXUS_REL_TYPE_KEY] ?? obj.type ?? ''),
+    startNodeId,
+    endNodeId,
+    properties,
+  };
 }
 
 function asSuccessMessage(

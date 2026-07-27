@@ -51,11 +51,11 @@ CREATE (analysis:Analysis {content: '...'})
 CREATE (analysis)-[:FOR]->(doc)
 ```
 
-## Conflict Policies in Practice
+## Write Forms and Conflict Handling
 
-### ERROR (Defensive Create)
+### CREATE (Defensive)
 
-Use when creating is expected to succeed with a unique external id:
+Create with external ID fails if the external ID already exists:
 
 ```cypher
 CREATE (n:Node {_id: 'unique:abc', data: 'value'})
@@ -64,7 +64,7 @@ RETURN n._id
 -- Useful for validation: ensures no accidental duplicates
 ```
 
-### MATCH (Idempotent Ingest)
+### CREATE ... ON CONFLICT MATCH (Idempotent Ingest)
 
 Use for idempotent batch imports where the same data may be applied multiple times:
 
@@ -84,7 +84,7 @@ nexus-ingest --conflict=match files.csv
 # → existing nodes untouched, new files created
 ```
 
-### REPLACE (Full Re-Sync)
+### CREATE ... ON CONFLICT REPLACE (Full Re-Sync)
 
 Use when you want to update properties while preserving identity:
 
@@ -107,6 +107,35 @@ CREATE (config:Config {_id: 'str:prod-config', value: 'old'})
 -- Later: full re-sync with new values
 CREATE (config:Config {_id: 'str:prod-config', value: 'new'}) ON CONFLICT REPLACE
 -- Properties updated, same internal id
+```
+
+### MERGE ... ON CREATE/ON MATCH SET (Alternative Idempotent Form)
+
+An alternative to `ON CONFLICT MATCH`, MERGE also provides idempotent creation with finer-grained control:
+
+```cypher
+MERGE (f:File {_id: 'sha256:content…'})
+ON CREATE SET f.path = '/file.txt', f.imported_at = timestamp()
+ON MATCH SET f.last_seen = timestamp()
+RETURN f._id, f.path
+
+-- Multiple nodes in one statement (each endpoint has its own _id)
+MERGE (a:Person {_id: 'uuid:alice'})
+-[r:KNOWS {since: 2020}]->
+(b:Person {_id: 'uuid:bob'})
+ON CREATE SET r.met_at = timestamp()
+RETURN a._id, b._id
+```
+
+### CREATE with SET (Atomic Properties)
+
+Use CREATE+SET together to write external ID and properties atomically in one statement:
+
+```cypher
+CREATE (doc:Document {_id: 'uuid:550e8400-…'})
+SET doc.title = 'Updated Title', doc.version = 2, doc.updated_at = timestamp()
+RETURN doc._id, doc.title, doc.version
+-- External ID resolved and properties set in same statement
 ```
 
 ## External ID Formats
@@ -186,13 +215,24 @@ curl http://localhost:15474/data/nodes/by-external-id?external_id=sha256:abc123d
 CREATE (f:File {_id: 'sha256:abc…', path: '/file.txt'})
 RETURN f._id, f.path
 
--- Idempotent create
+-- Idempotent create with ON CONFLICT MATCH
 CREATE (doc:Doc {_id: 'uuid:550e8400-…', title: 'Report'}) ON CONFLICT MATCH
 RETURN doc._id
 
--- Update on conflict
+-- Idempotent create with MERGE (alternative form)
+MERGE (doc:Doc {_id: 'uuid:550e8400-…'})
+ON CREATE SET doc.title = 'Report', doc.created_at = timestamp()
+ON MATCH SET doc.last_seen = timestamp()
+RETURN doc._id
+
+-- Update on conflict with ON CONFLICT REPLACE
 CREATE (config:Config {_id: 'str:prod', value: 'new-value'}) ON CONFLICT REPLACE
 RETURN config._id, config.value
+
+-- Atomic create + property set in one statement
+CREATE (config2:Config {_id: 'str:staging'})
+SET config2.value = 'initial', config2.updated_at = timestamp()
+RETURN config2._id, config2.value
 
 -- Query by external id (index seek)
 MATCH (n {_id: 'sha256:abc…'})
@@ -413,9 +453,18 @@ Pulled verbatim from `sdks/php/tests/ExternalIdLiveTest.php` (14/14 live).
 
 **Problem**: Re-running an import creates new nodes instead of matching existing ones.
 
-**Solution**: Use `ON CONFLICT MATCH` in your CREATE statements:
+**Solution**: Use either form:
+
+**Option 1: CREATE ... ON CONFLICT MATCH** (simpler, returns existing node unchanged):
 ```cypher
 CREATE (f:File {_id: 'sha256:…', path: '/file'}) ON CONFLICT MATCH
+```
+
+**Option 2: MERGE ... ON CREATE/ON MATCH SET** (more control, allows conditional updates):
+```cypher
+MERGE (f:File {_id: 'sha256:…'})
+ON CREATE SET f.path = '/file', f.imported_at = timestamp()
+ON MATCH SET f.last_seen = timestamp()
 ```
 
 ### External ID lookup returns null

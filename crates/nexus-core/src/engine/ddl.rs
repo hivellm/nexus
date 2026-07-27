@@ -66,6 +66,72 @@ impl Engine {
                         });
                         continue;
                     }
+                    // phase20_knn-write-path-wiring §1.5 — a vector index
+                    // routes to the shared `VectorIndexRegistry` /
+                    // `KnnIndex` HNSW graph, mirroring the composite
+                    // early-continue route above: none of the typed
+                    // `property_index` existence/backfill machinery below
+                    // applies to it (a vector index is never registered
+                    // there).
+                    if create_index.index_type.as_deref() == Some("vector") {
+                        let _label_id = self.catalog.get_or_create_label(&create_index.label)?;
+                        let _key_id = self.catalog.get_or_create_key(&create_index.property)?;
+                        // Only one vector index can be active at a time (see
+                        // `VectorIndexRegistry` module docs). Capture the
+                        // previously-active definition (if any) BEFORE the
+                        // registry swap below, so an `OR REPLACE` that
+                        // installs a different `(label, property)` can also
+                        // remove the stale persisted definition — otherwise
+                        // it would linger in `vector_index_db` forever and
+                        // resurrect on the next restart alongside the new one.
+                        let previous_def = self
+                            .executor
+                            .knn_registry()
+                            .definitions()
+                            .into_iter()
+                            .next();
+                        self.executor.execute_create_index(
+                            &create_index.label,
+                            &create_index.property,
+                            Some("vector"),
+                            create_index.if_not_exists,
+                            create_index.or_replace,
+                        )?;
+
+                        // phase20_knn-write-path-wiring §3.2 — persist the
+                        // definition so the vector index survives a restart,
+                        // mirroring `persist_property_index` above. The
+                        // registry key is `"{label}.{property}"` (see
+                        // `Executor::execute_create_index`'s `"vector"` arm),
+                        // so persist under that same name.
+                        let vector_index_key =
+                            format!("{}.{}", create_index.label, create_index.property);
+                        if let Some((previous_name, _, _)) = previous_def {
+                            if previous_name != vector_index_key {
+                                self.catalog.remove_vector_index(&previous_name)?;
+                            }
+                        }
+                        self.catalog.persist_vector_index(
+                            &vector_index_key,
+                            &create_index.label,
+                            &create_index.property,
+                        )?;
+
+                        let index_name =
+                            format!(":{}({})", create_index.label, create_index.property);
+                        let message = if create_index.or_replace {
+                            format!("Vector index {} replaced", index_name)
+                        } else {
+                            format!("Vector index {} created", index_name)
+                        };
+                        result_rows.push(executor::Row {
+                            values: vec![
+                                serde_json::Value::String(index_name),
+                                serde_json::Value::String(message),
+                            ],
+                        });
+                        continue;
+                    }
                     // Get label and property IDs
                     let label_id = self.catalog.get_or_create_label(&create_index.label)?;
                     let property_key_id = self.catalog.get_or_create_key(&create_index.property)?;
@@ -171,6 +237,38 @@ impl Engine {
                     }
                 }
                 executor::parser::Clause::DropIndex(drop_index) => {
+                    // phase20_knn-write-path-wiring §1.5 — vector indexes
+                    // live in the shared `VectorIndexRegistry`, keyed by
+                    // the same `"{label}.{property}"` name the CREATE
+                    // VECTOR INDEX route above registers under (see
+                    // `Executor::execute_create_index`'s `"vector"` arm).
+                    // `DropIndexClause` carries no index-type tag (unlike
+                    // `CreateIndexClause`), so check that registry FIRST:
+                    // a vector index never touches the typed
+                    // `property_index` the rest of this handler drops,
+                    // and it must short-circuit before any label/property
+                    // catalog lookups run.
+                    let vector_key = format!("{}.{}", drop_index.label, drop_index.property);
+                    if self.executor.knn_registry().contains(&vector_key) {
+                        self.executor
+                            .execute_drop_index(&vector_key, drop_index.if_exists)?;
+                        // Remove the durable definition too — otherwise the
+                        // next restart would resurrect a dropped vector index
+                        // (phase20_knn-write-path-wiring §3.2).
+                        self.catalog.remove_vector_index(&vector_key)?;
+                        let index_name = format!(":{}({})", drop_index.label, drop_index.property);
+                        result_rows.push(executor::Row {
+                            values: vec![
+                                serde_json::Value::String(index_name.clone()),
+                                serde_json::Value::String(format!(
+                                    "Vector index {} dropped",
+                                    index_name
+                                )),
+                            ],
+                        });
+                        continue;
+                    }
+
                     // Get label and property IDs
                     let label_id = match self.catalog.get_label_id(&drop_index.label) {
                         Ok(id) => id,
@@ -228,6 +326,87 @@ impl Engine {
                             )),
                         ],
                     });
+                }
+                executor::parser::Clause::ShowIndexes => {
+                    // Mirror of the `SHOW CONSTRAINTS` handler: enumerate every
+                    // registered index and emit one row per index in
+                    // Neo4j-compatible column shape. Two disjoint registries
+                    // feed this: single-property (`properties.len() <= 1`)
+                    // indexes are persisted in the catalog, multi-property
+                    // ones live in the composite B-tree registry (see the
+                    // create routing above). Spatial indexes live in the
+                    // executor and are intentionally out of scope for this
+                    // minimal listing.
+                    let mut index_rows: Vec<executor::Row> = Vec::new();
+
+                    // Single-property range indexes (durable catalog records).
+                    let mut singles = self.catalog.list_property_indexes()?;
+                    singles.sort_unstable();
+                    for (label_id, key_id) in singles {
+                        let label_name = self
+                            .catalog
+                            .get_label_name(label_id)?
+                            .unwrap_or_else(|| format!("Label_{}", label_id));
+                        let prop_name = self
+                            .catalog
+                            .get_key_name(key_id)?
+                            .unwrap_or_else(|| format!("Property_{}", key_id));
+                        let name = format!("index_{}_{}", label_name, prop_name);
+                        index_rows.push(executor::Row {
+                            values: vec![
+                                serde_json::Value::String(name),
+                                serde_json::Value::String("RANGE".to_string()),
+                                serde_json::Value::String("NODE".to_string()),
+                                serde_json::Value::Array(vec![serde_json::Value::String(
+                                    label_name,
+                                )]),
+                                serde_json::Value::Array(vec![serde_json::Value::String(
+                                    prop_name,
+                                )]),
+                            ],
+                        });
+                    }
+
+                    // Composite (multi-property) B-tree indexes.
+                    let mut composites = self.indexes.composite_btree.list();
+                    composites.sort_by(|a, b| a.0.cmp(&b.0).then_with(|| a.1.cmp(&b.1)));
+                    for (label_id, property_keys, _unique, opt_name) in composites {
+                        let label_name = self
+                            .catalog
+                            .get_label_name(label_id)?
+                            .unwrap_or_else(|| format!("Label_{}", label_id));
+                        let name = opt_name.unwrap_or_else(|| {
+                            format!("index_{}_{}", label_name, property_keys.join("_"))
+                        });
+                        let properties = serde_json::Value::Array(
+                            property_keys
+                                .into_iter()
+                                .map(serde_json::Value::String)
+                                .collect(),
+                        );
+                        index_rows.push(executor::Row {
+                            values: vec![
+                                serde_json::Value::String(name),
+                                serde_json::Value::String("RANGE".to_string()),
+                                serde_json::Value::String("NODE".to_string()),
+                                serde_json::Value::Array(vec![serde_json::Value::String(
+                                    label_name,
+                                )]),
+                                properties,
+                            ],
+                        });
+                    }
+
+                    return Ok(executor::ResultSet::new(
+                        vec![
+                            "name".to_string(),
+                            "type".to_string(),
+                            "entityType".to_string(),
+                            "labelsOrTypes".to_string(),
+                            "properties".to_string(),
+                        ],
+                        index_rows,
+                    ));
                 }
                 _ => {}
             }

@@ -28,12 +28,14 @@ MATCH (n:Person)-[r:KNOWS]->(m:Person)
 -- Undirected relationship
 MATCH (n:Person)-[r:KNOWS]-(m:Person)
 
--- Variable-length path ✅ IMPLEMENTED
+-- Variable-length path ✅ IMPLEMENTED (with bounded-depth protection)
 MATCH (n:Person)-[:KNOWS*1..3]->(m:Person)
 MATCH (n:Person)-[:KNOWS*5]->(m:Person)  -- Fixed length
-MATCH (n:Person)-[:KNOWS*]->(m:Person)   -- Unbounded
-MATCH (n:Person)-[:KNOWS+]->(m:Person)   -- One or more
+MATCH (n:Person)-[:KNOWS*]->(m:Person)   -- Unbounded (max 64 hops)
+MATCH (n:Person)-[:KNOWS+]->(m:Person)   -- One or more (max 64 hops)
 MATCH (n:Person)-[:KNOWS?]->(m:Person)   -- Zero or one
+
+**Variable-length path bounded depth:** Unbounded quantifiers (`[*]`, `[+]`) and quantified path patterns with large bounds are clamped to a maximum **64-hop BFS depth**, preventing exhaustion on dense or cyclic graphs. Bounded quantifiers (e.g. `[*1..5]`) operate normally within their specified range. The limit applies per traversal start point; see `docs/specs/cypher-subset.md` § "Variable-Length Paths" for traversal semantics.
 
 -- Quantified Path Patterns (Cypher 25 / GQL) ✅ FULLY IMPLEMENTED
 -- Anonymous-body shape collapses to legacy *m..n at parse time;
@@ -55,6 +57,14 @@ MATCH (a)SIMPLE  ( ()-[:KNOWS]->() ){1,5}(b)   -- no edge AND no node revisits
 
 -- Multiple patterns
 MATCH (a:Person)-[:KNOWS]->(b:Person)-[:WORKS_AT]->(c:Company)
+
+-- Labelled scan returns only that label
+MATCH (n:Person) RETURN n
+-- Returns only nodes with the Person label, not unlabelled or other-labelled nodes
+
+-- Unlabelled scan returns all nodes
+MATCH (n) RETURN n
+-- Returns every node in the database regardless of labels
 ```
 
 **Pattern Syntax**:
@@ -89,7 +99,7 @@ Quantifier ::= '*' Int? ('..' Int?)?  -- legacy *m..n shorthand
              | '+' | '*' | '?'          -- shorthand desugars
 
 Variable ::= Identifier
-Type ::= Identifier
+Type ::= Identifier ( '|' Identifier )*  -- single type or union (e.g. :R, :R1|R2|R3)
 ```
 
 ### WHERE Clause
@@ -247,6 +257,17 @@ SKIP 10
 SKIP 20 LIMIT 10  -- page 3, size 10
 ```
 
+**Supported contexts.** SKIP is applied in the standard openCypher `ORDER BY` → `SKIP` → `LIMIT` pipeline order on pattern-less queries, procedure YIELD projections, and pattern-driven `MATCH` queries (including aggregation projections, `WITH` pipelines, and post-`UNION` projections):
+- ✅ `CALL db.labels() YIELD label RETURN label SKIP 1 LIMIT 10`
+- ✅ `RETURN 1 SKIP 1`
+- ✅ `UNWIND [1, 2, 3] AS x RETURN x SKIP 1`
+- ✅ `MATCH (n) RETURN n.v AS v ORDER BY v SKIP 1` — drops the first sorted row
+- ✅ `MATCH (n) RETURN n.v AS v ORDER BY v SKIP 1 LIMIT 2` — pagination over the sorted set
+- ✅ `MATCH (n:N) RETURN n.v AS v, count(*) AS c ORDER BY v SKIP 2` — after an aggregation projection
+- ✅ `MATCH ... RETURN v UNION MATCH ... RETURN v ORDER BY v SKIP 2` — SKIP applies to the merged result
+
+Pair `SKIP` with `ORDER BY` for deterministic pagination — without an explicit ordering the rows dropped are implementation-defined. On a post-`UNION` projection, a `SKIP`/`LIMIT` written *without* an accompanying `ORDER BY` binds to the nearest `RETURN` (the right-hand UNION arm) rather than the merged result, matching openCypher clause attachment; add `ORDER BY` after the final `UNION` to page the combined output.
+
 ### Aggregations
 
 ```cypher
@@ -283,6 +304,26 @@ AggFunc ::= 'COUNT' '(' ('DISTINCT')? Expr ')'
           | 'MAX' '(' Expr ')'
           | 'COLLECT' '(' Expr ')'  // V1
 ```
+
+**Empty and multi-hop patterns.** An aggregation over a pattern with no matches
+returns one row with the identity value (`count(*)`/`count(x)` = 0). This holds
+for multi-hop relationship patterns too: `count(*)` over
+`MATCH (a)-[:R1]->(b)-[:R2]->(c)` reports the true number of matching paths — `0`
+when any hop is absent — never a phantom count.
+
+**Fully-anonymous relationships.** A fully-anonymous relationship pattern with no
+node or relationship variables — `MATCH ()-[:TYPE]->() RETURN count(*)` — counts
+every matching relationship, not just the unique target nodes. Prior behavior under-counted by deduplicating rows incorrectly; the fix ensures each relationship is counted exactly once.
+
+**Argument-domain & overflow errors.** These operations return a bounded Cypher
+error (never a panic or a silently wrapped value) on out-of-range input:
+
+- `percentileCont(expr, p)` / `percentileDisc(expr, p)` require `p` in `[0.0, 1.0]`
+  (a value outside the range, or `NaN`, is rejected).
+- Temporal arithmetic — `date`/`datetime`/`localdatetime` `±` `duration` — errors
+  when the result would leave the representable date range instead of panicking.
+- Duration arithmetic — `duration ± duration` — errors on component overflow
+  instead of wrapping.
 
 ## KNN Procedures (MVP)
 
@@ -362,7 +403,52 @@ RETURN r
 -- Create multiple
 CREATE (a:Person {name: 'Alice'}), (b:Person {name: 'Bob'})
 CREATE (a)-[:KNOWS]->(b)
+
+-- Inline node creation in MATCH...CREATE patterns
+MATCH (a:Person {name: 'Alice'})
+CREATE (a)-[r:KNOWS]->(b:Person {name: 'Bob', age: 30})
+RETURN a, r, b
+
+-- Multi-hop chains with mixed bound and inline nodes
+MATCH (a:Person {name: 'Alice'})
+CREATE (a)-[:KNOWS]->(b:Person {name: 'Bob'})
+        -[:WORKS_AT]->(c:Company {name: 'Acme'})
+RETURN a, b, c
 ```
+
+**Inline node creation in relationship patterns (MATCH…CREATE).** When a node appears in a relationship
+pattern within a `CREATE` clause following a `MATCH`, it is created inline during the relationship
+write if the node's variable is unbound. The node is written immediately before the relationship,
+ensuring the full pattern (nodes and edges) persists atomically. Anonymous nodes (no explicit
+variable) can also anchor relationships. Multi-hop chains combine bound nodes (from the preceding
+`MATCH`) and inline-created nodes seamlessly.
+
+**CREATE semantics guarantee: each pattern element produces exactly one node.** A `CREATE` statement that
+combines a relationship pattern with write clauses (`SET`, `REMOVE`, `MERGE`, or `FOREACH` in the same
+query) produces exactly one instance of each node, even when the node appears in an inlined relationship
+pattern. Prior versions created a phantom duplicate in this scenario; the fix (3.0.0) ensures pattern
+materialization is atomic and non-duplicating. All query variables bind to the connected node, not an
+orphan. See `docs/data-corruption/CREATE-relationship-phantom-target-audit.md` for historical context
+and data-safety migration guidance.
+
+**Index and constraint maintenance (both CREATE forms).** A node created by a
+bare `CREATE` and one created by a `MATCH…CREATE` are treated identically:
+
+- **Typed property index** — the new node is inserted into the typed property
+  B-tree for every registered `(label, key)` index, so it is immediately
+  visible to `NodeIndexSeek`, `find_exact`, and the index-backed `MERGE`
+  existence check (no `MERGE`-created duplicates of a `MATCH…CREATE` node).
+- **Composite / `NODE KEY` index** — the new node's tuple is inserted into every
+  registered composite B-tree matching its labels.
+- **Extended constraints** — `NODE KEY` (each key present, non-null, tuple
+  unique) and property-type constraints are enforced. A duplicate `NODE KEY`
+  tuple is rejected whether the duplicate comes from an earlier statement or an
+  earlier node in the same multi-node `CREATE`.
+
+A `CREATE` statement that violates an extended constraint is rejected **as a
+whole** — no partial write survives (relationships created by the statement are
+rolled back along with the nodes). Single-column `UNIQUE` / `EXISTS` constraints
+are additionally rejected up front by the executor's local check.
 
 ### SET
 
@@ -397,6 +483,17 @@ DELETE r
 MATCH (n:Person {name: 'Alice'})
 DETACH DELETE n
 ```
+
+**Relationship-existence guard** (`phase0_fix-delete-node-dangling-relationships`):
+a non-`DETACH` `DELETE` of a node that still has ANY live relationship —
+**outgoing OR incoming** — fails with an error; use `DETACH DELETE`. The check
+is enforced centrally in `Engine::delete_node`, so it applies uniformly to
+every entry point (Cypher `MATCH…DELETE` and `FOREACH…DELETE`, REST, RPC,
+RESP3), not just Cypher. This closes a prior gap where an incoming-only node
+(which keeps `first_rel_ptr == 0`, since that pointer tracks outgoing edges
+only) slipped past the guard and was hard-deleted under a live edge, leaving a
+dangling relationship. Invariant: no live relationship record may reference a
+deleted node.
 
 ### REMOVE
 
@@ -497,20 +594,138 @@ MATCH (n) WHERE n._id = 'sha256:abc…'
 RETURN n
 ```
 
-### MERGE with External ID
+### Index Seek on Property Predicates
+
+The query planner uses property indexes when available for inline property predicates in node patterns:
+
+**Constant inline predicates** (already seekable):
+```cypher
+-- Constant literal → index seek
+MATCH (n:Person {id: 42})
+RETURN n
+
+-- Constant parameter → index seek
+MATCH (n:Person {id: $userId})
+RETURN n
+```
+
+**Correlated inline predicates** (row-local expressions from UNWIND/WITH):
+```cypher
+-- Row-local property access from UNWIND → index seek per driving row
+UNWIND $rows AS r
+MATCH (a:Person {id: r.s})
+RETURN a
+
+-- Multi-step: correlated predicate with multiple rows
+UNWIND [10, 20, 30] AS user_id
+MATCH (u:Person {id: user_id})
+CREATE (u)-[:VISITED]->(place:Place {name: 'New Location'})
+
+-- Batch endpoint resolution via correlated predicates
+UNWIND $edges AS edge
+MATCH (a:Person {id: edge.from_id}), (b:Person {id: edge.to_id})
+CREATE (a)-[:KNOWS]->(b)
+```
+
+**WHERE-clause predicates** (every form below seeks when an index exists):
+```cypher
+-- WHERE-clause equality with literal → index seek
+MATCH (n:Person) WHERE n.age = 30
+RETURN n
+
+-- WHERE-clause equality with parameter → index seek, key resolved at
+-- execution time (the predicate is kept as a residual filter)
+MATCH (n:Person) WHERE n.age = $age
+RETURN n
+
+-- WHERE-clause range comparison with literal → index range seek
+-- (>, >=, <, <=, and the mirrored `30 < n.age`)
+MATCH (n:Person) WHERE n.age > 30
+RETURN n
+
+-- IN over a literal list → union of point seeks
+MATCH (n:Person) WHERE n.age IN [30, 40, 50]
+RETURN n
+
+-- STARTS WITH a literal prefix → index prefix seek
+MATCH (n:Person) WHERE n.name STARTS WITH 'A'
+RETURN n
+
+-- CONTAINS → full-table filter (an unanchored substring match cannot be
+-- served by an ordered index)
+MATCH (n:Person) WHERE n.name CONTAINS 'li'
+RETURN n
+```
+
+**Fallback and limitations**:
+- If no index exists on the `(label, property)` pair, both constant and correlated predicates fall back to a label scan followed by property filtering.
+- WHERE-clause equality comparisons with **literal values** (e.g., `WHERE n.property = 30`) now use index seeks when an index exists on the property.
+- WHERE-clause **range comparisons** with a literal (`>`, `>=`, `<`, `<=`, and the mirrored `30 < n.age`) now use an index **range seek** when an index exists (exclusive `>`/`<` exclude the threshold; residual filters still run). One bound lifts to the seek; a second bound (`age > 10 AND age < 40`) stays a residual filter.
+- WHERE-clause **`IN`** over a literal list uses a **union of point seeks** (one per element). `NULL` elements are dropped — they can never make the comparison true — so `IN []` and `IN [null]` correctly match nothing. A `$parameter` list (`IN $ages`) has no plan-time elements and stays a label scan.
+- WHERE-clause **`STARTS WITH`** a literal prefix uses an index **prefix seek** (the contiguous run of string keys sharing the prefix). Only `n.prop STARTS WITH 'x'` seeks; the reversed `'x' STARTS WITH n.prop` asks a different question and stays a scan.
+- WHERE-clause equality against a **`$parameter`** uses a **parameter seek** that resolves the key from the query envelope at execution time (no driving rows required). If the parameter is bound to a list/map, or is absent from the envelope, the operator falls back to a label scan — which is why this is the one seek that keeps its predicate as a residual filter.
+- Numeric seek keys probe both `Integer` and `Float` index entries, because Cypher compares `10` and `10.0` equal while the B-tree keys them separately.
+- **`CONTAINS`** still evaluates the filter after a label scan even with an index, and keeps emitting `Nexus.Performance.UnindexedPropertyAccess`.
+- Predicate values that are function calls or complex expressions are not index-eligible and trigger a label scan.
+
+**Performance impact**:
+- Constant inline predicates: O(log N) or O(matches) via index seek
+- Correlated inline predicates with an index: O(R·log N) where R is the driving row count (one seek per row)
+- Correlated inline predicates without an index: O(R·N) label scan (quadratic behavior in the absence of indexes)
+
+### Write Forms Honouring External ID
+
+Reserved property `_id` is now honoured by all major write forms:
+
+**Fast path: MERGE constrained by external ID**
 
 ```cypher
--- Fast path: MERGE constrained only by _id
+-- MERGE uses external-id index (consulted before property-pattern search)
+-- Returns existing node if _id matches; creates if absent
 MERGE (n:File {_id: 'sha256:abc…'})
 ON CREATE SET n.imported_at = timestamp()
+ON MATCH SET n.synced_at = timestamp()
 RETURN n._id
 
--- MERGE creates when absent, matches when present (idempotent)
+-- Idempotent: same _id always resolves to the same node
 MERGE (n:User {_id: 'uuid:1234…'})
 ON CREATE SET n.created_at = timestamp()
 ON MATCH SET n.last_seen = timestamp()
 RETURN n._id
 ```
+
+**All supported write forms now preserve `_id`**:
+
+- `CREATE (n:L {_id:'str:x', ...})` — creates node with external ID (always worked)
+- `CREATE (n:L {_id:'str:x', ...}) SET ...` — creates with external ID, then applies SET (fixed)
+- `MERGE (n:L {_id:'str:x'}) ON CREATE SET ... ON MATCH SET ...` — external-id index consulted first, TOCTOU-safe (fixed)
+- `UNWIND ... CREATE (n {_id: $id, ...})` — where `$id` is a literal string or parameter (fixed)
+- `UNWIND ... MERGE (n:L {_id: $id})` — delegates to MERGE path (fixed)
+- **NEW: Relationship MERGE with per-endpoint external IDs**:
+  ```cypher
+  -- Each endpoint may carry its own _id (or none)
+  MERGE (a:Person {_id:'uuid:alice'})
+  -[r:KNOWS {start_year: 2020}]->
+  (b:Person {_id:'uuid:bob'})
+  ON CREATE SET r.met_at = timestamp()
+  ```
+
+**Explicit limitations** (deliberate design):
+
+1. **Per-row `_id` from UNWIND row is a parse error**: `UNWIND $rows AS r CREATE (n {_id: r.id})` is rejected. Only a literal string or `$param` is accepted. Rationale: a constant `_id` across rows would collide from row 2 anyway; rejected explicitly rather than silently dropped.
+
+2. **At most one node in a CREATE pattern carries `_id`**: `CREATE (a {_id: 'str:a'}) (b {_id: 'str:b'})` is a parse error (`_id may only appear once`). Only MERGE patterns support per-endpoint `_id` (via separate MERGE clauses or relationship endpoints).
+
+3. **Invalid `_id` values surface an explicit error** (never silently ignored):
+   - Missing or unknown prefix: use one of `blake3:`, `sha256:`, `sha512:`, `uuid:`, `str:`, `bytes:`
+   - Non-string value: `_id` must be a string or parameter
+   - Unresolved `$param`: returns a Cypher error
+
+4. **Relationships have no external IDs** (by design): only node endpoints carry `_id`. A relationship record itself cannot be looked up by external ID.
+
+**Match-before-pattern-search semantics**:
+
+When a MERGE pattern includes `_id`, the external-id index is consulted **before** the property-pattern search. This makes the external ID the stronger key and closes a TOCTOU (time-of-check-time-of-use) window: if two concurrent MERGE requests target the same `_id`, one wins without either seeing a phantom duplicate.
 
 ## Query Examples
 
@@ -564,12 +779,26 @@ LIMIT 10
 ### MERGE Clause
 
 ```cypher
--- Match or create
+-- Match or create node
 MERGE (n:Person {email: 'alice@example.com'})
 ON CREATE SET n.created = true
 ON MATCH SET n.last_seen = datetime()
 RETURN n
+
+-- Relationship pattern with anonymous endpoints/relationship (creates or matches the whole pattern)
+MERGE (a:Person {name: 'Alice'})-[:KNOWS]->(b:Person {name: 'Bob'})
+ON CREATE SET a.joined = datetime()
+ON MATCH SET a.seen = datetime()
+
+-- ON CREATE/ON MATCH SET can target endpoint nodes even when relationship/endpoints are anonymous
+MERGE (:Person {name: 'Alice'})-[:KNOWS]->(:Person {name: 'Bob'})
+ON CREATE SET (a:Person {name: 'Alice'}).joined = datetime()  -- targets the endpoint by pattern
 ```
+
+Relationship MERGE patterns support fully anonymous forms:
+- **Anonymous relationship** (`-[:TYPE]->` with no variable `r`): the edge is created or matched as part of the whole pattern.
+- **Anonymous endpoints** (`(:Label {props})` with no variable): nodes are created or matched; ON CREATE/ON MATCH SET items targeting those nodes now apply (previously silently filtered out for anonymous endpoints).
+- **Mixed**: one or both endpoints may lack variables; the relationship may lack a variable; all three are supported independently. The whole pattern (all three elements) is created or matched as an atomic unit.
 
 ### WITH Clause
 
@@ -628,6 +857,29 @@ Implementation: the planner injects an `EnsureNullRowIfEmpty`
 operator after the first OPTIONAL pattern's scan when no prior
 driver exists. The operator is a no-op when the scan produced
 rows.
+
+#### Required MATCH semantics (non-OPTIONAL Expand)
+
+A required (non-OPTIONAL) pattern expansion that finds no matching
+relationships drops the input row entirely, rather than emitting a phantom
+partial row with the expansion's variables bound to `NULL`:
+
+```cypher
+-- If no edge exists from any Person to any Message:
+MATCH (p:Person), (m:Message), (post:Post)
+MATCH (m)-[:REPLY_OF]->(post)
+RETURN p, m, post
+-- Returns zero rows (no phantom [<p>, <m>, NULL] rows)
+```
+
+Use `OPTIONAL MATCH` to preserve rows with `NULL` bindings:
+
+```cypher
+MATCH (p:Person), (m:Message), (post:Post)
+OPTIONAL MATCH (m)-[:REPLY_OF]->(post)
+RETURN p, m, post
+-- Returns rows with post = NULL if the optional edge doesn't exist
+```
 
 ### UNWIND Clause
 
@@ -702,7 +954,17 @@ RETURN CASE
   WHEN n.age < 65 THEN 'Adult'
   ELSE 'Senior'
 END AS age_group
+
+-- CASE (and list/pattern comprehensions) are supported inside WHERE too,
+-- evaluated against each row — not only in RETURN/WITH projections.
+MATCH (n) WHERE CASE WHEN n.x > 4 THEN true ELSE false END RETURN n
 ```
+
+A `WHERE` clause is evaluated by carrying the parsed predicate AST through to
+the filter operator (`Operator::Filter`/`OptionalFilter` `predicate_ast`) and
+evaluating it directly against each row, the same evaluator `RETURN`/`WITH`
+projections use — so `CASE`, list/pattern comprehensions, and other complex
+expressions in a `WHERE` evaluate identically to their projected form.
 
 ### Comprehensions
 
@@ -734,14 +996,45 @@ CREATE OR REPLACE INDEX ON :Person(age)
 -- Create spatial index
 CREATE SPATIAL INDEX ON :Location(coords)
 
+-- Create vector index (native KNN search, dimension fixed at 128)
+CREATE VECTOR INDEX ON :Person(embedding)
+
+-- Create vector index if not exists
+CREATE VECTOR INDEX IF NOT EXISTS ON :Person(embedding)
+
+-- Create or replace vector index (resets the index)
+CREATE OR REPLACE VECTOR INDEX ON :Person(embedding)
+
 -- Drop index
 DROP INDEX ON :Person(email)
 
 -- Drop index if exists
 DROP INDEX IF EXISTS ON :Person(name)
+
+-- Drop vector index
+DROP INDEX ON :Person(embedding)
+
+-- Show all indexes
+SHOW INDEXES
+-- Returns: name, type, entityType, labelsOrTypes, properties
+
+-- Show indexes and filter by label
+SHOW INDEXES
+-- Can be followed by a WHERE clause if needed in application code
 ```
 
+**Vector Index Constraints (V1):**
+- **Single global index**: Only one active vector index per database. Creating a second distinct index without `CREATE OR REPLACE` returns an error.
+- **Fixed dimension**: Vector dimension is fixed at 128 floats per vector. All embeddings must have exactly 128 components.
+- **Embedding supply**: Embeddings are supplied via query parameters or the data API — inline array literals in the CREATE DDL are NOT supported.
+
 ### Constraint Management
+
+Both the legacy Cypher 4.x `ON … ASSERT` form and the Cypher 25 `FOR … REQUIRE`
+form are supported. New queries should prefer `FOR … REQUIRE`; the legacy form is
+kept for backward compatibility.
+
+#### Legacy form (Cypher 4.x)
 
 ```cypher
 -- Unique constraint
@@ -756,6 +1049,35 @@ DROP CONSTRAINT ON (n:Person) ASSERT n.email IS UNIQUE
 -- Drop constraint if exists
 DROP CONSTRAINT IF EXISTS ON (n:Person) ASSERT EXISTS(n.email)
 ```
+
+#### Cypher 25 form — node scope
+
+An optional constraint name may precede `IF NOT EXISTS`.
+
+```cypher
+CREATE CONSTRAINT FOR (n:Person) REQUIRE n.email IS UNIQUE
+CREATE CONSTRAINT FOR (n:Person) REQUIRE n.email IS NOT NULL
+
+-- Named, idempotent
+CREATE CONSTRAINT person_email_unique IF NOT EXISTS
+    FOR (n:Person) REQUIRE n.email IS UNIQUE
+
+-- Composite node key
+CREATE CONSTRAINT FOR (n:Person) REQUIRE (n.first, n.last) IS NODE KEY
+
+-- Property type constraint
+-- (INTEGER | FLOAT | STRING | BOOLEAN | BYTES | LIST | MAP)
+CREATE CONSTRAINT FOR (n:Person) REQUIRE n.age IS :: INTEGER
+```
+
+#### Cypher 25 form — relationship scope
+
+```cypher
+CREATE CONSTRAINT FOR ()-[r:KNOWS]-() REQUIRE r.since IS NOT NULL
+CREATE CONSTRAINT FOR ()-[r:KNOWS]-() REQUIRE r.weight IS :: FLOAT
+```
+
+A violated constraint raises `ERR_CONSTRAINT_VIOLATED`.
 
 ### Database Management
 
@@ -904,6 +1226,14 @@ LOAD CSV FROM 'file:///path/to/data.csv' WITH HEADERS AS row
 CREATE (n:Person {name: row.name, age: toInteger(row.age)})
 ```
 
+`LOAD CSV ... AS row` binds a fresh per-row variable, exactly like `UNWIND`.
+The cost-based operator-reordering pass treats it as a per-row binder: it is
+ordered before any `WHERE`/`Filter` that references the row variable, and
+before a correlated seek it feeds (e.g. `LOAD CSV ... AS row MATCH (n:Label
+{id: row.id})` with an index on `:Label(id)`), so a predicate on the CSV row —
+or a `MATCH` seeded from it — is applied correctly rather than silently
+dropped.
+
 ## Advanced Features ✅ IMPLEMENTED
 
 ### Subqueries
@@ -969,6 +1299,13 @@ RETURN shortestPath((a:Person {name: 'Alice'})-[*]-(b:Person {name: 'Bob'}))
 RETURN allShortestPaths((a:Person)-[*]-(b:Person))
 ```
 
+Both functions take their endpoints from variables bound by a preceding
+`MATCH` (`MATCH (a), (b) RETURN shortestPath((a)-[...]->(b))`); a
+`MATCH p = shortestPath(...)` assignment form is not supported. The
+relationship pattern may name **multiple types** with `|` — `shortestPath((a)-[:R1|R2*..5]->(b))`
+traverses every named type (OR-membership), and an unqualified `[*..n]`
+matches every type. An unbounded `[*]` uses BFS with no depth cap.
+
 ## Built-in Functions ✅ IMPLEMENTED
 
 ### String Functions
@@ -988,10 +1325,12 @@ RETURN length('hello') AS len
 -- 2.5.0 additions
 RETURN ascii('A') AS code            -- 65
 RETURN chr(65) AS ch                 -- 'A'
-RETURN lpad('7', 3, '0') AS padded   -- '007'
-RETURN rpad('ab', 4, '.') AS padded  -- 'ab..'
+RETURN lpad('7', 3, '0') AS padded   -- '007' (bounded allocation)
+RETURN rpad('ab', 4, '.') AS padded  -- 'ab..' (bounded allocation)
 RETURN normalize('café') AS nfc      -- NFC default; NFD/NFKC/NFKD via 2nd arg
 RETURN randomUUID() AS uuid          -- v4 UUID string
+
+**`lpad()` and `rpad()` bounded allocation:** Both functions cap the target length to **1,000,000 characters**, rejecting larger requests with a Cypher error before string allocation. Typical padding operations remain unaffected.
 ```
 
 ### Regex Functions ✅ IMPLEMENTED
@@ -1215,10 +1554,13 @@ RETURN head([1, 2, 3]) AS first
 RETURN tail([1, 2, 3]) AS rest
 RETURN last([1, 2, 3]) AS last_item
 RETURN range(1, 10) AS numbers
+RETURN range(0, 1000000, 2) AS step_range  -- bounded allocation
 RETURN reverse([1, 2, 3]) AS reversed
 RETURN reduce(acc = 0, x IN [1, 2, 3] | acc + x) AS sum
 RETURN [x IN [1, 2, 3] | x * 2] AS doubled
 ```
+
+**`range()` bounded allocation:** `range(start, end [, step])` rejects queries whose element count exceeds **2,000,000** with a Cypher error. Checked arithmetic prevents wraparound on huge step values, so `range(0, 9223372036854775807, 3)` returns an error instead of looping. Well-formed ranges within 2M elements are unaffected.
 
 ### Path Functions
 
@@ -1544,6 +1886,66 @@ RETURN coefficient
 
 **Total: 19 GDS procedures implemented**
 
+### Schema Introspection Procedures
+
+Nexus provides a suite of read-only schema procedures for inspecting catalog metadata, index/constraint definitions, and property keys. These procedures honor the per-request `database` field on `/cypher` — a `CALL db.labels()` on `database:"alpha"` queries the `alpha` database's catalog, not the default.
+
+**YIELD projection ordering (ORDER BY, SKIP, LIMIT).** Procedure YIELD projections support ORDER BY, SKIP, and LIMIT clauses in the standard openCypher order. For example, `CALL db.labels() YIELD label RETURN label ORDER BY label SKIP 1 LIMIT 10` will sort the labels alphabetically, skip the first result, and return the next 10 — all clauses now apply correctly to pattern-less YIELD outputs.
+
+| Procedure | Returns | Description |
+|-----------|---------|-------------|
+| `db.labels()` | List of label names | All node labels currently in use (single column: `label`). |
+| `db.propertyKeys()` | List of property key names | All properties observed on writes (single column: `propertyKey`). Keys are registered at every property write via engine CRUD, executor CREATE, SET/MERGE on relationships, and bulk loaders — not only at DDL. |
+| `db.relationshipTypes()` | List of relationship type names | All relationship types currently in use (single column: `relationshipType`). |
+| `db.schema()` | `nodes` array, `relationships` array | Combined schema: nested JSON objects with `name` fields, useful for schema inspection in a single query. |
+| `db.info()` | id, name, creationDate | Database info: `id` (usually `"db-1"`), `name` (database name), `creationDate` (ISO 8601 timestamp). Single row. |
+| `db.indexes()` | Index metadata | All indexes (label bitmaps, composite B-tree, KNN, full-text, R-tree): columns `id, name, state, populationPercent, uniqueness, type, entityType, labelsOrTypes, properties, indexProvider, options`. Filterable via `YIELD` clause. |
+| `db.indexDetails(indexName)` | Single index metadata | Same columns as `db.indexes()`, filtered to a specific index by name (useful for detailed inspection of one index). |
+| `db.constraints()` | Constraint metadata | All constraints (UNIQUENESS, NODE_PROPERTY_EXISTENCE): columns `id, name, type, entityType, labelsOrTypes, properties, ownedIndex`. |
+
+**Examples:**
+
+```cypher
+-- List all labels in the current database
+CALL db.labels() YIELD label
+RETURN label
+ORDER BY label
+
+-- List all property keys (includes keys from live writes)
+CALL db.propertyKeys() YIELD propertyKey
+RETURN propertyKey
+
+-- Get full schema in one call
+CALL db.schema() YIELD nodes, relationships
+RETURN nodes, relationships
+
+-- Inspect a specific index
+CALL db.indexDetails('index_label_Person') YIELD name, type, properties
+RETURN name, type, properties
+
+-- Query a different database's schema
+POST /cypher
+{
+  "query": "CALL db.labels() YIELD label RETURN label",
+  "database": "alpha"
+}
+```
+
+**Additional System Procedures:**
+
+| Procedure | Returns | Description |
+|-----------|---------|-------------|
+| `dbms.components()` | Component info | Nexus components/versions. |
+| `dbms.procedures()` | Procedure list | All built-in procedures with signatures. |
+| `dbms.functions()` | Function list | All built-in functions. |
+| `dbms.info()` | System info | Nexus system information. |
+| `dbms.listConfig(pattern?)` | Config parameters | Configuration keys matching an optional pattern. |
+| `dbms.showCurrentUser()` | User info | Current authenticated user (if auth enabled). |
+| `db.index.fulltext.queryNodes(indexName, query, limit?)` | Full-text results | Query a full-text node index by name. |
+| `db.index.fulltext.queryRelationships(indexName, query, limit?)` | Full-text results | Query a full-text relationship index by name. |
+| `db.index.fulltext.listAvailableAnalyzers()` | Analyzer list | Available Tantivy analyzers for full-text indexes. |
+| `spatial.nearest(label, property, point, limit?)` | Spatial results | K-nearest spatial neighbors from R-tree index. |
+
 ## Unsupported Features (Out of Scope)
 
 ### Not Currently Implemented
@@ -1789,7 +2191,7 @@ available in every expression position:
 | Function                              | Result                                    |
 |---------------------------------------|-------------------------------------------|
 | `bytes(str)`                          | UTF-8 encode a STRING to BYTES            |
-| `bytesFromBase64(str)`                | Decode a base64 STRING to BYTES           |
+| `bytesFromBase64(str)`                | Decode a base64 STRING to BYTES (bounded) |
 | `bytesToBase64(b)`                    | Encode BYTES as a base64 STRING           |
 | `bytesToHex(b)`                       | Lowercase hex of the bytes                |
 | `bytesLength(b)`                      | Length in bytes (INTEGER)                 |
@@ -1798,21 +2200,53 @@ available in every expression position:
 NULL in → NULL out across every entry point. The per-property cap
 is 64 MiB; exceeding it raises `ERR_BYTES_TOO_LARGE`.
 
-### Dynamic labels on writes
+**Base64 payload bounded allocation:** Base64-encoded BYTES literals and `$parameter` values are validated on their **encoded length** before decoding (before per-property size checks apply), rejecting oversized inputs with a Cypher error. This prevents a query from allocating multi-gigabyte buffers via a large base64 string in a literal or parameter binding.
 
-`$param` is accepted wherever a label appears in a write clause:
+### Dynamic labels and relationship types
+
+`$param` is accepted wherever a label or relationship type appears in read and write clauses.
+
+#### Labels and types — read side (MATCH patterns)
+
+```cypher
+-- Match nodes with a dynamic label
+MATCH (n:$label)
+WHERE n.id = 42
+RETURN n
+
+-- Variable-length paths with dynamic types
+MATCH (a)-[:$reltype*1..5]->(b)
+RETURN a, b
+
+-- Multiple dynamic relationship types (union)
+MATCH (a)-[:R1|$type2|R3]->(b)
+RETURN a, b
+```
+
+Dynamic labels and types in reads resolve at execution time against query parameters:
+- **STRING parameter:** single label/type
+- **LIST<STRING> parameter:** multiple labels (node must carry ALL as a label intersection), or union of relationship types (matched if edge is any of the types)
+- **NULL, missing, empty, or non-STRING:** returns zero rows (no error)
+- A LIST containing non-STRING elements raises `ERR_INVALID_LABEL` / `ERR_INVALID_RELATIONSHIP_TYPE`
+
+#### Labels and types — write side
+
+`$param` is accepted wherever a label or relationship type appears in a write clause:
 
 ```cypher
 CREATE (n:$label)
 CREATE (n:Base:$role)
 SET n:$label
 REMOVE n:$label
+
+CREATE (a)-[r:$type]->(b)
+MERGE (a)-[r:$reltype]->(b) ON CREATE SET r.created = true
 ```
 
-The parameter may be a STRING (single label) or a LIST<STRING>
-(expands to multiple labels in order). Rejected with
-`ERR_INVALID_LABEL`: NULL, empty string, empty list, non-STRING
-list element, or a label string containing characters outside
+The parameter may be a STRING (single label/type) or a LIST<STRING>
+(expands to multiple labels/types in order). Rejected with
+`ERR_INVALID_LABEL` / `ERR_INVALID_RELATIONSHIP_TYPE`: NULL, empty string, empty list, non-STRING
+list element, or a label/type string containing characters outside
 `[A-Za-z_][A-Za-z0-9_]*`.
 
 ### Composite B-tree indexes

@@ -157,6 +157,16 @@ impl Executor {
         self.config.columnar_threshold = threshold;
     }
 
+    /// Override the `cartesian_product_max_bytes` budget on this executor.
+    ///
+    /// Exposed as a narrow public mutator so the server can honour the
+    /// `NEXUS_CARTESIAN_PRODUCT_MAX_BYTES` operator override without
+    /// constructing an `ExecutorConfig` by hand. See
+    /// `phase0_fix-cypher-oom-process-abort`.
+    pub fn set_cartesian_product_max_bytes(&mut self, max_bytes: usize) {
+        self.config.cartesian_product_max_bytes = max_bytes;
+    }
+
     /// Run the filter operator over an in-memory working set.
     ///
     /// Builds a fresh `ExecutionContext`, binds `rows` to `variable`,
@@ -173,7 +183,7 @@ impl Executor {
         use super::context::ExecutionContext;
         let mut context = ExecutionContext::new(HashMap::new(), None);
         context.set_variable(variable, serde_json::Value::Array(rows));
-        self.execute_filter(&mut context, predicate)?;
+        self.execute_filter(&mut context, predicate, None)?;
         Ok(context.result_set.rows.len())
     }
 
@@ -297,6 +307,23 @@ impl Executor {
         self.shared.rtree_registry = registry;
     }
 
+    /// Replace the executor's vector-index registry arc with the
+    /// engine's canonical `IndexManager::knn_registry` arc so
+    /// `CREATE VECTOR INDEX` and the write-path autopopulate hooks
+    /// share the same in-memory registry state
+    /// (phase20_knn-write-path-wiring §1.4).
+    ///
+    /// Called from `Engine::refresh_executor` after every engine-side
+    /// index update. Subsequent calls replace the arc again — like
+    /// `install_rtree` (plain `Arc` field, not `OnceLock`), the
+    /// registry is safe to overwrite on every refresh.
+    pub(crate) fn install_knn_registry(
+        &mut self,
+        registry: std::sync::Arc<crate::index::knn_registry::VectorIndexRegistry>,
+    ) {
+        self.shared.knn_registry = registry;
+    }
+
     pub(crate) fn install_preparsed_ast_override(
         &self,
         ast: Option<super::parser::CypherQuery>,
@@ -348,6 +375,15 @@ impl Executor {
     /// through the full DDL path.
     pub fn rtree_registry(&self) -> std::sync::Arc<crate::index::rtree::RTreeRegistry> {
         self.shared.rtree_registry.clone()
+    }
+
+    /// Public handle on the shared vector-index registry. Used by the
+    /// engine to publish the current definition, by the `CREATE VECTOR
+    /// INDEX` handler to register/replace it, and by tests to seed or
+    /// inspect the active index without going through the full DDL path
+    /// (phase20_knn-write-path-wiring §1.4).
+    pub fn knn_registry(&self) -> std::sync::Arc<crate::index::knn_registry::VectorIndexRegistry> {
+        self.shared.knn_registry.clone()
     }
 
     /// Read lock on label_index (guard derefs to `&LabelIndex`).

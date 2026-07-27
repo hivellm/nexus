@@ -1,0 +1,14 @@
+{
+  "id": 4,
+  "slug": "sdk-transport-default-is-nexusrpc",
+  "title": "SDK transport default is NexusRpc",
+  "status": "proposed",
+  "date": "2026-04-19",
+  "relatedTasks": [
+    "phase2_sdk-rpc-transport-default",
+    "phase2_cli-default-rpc-transport",
+    "phase1_nexus-rpc-binary-protocol",
+    "phase1_nexus-resp3-compatibility"
+  ],
+  "supersededBy": null
+}

@@ -7,22 +7,27 @@
 //! - CRUD operations for graph entities
 //! - Property storage and retrieval
 
+pub mod adjacency_index;
 pub mod adjacency_list;
 pub mod crypto;
 pub mod external_id;
+pub(crate) mod fs;
 pub mod graph_engine;
 pub mod property_store;
 pub mod record_store;
 pub mod record_store_ops;
 pub mod records;
 pub mod row_lock;
+mod temp_guard;
+pub(crate) use temp_guard::TempDirGuard;
 pub mod write_buffer;
 
 pub use external_id::{ConflictPolicy, ExternalId};
 
 // Record layout types — constants and structs
 pub use records::{
-    NODE_RECORD_SIZE, NodeRecord, REL_RECORD_SIZE, RecordStoreStats, RelationshipRecord,
+    FLAG_ALLOCATED, FLAG_DELETED, NODE_RECORD_SIZE, NodeRecord, REL_RECORD_SIZE, RecordStoreStats,
+    RelationshipRecord,
 };
 
 // RecordStore — struct + lifecycle methods (record_store.rs) and operations

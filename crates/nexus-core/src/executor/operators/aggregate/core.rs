@@ -58,7 +58,7 @@ impl Executor {
             // Only skip materialization if we don't have GROUP BY and have match columns (MATCH returned empty)
             // If we have GROUP BY, we need rows to create groups, so materialize even with match columns
             if !has_match_columns || !group_by.is_empty() {
-                let rows = self.materialize_rows_from_variables(context);
+                let rows = self.materialize_rows_from_variables(context)?;
                 self.update_result_set_from_rows(context, &rows);
             }
         }
@@ -170,7 +170,7 @@ impl Executor {
         } else if rows.is_empty() && !group_by.is_empty() && !context.variables.is_empty() {
             // GROUP BY but no rows - materialize from variables if Project was deferred
             // This happens when Project is deferred until after Aggregate
-            let materialized_rows = self.materialize_rows_from_variables(context);
+            let materialized_rows = self.materialize_rows_from_variables(context)?;
             if !materialized_rows.is_empty() {
                 // Convert to Row format for grouping
                 let columns = context.result_set.columns.clone();
@@ -846,6 +846,14 @@ impl Executor {
                         Aggregation::PercentileCont {
                             column, percentile, ..
                         } => {
+                            // Neo4j requires the percentile argument to be in [0.0, 1.0];
+                            // this also rejects NaN (all range comparisons with NaN are
+                            // false), which would otherwise poison `position` below.
+                            if !(0.0..=1.0).contains(percentile) {
+                                return Err(Error::CypherExecution(format!(
+                                    "percentileCont() requires a percentile between 0.0 and 1.0, got {percentile}"
+                                )));
+                            }
                             // See PercentileDisc above for why this uses
                             // extract_value_from_row instead of get_column_index.
                             let mut values: Vec<f64> = group_rows
@@ -862,10 +870,13 @@ impl Executor {
                                 values.sort_by(|a, b| {
                                     a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal)
                                 });
-                                // Continuous percentile: linear interpolation
+                                // Continuous percentile: linear interpolation.
+                                // lower_idx/upper_idx are clamped defensively (mirrors
+                                // PercentileDisc above) even though the [0,1] validation
+                                // already rules out the only way this could go OOB.
                                 let position = *percentile * (values.len() - 1) as f64;
-                                let lower_idx = position.floor() as usize;
-                                let upper_idx = position.ceil() as usize;
+                                let lower_idx = (position.floor() as usize).min(values.len() - 1);
+                                let upper_idx = (position.ceil() as usize).min(values.len() - 1);
 
                                 let result = if lower_idx == upper_idx {
                                     values[lower_idx]

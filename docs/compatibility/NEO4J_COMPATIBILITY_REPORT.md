@@ -81,9 +81,11 @@ See `docs/guides/FULL_TEXT_SEARCH.md`.
 
 ## v1.5 — advanced-types additions (2026-04-21)
 
-phase6_opencypher-advanced-types lifts Nexus toward ~95% openCypher
-parity by adding six concurrent surfaces, none of which regress the
-existing 325/325 diff suite:
+phase6_opencypher-advanced-types broadens Nexus's openCypher *feature*
+coverage (a feature-inventory estimate — distinct from the measured
+openCypher TCK conformance now tracked in `OPENCYPHER_TCK_REPORT.md`, and
+from the differential Neo4j suite below) by adding six concurrent surfaces,
+none of which regress the existing 325/325 diff suite:
 
 - **BYTES scalar family** — `bytes()`, `bytesFromBase64()`,
   `bytesToBase64()`, `bytesToHex()`, `bytesLength()`, `bytesSlice()`.

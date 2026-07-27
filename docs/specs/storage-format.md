@@ -51,11 +51,29 @@ record_offset = node_id * 32
 ```
 Bit    | Meaning
 -------|----------------------------------------------------------
-0      | Deleted (soft delete, GC later)
-1      | Locked (transaction in progress)
+0      | Deleted (soft delete, GC later)          — FLAG_DELETED = 0b01
+1      | Allocated / in-use (set on every write)  — FLAG_ALLOCATED = 0b10
 2-7    | Reserved
 8-31   | Version/epoch (for MVCC, 24 bits = 16M versions)
 ```
+
+**Allocated bit & recovery contract** (`phase0_fix-anonymous-node-lost-on-restart`):
+Bit 1 (`FLAG_ALLOCATED`) is set by `write_node`/`write_rel` on every live
+write. It exists because a node with no labels, no properties and no
+relationships (or a relationship with `src=dst=type=0` and no pointers) would
+otherwise persist as a byte-for-byte **all-zero** record — indistinguishable
+from an unallocated slot. On startup the store reconstructs
+`next_node_id`/`next_rel_id` by scanning the record file; a slot counts as
+**in use** (reserving its id) if `FLAG_ALLOCATED` is set **or**, for
+backward-compatibility with pre-fix stores, any byte is non-zero. This
+reservation is independent of the deleted bit: a soft-deleted record still
+reserves its id (deletion never releases an id; `is_deleted()` is the
+query-visibility gate, not the id-reservation gate). Legacy non-zero slots are
+stamped with `FLAG_ALLOCATED` by a one-time migration on reopen (the deleted
+bit is preserved). Caveat: an anonymous record already written by the pre-fix
+format is physically all-zero and cannot be recovered — only records written
+after the fix are protected. (Bit 1 was previously reserved in this document
+for a "Locked" flag that was never implemented.)
 
 **label_bits Encoding**:
 ```
@@ -117,6 +135,51 @@ while rel_ptr != 0xFFFFFFFFFFFFFFFF:
     else:  # rel.src_id == N
         rel_ptr = rel.next_src_ptr
 ```
+
+> **Note:** `first_rel_ptr` is set on a node only for its OUTGOING
+> relationships — `create_relationship` deliberately does NOT set it on the
+> destination node. A node that is only ever a relationship TARGET therefore
+> keeps `first_rel_ptr == 0`, so `first_rel_ptr != 0` alone is NOT a complete
+> liveness check for "has any relationship" (it misses incoming-only nodes).
+> The "incoming relationships" walk sketched above is therefore only usable
+> from a node that already heads a chain; the reverse direction is served by
+> the in-memory adjacency index below.
+
+#### Adjacency index (in-memory, authoritative)
+
+Because the on-disk format carries no reverse adjacency, `RecordStore` keeps
+one in memory (`storage::adjacency_index::AdjacencyIndex`): `node_id → {live
+relationship ids}`, in both directions, shared by every clone of the store.
+
+- **Maintained in exactly one place** — `RecordStore::write_rel`, the single
+  funnel every relationship-record mutation passes through (creation, the
+  `next_src_ptr` fix-ups, and all deletion paths, only some of which call
+  `delete_rel`). A write path cannot desync it by forgetting to call anything;
+  that is what makes it authoritative, unlike `cache::RelationshipIndex`, which
+  the executor `CREATE` operator and the bulk loader never notify and which is
+  therefore only ever a hint. `clear_all` resets it explicitly, being the one
+  operation that replaces the record files wholesale.
+- **Rebuilt on open**, inside the scan `RecordStore::new` already performs to
+  derive `next_rel_id` — no extra I/O, no format change, nothing to migrate.
+  Deleted records are skipped, so a reopen cannot resurrect a deleted edge.
+- **Endpoints are immutable** once written (nothing assigns `src_id`/`dst_id`
+  on an existing record), so a write only ever adds or removes the record's own
+  id from the sets, decided by its own deleted bit — no read-before-write.
+- **Accelerator, not an oracle**: consumers (`Engine::delete_node`'s liveness
+  guard, `delete_node_relationships`, the MERGE exact-edge fallback) read each
+  candidate record back and re-check it, so the index only decides WHICH
+  records are worth reading. It turns those paths from
+  O(total relationships) into O(degree).
+
+Design notes: `docs/analysis/store-adjacency-index/`.
+
+**Deletion invariant** (`phase0_fix-delete-node-dangling-relationships`): no
+LIVE relationship record may reference a deleted node. A non-`DETACH` node
+delete is refused (at `Engine::delete_node`, uniformly for all protocols) when
+the node still has any live relationship — outgoing OR incoming — so an edge can
+never be left pointing at a freed node. Node deletion is soft (`mark_deleted`),
+and ids are never recycled, so a lingering pointer to a soft-deleted node is a
+bug, not an expected transient.
 
 ### props.store
 
@@ -447,6 +510,20 @@ Example progression:
 1MB → 2MB → 4MB → 8MB → 16MB → ... → 1TB
 ```
 
+## Adjacency-List Encoding
+
+Compressed adjacency lists (`graph_engine`) store each entry's `rel_id` as a
+**little-endian `u64`** (8 bytes/entry for the uncompressed `None` form; the
+LZ4/Zstd forms compress that same little-endian byte stream).
+
+The decompression path **must not assume 8-byte alignment** of the buffer it
+decodes. `decompress_none` operates directly on an mmap sub-slice starting at
+`list_offset`, an on-disk byte offset with no alignment guarantee, so entries
+are reconstructed with `chunks_exact(8)` + `u64::from_le_bytes` — never by
+reinterpreting the byte slice as `&[AdjacencyEntry]` (which is undefined
+behaviour on a misaligned pointer, regardless of platform). The little-endian
+contract also keeps the on-disk encoding portable across host byte orders.
+
 ## Compatibility
 
 ### Version Evolution
@@ -509,7 +586,7 @@ Offset 0x0540 (node_id 42):
 05 00 00 00 00 00 00 00  ← label_bits (0x05 = labels 0,2)
 A0 12 00 00 00 00 00 00  ← first_rel_ptr (offset 0x12A0)
 10 34 00 00 00 00 00 00  ← prop_ptr (offset 0x3410)
-00 00 00 00              ← flags (0 = active)
+02 00 00 00              ← flags (bit 1 = FLAG_ALLOCATED, in use; bit 0 = deleted, clear)
 00 00 00 00              ← reserved
 ```
 
@@ -558,6 +635,53 @@ Backup strategy:
 - Verify checksums on restore
 ```
 
+#### Bounds-checking contract (record & property stores)
+
+A corrupt or adversarially-crafted on-disk value (a bad `dst_id`, a bad
+`prop_ptr`, or a large id-space gap) must surface as a storage `Error` /
+`None`, **never** an out-of-bounds slice panic that aborts the query thread
+or the process (`phase0_fix-storage-oob-panics`). The stores enforce:
+
+- **Overflow-safe record offsets.** `read_node`/`write_node`/`read_rel`/
+  `write_rel` compute `id * RECORD_SIZE` and `offset + RECORD_SIZE` with
+  checked `u64` arithmetic (never `id as usize`, which would also truncate on
+  a 32-bit target). An id whose byte offset overflows is rejected
+  (`NotFound` on read, `Storage` on write) instead of wrapping past the
+  bounds check — in a release build the release profile does not enable
+  `overflow-checks`, so unchecked arithmetic would silently wrap.
+- **Header-length-aware property reads.** `get_entity_info_at_offset` and
+  `load_properties_at_offset` reject any offset whose full 13-byte entry
+  header (`entity_id` 8 + `entity_type` 1 + `data_size` 4) would run past
+  EOF — not merely `offset >= len` — and the low-level `read_u64`/`read_u32`/
+  `read_u8` helpers are themselves bounds-checked (returning `0` rather than
+  indexing past the mapping) so a future caller that omits its own pre-check
+  is still panic-safe. This keeps the corruption-defense paths
+  (`repair_corrupt_node_prop_ptrs`, run at startup) from being crashed by the
+  exact corrupt pointer they exist to sanitize.
+- **Grow sized to the write target.** `grow_nodes_file`/`grow_rels_file` size
+  the new file to `max(1.5x, +2 MB, target_offset + RECORD_SIZE)`, so a single
+  sparse write whose offset is more than one growth step past EOF is covered
+  by that one grow instead of slicing past the freshly-remapped file. This
+  matches `property_store::ensure_capacity`'s `.max(required_size)`.
+- **Reads bound-check the live mapping, not a cached size.**
+  (`phase0_fix-store-size-per-clone-divergence`) A `RecordStore` shares its
+  mmaps across clones via `Arc<RwLock<MmapMut>>` (a fresh clone is taken on
+  every `refresh_executor`), so a per-clone cached `nodes_file_size` /
+  `rels_file_size` can diverge from the shared mmap: a grow by one clone
+  leaves other clones stale-small (they would report `NotFound` for a node
+  that exists), and a `clear_all` that shrinks the mmap leaves clones
+  stale-large (they would slice past the smaller mapping). `read_node` /
+  `read_rel` therefore bound-check the record's end offset against the **live**
+  `guard.len()` of the mmap **inside the same read lock** used to copy the
+  record — never a cached field — so every clone observes the true current
+  length (the discipline `read_all_node_headers` already used). The cached
+  size fields remain only on the write/grow path, which is safe under the
+  single-writer model (the sole writer both mutates the mmap and updates its
+  own size, so they never diverge for it). The `next_node_id`/`next_rel_id`
+  high-water marks are already shared via `Arc<AtomicU64>`. As defense in
+  depth, `Engine::clear_all_data` refreshes the cached executor clone after a
+  `clear_all` so the reset size is observed promptly.
+
 ## Debugging Tools
 
 ### Hexdump Example
@@ -581,6 +705,65 @@ nexus-cli inspect nodes.store --id 42
 # Properties: {name: "Alice", age: 30}
 # Relationships: 2 outgoing, 1 incoming
 ```
+
+## Property Store Entry Layout & Rebuild Contract
+
+Each entity's properties are stored as one contiguous, append-oriented entry:
+
+```
+Offset | Size | Field        | Notes
+-------|------|--------------|-------------------------------------------
+0      | 8    | entity_id    | u64
+8      | 1    | entity_type  | 0 = Node, 1 = Relationship
+9      | 4    | data_size    | u32, length of the JSON payload in bytes
+13     | data_size | data    | serde_json payload
+```
+
+`data_size` is BOTH the payload length and the entry's physical footprint —
+the two must never diverge. Writes are therefore **grow-only**
+(`phase0_fix-property-store-shrink-corruption`): `update_properties` rewrites
+an entry in place ONLY when the new payload is exactly the same size; a
+strictly smaller or larger payload is written as a fresh entry at the store's
+append cursor (`next_offset`) and the index is repointed. A shrink never
+reduces `data_size` below the physical footprint in place (which would leave a
+stale tail), so the superseded old entry stays a valid, fully-parseable blob —
+dead space until a future compaction pass, deduplicated by `entity_id` on
+rebuild (later offset wins).
+
+**Rebuild contract:** on reopen the index is rebuilt by scanning entries in
+ascending offset order, striding by `13 + data_size`. `next_offset` is set to
+the end of the LAST successfully parsed entry, never to a raw cursor position.
+For backward compatibility with stores written by the pre-fix code (which
+could leave a shrunk-in-place entry with a stale tail), the scanner RESYNCS:
+on landing on bytes that do not parse as a valid header + complete JSON
+payload, it scans forward for the next parseable entry instead of stopping —
+so a damaged old store recovers its later entities rather than dropping them.
+Caveat: an entry whose header was already overwritten by a pre-fix mis-scan is
+unrecoverable.
+
+### Dead Record Tombstoning (`phase0_fix-deleted-properties-resurrected-on-rebuild`)
+
+When a property entry is logically deleted via `PropertyStore::delete_properties`,
+the on-disk entry is marked with a reserved `entity_type` tombstone marker
+(`ENTITY_TYPE_TOMBSTONE = 0xFF`, outside the valid range 0=Node/1=Relationship)
+instead of being erased. This ensures that on rebuild:
+
+1. **Shared scanner skip**: The rebuild scanner (`scan_entry_at`) recognizes the
+   tombstone byte at offset 8 and strides over the entry without re-indexing,
+   preserving the entry's physical footprint so the next entry is landed correctly.
+
+2. **Backward compatibility**: Existing stores written by pre-fix code hold
+   un-tombstoned deleted entries (fully parseable blobs with valid entity_type).
+   On rebuild, each entry is reconciled against the authoritative node/relationship
+   record stores (`nodes.store`/`rels.store`) via a `RecordLiveness` check: if the
+   owning record is deleted or absent, the property blob is tombstoned-in-place
+   (overwriting the entity_type byte to `0xFF`) instead of being resurrected.
+   This reconciliation runs once per rebuild (on every startup-reopen, O(1) per
+   entry); a future format-version-stamp optimization can track whether a store
+   is already fully tombstoned and skip the pass entirely.
+
+3. **Durability**: A logical delete is now durable across restart — a property
+   blob cannot be resurrected by a reopen's full index rebuild scan.
 
 ## Advanced-type Wire Encodings (v1.5)
 

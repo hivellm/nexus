@@ -241,6 +241,49 @@ Recall: ~90%, Latency: ~0.2 ms
 
 ## Cypher Integration
 
+### CREATE VECTOR INDEX / DROP INDEX (Vector)
+
+Native vector search is activated by creating a vector index on a node label and property:
+
+```cypher
+-- Create a vector index (default dimension: 128)
+CREATE VECTOR INDEX ON :Person(embedding)
+
+-- Create with idempotency
+CREATE VECTOR INDEX IF NOT EXISTS ON :Person(embedding)
+
+-- Create or replace (resets the index)
+CREATE OR REPLACE VECTOR INDEX ON :Person(embedding)
+
+-- Drop a vector index
+DROP INDEX ON :Person(embedding)
+
+-- Drop if exists
+DROP INDEX IF EXISTS ON :Person(embedding)
+```
+
+**V1 Constraints:**
+- **Single global index**: Only ONE active vector index per database at a time. Creating a second distinct index without `CREATE OR REPLACE` returns an error. A subsequent `CREATE OR REPLACE` clears the old index and builds a new one.
+- **Fixed dimension**: Vector dimension is fixed at `DEFAULT_VECTORIZER_DIMENSION` (128 floats per vector). All vectors stored in the index must have exactly 128 components.
+- **Vector property format**: The indexed property must be a numeric array (Cypher `List<Float>`). Inline array literals in the `CREATE` DDL are NOT supported — supply embeddings via query parameters or the data API.
+- **Durability**: The vector-index definition is persisted in the catalog; the HNSW graph is rebuilt from the property store on restart.
+
+**Example: Creating and using a vector index**:
+```cypher
+-- 1. Create the index
+CREATE VECTOR INDEX ON :Document(embedding)
+
+-- 2. Create a document with an embedding (via parameter)
+CREATE (d:Document {
+  title: 'RAG System Guide',
+  embedding: $embedding_vector
+})
+RETURN d
+
+-- Parameters passed to the query:
+-- { "embedding_vector": [0.1, 0.2, ..., 0.9] }  // 128 floats
+```
+
 ### vector.knn Procedure
 
 ```cypher
@@ -254,13 +297,20 @@ YIELD
   score: Float         -- Similarity score (0.0-1.0, higher = more similar)
 ```
 
+**Label-aware behavior**: The KNN search is label-aware — only nodes carrying the requested label are returned. Internally, a single global HNSW graph stores vectors from all indexed nodes; the query applies per-label post-filtering with 10x oversampling to ensure k results (if available). An unknown label returns an empty result set (not an error).
+
 **Example**:
 ```cypher
-CALL vector.knn('Person', [0.1, 0.2, ..., 0.9], 10)
+CALL vector.knn('Person', $query_embedding, 10)
 YIELD node, score
 RETURN node.name, score
 ORDER BY score DESC
 ```
+
+**Query surfaces**: The `vector.knn` procedure is reachable via three transports:
+- **HTTP POST `/knn_traverse`**: `{ "label": "Person", "vector": [...], "k": 10 }` returns `{ "columns": ["node", "score"], "rows": [...] }`
+- **RPC `KNN_SEARCH`**: Sends the label, vector array, and k; server runs a real label-aware HNSW search (previously a stub returning fabricated scores — now functional).
+- **RESP3 `KNN.SEARCH`**: `KNN.SEARCH label k vector_array` queries the index and returns scored results.
 
 ### Hybrid Queries
 
@@ -298,6 +348,8 @@ ORDER BY doc_score DESC
 ## Index Management
 
 ### Creating Index
+
+The `CREATE VECTOR INDEX` DDL creates an HNSW graph for a label:
 
 ```rust
 impl KnnIndex {
@@ -379,6 +431,63 @@ fn normalize_vector(v: &[f32]) -> Vec<f32> {
     v.iter().map(|x| x / norm).collect()
 }
 ```
+
+### Write-Path Maintenance
+
+The KNN index is **automatically populated and maintained** by the write path:
+
+- **`CREATE`** now inserts vectors into the KNN index when a node is created with an embedding value.
+- **`SET`** now refreshes the KNN index when a vector property is updated.
+- **`DELETE`** and `DETACH DELETE` now evict the node's vector from the index.
+- **WAL entries** `KnnVectorAdd` and `KnnVectorDelete` are emitted for durability and recovery.
+
+A vector property update follows the same "delete-then-add" pattern as full-text index maintenance: a `SET` that changes an embedding deletes the old vector from the HNSW graph and inserts the new one, ensuring no stale vector remains reachable.
+
+### Update & Eviction Contract
+
+The pseudocode above illustrates the intended design; the actual implementation
+(`crates/nexus-core/src/index/knn_index.rs`) enforces one additional invariant that
+is easy to get wrong: **exactly one HNSW entry maps to a given `node_id` at all
+times**, across both re-insertion (update) and removal (delete).
+
+`hnsw_rs` (0.3.x, the crate `KnnIndex` is built on) has **no in-place update or
+delete API** — once a vector is `insert`ed, its data stays physically resident
+in the HNSW graph for the lifetime of the index. `KnnIndex` therefore cannot
+implement "update" or "delete" by removing data from the graph itself. Instead
+it uses a **tombstone-by-unmapping** strategy over the `node_id ↔ vector_index`
+mapping tables:
+
+- **`search_knn_with_ef`** only ever resolves an HNSW hit back to a `node_id`
+  through the `index_to_node` map (`knn_index.rs:263`); a raw HNSW graph slot
+  with no `index_to_node` entry is silently skipped and never appears in a
+  result set, even though its vector payload is still inside the graph.
+- **`add_vector(node_id, embedding)`** on a `node_id` that already has an
+  entry evicts the OLD entry's `index_to_node` mapping BEFORE inserting the
+  new vector as a fresh HNSW slot and remapping `node_id` to it. This makes
+  the old vector permanently unreachable through the public search API from
+  that point on, and keeps `KnnIndexStats::total_vectors` counting nodes
+  (not physical graph slots) — a re-insert is a logical update, not an
+  addition.
+- **`remove_vector(node_id)`** evicts `node_id`'s current mapping from both
+  `node_to_index` and `index_to_node`. Because `add_vector` maintains the
+  one-entry-per-node invariant on every re-insert, there is never more than
+  one mapping to evict — `remove_vector` cannot be asked to reach an orphan
+  left by an earlier re-insert, because no such orphan can exist.
+- **`knn_evict_node(node_id)`** (`engine/crud/index_maintenance.rs`) is the
+  engine-level maintenance hook that calls `remove_vector`, mirroring the
+  `fts_evict_node` / `spatial_evict_node` pattern used by the full-text and
+  spatial indexes. The CREATE/SET write path now wires `add_vector` into
+  node materialization, and `delete_node` calls `knn_evict_node`, keeping
+  the index consistent with graph state.
+
+Consequence for callers: a caller that re-inserts a vector for the same node
+id (an "update"), or that deletes a node and calls `knn_evict_node`, is
+guaranteed the old vector is unreachable via `search_knn`/`search_knn_with_ef`
+immediately afterward — no rebuild or compaction step is required. The
+trade-off is that the underlying `Hnsw` graph itself only ever grows (tombstoned
+slots are never physically reclaimed); a full index rebuild (`clear()` +
+re-`add_vector` every live node) is the only way to reclaim that memory, and is
+out of scope for this contract.
 
 ### Searching
 

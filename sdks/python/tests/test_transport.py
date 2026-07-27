@@ -2,18 +2,9 @@
 
 from __future__ import annotations
 
-import struct
-
-import msgpack  # type: ignore[import-untyped]
 import pytest
+from thunder_rpc.errors import ThunderError
 
-from nexus_sdk.transport.codec import (
-    RpcRequest,
-    decode_response_body,
-    encode_request_frame,
-    from_wire_value,
-    to_wire_value,
-)
 from nexus_sdk.transport.command_map import (
     json_to_nexus,
     map_command,
@@ -29,7 +20,12 @@ from nexus_sdk.transport.endpoint import (
 )
 from nexus_sdk.transport.factory import build_transport
 from nexus_sdk.transport.rpc import RpcTransport
-from nexus_sdk.transport.types import TransportCredentials, TransportMode, nx
+from nexus_sdk.transport.types import (
+    TransportCredentials,
+    TransportMode,
+    TransportRequest,
+    nx,
+)
 
 # ── Endpoint parser ────────────────────────────────────────────────────
 
@@ -87,78 +83,11 @@ class TestEndpoint:
         assert ep.as_http_url() == "http://host:15474"
 
 
-# ── Wire codec: NexusValue ────────────────────────────────────────────
-
-
-class TestWireValue:
-    def test_encodes_null_as_literal_string(self) -> None:
-        assert to_wire_value(nx.Null()) == "Null"
-
-    def test_encodes_str_as_tagged_map(self) -> None:
-        assert to_wire_value(nx.Str("hi")) == {"Str": "hi"}
-
-    def test_encodes_primitives(self) -> None:
-        assert to_wire_value(nx.Bool(True)) == {"Bool": True}
-        assert to_wire_value(nx.Int(42)) == {"Int": 42}
-        assert to_wire_value(nx.Float(1.5)) == {"Float": 1.5}
-        assert to_wire_value(nx.Bytes(b"\x01\x02")) == {"Bytes": b"\x01\x02"}
-
-    def test_roundtrips_primitive_variants(self) -> None:
-        cases = [
-            nx.Null(),
-            nx.Bool(False),
-            nx.Bool(True),
-            nx.Int(0),
-            nx.Int(-1),
-            nx.Str(""),
-            nx.Str("hello"),
-            nx.Float(3.14),
-            nx.Bytes(b"\x00\xff"),
-        ]
-        for v in cases:
-            assert from_wire_value(to_wire_value(v)) == v
-
-    def test_roundtrips_nested_array_and_map(self) -> None:
-        v = nx.Map(
-            [
-                (nx.Str("labels"), nx.Array([nx.Str("Person")])),
-                (nx.Str("age"), nx.Int(30)),
-            ]
-        )
-        assert from_wire_value(to_wire_value(v)) == v
-
-    def test_rejects_multi_key_tagged_value(self) -> None:
-        with pytest.raises(ValueError, match="single-key"):
-            from_wire_value({"Str": "a", "Int": 1})
-
-    def test_rejects_unknown_tag(self) -> None:
-        with pytest.raises(ValueError, match="unknown NexusValue tag"):
-            from_wire_value({"Widget": "x"})
-
-
-class TestFrameCodec:
-    def test_frame_has_u32_le_length_prefix(self) -> None:
-        frame = encode_request_frame(RpcRequest(id=7, command="PING", args=[]))
-        (length,) = struct.unpack("<I", frame[:4])
-        assert length == len(frame) - 4
-        assert length > 0
-
-    def test_decodes_ok_response(self) -> None:
-        body = msgpack.packb(
-            {"id": 9, "result": {"Ok": {"Str": "OK"}}}, use_bin_type=True
-        )
-        resp = decode_response_body(body)
-        assert resp.id == 9
-        assert resp.ok is True
-        assert resp.unwrap() == nx.Str("OK")
-
-    def test_decodes_err_response(self) -> None:
-        body = msgpack.packb({"id": 3, "result": {"Err": "boom"}}, use_bin_type=True)
-        resp = decode_response_body(body)
-        assert resp.ok is False
-        assert resp.value == "boom"
-        with pytest.raises(RuntimeError, match="boom"):
-            resp.unwrap()
+# The wire codec (NexusValue <-> MessagePack framing) now lives in
+# `hivellm-thunder`; the SDK's RPC transport wraps Thunder's client instead
+# of owning the codec, so the former wire-codec / frame test classes were
+# removed with `nexus_sdk/transport/codec.py`. Thunder ships its own codec
+# conformance tests.
 
 
 # ── Command map ───────────────────────────────────────────────────────
@@ -300,11 +229,13 @@ class TestBuildTransportPrecedence:
 
 class TestRpcTransportFailFast:
     @pytest.mark.asyncio
-    async def test_call_fails_fast_on_unreachable_host(self) -> None:
+    async def test_execute_fails_fast_on_unreachable_host(self) -> None:
         ep = Endpoint(scheme="nexus", host="127.0.0.1", port=1)  # port 1 is reserved
         t = RpcTransport(ep, TransportCredentials(), connect_timeout_s=0.5)
-        with pytest.raises(ConnectionError, match="failed to connect"):
-            await t.call("PING", [])
+        # An unreachable host surfaces as a typed Thunder error (connection
+        # refused or timeout, depending on the platform).
+        with pytest.raises(ThunderError):
+            await t.execute(TransportRequest(command="PING"))
         await t.close()
 
 

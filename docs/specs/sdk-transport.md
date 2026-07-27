@@ -13,7 +13,7 @@ The SDK recognises three transport modes:
 
 | Enum variant | String value | Default port | Wire format                |
 |--------------|--------------|--------------|----------------------------|
-| `NexusRpc`   | `"nexus"`    | `15475`      | length-prefixed MessagePack (see `docs/specs/rpc-wire-format.md` once landed) |
+| `NexusRpc`   | `"nexus"`    | `15475`      | length-prefixed MessagePack (Thunder wire v1 — each SDK wraps the published Thunder client package for its language) |
 | `Resp3`      | `"resp3"`    | `15476`      | RESP3 over TCP              |
 | `Http`       | `"http"`     | `15474`      | JSON/HTTP (legacy)          |
 
@@ -32,6 +32,15 @@ RESP3 is offered for compatibility with redis-tooling (redis-cli,
 grafana tail, debug dashboards). HTTP remains available for networks
 where only port 80/443 is reachable and for SDK operations that do
 not yet have an RPC verb.
+
+**RPC transport internals**: Each SDK's RPC transport is a thin wrapper
+around the published Thunder client package for its language (`thunder-rpc`
+on crates.io for Rust, `@hivehub/thunder` on npm for TypeScript, etc.).
+MessagePack framing and encoding are owned by Thunder; no shared protocol
+crate exists — the server and each SDK carry their own copy of the protocol
+configuration. The command map, transport selection grammar, HTTP fallback,
+and handshake (Thunder's `auth_command` + `arg_less` HELLO, matched against
+the server's AUTH gate) are all unchanged.
 
 ## 2. URL grammar
 

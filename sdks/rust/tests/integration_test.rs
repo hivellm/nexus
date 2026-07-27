@@ -174,10 +174,15 @@ async fn test_create_relationship() {
         .await
         .unwrap();
 
-    // Relationship creation may fail if engine not initialized
-    if rel_response.error.is_none() {
-        assert!(rel_response.rel_id > 0);
-    }
+    // A successful create returns no error. Relationship ids are
+    // 0-indexed, so the first relationship legitimately has id 0 — assert
+    // success via the `error` field, not `rel_id > 0` (which wrongly
+    // assumed 1-indexed ids and failed on a fresh store's first edge).
+    assert!(
+        rel_response.error.is_none(),
+        "create_relationship should succeed: {:?}",
+        rel_response.error
+    );
 }
 
 #[tokio::test]

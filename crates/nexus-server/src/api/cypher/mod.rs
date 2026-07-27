@@ -10,6 +10,8 @@ pub mod execute;
 pub(crate) mod routing;
 
 #[cfg(test)]
+mod schema_procedures_test;
+#[cfg(test)]
 mod tests;
 #[cfg(test)]
 mod write_path_parity;
@@ -35,6 +37,42 @@ use std::time::Duration;
 /// `Arc` via the `State<Arc<NexusServer>>` extractor.
 pub fn build_executor() -> anyhow::Result<Executor> {
     let mut executor = Executor::default();
+
+    // Operator override for the cartesian-product memory budget. Absent env
+    // var keeps the `ExecutorConfig` default (1 GiB); a present-but-invalid
+    // value is a warning, not a fatal error — this is a server binary path
+    // and must never panic on operator-supplied input.
+    match std::env::var("NEXUS_CARTESIAN_PRODUCT_MAX_BYTES") {
+        Ok(raw) => match raw.parse::<usize>() {
+            Ok(max_bytes) if max_bytes > 0 => {
+                executor.set_cartesian_product_max_bytes(max_bytes);
+                tracing::info!(
+                    "NEXUS_CARTESIAN_PRODUCT_MAX_BYTES applied: cartesian_product_max_bytes={} bytes",
+                    max_bytes
+                );
+            }
+            Ok(_) => {
+                tracing::warn!(
+                    "NEXUS_CARTESIAN_PRODUCT_MAX_BYTES=\"{}\" is zero; keeping the default cartesian_product_max_bytes",
+                    raw
+                );
+            }
+            Err(e) => {
+                tracing::warn!(
+                    "NEXUS_CARTESIAN_PRODUCT_MAX_BYTES=\"{}\" is not a valid usize ({}); keeping the default cartesian_product_max_bytes",
+                    raw,
+                    e
+                );
+            }
+        },
+        Err(std::env::VarError::NotPresent) => {}
+        Err(std::env::VarError::NotUnicode(raw)) => {
+            tracing::warn!(
+                "NEXUS_CARTESIAN_PRODUCT_MAX_BYTES={:?} is not valid unicode; keeping the default cartesian_product_max_bytes",
+                raw
+            );
+        }
+    }
 
     // Enable intelligent query cache with default configuration
     let cache_config = nexus_core::query_cache::QueryCacheConfig {
@@ -188,6 +226,18 @@ pub struct CypherResponse {
     /// before phase6.
     #[serde(skip_serializing_if = "Vec::is_empty", default)]
     pub notifications: Vec<nexus_core::executor::types::Notification>,
+    /// Mutation counters for the query in openCypher/Neo4j vocabulary
+    /// (nodes/relationships created and deleted, properties set/removed,
+    /// labels added/removed). Omitted from the wire format for read-only
+    /// queries (all-zero) so the read hot path keeps the exact byte count it
+    /// had before side-effect reporting; present on any query that mutated
+    /// the graph. Additive — the Neo4j-compatible `columns`/`rows` shape is
+    /// unchanged.
+    #[serde(
+        default,
+        skip_serializing_if = "nexus_core::executor::types::SideEffects::is_empty"
+    )]
+    pub stats: nexus_core::executor::types::SideEffects,
 }
 
 /// Record Prometheus metrics for query execution against the server's

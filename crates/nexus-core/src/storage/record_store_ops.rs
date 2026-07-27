@@ -15,8 +15,8 @@ use super::external_id::{ConflictPolicy, ExternalId};
 use super::property_store;
 use super::record_store::RecordStore;
 use super::records::{
-    INITIAL_NODES_FILE_SIZE, INITIAL_RELS_FILE_SIZE, NODE_RECORD_SIZE, NodeRecord, REL_RECORD_SIZE,
-    RelationshipRecord,
+    FLAG_ALLOCATED, INITIAL_NODES_FILE_SIZE, INITIAL_RELS_FILE_SIZE, NODE_RECORD_SIZE, NodeRecord,
+    REL_RECORD_SIZE, RelationshipRecord,
 };
 
 impl RecordStore {
@@ -66,17 +66,33 @@ impl RecordStore {
             }
         }
 
-        let offset = (node_id as usize * NODE_RECORD_SIZE) as u64;
+        // Overflow-safe offset (see read_node); a write whose offset
+        // arithmetic overflows is rejected rather than wrapping past the map.
+        let offset = node_id
+            .checked_mul(NODE_RECORD_SIZE as u64)
+            .ok_or_else(|| Error::Storage(format!("node id {} offset overflow", node_id)))?;
+        let record_end = offset
+            .checked_add(NODE_RECORD_SIZE as u64)
+            .ok_or_else(|| Error::Storage(format!("node id {} offset overflow", node_id)))?;
 
-        // Phase 3 Optimization: Pre-check file size to avoid unnecessary grow check
-        if offset + NODE_RECORD_SIZE as u64 > self.nodes_file_size as u64 {
-            self.grow_nodes_file()?;
+        // Grow the file if the target record extends past it. #4: the grow is
+        // sized to at least `record_end`, so a sparse write far past EOF is
+        // covered by a single grow instead of slicing past the mapping.
+        if record_end > self.nodes_file_size as u64 {
+            self.grow_nodes_file(record_end)?;
         }
 
         // Phase 3 Optimization: Direct write without intermediate allocation
         let start = offset as usize;
         let end = start + NODE_RECORD_SIZE;
-        let record_bytes = bytemuck::bytes_of(record);
+        // phase0_fix-anonymous-node-lost-on-restart: stamp the allocated bit
+        // on every write so a live node — even one with no labels,
+        // properties or relationships — is never byte-for-byte all-zero on
+        // disk. This also self-migrates any legacy (flags == 0) record that
+        // gets rewritten after the fix, without mutating the caller's copy.
+        let mut record_to_write = *record;
+        record_to_write.flags |= FLAG_ALLOCATED;
+        let record_bytes = bytemuck::bytes_of(&record_to_write);
         self.nodes_mmap.write().unwrap()[start..end].copy_from_slice(record_bytes);
 
         // Memory barrier to ensure write is visible to subsequent reads
@@ -177,16 +193,31 @@ impl RecordStore {
         // Acquire is sufficient - pairs with Release barriers in write operations
         std::sync::atomic::fence(std::sync::atomic::Ordering::Acquire);
 
-        let offset = (node_id as usize * NODE_RECORD_SIZE) as u64;
-
-        if offset + NODE_RECORD_SIZE as u64 > self.nodes_file_size as u64 {
-            return Err(Error::NotFound(format!("Node {} not found", node_id)));
-        }
+        // Overflow-safe offset: compute `node_id * SIZE` and `offset + SIZE`
+        // with checked u64 arithmetic (never `id as usize`, which also
+        // truncates on 32-bit targets). A crafted/corrupt id can otherwise
+        // make the multiply overflow, or make `offset + SIZE` wrap to 0 and
+        // slip past the bounds check, then panic on the out-of-range slice.
+        let offset = node_id
+            .checked_mul(NODE_RECORD_SIZE as u64)
+            .ok_or_else(|| Error::NotFound(format!("Node {} not found", node_id)))?;
+        let record_end = offset
+            .checked_add(NODE_RECORD_SIZE as u64)
+            .ok_or_else(|| Error::NotFound(format!("Node {} not found", node_id)))?;
 
         let start = offset as usize;
         let end = start + NODE_RECORD_SIZE;
+        // Bound-check against the LIVE shared mapping length under the same
+        // read lock used to copy the record — never the per-clone cached
+        // `nodes_file_size`, which diverges from the shared mmap after a grow
+        // by another clone (stale-small -> spurious NotFound) or a clear_all
+        // (stale-large -> out-of-bounds slice). Mirrors read_all_node_headers.
+        // See phase0_fix-store-size-per-clone-divergence.
         let mut record: NodeRecord = {
             let guard = self.nodes_mmap.read().unwrap();
+            if record_end > guard.len() as u64 {
+                return Err(Error::NotFound(format!("Node {} not found", node_id)));
+            }
             *bytemuck::from_bytes(&guard[start..end])
         };
 
@@ -261,40 +292,101 @@ impl RecordStore {
     /// Write a relationship record
     /// Phase 3 Deep Optimization: Optimized write path
     pub fn write_rel(&mut self, rel_id: u64, record: &RelationshipRecord) -> Result<()> {
-        let offset = (rel_id as usize * REL_RECORD_SIZE) as u64;
+        // Overflow-safe offset (see read_node); a write whose offset
+        // arithmetic overflows is rejected rather than wrapping past the map.
+        let offset = rel_id
+            .checked_mul(REL_RECORD_SIZE as u64)
+            .ok_or_else(|| Error::Storage(format!("relationship id {} offset overflow", rel_id)))?;
+        let record_end = offset
+            .checked_add(REL_RECORD_SIZE as u64)
+            .ok_or_else(|| Error::Storage(format!("relationship id {} offset overflow", rel_id)))?;
 
-        // Phase 3 Optimization: Pre-check file size to avoid unnecessary grow check
-        if offset + REL_RECORD_SIZE as u64 > self.rels_file_size as u64 {
-            self.grow_rels_file()?;
+        // Grow the file if the target record extends past it. #4: sized to at
+        // least `record_end` so a sparse write far past EOF is covered.
+        if record_end > self.rels_file_size as u64 {
+            self.grow_rels_file(record_end)?;
         }
 
         // Phase 3 Optimization: Direct write without intermediate allocation
         let start = offset as usize;
         let end = start + REL_RECORD_SIZE;
-        let record_bytes = bytemuck::bytes_of(record);
+        // phase0_fix-anonymous-node-lost-on-restart §2.3: same allocated-bit
+        // stamp as write_node, closing the degenerate all-zero self-loop gap
+        // (src_id == dst_id == 0, type_id == 0, no pointers).
+        let mut record_to_write = *record;
+        record_to_write.flags |= FLAG_ALLOCATED;
+        let record_bytes = bytemuck::bytes_of(&record_to_write);
         self.rels_mmap.write().unwrap()[start..end].copy_from_slice(record_bytes);
 
         // Memory barrier to ensure write is visible to subsequent reads
         // Release is sufficient for single-writer model
         std::sync::atomic::fence(std::sync::atomic::Ordering::Release);
 
+        // Maintain the adjacency index HERE, and only here: this is the single
+        // funnel every relationship-record mutation passes through (creation,
+        // the `next_src_ptr` fix-ups, and all five deletion paths, only two of
+        // which go through `delete_rel`). Doing it at the funnel is what makes
+        // the index authoritative for write paths that do not know it exists —
+        // the property `cache::RelationshipIndex` lacks, and the reason it can
+        // only ever be a hint. Endpoints are immutable once written, so the
+        // record's own deleted bit decides add-or-remove; no read-before-write.
+        // See docs/analysis/store-adjacency-index/01_write_chokepoint.md.
+        if record_to_write.is_deleted() {
+            self.adjacency_index
+                .remove(rel_id, record_to_write.src_id, record_to_write.dst_id);
+        } else {
+            self.adjacency_index
+                .insert(rel_id, record_to_write.src_id, record_to_write.dst_id);
+        }
+
         Ok(())
+    }
+
+    /// Live relationship ids pointing AT `node_id` (the reverse adjacency the
+    /// record format itself does not carry), ascending. O(in-degree).
+    pub fn incoming_relationships(&self, node_id: u64) -> Vec<u64> {
+        self.adjacency_index.incoming(node_id)
+    }
+
+    /// Live relationship ids `node_id` is the source of, ascending.
+    /// O(out-degree). Unlike a `first_rel_ptr` chain walk this cannot be
+    /// defeated by a damaged chain — it is rebuilt from the records on open.
+    pub fn outgoing_relationships(&self, node_id: u64) -> Vec<u64> {
+        self.adjacency_index.outgoing(node_id)
+    }
+
+    /// Every live relationship id incident on `node_id` in either direction,
+    /// ascending and de-duplicated (a self-loop appears once). O(degree).
+    pub fn connected_relationships(&self, node_id: u64) -> Vec<u64> {
+        self.adjacency_index.connected(node_id)
+    }
+
+    /// Whether any live relationship touches `node_id`. O(1).
+    pub fn has_any_relationship(&self, node_id: u64) -> bool {
+        self.adjacency_index.has_any(node_id)
     }
 
     /// Read a relationship record
     pub fn read_rel(&self, rel_id: u64) -> Result<RelationshipRecord> {
-        let offset = (rel_id as usize * REL_RECORD_SIZE) as u64;
+        // Overflow-safe offset (see read_node).
+        let offset = rel_id
+            .checked_mul(REL_RECORD_SIZE as u64)
+            .ok_or_else(|| Error::NotFound(format!("Relationship {} not found", rel_id)))?;
+        let record_end = offset
+            .checked_add(REL_RECORD_SIZE as u64)
+            .ok_or_else(|| Error::NotFound(format!("Relationship {} not found", rel_id)))?;
 
-        if offset + REL_RECORD_SIZE as u64 > self.rels_file_size as u64 {
+        let start = offset as usize;
+        let end = start + REL_RECORD_SIZE;
+        // Bound-check against the live shared mapping length under the read
+        // lock, not the per-clone cached `rels_file_size` (see read_node).
+        let guard = self.rels_mmap.read().unwrap();
+        if record_end > guard.len() as u64 {
             return Err(Error::NotFound(format!(
                 "Relationship {} not found",
                 rel_id
             )));
         }
-
-        let start = offset as usize;
-        let end = start + REL_RECORD_SIZE;
-        let guard = self.rels_mmap.read().unwrap();
         Ok(*bytemuck::from_bytes(&guard[start..end]))
     }
 
@@ -452,6 +544,12 @@ impl RecordStore {
         policy: ConflictPolicy,
         catalog: Option<&crate::catalog::Catalog>,
     ) -> Result<u64> {
+        // Side-effect count (openCypher TCK `+properties`): captured before
+        // `properties` may be moved into `store_properties` on either path.
+        // Added to `properties_created` only where a record is actually
+        // written (never on a `ConflictPolicy::Match`/`Replace` that resolves
+        // to an existing node).
+        let inline_prop_count = properties.as_object().map(|m| m.len() as u64).unwrap_or(0);
         // ── External-id path ──────────────────────────────────────────────────
         //
         // peek-then-allocate:
@@ -485,6 +583,11 @@ impl RecordStore {
 
                     self.write_node(node_id, &record)?;
                     wtxn.commit()?;
+                    self.nodes_created.fetch_add(1, Ordering::SeqCst);
+                    self.labels_created
+                        .fetch_add(label_bits.count_ones() as u64, Ordering::SeqCst);
+                    self.properties_created
+                        .fetch_add(inline_prop_count, Ordering::SeqCst);
                     return Ok(node_id);
                 }
                 Some(existing_id) => {
@@ -570,6 +673,11 @@ impl RecordStore {
             );
         }
 
+        self.nodes_created.fetch_add(1, Ordering::SeqCst);
+        self.labels_created
+            .fetch_add(label_bits.count_ones() as u64, Ordering::SeqCst);
+        self.properties_created
+            .fetch_add(inline_prop_count, Ordering::SeqCst);
         Ok(node_id)
     }
 
@@ -614,6 +722,9 @@ impl RecordStore {
                 .as_object()
                 .map(|m| !m.is_empty())
                 .unwrap_or(false);
+        // Side-effect count (openCypher TCK `+properties`): captured before
+        // `properties` is moved into `store_properties` below.
+        let inline_prop_count = properties.as_object().map(|m| m.len() as u64).unwrap_or(0);
 
         // Store properties first to get property pointer (if needed)
         record.prop_ptr = if has_properties {
@@ -824,44 +935,22 @@ impl RecordStore {
             target_node_opt = Some(target_node);
         }
 
-        // Write both nodes (better cache locality - sequential writes)
-        if let Some(source_node) = source_node_opt {
-            tracing::debug!(
-                "[create_relationship] Writing source node {} with first_rel_ptr={}",
-                from,
-                source_node.first_rel_ptr
-            );
-            self.write_node(from, &source_node)?;
+        // === Publish ordering: record BEFORE pointer ===
+        // Nexus has no record-level MVCC, so the ORDER in which a relationship
+        // insert publishes its writes IS the isolation contract for lock-free
+        // readers (the server read path clones the executor/store and runs
+        // holding no engine lock, against these same shared mmaps). The new
+        // relationship record must be fully initialized in `rels_mmap` BEFORE
+        // the source node's `first_rel_ptr` links it in — otherwise a reader
+        // that observes the new pointer can `read_rel` a still-zeroed slot and
+        // either surface a phantom edge to node 0 or stop its adjacency walk on
+        // the `next_src_ptr == 0` end-of-chain sentinel (truncating the list).
 
-            // CRITICAL FIX: Flush source node immediately to ensure first_rel_ptr is visible
-            // for subsequent relationship creations in separate queries
-            // This is essential when creating multiple relationships to the same node
-            // in separate MATCH...CREATE statements
-            tracing::debug!(
-                "[create_relationship] Flushing source node {} after write (first_rel_ptr={})",
-                from,
-                source_node.first_rel_ptr
-            );
-            // PERFORMANCE OPTIMIZATION: Skip per-node flush - let executor batch flush at end
-            // The memory barrier below is sufficient for single-writer model
-            // Durability is ensured by flush_async() at executor level
-            std::sync::atomic::fence(std::sync::atomic::Ordering::Release);
-        }
-        if let Some(target_node) = target_node_opt {
-            tracing::debug!(
-                "[create_relationship] Writing target node {} with first_rel_ptr={}",
-                to,
-                target_node.first_rel_ptr
-            );
-            self.write_node(to, &target_node)?;
-
-            // PERFORMANCE OPTIMIZATION: Skip per-node flush - handled at executor level
-        }
-
+        // 1. Finish building the record: its next-pointers chain to the prior
+        //    list heads captured (above) before any node was modified.
         record.next_src_ptr = source_prev_ptr;
         record.next_dst_ptr = target_prev_ptr;
 
-        // CRITICAL DEBUG: Log linked list construction
         tracing::debug!(
             "[create_relationship] Relationship {}: src={}, dst={}, next_src_ptr={}, next_dst_ptr={}",
             rel_id,
@@ -871,8 +960,36 @@ impl RecordStore {
             target_prev_ptr
         );
 
-        // Write the record to storage
+        // 2. Write the fully-initialized relationship record FIRST.
         self.write_rel(rel_id, &record)?;
+
+        // 3. Release fence: the record write above must be visible to another
+        //    thread BEFORE the `first_rel_ptr` publish below. Pairs with the
+        //    Acquire fence on the reader's node read
+        //    (`executor/operators/path.rs::find_relationships`) to form the
+        //    happens-before edge the no-MVCC lock-free read path relies on.
+        std::sync::atomic::fence(std::sync::atomic::Ordering::Release);
+
+        // 4. Only now link the record in by publishing `first_rel_ptr` on the
+        //    source node — the last, externally-visible step. (The target
+        //    node's `first_rel_ptr` is intentionally NOT updated for an
+        //    incoming edge, so its write publishes no adjacency pointer.)
+        if let Some(source_node) = source_node_opt {
+            tracing::debug!(
+                "[create_relationship] Publishing source node {} first_rel_ptr={}",
+                from,
+                source_node.first_rel_ptr
+            );
+            self.write_node(from, &source_node)?;
+        }
+        if let Some(target_node) = target_node_opt {
+            tracing::debug!(
+                "[create_relationship] Writing target node {} (first_rel_ptr={} unchanged)",
+                to,
+                target_node.first_rel_ptr
+            );
+            self.write_node(to, &target_node)?;
+        }
 
         // Phase 3 Deep Optimization: Lazy adjacency list updates (defer to improve CREATE performance)
         // For now, update immediately but with optimizations
@@ -901,6 +1018,9 @@ impl RecordStore {
             // Self-loop: skip incoming update (same as outgoing)
         }
 
+        self.relationships_created.fetch_add(1, Ordering::SeqCst);
+        self.properties_created
+            .fetch_add(inline_prop_count, Ordering::SeqCst);
         Ok(rel_id)
     }
 
@@ -1025,6 +1145,11 @@ impl RecordStore {
         // Reset counters
         self.next_node_id.store(0, Ordering::SeqCst);
         self.next_rel_id.store(0, Ordering::SeqCst);
+
+        // The record files are re-mapped wholesale below, bypassing
+        // `write_rel` — the only other place the adjacency index is
+        // maintained — so drop every entry explicitly.
+        self.adjacency_index.clear();
 
         // CRITICAL FIX: Clear property store FIRST to prevent next_offset corruption
         // When clear_all() is called, the properties.store file still contains old data

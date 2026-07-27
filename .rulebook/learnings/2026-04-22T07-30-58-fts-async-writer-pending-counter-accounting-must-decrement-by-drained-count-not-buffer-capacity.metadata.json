@@ -1,0 +1,8 @@
+{
+  "id": "2026-04-22T07-30-58-fts-async-writer-pending-counter-accounting-must-decrement-by-drained-count-not-buffer-capacity",
+  "title": "FTS async writer: pending-counter accounting must decrement by drained count, not buffer capacity",
+  "content": "`phase6_fulltext-async-writer` — the pre-existing writer implementation decremented `pending` by `buffer.capacity().saturating_sub(buffer.len())` after drain. That value is the unused allocation slack, not the number of commands drained; once buffer.capacity grew past the initial capacity the counter never decremented. Fix: snapshot `buffer.len()` BEFORE the drain and subtract that exact count.\\n\\nTakeaway: when using `Vec::drain(..)` for a bounded-channel consumer, capture the drain count before the loop. `buffer.len()` after drain is zero; `buffer.capacity()` is unrelated to item count.",
+  "source": "manual",
+  "tags": [],
+  "createdAt": "2026-04-22T07:30:58.344Z"
+}

@@ -1,0 +1,36 @@
+name: SDK Release train
+
+# phase13_sdk-release-trusted-publishing — the four Nexus SDKs ship one version
+# everywhere (crates.io / npm / PyPI / NuGet). A promise nothing verifies is a
+# promise that drifts: on the sibling Thunder project a registry twice fell a
+# version behind and a consumer found out before the maintainers did.
+#
+# This runs the check in "drift" mode: the registries must agree with EACH OTHER.
+# The repo being ahead of all of them is the normal state between releases and
+# passes, deliberately — a check that fires on every unreleased commit gets
+# ignored, and an ignored check is worse than none.
+#
+# The tag-time check ("every registry matches this release") lives in
+# sdk-release.yml, where it runs after the publish jobs.
+
+on:
+  schedule:
+    # Weekly. A lagging registry is not urgent to the minute, but it must not be
+    # able to sit unnoticed for months.
+    - cron: "0 6 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  drift:
+    name: registries agree with each other
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Check published versions
+        run: python scripts/ci/check_published_sdk_versions.py drift

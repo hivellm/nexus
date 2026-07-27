@@ -21,10 +21,10 @@ use nexus_core::{
     executor::Executor,
     vectorizer_cache::{QueryMetadata, VectorizerCache},
 };
-use nexus_protocol::mcp::McpClient;
 use nexus_server::NexusServer;
 use nexus_server::api;
 use nexus_server::config::RootUserConfig;
+use nexus_server::mcp::McpClient;
 
 // ============================================================================
 // Mock Vectorizer Implementation

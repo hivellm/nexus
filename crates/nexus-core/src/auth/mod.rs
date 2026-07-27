@@ -30,7 +30,7 @@ pub use middleware::{
 };
 #[cfg(feature = "axum")]
 pub use middleware::{extract_auth_context, extract_user_context};
-pub use password::{hash_password, verify_password};
+pub use password::{hash_password, needs_rehash, verify_dummy_password, verify_password};
 pub use permissions::{Permission, PermissionSet};
 pub use queue_permissions::{
     QueueOperation, can_consume_queue, can_manage_queue, can_publish_queue, check_queue_permission,
@@ -133,7 +133,11 @@ impl AuthManager {
     ) -> Result<(ApiKey, String)> {
         let key_id = uuid::Uuid::new_v4().to_string();
         let key_secret = self.generate_secret();
-        let full_key = format!("nx_{}", key_secret);
+        // The key ID is embedded right after the `nx_` prefix so
+        // `verify_api_key` can look up the single candidate key in O(1)
+        // instead of running Argon2 against every stored key (see
+        // `extract_embedded_key_id`).
+        let full_key = format!("nx_{key_id}_{key_secret}");
 
         // Hash the full key for storage
         let salt = SaltString::generate(&mut OsRng);
@@ -180,7 +184,11 @@ impl AuthManager {
     ) -> Result<(ApiKey, String)> {
         let key_id = uuid::Uuid::new_v4().to_string();
         let key_secret = self.generate_secret();
-        let full_key = format!("nx_{}", key_secret);
+        // The key ID is embedded right after the `nx_` prefix so
+        // `verify_api_key` can look up the single candidate key in O(1)
+        // instead of running Argon2 against every stored key (see
+        // `extract_embedded_key_id`).
+        let full_key = format!("nx_{key_id}_{key_secret}");
 
         // Hash the full key for storage
         let salt = SaltString::generate(&mut OsRng);
@@ -227,7 +235,11 @@ impl AuthManager {
     ) -> Result<(ApiKey, String)> {
         let key_id = uuid::Uuid::new_v4().to_string();
         let key_secret = self.generate_secret();
-        let full_key = format!("nx_{}", key_secret);
+        // The key ID is embedded right after the `nx_` prefix so
+        // `verify_api_key` can look up the single candidate key in O(1)
+        // instead of running Argon2 against every stored key (see
+        // `extract_embedded_key_id`).
+        let full_key = format!("nx_{key_id}_{key_secret}");
 
         // Hash the full key for storage
         let salt = SaltString::generate(&mut OsRng);
@@ -275,7 +287,11 @@ impl AuthManager {
     ) -> Result<(ApiKey, String)> {
         let key_id = uuid::Uuid::new_v4().to_string();
         let key_secret = self.generate_secret();
-        let full_key = format!("nx_{}", key_secret);
+        // The key ID is embedded right after the `nx_` prefix so
+        // `verify_api_key` can look up the single candidate key in O(1)
+        // instead of running Argon2 against every stored key (see
+        // `extract_embedded_key_id`).
+        let full_key = format!("nx_{key_id}_{key_secret}");
 
         // Hash the full key for storage
         let salt = SaltString::generate(&mut OsRng);
@@ -313,55 +329,103 @@ impl AuthManager {
         Ok((api_key, full_key))
     }
 
-    /// Verify an API key
+    /// Verify an API key.
+    ///
+    /// Current-format keys (`nx_{key_id}_{secret}`, see [`Self::generate_api_key`])
+    /// embed their own key ID, so the matching stored key can be looked up
+    /// in O(1) and exactly one Argon2 verify is performed — cost no longer
+    /// scales with the number of stored keys. Legacy keys minted before
+    /// this format existed (`nx_{secret}`, no embedded ID) fall back to the
+    /// original linear scan over valid keys so already-issued keys keep
+    /// working.
     pub fn verify_api_key(&self, key: &str) -> Result<Option<ApiKey>> {
         if !self.config.enabled {
             return Ok(None);
         }
 
-        // Check if key starts with nx_
         if !key.starts_with("nx_") {
             return Ok(None);
         }
 
-        // Try to find the key by verifying against all stored keys
-        // This is less efficient but necessary since we hash the full key
-        // Optimize by filtering valid keys first to avoid expensive Argon2 verification on invalid keys
+        match Self::extract_embedded_key_id(key) {
+            Some(key_id) => {
+                let candidate = {
+                    let keys_guard = self.api_keys.read();
+                    keys_guard.get(&key_id).filter(|k| k.is_valid()).cloned()
+                };
+                match candidate {
+                    Some(api_key) => self.verify_candidate(key, api_key),
+                    // A well-formed-but-unknown embedded ID is a forged or
+                    // stale token, not a legacy key — deliberately do NOT
+                    // fall back to the linear scan here, or a forged token
+                    // with a syntactically valid ID would still cost O(N).
+                    None => Ok(None),
+                }
+            }
+            None => self.verify_by_linear_scan(key),
+        }
+    }
+
+    /// Extract the key ID embedded in a current-format token
+    /// (`nx_{uuid}_{secret}`), if `key` matches that shape. Returns `None`
+    /// for legacy tokens (`nx_{secret}`, no `_` separator after the prefix)
+    /// so [`Self::verify_api_key`] knows to fall back to the O(N) scan
+    /// instead of treating an unrelated or forged prefix as a lookup miss.
+    fn extract_embedded_key_id(key: &str) -> Option<String> {
+        let rest = key.strip_prefix("nx_")?;
+        let (id_part, secret_part) = rest.split_once('_')?;
+        if secret_part.is_empty() {
+            return None;
+        }
+        uuid::Uuid::parse_str(id_part).ok()?;
+        Some(id_part.to_string())
+    }
+
+    /// Verify `key` against a single already-selected candidate, updating
+    /// `last_used` (in memory and, if configured, in LMDB) on success.
+    fn verify_candidate(&self, key: &str, mut api_key: ApiKey) -> Result<Option<ApiKey>> {
+        let password_hash = PasswordHash::new(&api_key.hashed_key)
+            .map_err(|e| anyhow::anyhow!("Invalid password hash: {}", e))?;
+
+        if self
+            .argon2
+            .verify_password(key.as_bytes(), &password_hash)
+            .is_err()
+        {
+            return Ok(None);
+        }
+
+        api_key.last_used = Some(Utc::now());
+        {
+            let mut keys = self.api_keys.write();
+            if let Some(stored) = keys.get_mut(&api_key.id) {
+                stored.last_used = Some(Utc::now());
+            }
+        }
+
+        if let Some(storage) = &self.storage {
+            storage.update_api_key(&api_key)?;
+        }
+
+        Ok(Some(api_key))
+    }
+
+    /// Legacy path: verify `key` against every stored valid key, exactly as
+    /// `verify_api_key` did before the O(1) embedded-ID lookup existed.
+    /// Only reachable for tokens with no embedded key ID.
+    fn verify_by_linear_scan(&self, key: &str) -> Result<Option<ApiKey>> {
         let keys: Vec<_> = {
             let keys_guard = self.api_keys.read();
             keys_guard
                 .values()
-                .filter(|k| k.is_valid()) // Filter valid keys first
+                .filter(|k| k.is_valid())
                 .cloned()
                 .collect()
         };
 
-        // Only verify against valid keys (much faster)
-        for mut api_key in keys {
-            // Verify the key
-            let password_hash = PasswordHash::new(&api_key.hashed_key)
-                .map_err(|e| anyhow::anyhow!("Invalid password hash: {}", e))?;
-
-            if self
-                .argon2
-                .verify_password(key.as_bytes(), &password_hash)
-                .is_ok()
-            {
-                // Update last used timestamp
-                api_key.last_used = Some(Utc::now());
-                {
-                    let mut keys = self.api_keys.write();
-                    if let Some(key) = keys.get_mut(&api_key.id) {
-                        key.last_used = Some(Utc::now());
-                    }
-                }
-
-                // Persist update to LMDB if storage is available
-                if let Some(storage) = &self.storage {
-                    storage.update_api_key(&api_key)?;
-                }
-
-                return Ok(Some(api_key));
+        for api_key in keys {
+            if let Some(verified) = self.verify_candidate(key, api_key)? {
+                return Ok(Some(verified));
             }
         }
 
@@ -647,7 +711,10 @@ mod tests {
         assert!(api_key.permissions.contains(&Permission::Write));
         assert!(api_key.is_active);
         assert!(full_key.starts_with("nx_"));
-        assert_eq!(full_key.len(), 35); // nx_ + 32 chars
+        // nx_ + 36-char UUID (key ID, for the M1 O(1) lookup) + _ + 32-char
+        // hex secret.
+        assert_eq!(full_key.len(), 3 + 36 + 1 + 32);
+        assert!(full_key.contains(&api_key.id));
     }
 
     #[test]
@@ -928,5 +995,148 @@ mod tests {
         // Verify expired key cannot be used
         let verified = manager.verify_api_key(&full_key).unwrap();
         assert!(verified.is_none()); // Expired keys should not verify
+    }
+
+    // -- M1: O(1) API key verification ------------------------------------
+
+    #[test]
+    fn test_extract_embedded_key_id() {
+        let id = uuid::Uuid::new_v4().to_string();
+        let key = format!("nx_{id}_somesecrethex");
+        assert_eq!(AuthManager::extract_embedded_key_id(&key), Some(id));
+
+        // Legacy shape: no `_` separator after the prefix at all.
+        assert_eq!(
+            AuthManager::extract_embedded_key_id("nx_deadbeefdeadbeef"),
+            None
+        );
+
+        // Forged/garbage shape: has a separator, but the id segment is not
+        // a valid UUID — must NOT be treated as a lookup miss that falls
+        // back to the expensive linear scan.
+        assert_eq!(
+            AuthManager::extract_embedded_key_id("nx_notauuid_secret"),
+            None
+        );
+    }
+
+    #[test]
+    fn test_verify_api_key_legacy_format_without_embedded_id_still_verifies() {
+        // Simulates a key minted before the O(1) embedded-ID lookup
+        // existed: `nx_{secret}` with no key-ID segment. Must still verify
+        // via the linear-scan fallback so already-issued keys keep working.
+        let config = AuthConfig {
+            enabled: true,
+            ..Default::default()
+        };
+        let manager = AuthManager::new(config);
+
+        let legacy_full_key = "nx_deadbeefdeadbeefdeadbeefdeadbeef".to_string();
+        let salt = SaltString::generate(&mut OsRng);
+        let hashed_key = manager
+            .argon2
+            .hash_password(legacy_full_key.as_bytes(), &salt)
+            .unwrap()
+            .to_string();
+
+        let legacy_key = ApiKey {
+            id: uuid::Uuid::new_v4().to_string(),
+            name: "legacy".to_string(),
+            user_id: None,
+            permissions: vec![Permission::Read],
+            hashed_key,
+            created_at: Utc::now(),
+            expires_at: None,
+            last_used: None,
+            is_active: true,
+            is_revoked: false,
+            revocation_reason: None,
+            allowed_functions: None,
+        };
+        manager
+            .api_keys
+            .write()
+            .insert(legacy_key.id.clone(), legacy_key.clone());
+
+        let verified = manager.verify_api_key(&legacy_full_key).unwrap();
+        assert!(verified.is_some());
+        assert_eq!(verified.unwrap().id, legacy_key.id);
+
+        // A wrong secret against the same legacy shape must still fail.
+        assert!(
+            manager
+                .verify_api_key("nx_wrongwrongwrongwrongwrongwrongwrong")
+                .unwrap()
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn test_verify_api_key_forged_embedded_id_does_not_fall_back_to_scan() {
+        // A token shaped like the current format (`nx_{uuid}_{secret}`)
+        // but whose UUID does not match any stored key must fail outright
+        // — it must NOT fall back to the O(N) linear scan, or a forged
+        // token would still cost as much as the pre-fix bug.
+        let config = AuthConfig {
+            enabled: true,
+            ..Default::default()
+        };
+        let manager = AuthManager::new(config);
+        let (_key, _full_key) = manager
+            .generate_api_key("real-key".to_string(), vec![Permission::Read])
+            .unwrap();
+
+        let forged = format!("nx_{}_forgedsecret", uuid::Uuid::new_v4());
+        assert!(manager.verify_api_key(&forged).unwrap().is_none());
+    }
+
+    #[test]
+    fn test_verify_api_key_cost_is_constant_in_key_count() {
+        // M1 regression: verifying a real key must cost about the same
+        // whether it is the only stored key or one of hundreds — not O(N)
+        // Argon2 verifications.
+        let config = AuthConfig {
+            enabled: true,
+            ..Default::default()
+        };
+        let manager = AuthManager::new(config);
+
+        let (_baseline_key, baseline_full_key) = manager
+            .generate_api_key("baseline".to_string(), vec![Permission::Read])
+            .unwrap();
+        let start = std::time::Instant::now();
+        assert!(
+            manager
+                .verify_api_key(&baseline_full_key)
+                .unwrap()
+                .is_some()
+        );
+        let baseline = start.elapsed();
+
+        for i in 0..200 {
+            manager
+                .generate_api_key(format!("decoy-{i}"), vec![Permission::Read])
+                .unwrap();
+        }
+        // Created after the decoys so it can't benefit from being first in
+        // any incidental map iteration order.
+        let (_target_key, target_full_key) = manager
+            .generate_api_key("target".to_string(), vec![Permission::Read])
+            .unwrap();
+
+        let start = std::time::Instant::now();
+        let verified = manager.verify_api_key(&target_full_key).unwrap();
+        let with_many_keys = start.elapsed();
+
+        assert!(verified.is_some());
+        // Generous tolerance (10x the single-key baseline, floor 200ms) to
+        // avoid CI flakiness while still failing hard against genuine O(N)
+        // behavior, which would cost roughly 200x the baseline here.
+        let tolerance = std::cmp::max(baseline * 10, std::time::Duration::from_millis(200));
+        assert!(
+            with_many_keys <= tolerance,
+            "verify_api_key took {with_many_keys:?} with 200+ stored keys vs {baseline:?} \
+             baseline (tolerance {tolerance:?}) — looks O(N), not O(1)"
+        );
     }
 }

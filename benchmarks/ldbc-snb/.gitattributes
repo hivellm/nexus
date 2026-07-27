@@ -1,0 +1,12 @@
+# The repository is checked out with core.autocrlf=true on Windows, which would
+# otherwise rewrite these files to CRLF and break them:
+#
+#   *.sh   a CRLF shebang makes Linux fail with "bad interpreter: ^M"
+#   *.tsv  the manifest is read field-by-field by fetch-dataset.sh; a trailing
+#          \r rides along on the last column and corrupts the byte-size
+#          arithmetic
+#
+# Pinning eol=lf keeps both correct on every platform. PowerShell is content
+# with LF, so fetch-dataset.ps1 needs no exception.
+*.sh text eol=lf
+*.tsv text eol=lf

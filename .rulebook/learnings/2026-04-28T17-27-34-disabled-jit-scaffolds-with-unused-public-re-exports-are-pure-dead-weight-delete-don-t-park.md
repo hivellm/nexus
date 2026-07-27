@@ -1,0 +1,12 @@
+# Disabled JIT scaffolds with unused public re-exports are pure dead weight — delete, don't park
+**Source**: manual
+**Date**: 2026-04-28
+**Related Task**: phase7_resolve-jit-module
+**Tags**: dead-code, tech-debt, tier-1, execution, jit, audit-heuristic
+When auditing `phase7_resolve-jit-module`, the JIT scaffold under `crates/nexus-core/src/execution/jit/` looked alive at first glance: it had a `pub use jit::{JitRuntime, QueryHints}` re-export through `execution/mod.rs`, three substantial files (mod.rs + codegen.rs + runtime.rs = ~1320 LOC), a shadow `cranelift_jit.rs.disabled` file, and unit tests covering the in-module API. The temptation was to ship a feature-flagged "preserve for later" gate.
+
+The actual signal: a `grep -rn "JitRuntime\|QueryHints\|jit::"` across the workspace returned **zero hits** outside the module itself. The executor's only use site was a commented-out import (`// use crate::execution::jit::CraneliftJitCompiler;`). The unit tests inside the module test the module's own public API but don't drive any executor behavior. The shadow `.disabled` file was a corpse from a 2-year-old refactor.
+
+Lesson: when auditing dead code, the diagnostic is "who calls this from outside the module?", not "does this module compile?". Unused re-exports look like API surface but are zero-coverage by definition. If no production caller depends on a module, parking it behind a feature flag adds maintenance cost (forward-port through every refactor) without delivering value. Delete and let git history serve as the archive — a future task that wants the feature can either restart from scratch with current knowledge or `git show <pre-deletion-commit>` to recover the scaffold.
+
+Concrete heuristic for this codebase: a module that exports types via `pub use` and contains a `// TODO: Re-enable after core optimizations` marker on its own re-export line is dead — the original author already flagged it, the project's Tier-1 rule already banned the pattern, and the only thing keeping it alive is inertia.

@@ -531,6 +531,12 @@ impl BulkLoader {
                     .collect(),
             );
 
+            // Register every property key with the catalog so
+            // `db.propertyKeys()` sees bulk-loaded properties too, not just
+            // ones written through Cypher. See
+            // `Catalog::register_property_keys`.
+            self.catalog.register_property_keys(&properties);
+
             // Store node
             let mut storage = self.storage.write().await;
             let node_id = storage.create_node(&mut tx, labels.clone(), properties)?;
@@ -567,6 +573,11 @@ impl BulkLoader {
                     .map(|(k, v)| (k.clone(), v.clone()))
                     .collect(),
             );
+
+            // Register every property key with the catalog so
+            // `db.propertyKeys()` sees bulk-loaded relationship properties
+            // too. See `Catalog::register_property_keys`.
+            self.catalog.register_property_keys(&properties);
 
             // Store relationship
             let mut storage = self.storage.write().await;
@@ -705,6 +716,72 @@ mod tests {
         assert_eq!(result.nodes_loaded, 2);
         assert_eq!(result.relationships_loaded, 1);
         assert!(result.duration_seconds.is_some());
+    }
+
+    /// The bulk loader writes edges straight to the store without telling any
+    /// cache layer — which is exactly why `cache::RelationshipIndex` is only a
+    /// hint. The store's own adjacency index is maintained at `write_rel`, so
+    /// bulk-loaded edges ARE indexed in both directions, incoming included.
+    /// See phase0_perf-store-reverse-incoming-adjacency-index.
+    #[tokio::test]
+    async fn bulk_loaded_relationships_populate_the_store_adjacency_index() {
+        let ctx = TestContext::new();
+        let catalog = Arc::new(Catalog::new(ctx.path()).unwrap());
+        let storage = Arc::new(RwLock::new(RecordStore::new(ctx.path()).unwrap()));
+        let indexes = Arc::new(IndexManager::new(ctx.path().join("indexes")).unwrap());
+        let transaction_manager = Arc::new(RwLock::new(TransactionManager::new().unwrap()));
+
+        let loader = BulkLoader::new(
+            catalog,
+            Arc::clone(&storage),
+            indexes,
+            transaction_manager,
+            BulkLoadConfig::default(),
+        );
+
+        let nodes = vec![
+            NodeData {
+                id: None,
+                labels: vec!["Person".to_string()],
+                properties: HashMap::new(),
+            },
+            NodeData {
+                id: None,
+                labels: vec!["Person".to_string()],
+                properties: HashMap::new(),
+            },
+        ];
+        let relationships = vec![RelationshipData {
+            id: None,
+            source_id: 0,
+            target_id: 1,
+            rel_type: "KNOWS".to_string(),
+            properties: HashMap::new(),
+        }];
+
+        let result = loader
+            .load_data(
+                DataSource::InMemory {
+                    nodes,
+                    relationships,
+                },
+                None,
+            )
+            .await
+            .unwrap();
+        assert_eq!(result.relationships_loaded, 1);
+
+        let store = storage.read().await;
+        assert_eq!(
+            store.incoming_relationships(1),
+            vec![0],
+            "the bulk loader must register the incoming edge"
+        );
+        assert_eq!(store.outgoing_relationships(0), vec![0]);
+        assert!(
+            store.incoming_relationships(0).is_empty(),
+            "nothing points at the source node"
+        );
     }
 
     #[tokio::test]

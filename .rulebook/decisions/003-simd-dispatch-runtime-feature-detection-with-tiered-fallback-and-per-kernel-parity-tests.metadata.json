@@ -1,0 +1,12 @@
+{
+  "id": 3,
+  "slug": "simd-dispatch-runtime-feature-detection-with-tiered-fallback-and-per-kernel-parity-tests",
+  "title": "SIMD dispatch: runtime feature detection with tiered fallback and per-kernel parity tests",
+  "date": "2026-04-18",
+  "relatedTasks": [
+    "phase1_simd-knn-distance-kernels",
+    "phase2_simd-executor-filter-aggregate",
+    "phase3_simd-storage-checksum-parse"
+  ],
+  "supersededBy": null
+}

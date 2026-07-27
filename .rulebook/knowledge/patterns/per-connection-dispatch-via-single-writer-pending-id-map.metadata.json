@@ -1,0 +1,19 @@
+{
+  "id": "per-connection-dispatch-via-single-writer-pending-id-map",
+  "type": "pattern",
+  "title": "Per-connection dispatch via single writer + pending-id map",
+  "category": "architecture",
+  "description": "A persistent TCP RPC connection needs writes serialised (frames cannot interleave on the wire) and responses multiplexed back to the right caller (they may arrive out of completion order). The pattern we adopted across all six SDKs is: one writer mutex/lock guarding the socket, a `Map<request_id, channel>` (or `TaskCompletionSource` / `Future` / `Promise`) of pending callers, and a single reader task that reads frames off the socket and dispatches them to the pending map by id. Every SDK uses the same shape — it's simple, correct, and trivially debuggable.",
+  "example": "// Rust (sdks/rust/src/transport/rpc.rs):\npub struct RpcTransport {\n    stream: Mutex<Option<BufReader<TcpStream>>>,  // writer lock\n    next_id: AtomicU32,                            // skip PUSH_ID (u32::MAX)\n}\n// TypeScript: Map<number, {resolve, reject}> + single on('data') handler\n// Python: asyncio._pending: Dict[int, Future] + a create_task(_read_loop)\n// Go: sync.Map of chan RpcResponse + a goroutine for readLoop\n// C#: ConcurrentDictionary<uint, TaskCompletionSource> + background Task\n// PHP: synchronous write-then-read (process model makes goroutines awkward)",
+  "whenToUse": "Any persistent-socket request/response protocol where concurrent callers need to share a single connection. Especially right when request ids are already monotonic — you get correctness + O(1) lookup for free.",
+  "whenNotToUse": "Connection-per-request protocols (short-lived TCP with one in-flight request per socket, like naive HTTP/1.0). Pub/sub-first protocols where streams don't have a request-id concept. PHP's synchronous model uses a simpler blocking read-after-write pattern — appropriate when concurrency lives in the process model (multiple workers) rather than in-process.",
+  "createdAt": "2026-04-19T05:15:30.020Z",
+  "tags": [
+    "rpc",
+    "transport",
+    "concurrency",
+    "sdk",
+    "messagepack"
+  ],
+  "source": "manual"
+}

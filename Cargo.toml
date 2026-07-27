@@ -4,17 +4,20 @@ resolver = "2"
 members = [
     "crates/nexus-core",
     "crates/nexus-server",
-    "crates/nexus-protocol",
     "crates/nexus-cli",
     "crates/nexus-bench",
     "crates/nexus-knn-bench",
 ]
 exclude = [
     "sdks/rust",
+    # LDBC SNB harness: an HTTP client of the running server, not part of the
+    # product. Kept out so its benchmark-only dependencies never reach the
+    # shipped crates' lockfile. See benchmarks/ldbc-snb/Cargo.toml.
+    "benchmarks/ldbc-snb",
 ]
 
 [workspace.package]
-version = "2.5.0"
+version = "3.0.0"
 edition = "2024"
 authors = ["HiveLLM Contributors <team@hivellm.org>"]
 license = "Apache-2.0"
@@ -25,7 +28,11 @@ rust-version = "1.85"
 [workspace.dependencies]
 # Core graph engine
 nexus-core = { path = "crates/nexus-core" }
-nexus-protocol = { path = "crates/nexus-protocol" }
+
+# HiveLLM family RPC standard (Thunder wire v1 — byte-identical to the
+# current hand-rolled Nexus RPC wire). Registry version only, no path/git
+# (crates.io publish constraint). phase10_thunder-server-migration.
+thunder-rpc = { version = "0.2.2", default-features = false }
 
 # Storage
 memmap2 = "0.9"
@@ -48,12 +55,12 @@ hnsw_rs = "0.3"
 tokio = { version = "1.40", features = ["full"] }
 axum = "0.8"
 tower = "0.5"
-tower-http = { version = "0.6", features = ["trace", "cors", "compression-gzip", "compression-br"] }
+tower-http = { version = "0.6", features = ["trace", "cors", "compression-gzip", "compression-br", "timeout"] }
 hyper = "1.5"
 hyper-util = "0.1"
 
 # MCP dependencies
-rmcp = { version = "0.8.1", features = ["server", "macros", "transport-streamable-http-server"] }
+rmcp = { version = "2.2.0", features = ["server", "transport-streamable-http-server"] }
 tokio-stream = { version = "0.1", features = ["sync"] }
 tokio-util = "0.7"
 async-trait = "0.1"

@@ -1,0 +1,6 @@
+# Plan-cache: counters survive clear() so trend lines stay clean
+**Source**: manual
+**Date**: 2026-04-30
+**Related Task**: phase8_query-plan-cache
+**Tags**: plan-cache, observability, lifetime-counters
+When designing a process-wide query-plan cache, the obvious move is to reset the hit / miss / eviction counters on `clear()` — that mirrors how most cache APIs spell "flush". Resist it.\n\nOps observability wants lifetime hit-rate trend lines: "cache started cold at boot, warmed to 87 % hit rate over 4 h, dropped to 22 % when the operator deployed a schema change". If `clear()` zeroes the counters, the second drop is visually indistinguishable from "the operator pressed flush". With monotonic counters, the eviction count climbs on every `clear()` (recording the bulk drop) but the hit / miss totals continue forward — the operator can subtract two snapshots to get a windowed hit rate while still seeing emergency flushes as eviction spikes.\n\nThis pattern appears in `crates/nexus-core/src/executor/planner/cache.rs::PlanCache::clear`. The `plan_cache_clear_drops_all_entries_but_preserves_counters` test pins it.

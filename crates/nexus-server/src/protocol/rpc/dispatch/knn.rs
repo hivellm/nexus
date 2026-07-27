@@ -339,7 +339,7 @@ mod tests {
             .iter()
             .flat_map(|f| f.to_le_bytes())
             .collect();
-        let got = parse_embedding(&NexusValue::Bytes(raw)).unwrap();
+        let got = parse_embedding(&NexusValue::bytes(raw)).unwrap();
         assert_eq!(got, vec![1.0, 2.5, -3.25]);
     }
 
@@ -358,7 +358,7 @@ mod tests {
     fn parse_embedding_bytes_and_array_produce_same_vec() {
         let values = [0.25_f32, -1.5, 3.0];
         let raw: Vec<u8> = values.iter().flat_map(|f| f.to_le_bytes()).collect();
-        let as_bytes = parse_embedding(&NexusValue::Bytes(raw)).unwrap();
+        let as_bytes = parse_embedding(&NexusValue::bytes(raw)).unwrap();
         let as_array = parse_embedding(&NexusValue::Array(
             values
                 .iter()
@@ -371,7 +371,7 @@ mod tests {
 
     #[test]
     fn parse_embedding_rejects_bytes_not_multiple_of_4() {
-        let err = parse_embedding(&NexusValue::Bytes(vec![0, 1, 2])).unwrap_err();
+        let err = parse_embedding(&NexusValue::bytes(vec![0, 1, 2])).unwrap_err();
         assert!(err.contains("multiple of 4"));
     }
 
@@ -422,11 +422,13 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn knn_search_surfaces_engine_error_for_unknown_label() {
+    async fn knn_search_unknown_label_returns_empty() {
         let s = session();
-        // An empty engine has no label index for "Missing"; the engine
-        // returns an error rather than an empty result.
-        let err = run(
+        // phase20_knn-write-path-wiring §2.6: `knn_search` is label-aware
+        // and treats an unknown label as "no matching nodes", returning an
+        // empty result rather than an error — consistent with how a
+        // label-scoped read over a non-existent label yields zero rows.
+        let out = run(
             &s,
             "KNN_SEARCH",
             &[
@@ -436,8 +438,11 @@ mod tests {
             ],
         )
         .await
-        .unwrap_err();
-        assert!(err.contains("KNN_SEARCH failed"));
+        .unwrap();
+        match out {
+            NexusValue::Array(rows) => assert!(rows.is_empty(), "expected no hits, got {rows:?}"),
+            other => panic!("expected an (empty) array result, got {other:?}"),
+        }
     }
 
     #[tokio::test]

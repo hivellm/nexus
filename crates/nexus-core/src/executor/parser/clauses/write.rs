@@ -11,7 +11,7 @@ impl CypherParser {
         self.skip_whitespace();
         let mut pattern = self.parse_pattern()?;
 
-        let external_id_expr = extract_underscore_id_from_pattern(&mut pattern)?;
+        let external_id_expr = extract_underscore_id_from_pattern(&mut pattern, false)?;
 
         self.skip_whitespace();
         let conflict_policy = if self.peek_keyword("ON") && self.peek_keyword_at(1, "CONFLICT") {
@@ -84,7 +84,7 @@ impl CypherParser {
         };
 
         let mut pattern = pattern;
-        let external_id_expr = extract_underscore_id_from_pattern(&mut pattern)?;
+        let external_id_expr = extract_underscore_id_from_pattern(&mut pattern, true)?;
 
         Ok(MergeClause {
             pattern,

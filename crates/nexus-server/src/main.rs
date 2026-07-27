@@ -45,7 +45,7 @@ use parking_lot::RwLock;
 use std::sync::Arc;
 use std::thread;
 use tokio::sync::RwLock as TokioRwLock;
-use tower_http::{compression::CompressionLayer, cors::CorsLayer, trace::TraceLayer};
+use tower_http::{compression::CompressionLayer, trace::TraceLayer};
 use tracing::{info, warn};
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
@@ -151,6 +151,38 @@ fn run_healthcheck() -> ! {
     std::process::exit(1);
 }
 
+/// Best-effort removal of stale comparison-graph temp directories left by
+/// prior server processes that exited without running `Drop` (`kill -9`,
+/// crashes). Comparison graphs self-remove on graceful shutdown; this only
+/// reclaims orphans. A directory still open by a live process fails
+/// `remove_dir_all` and is skipped, and only entries older than one hour are
+/// considered so a concurrently-starting sibling server is never touched.
+fn sweep_stale_comparison_dirs() {
+    let base = std::env::temp_dir();
+    let Ok(entries) = std::fs::read_dir(&base) else {
+        return;
+    };
+    let now = std::time::SystemTime::now();
+    const STALE_AFTER: std::time::Duration = std::time::Duration::from_secs(3600);
+    for entry in entries.flatten() {
+        let name = entry.file_name();
+        let Some(name) = name.to_str() else {
+            continue;
+        };
+        if !name.starts_with("nexus-cmp-") {
+            continue;
+        }
+        let stale = entry
+            .metadata()
+            .and_then(|m| m.modified())
+            .map(|mtime| now.duration_since(mtime).unwrap_or_default() > STALE_AFTER)
+            .unwrap_or(false);
+        if stale {
+            let _ = std::fs::remove_dir_all(entry.path());
+        }
+    }
+}
+
 fn main() -> anyhow::Result<()> {
     // Parse CLI arguments
     let args = Args::parse();
@@ -226,6 +258,17 @@ async fn async_main(_worker_threads: usize) -> anyhow::Result<()> {
     // Load configuration (YAML file -> env vars -> defaults, env wins).
     let config = config::Config::from_env();
 
+    // Security preflight: refuse to boot in an unsafe posture (public bind with
+    // auth off; default root password with auth on). Intentional hard failure.
+    if let Err(msg) = config.security_preflight() {
+        tracing::error!("{msg}");
+        anyhow::bail!("{msg}");
+    }
+
+    // Reclaim comparison-graph temp dirs orphaned by a prior process that
+    // exited without running `Drop` (crash / `kill -9`).
+    sweep_stale_comparison_dirs();
+
     // Initialize Engine (contains all core components)
     // `config.data_dir` already merges NEXUS_DATA_DIR / YAML / default, so
     // we use it directly instead of re-reading the env var here.
@@ -264,7 +307,7 @@ async fn async_main(_worker_threads: usize) -> anyhow::Result<()> {
 
     // Create root user if enabled in config
     if config.root_user.enabled {
-        // Hash password with SHA512
+        // Hash password with Argon2id (per-user random salt)
         let password_hash = nexus_core::auth::hash_password(&config.root_user.password);
 
         if let Err(e) = rbac.create_root_user(config.root_user.username.clone(), password_hash) {
@@ -438,7 +481,10 @@ async fn async_main(_worker_threads: usize) -> anyhow::Result<()> {
     // Enabled by default — first-party SDKs prefer this transport for its
     // multiplexed MessagePack framing, but HTTP and RESP3 keep running
     // regardless so existing clients and tooling stay working.
-    if config.rpc.enabled {
+    // Held for the process lifetime: dropping the Thunder `ListenerHandle`
+    // triggers a graceful shutdown, so this binding must outlive the HTTP
+    // serve below.
+    let _rpc_handle = if config.rpc.enabled {
         match nexus_server::protocol::rpc::spawn_rpc_listener(
             nexus_server.clone(),
             config.rpc.addr,
@@ -447,28 +493,58 @@ async fn async_main(_worker_threads: usize) -> anyhow::Result<()> {
         )
         .await
         {
-            Ok(()) => {
+            Ok(handle) => {
                 info!(
                     "Nexus RPC listener bound on {} (auth_required={}, max_frame_bytes={})",
                     config.rpc.addr, config.rpc.require_auth, config.rpc.max_frame_bytes
                 );
+                Some(handle)
             }
             Err(e) => {
                 warn!(
                     "Failed to bind RPC listener on {}: {}. HTTP/RESP3 surfaces continue unaffected.",
                     config.rpc.addr, e
                 );
+                None
             }
         }
-    }
+    } else {
+        None
+    };
 
     // Hoisted above `create_mcp_router` so both the MCP and main
     // routers see the same cluster flag. Legacy auth stays wired
     // up through `auth.enabled`; cluster mode piggy-backs on it.
     let cluster_enabled = config.cluster.enabled;
 
+    // rmcp's `StreamableHttpServerConfig` default `allowed_hosts` list
+    // (localhost/127.0.0.1/::1) 403s any other `Host` header. A server
+    // bound to a non-loopback address with no allow-list configured will
+    // silently reject every remote MCP client until an operator notices
+    // the 403s — warn at startup instead so the gap surfaces immediately.
+    if !config.addr.ip().is_loopback()
+        && config.mcp_allowed_hosts.is_empty()
+        && !config.mcp_allowed_hosts_disable
+    {
+        warn!(
+            "/mcp is bound on non-loopback address {} but NEXUS_MCP_ALLOWED_HOSTS is unset; \
+             rmcp's DNS-rebinding guard will return 403 for any Host header other than \
+             localhost/127.0.0.1/::1. Set NEXUS_MCP_ALLOWED_HOSTS (comma-separated hostnames \
+             or host:port authorities) to the values remote clients will send, or \
+             NEXUS_MCP_ALLOWED_HOSTS_DISABLE=true to disable the check (not recommended for \
+             public deployments).",
+            config.addr
+        );
+    }
+
     // Create MCP router with StreamableHTTP transport
-    let mcp_router = create_mcp_router(nexus_server.clone(), cluster_enabled).await?;
+    let mcp_router = create_mcp_router(
+        nexus_server.clone(),
+        cluster_enabled,
+        config.mcp_allowed_hosts.clone(),
+        config.mcp_allowed_hosts_disable,
+    )
+    .await?;
 
     // Health + Prometheus now read `server.start_time` and
     // `server.metrics` via State<Arc<NexusServer>> (phase2e); the
@@ -479,8 +555,14 @@ async fn async_main(_worker_threads: usize) -> anyhow::Result<()> {
     // owned by NexusServer::new (phase2d), so the `init_graphs` /
     // `init_manager` scaffolding that used to live here is gone.
 
-    // Initialize rate limiter (for future use)
-    let _rate_limiter = RateLimiter::new();
+    // Initialize the per-IP rate limiter. Layered onto `app` below (H2);
+    // relies on `ConnectInfo<SocketAddr>` being available, which requires
+    // serving through `into_make_service_with_connect_info`. Sourced from
+    // `config.rate_limit` (NEXUS_RATE_LIMIT_* env vars) so operators can
+    // tune the budget or disable it, and so loopback clients are exempt by
+    // default — fixes bulk `/ingest` loads getting their connection reset
+    // instead of a clean 429 once the token bucket empties.
+    let rate_limiter = RateLimiter::with_config(config.rate_limit.clone());
 
     // Initialize authentication middleware if enabled
     // For now, we'll enable it based on config.auth.enabled
@@ -494,6 +576,7 @@ async fn async_main(_worker_threads: usize) -> anyhow::Result<()> {
         Some(create_auth_middleware(
             nexus_server.clone(),
             true,
+            config.auth.require_stats_auth,
             cluster_enabled,
         ))
     } else {
@@ -562,14 +645,19 @@ async fn async_main(_worker_threads: usize) -> anyhow::Result<()> {
             "/auth/users",
             get({
                 let server = nexus_server.clone();
-                move || api::auth::list_users(axum::extract::State(server))
+                move |ext: Option<
+                    axum::extract::Extension<Option<nexus_core::auth::middleware::AuthContext>>,
+                >| api::auth::list_users(axum::extract::State(server), ext)
             }),
         )
         .route(
             "/auth/users/{username}",
             get({
                 let server = nexus_server.clone();
-                move |path| api::auth::get_user(axum::extract::State(server), path)
+                move |ext: Option<
+                    axum::extract::Extension<Option<nexus_core::auth::middleware::AuthContext>>,
+                >,
+                      path| api::auth::get_user(axum::extract::State(server), ext, path)
             }),
         )
         .route("/auth/users/{username}", delete(api::auth::delete_user))
@@ -581,7 +669,14 @@ async fn async_main(_worker_threads: usize) -> anyhow::Result<()> {
             "/auth/users/{username}/permissions",
             get({
                 let server = nexus_server.clone();
-                move |path| api::auth::get_user_permissions(axum::extract::State(server), path)
+                move |ext: Option<
+                    axum::extract::Extension<Option<nexus_core::auth::middleware::AuthContext>>,
+                >,
+                      path| api::auth::get_user_permissions(
+                    axum::extract::State(server),
+                    ext,
+                    path,
+                )
             }),
         )
         .route(
@@ -594,14 +689,20 @@ async fn async_main(_worker_threads: usize) -> anyhow::Result<()> {
             "/auth/keys",
             get({
                 let server = nexus_server.clone();
-                move |query| api::auth::list_api_keys(axum::extract::State(server), query)
+                move |ext: Option<
+                    axum::extract::Extension<Option<nexus_core::auth::middleware::AuthContext>>,
+                >,
+                      query| api::auth::list_api_keys(axum::extract::State(server), ext, query)
             }),
         )
         .route(
             "/auth/keys/{key_id}",
             get({
                 let server = nexus_server.clone();
-                move |path| api::auth::get_api_key(axum::extract::State(server), path)
+                move |ext: Option<
+                    axum::extract::Extension<Option<nexus_core::auth::middleware::AuthContext>>,
+                >,
+                      path| api::auth::get_api_key(axum::extract::State(server), ext, path)
             }),
         )
         .route("/auth/keys/{key_id}", delete(api::auth::delete_api_key))
@@ -761,79 +862,51 @@ async fn async_main(_worker_threads: usize) -> anyhow::Result<()> {
         // guards the case anyway).
         .route("/cluster/stats/self", get(api::cluster_stats::tenant_stats))
         // Database management endpoints
-        .route(
-            "/databases",
-            get({
-                let server = nexus_server.clone();
-                move || {
-                    let manager = server.database_manager.clone();
-                    async move {
-                        api::database::list_databases(axum::extract::State(api::database::DatabaseState { manager })).await
-                    }
-                }
-            }),
-        )
+        // phase0_fix-multi-database-persistence-and-default G2 — `list_databases`
+        // now reads both `database_manager` AND `engine` (for the default
+        // database's real stats), so it takes `State<Arc<NexusServer>>`
+        // directly like the `/cypher` handler, instead of the narrower
+        // `DatabaseState` closure wrapper the other `/databases*` routes use.
+        .route("/databases", get(api::database::list_databases))
         .route(
             "/databases",
             post({
                 let server = nexus_server.clone();
-                move |request| {
+                move |ext: Option<
+                    axum::extract::Extension<Option<nexus_core::auth::middleware::AuthContext>>,
+                >,
+                      request| {
                     let manager = server.database_manager.clone();
                     async move {
-                        api::database::create_database(axum::extract::State(api::database::DatabaseState { manager }), request).await
+                        api::database::create_database(axum::extract::State(api::database::DatabaseState { manager }), ext, request).await
                     }
                 }
             }),
         )
-        .route(
-            "/databases/{name}",
-            get({
-                let server = nexus_server.clone();
-                move |path| {
-                    let manager = server.database_manager.clone();
-                    async move {
-                        api::database::get_database(axum::extract::State(api::database::DatabaseState { manager }), path).await
-                    }
-                }
-            }),
-        )
+        // Same reasoning as `/databases` above — `get_database` now also
+        // reads `engine` directly for the default database's stats.
+        .route("/databases/{name}", get(api::database::get_database))
         .route(
             "/databases/{name}",
             delete({
                 let server = nexus_server.clone();
-                move |path| {
+                move |ext: Option<
+                    axum::extract::Extension<Option<nexus_core::auth::middleware::AuthContext>>,
+                >,
+                      path| {
                     let manager = server.database_manager.clone();
                     async move {
-                        api::database::drop_database(axum::extract::State(api::database::DatabaseState { manager }), path).await
+                        api::database::drop_database(axum::extract::State(api::database::DatabaseState { manager }), ext, path).await
                     }
                 }
             }),
         )
-        // Session database endpoints
-        .route(
-            "/session/database",
-            get({
-                let server = nexus_server.clone();
-                move || {
-                    let manager = server.database_manager.clone();
-                    async move {
-                        api::database::get_session_database(axum::extract::State(api::database::DatabaseState { manager })).await
-                    }
-                }
-            }),
-        )
-        .route(
-            "/session/database",
-            put({
-                let server = nexus_server.clone();
-                move |request| {
-                    let manager = server.database_manager.clone();
-                    async move {
-                        api::database::switch_session_database(axum::extract::State(api::database::DatabaseState { manager }), request).await
-                    }
-                }
-            }),
-        )
+        // phase0_fix-cypher-database-routing §4 — the `/session/database`
+        // GET/PUT endpoints were removed: the stateless HTTP model has no
+        // per-connection identity to hang a session database on, and the
+        // switch was a stub that always reported success without persisting.
+        // Clients select a database with the per-request `database` field on
+        // `POST /cypher`.
         .route("/cache/stats", get(api::cypher::get_cache_stats))
         .route("/cache/clear", post(api::cypher::clear_cache))
         .route("/cache/clean", post(api::cypher::clean_cache))
@@ -1065,6 +1138,12 @@ async fn async_main(_worker_threads: usize) -> anyhow::Result<()> {
     #[cfg(debug_assertions)]
     let app = app.route("/graphql/playground", get(api::graphql::graphql_playground));
 
+    // M4: build the CORS layer from the configured allow-list instead of
+    // `CorsLayer::permissive()` (which reflected any `Origin`, letting any
+    // website read API responses cross-origin). Empty list (default) => no
+    // cross-origin access; see `middleware::cors::build_cors_layer`.
+    let cors_layer = nexus_server::middleware::build_cors_layer(&config.cors_allowed_origins);
+
     // Apply middleware layers
     let app = app
         // Cap request body size. Without this, Axum allows bodies up to its
@@ -1074,8 +1153,23 @@ async fn async_main(_worker_threads: usize) -> anyhow::Result<()> {
         .layer(DefaultBodyLimit::max(config.max_body_size_bytes))
         // Compression for responses (gzip, deflate, br)
         .layer(CompressionLayer::new())
-        // CORS support
-        .layer(CorsLayer::permissive())
+        // CORS — restricted to the configured allow-list (M4).
+        .layer(cors_layer)
+        // H4: per-request wall-clock timeout, so a slowloris-style connection
+        // or a request that never completes cannot pin a worker indefinitely.
+        // Covers the HTTP/connection vector; CPU-bound statement cancellation
+        // inside the executor is a separate follow-up.
+        .layer(tower_http::timeout::TimeoutLayer::with_status_code(
+            axum::http::StatusCode::REQUEST_TIMEOUT,
+            std::time::Duration::from_secs(config.request_timeout_secs),
+        ))
+        // Per-IP rate limiting (H2). Reads `ConnectInfo<SocketAddr>`, which
+        // requires serving through `into_make_service_with_connect_info`
+        // below.
+        .layer(axum_middleware::from_fn_with_state(
+            rate_limiter.clone(),
+            nexus_server::middleware::rate_limit::rate_limit_middleware,
+        ))
         // Request/response tracing
         .layer(TraceLayer::new_for_http());
 
@@ -1101,30 +1195,54 @@ async fn async_main(_worker_threads: usize) -> anyhow::Result<()> {
 
     tracing::debug!("Starting optimized Axum server with high concurrency settings");
 
-    // Start server
-    axum::serve(listener, app).await?;
+    // Start server. `into_make_service_with_connect_info` is required so the
+    // rate-limit middleware's `ConnectInfo<SocketAddr>` extractor resolves.
+    axum::serve(
+        listener,
+        app.into_make_service_with_connect_info::<std::net::SocketAddr>(),
+    )
+    .await?;
 
     Ok(())
 }
 
-/// Create MCP router with StreamableHTTP transport
+/// Create MCP router with StreamableHTTP transport.
+///
+/// `mcp_allowed_hosts` / `mcp_allowed_hosts_disable` configure rmcp's
+/// DNS-rebinding `Host` allow-list (see `config::Config::mcp_allowed_hosts`
+/// for the env var / default semantics): `disable` wins outright
+/// (`disable_allowed_hosts()`); otherwise a non-empty list replaces rmcp's
+/// built-in default via `with_allowed_hosts`; an empty list keeps
+/// `StreamableHttpServerConfig::default()` exactly as before this option
+/// existed.
 async fn create_mcp_router(
     nexus_server: Arc<NexusServer>,
     cluster_enabled: bool,
+    mcp_allowed_hosts: Vec<String>,
+    mcp_allowed_hosts_disable: bool,
 ) -> anyhow::Result<Router<Arc<NexusServer>>> {
     use hyper::service::Service;
     use hyper_util::service::TowerToHyperService;
+    use rmcp::transport::streamable_http_server::StreamableHttpServerConfig;
     use rmcp::transport::streamable_http_server::StreamableHttpService;
     use rmcp::transport::streamable_http_server::session::local::LocalSessionManager;
 
     // Create MCP service handler
     let server = nexus_server.clone();
 
+    let streamable_config = if mcp_allowed_hosts_disable {
+        StreamableHttpServerConfig::default().disable_allowed_hosts()
+    } else if !mcp_allowed_hosts.is_empty() {
+        StreamableHttpServerConfig::default().with_allowed_hosts(mcp_allowed_hosts)
+    } else {
+        StreamableHttpServerConfig::default()
+    };
+
     // Create StreamableHTTP service
     let streamable_service = StreamableHttpService::new(
         move || Ok(crate::api::streaming::NexusMcpService::new(server.clone())),
         LocalSessionManager::default().into(),
-        Default::default(),
+        streamable_config,
     );
 
     // Convert to axum service and create router
@@ -1152,6 +1270,7 @@ async fn create_mcp_router(
         let auth_middleware = create_auth_middleware(
             nexus_server.clone(),
             true, // Require authentication for MCP
+            true, // MCP has no /stats route; keep the gated default
             cluster_enabled,
         );
 
@@ -1352,7 +1471,7 @@ mod tests {
         ));
 
         // Test that MCP router can be created (standalone mode; cluster off)
-        let result = create_mcp_router(server, false).await;
+        let result = create_mcp_router(server, false, Vec::new(), false).await;
         assert!(result.is_ok());
 
         let _router = result.unwrap();
@@ -1487,7 +1606,7 @@ mod tests {
         ));
 
         // Test that we can create the MCP router (standalone mode)
-        let mcp_router_result = create_mcp_router(server.clone(), false).await;
+        let mcp_router_result = create_mcp_router(server.clone(), false, Vec::new(), false).await;
         assert!(mcp_router_result.is_ok());
 
         let _mcp_router = mcp_router_result.unwrap();

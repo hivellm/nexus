@@ -44,7 +44,16 @@ impl Executor {
         // Use existing result_set.rows if available (from UNWIND, Filter, etc), otherwise materialize from variables
         // CRITICAL FIX: In UNION context, always materialize from variables to ensure correct structure
         // The existing result_set.rows may have wrong column structure from previous operators
-        let rows = if !context.result_set.rows.is_empty()
+        //
+        // Rows drawn straight from `result_set.rows` are AUTHORITATIVE: an
+        // upstream operator (UNWIND, Filter, CALL subquery, UNION ALL) already
+        // produced the exact intended multiset. A plain RETURN must not
+        // deduplicate them — only `RETURN DISTINCT` collapses duplicates, and
+        // that is handled by a separate Distinct operator. The node-id dedup
+        // further down exists solely to absorb the spurious cartesian
+        // duplicates that the variable-materialization path can emit, so it
+        // must be skipped whenever the rows are authoritative.
+        let rows_are_authoritative = !context.result_set.rows.is_empty()
             && !context
                 .result_set
                 .columns
@@ -52,8 +61,8 @@ impl Executor {
             && !context
                 .result_set
                 .columns
-                .contains(&"__filter_created__".to_string())
-        {
+                .contains(&"__filter_created__".to_string());
+        let rows = if rows_are_authoritative {
             // Use existing rows only if they don't have filter markers (indicating they are real data rows)
             let existing_columns = context.result_set.columns.clone();
             context
@@ -74,7 +83,7 @@ impl Executor {
                 // Filter already processed and removed all rows, don't create new ones
                 vec![]
             } else {
-                let materialized = self.materialize_rows_from_variables(context);
+                let materialized = self.materialize_rows_from_variables(context)?;
 
                 // CRITICAL FIX: If we have variables but materialized is empty,
                 // check if variables contain empty arrays (MATCH found nothing)
@@ -105,7 +114,8 @@ impl Executor {
                             // We have multi-element arrays - materialize_rows_from_variables should have
                             // created rows from them. If it didn't, there's a bug. But let's try again
                             // in case variables changed:
-                            let retry_materialized = self.materialize_rows_from_variables(context);
+                            let retry_materialized =
+                                self.materialize_rows_from_variables(context)?;
                             if !retry_materialized.is_empty() {
                                 tracing::trace!(
                                     "Project: retry materialization succeeded, got {} rows",
@@ -260,7 +270,8 @@ impl Executor {
         let has_synthetic_maps = rows.iter().any(|row_map| {
             row_map.values().any(|val| {
                 if let Value::Object(obj) = val {
-                    !obj.contains_key("_nexus_id") && !obj.contains_key("type")
+                    // A synthetic map is neither a node nor a relationship.
+                    !obj.contains_key("_nexus_id") && !crate::executor::is_relationship_value(val)
                 } else {
                     false
                 }
@@ -297,12 +308,19 @@ impl Executor {
             false
         };
 
-        let unique_rows = if has_relationships || has_varying_primitives || has_synthetic_maps {
+        let unique_rows = if rows_are_authoritative
+            || has_relationships
+            || has_varying_primitives
+            || has_synthetic_maps
+        {
             // CRITICAL: Don't deduplicate when:
+            // 0. Rows are authoritative (came from result_set.rows — UNWIND,
+            //    Filter, CALL, UNION ALL already fixed the multiset)
             // 1. Rows contain relationships (same node with different relationships)
             // 2. Rows have different primitive values (e.g., from UNWIND)
             tracing::trace!(
-                "Project: skipping deduplication (has_relationships={}, has_varying_primitives={}), preserving {} rows",
+                "Project: skipping deduplication (authoritative={}, has_relationships={}, has_varying_primitives={}), preserving {} rows",
+                rows_are_authoritative,
                 has_relationships,
                 has_varying_primitives,
                 rows.len()
@@ -409,7 +427,7 @@ impl Executor {
                 .map(|row| self.row_to_map(row, &existing_columns))
                 .collect::<Vec<_>>()
         } else {
-            self.materialize_rows_from_variables(context)
+            self.materialize_rows_from_variables(context)?
         };
 
         tracing::trace!("execute_with: processing {} input rows", rows.len());
@@ -509,12 +527,37 @@ impl Executor {
         count: usize,
     ) -> Result<()> {
         if context.result_set.rows.is_empty() {
-            let rows = self.materialize_rows_from_variables(context);
+            let rows = self.materialize_rows_from_variables(context)?;
             self.update_result_set_from_rows(context, &rows);
         }
 
         if context.result_set.rows.len() > count {
             context.result_set.rows.truncate(count);
+        }
+
+        let row_maps = self.result_set_as_rows(context);
+        self.update_variables_from_rows(context, &row_maps);
+        Ok(())
+    }
+
+    /// Execute Skip operator — drop the first `count` rows of the current
+    /// result set. Mirrors [`Self::execute_limit`]'s materialize-then-slice
+    /// shape so a bare `RETURN`/`YIELD` projection with no prior `Sort`
+    /// still has rows to skip from.
+    pub(in crate::executor) fn execute_skip(
+        &self,
+        context: &mut ExecutionContext,
+        count: usize,
+    ) -> Result<()> {
+        if context.result_set.rows.is_empty() {
+            let rows = self.materialize_rows_from_variables(context)?;
+            self.update_result_set_from_rows(context, &rows);
+        }
+
+        if count >= context.result_set.rows.len() {
+            context.result_set.rows.clear();
+        } else {
+            context.result_set.rows.drain(0..count);
         }
 
         let row_maps = self.result_set_as_rows(context);
@@ -530,7 +573,7 @@ impl Executor {
         ascending: &[bool],
     ) -> Result<()> {
         if context.result_set.rows.is_empty() && !context.variables.is_empty() {
-            let rows = self.materialize_rows_from_variables(context);
+            let rows = self.materialize_rows_from_variables(context)?;
             self.update_result_set_from_rows(context, &rows);
         }
 

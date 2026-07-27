@@ -53,7 +53,7 @@ default = []
 # and `cargo test` stay cheap and sandboxed. The Nexus side of every
 # comparison goes over the native MessagePack RPC protocol — not
 # HTTP/JSON — so transport overhead does not drown engine timings.
-live-bench = ["dep:tokio", "dep:nexus-protocol"]
+live-bench = ["dep:tokio", "dep:thunder-rpc"]
 # Adds the Neo4j Bolt BenchClient on top of `live-bench`. Split out
 # so CI jobs that only care about the Nexus-only flow don't pull in
 # `neo4rs` + its tokio-based transport stack.
@@ -69,7 +69,7 @@ clap = { version = "4.5", features = ["derive", "env"] }
 # Gated so the no-live-bench build is self-contained. The bench
 # speaks the native RPC wire directly — length-prefixed MessagePack
 # via `nexus_protocol::rpc::codec`. No reqwest, no JSON over HTTP.
-nexus-protocol = { workspace = true, optional = true }
+thunder-rpc = { workspace = true, features = ["tokio"], optional = true }
 tokio = { workspace = true, optional = true }
 # Gated on `neo4j`. Pinned to 0.8 — the latest 0.x stable as of
 # 2026-04-20. 0.9.x is pre-release at time of writing.

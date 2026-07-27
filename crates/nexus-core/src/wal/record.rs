@@ -92,6 +92,10 @@ pub enum WalEntryType {
     /// crash recovery can rebuild the catalog external-id index even if the
     /// LMDB write had not been flushed to disk.
     ExternalIdAssigned = 0x60,
+    /// KNN vector added to the global HNSW index (phase20_knn-write-path-wiring §1).
+    KnnVectorAdd = 0x70,
+    /// KNN vector removed from the global HNSW index.
+    KnnVectorDelete = 0x71,
     /// Checkpoint marker
     Checkpoint = 0xFF,
 }
@@ -264,6 +268,23 @@ pub enum WalEntry {
         /// Wire-encoded external id (discriminator + payload).
         external_id_bytes: Vec<u8>,
     },
+    /// KNN vector add (phase20_knn-write-path-wiring §1). Emitted by
+    /// engine-level index-maintenance hooks whenever a node carrying the
+    /// registered vector-index property is inserted into the global HNSW
+    /// graph. Replay routes this to `IndexManager::knn_index` re-insertion.
+    KnnVectorAdd {
+        /// Owning node id.
+        node_id: u64,
+        /// Embedding vector inserted into the HNSW graph.
+        embedding: Vec<f32>,
+    },
+    /// KNN vector delete. Emitted whenever a node carrying the registered
+    /// vector-index property is evicted from the global HNSW graph
+    /// (node delete, property removal, or reindex-on-refresh).
+    KnnVectorDelete {
+        /// Owning node id.
+        node_id: u64,
+    },
 }
 
 impl WalEntry {
@@ -288,6 +309,8 @@ impl WalEntry {
             Self::RTreeDelete { .. } => WalEntryType::RTreeDelete,
             Self::RTreeBulkLoadDone { .. } => WalEntryType::RTreeBulkLoadDone,
             Self::ExternalIdAssigned { .. } => WalEntryType::ExternalIdAssigned,
+            Self::KnnVectorAdd { .. } => WalEntryType::KnnVectorAdd,
+            Self::KnnVectorDelete { .. } => WalEntryType::KnnVectorDelete,
         }
     }
 

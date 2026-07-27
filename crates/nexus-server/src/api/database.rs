@@ -6,11 +6,13 @@
 //! - GET /management/databases - List all databases
 //! - GET /management/databases/:name - Get database info
 
+use crate::NexusServer;
 use axum::{
-    extract::{Path, State},
+    extract::{Extension, Path, State},
     http::StatusCode,
     response::{IntoResponse, Json, Response},
 };
+use nexus_core::auth::middleware::AuthContext;
 use nexus_core::database::{DatabaseInfo, DatabaseManager};
 use parking_lot::RwLock;
 use serde::{Deserialize, Serialize};
@@ -59,11 +61,23 @@ pub struct DatabaseResponse {
     pub message: String,
 }
 
-/// Create a new database
+/// Create a new database.
+///
+/// phase0_fix-multi-database-persistence-and-default §G3 — database creation
+/// mutates server-wide state shared by every caller, so (mirroring
+/// `require_admin` in `api::auth`) it requires the calling key to hold
+/// `Admin`/`Super`. When authentication is disabled the request carries no
+/// identity (`None`) and the check is a no-op, preserving bootstrap.
 pub async fn create_database(
     State(state): State<DatabaseState>,
+    auth_context: Option<Extension<Option<AuthContext>>>,
     Json(req): Json<CreateDatabaseRequest>,
 ) -> Response {
+    let auth_context = auth_context.and_then(|e| e.0);
+    if let Err((status, body)) = crate::api::auth::require_admin(&auth_context) {
+        return (status, body).into_response();
+    }
+
     let manager_arc = state.manager.clone();
     let name = req.name.clone();
     let result = tokio::task::spawn_blocking(move || {
@@ -91,11 +105,21 @@ pub async fn create_database(
     }
 }
 
-/// Drop a database
+/// Drop a database.
+///
+/// phase0_fix-multi-database-persistence-and-default §G3 — dropping a
+/// database is destructive and server-wide, so it requires the calling key
+/// to hold `Admin`/`Super`, matching [`create_database`].
 pub async fn drop_database(
     State(state): State<DatabaseState>,
+    auth_context: Option<Extension<Option<AuthContext>>>,
     Path(name): Path<String>,
 ) -> Response {
+    let auth_context = auth_context.and_then(|e| e.0);
+    if let Err((status, body)) = crate::api::auth::require_admin(&auth_context) {
+        return (status, body).into_response();
+    }
+
     let manager_arc = state.manager.clone();
     let name_for_task = name.clone();
     let result = tokio::task::spawn_blocking(move || {
@@ -122,10 +146,19 @@ pub async fn drop_database(
     }
 }
 
-/// List all databases
-pub async fn list_databases(State(state): State<DatabaseState>) -> Response {
-    let manager_arc = state.manager.clone();
-    let (databases, default_database) = tokio::task::spawn_blocking(move || {
+/// List all databases.
+///
+/// phase0_fix-multi-database-persistence-and-default G2 — the default
+/// database (`neo4j`) is served by the primary engine (`server.engine`),
+/// not a manager-owned `Engine`, and is therefore absent from
+/// `DatabaseManager::list_databases()`. This handler injects a
+/// [`DatabaseInfo`] row for it — with real node/relationship counts read
+/// straight from `server.engine` — ahead of the manager's named
+/// databases, so `GET /databases` reports the store that `/cypher`
+/// actually queries instead of the empty phantom the manager used to own.
+pub async fn list_databases(State(server): State<Arc<NexusServer>>) -> Response {
+    let manager_arc = server.database_manager.clone();
+    let (named_databases, default_database) = tokio::task::spawn_blocking(move || {
         let manager = manager_arc.read();
         (
             manager.list_databases(),
@@ -135,6 +168,26 @@ pub async fn list_databases(State(state): State<DatabaseState>) -> Response {
     .await
     .expect("spawn_blocking panicked");
 
+    let (node_count, relationship_count) = {
+        let mut engine = server.engine.write().await;
+        match engine.stats() {
+            Ok(stats) => (stats.nodes, stats.relationships),
+            Err(_) => (0, 0),
+        }
+    };
+
+    let mut databases = Vec::with_capacity(named_databases.len() + 1);
+    databases.push(DatabaseInfo {
+        name: default_database.clone(),
+        path: std::path::PathBuf::new(), // Don't expose full path
+        created_at: 0,
+        node_count,
+        relationship_count,
+        storage_size: 0,
+        state: nexus_core::database::DatabaseState::Online,
+    });
+    databases.extend(named_databases);
+
     Json(ListDatabasesResponse {
         databases,
         default_database,
@@ -142,27 +195,45 @@ pub async fn list_databases(State(state): State<DatabaseState>) -> Response {
     .into_response()
 }
 
-/// Get database info
+/// Get database info.
+///
+/// phase0_fix-multi-database-persistence-and-default G2 — the default
+/// database has no manager-owned `Engine` to query, so its stats are read
+/// directly from `server.engine`. Any other name is resolved through the
+/// `DatabaseManager` as before.
 pub async fn get_database(
-    State(state): State<DatabaseState>,
+    State(server): State<Arc<NexusServer>>,
     Path(name): Path<String>,
 ) -> Response {
-    let manager_arc = state.manager.clone();
-    let name_for_task = name.clone();
-    let result = tokio::task::spawn_blocking(move || {
-        let manager = manager_arc.read();
-        let engine = manager
-            .get_database(&name_for_task)
-            .map_err(|e| e.to_string())?;
-        let mut engine_guard = engine.write();
-        let (node_count, relationship_count) = match engine_guard.stats() {
+    let is_default = {
+        let manager = server.database_manager.read();
+        name == manager.default_database_name()
+    };
+
+    let result: Result<(u64, u64), String> = if is_default {
+        let mut engine = server.engine.write().await;
+        Ok(match engine.stats() {
             Ok(stats) => (stats.nodes, stats.relationships),
             Err(_) => (0, 0),
-        };
-        Ok::<(u64, u64), String>((node_count, relationship_count))
-    })
-    .await
-    .expect("spawn_blocking panicked");
+        })
+    } else {
+        let manager_arc = server.database_manager.clone();
+        let name_for_task = name.clone();
+        tokio::task::spawn_blocking(move || {
+            let manager = manager_arc.read();
+            let engine = manager
+                .get_database(&name_for_task)
+                .map_err(|e| e.to_string())?;
+            let mut engine_guard = engine.write();
+            let (node_count, relationship_count) = match engine_guard.stats() {
+                Ok(stats) => (stats.nodes, stats.relationships),
+                Err(_) => (0, 0),
+            };
+            Ok::<(u64, u64), String>((node_count, relationship_count))
+        })
+        .await
+        .expect("spawn_blocking panicked")
+    };
 
     match result {
         Ok((node_count, relationship_count)) => Json(DatabaseInfo {
@@ -186,76 +257,20 @@ pub async fn get_database(
     }
 }
 
-/// Request to switch database
-#[derive(Debug, Deserialize)]
-pub struct SwitchDatabaseRequest {
-    /// Database name to switch to
-    pub name: String,
-}
-
-/// Response for session database
-#[derive(Debug, Serialize)]
-pub struct SessionDatabaseResponse {
-    /// Current database name
-    pub database: String,
-}
-
-/// Get current session database
-pub async fn get_session_database(State(state): State<DatabaseState>) -> Response {
-    let manager_arc = state.manager.clone();
-    let current_db = tokio::task::spawn_blocking(move || {
-        let manager = manager_arc.read();
-        manager.default_database_name().to_string()
-    })
-    .await
-    .expect("spawn_blocking panicked");
-
-    Json(SessionDatabaseResponse {
-        database: current_db,
-    })
-    .into_response()
-}
-
-/// Switch session database
-pub async fn switch_session_database(
-    State(state): State<DatabaseState>,
-    Json(req): Json<SwitchDatabaseRequest>,
-) -> Response {
-    let manager_arc = state.manager.clone();
-    let name_for_task = req.name.clone();
-    let exists = tokio::task::spawn_blocking(move || {
-        let manager = manager_arc.read();
-        manager.exists(&name_for_task)
-    })
-    .await
-    .expect("spawn_blocking panicked");
-
-    // Check if database exists
-    if !exists {
-        return (
-            StatusCode::NOT_FOUND,
-            Json(DatabaseResponse {
-                success: false,
-                message: format!("Database '{}' does not exist", req.name),
-            }),
-        )
-            .into_response();
-    }
-
-    // In a full implementation, this would set the session's current database
-    // For now, we just validate the database exists
-    Json(DatabaseResponse {
-        success: true,
-        message: format!("Switched to database '{}'", req.name),
-    })
-    .into_response()
-}
+// phase0_fix-cypher-database-routing §4 — the session-scoped database switch
+// (`GET`/`PUT /session/database`) was removed. It could not be honored in the
+// stateless HTTP model (no per-connection identity), and the switch was a
+// stub that reported `{"success":true,"message":"Switched to database 'X'"}`
+// while never persisting anything — `GET` always returned the default. Per
+// no-shortcuts, an endpoint that lies is worse than an absent one. The
+// supported mechanism is the per-request `database` field on `POST /cypher`.
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use nexus_core::database::DatabaseManager;
     use nexus_core::testing::TestContext;
+    use tokio::sync::RwLock as TokioRwLock;
 
     // Test state wrapper that keeps TestContext alive
     struct TestState {
@@ -285,12 +300,62 @@ mod tests {
         TestState::new().state()
     }
 
+    /// Build an isolated `Arc<NexusServer>` sharing one data dir between
+    /// `engine` and `database_manager`, mirroring `main.rs`'s production
+    /// wiring (phase0_fix-multi-database-persistence-and-default G2).
+    /// `list_databases`/`get_database` now read both the manager AND the
+    /// primary engine, so a bare `DatabaseState` is no longer enough to
+    /// exercise them.
+    fn build_test_server() -> Arc<NexusServer> {
+        let ctx = TestContext::new();
+        let engine = nexus_core::Engine::with_data_dir(ctx.path()).expect("engine init");
+        let engine_arc = Arc::new(TokioRwLock::new(engine));
+        let executor = Arc::new(nexus_core::executor::Executor::default());
+        let dbm = Arc::new(RwLock::new(
+            DatabaseManager::new(ctx.path().to_path_buf()).expect("dbm init"),
+        ));
+        let rbac = Arc::new(TokioRwLock::new(
+            nexus_core::auth::RoleBasedAccessControl::new(),
+        ));
+        let auth_mgr = Arc::new(nexus_core::auth::AuthManager::new(
+            nexus_core::auth::AuthConfig::default(),
+        ));
+        let jwt = Arc::new(nexus_core::auth::JwtManager::new(
+            nexus_core::auth::JwtConfig::default(),
+        ));
+        let audit = Arc::new(
+            nexus_core::auth::AuditLogger::new(nexus_core::auth::AuditConfig {
+                enabled: false,
+                log_dir: ctx.path().join("audit"),
+                retention_days: 1,
+                compress_logs: false,
+            })
+            .expect("audit init"),
+        );
+
+        // Leak the TestContext so its tempdir outlives the request — the
+        // handlers may lazily open files during the test body.
+        let _leaked = Box::leak(Box::new(ctx));
+
+        Arc::new(NexusServer::new(
+            executor,
+            engine_arc,
+            dbm,
+            rbac,
+            auth_mgr,
+            jwt,
+            audit,
+            crate::config::RootUserConfig::default(),
+        ))
+    }
+
     #[tokio::test]
     async fn test_create_database_endpoint() {
         let state = create_test_state().await;
 
         let response = create_database(
             State(state),
+            Some(Extension(None)),
             Json(CreateDatabaseRequest {
                 name: "test_db".to_string(),
             }),
@@ -302,27 +367,27 @@ mod tests {
 
     #[tokio::test]
     async fn test_list_databases_endpoint() {
-        let state = create_test_state().await;
+        let server = build_test_server();
 
-        let response = list_databases(State(state)).await;
+        let response = list_databases(State(server)).await;
 
         assert_eq!(response.status(), StatusCode::OK);
     }
 
     #[tokio::test]
     async fn test_get_database_endpoint() {
-        let state = create_test_state().await;
+        let server = build_test_server();
 
-        let response = get_database(State(state), Path("neo4j".to_string())).await;
+        let response = get_database(State(server), Path("neo4j".to_string())).await;
 
         assert_eq!(response.status(), StatusCode::OK);
     }
 
     #[tokio::test]
     async fn test_get_nonexistent_database() {
-        let state = create_test_state().await;
+        let server = build_test_server();
 
-        let response = get_database(State(state), Path("nonexistent".to_string())).await;
+        let response = get_database(State(server), Path("nonexistent".to_string())).await;
 
         assert_eq!(response.status(), StatusCode::NOT_FOUND);
     }
@@ -333,6 +398,7 @@ mod tests {
 
         let response = create_database(
             State(state),
+            Some(Extension(None)),
             Json(CreateDatabaseRequest {
                 name: "invalid name".to_string(),
             }),
@@ -357,6 +423,7 @@ mod tests {
         // Try to create again
         let response = create_database(
             State(state),
+            Some(Extension(None)),
             Json(CreateDatabaseRequest {
                 name: "test_db".to_string(),
             }),
@@ -368,9 +435,9 @@ mod tests {
 
     #[tokio::test]
     async fn test_list_databases_includes_default() {
-        let state = create_test_state().await;
+        let server = build_test_server();
 
-        let response = list_databases(State(state)).await;
+        let response = list_databases(State(server)).await;
 
         assert_eq!(response.status(), StatusCode::OK);
         // Should include default "neo4j" database
@@ -379,18 +446,17 @@ mod tests {
     #[tokio::test]
     #[ignore] // TODO: Fix temp dir race condition
     async fn test_list_databases_after_creating_multiple() {
-        let test_state = TestState::new();
-        let state = test_state.state();
+        let server = build_test_server();
 
         // Create multiple databases — scoped for clippy.
         {
-            let manager = state.manager.read();
+            let manager = server.database_manager.read();
             manager.create_database("db1").unwrap();
             manager.create_database("db2").unwrap();
             manager.create_database("db3").unwrap();
         }
 
-        let response = list_databases(State(state)).await;
+        let response = list_databases(State(server)).await;
 
         assert_eq!(response.status(), StatusCode::OK);
         // Should list all 4 databases (neo4j + 3 new)
@@ -398,11 +464,11 @@ mod tests {
 
     #[tokio::test]
     async fn test_get_database_with_data() {
-        let state = create_test_state().await;
+        let server = build_test_server();
 
         // Create database and add data — scoped for clippy.
         let db = {
-            let manager = state.manager.read();
+            let manager = server.database_manager.read();
             manager.create_database("test_db").unwrap()
         };
 
@@ -415,7 +481,7 @@ mod tests {
             }
         }
 
-        let response = get_database(State(state), Path("test_db".to_string())).await;
+        let response = get_database(State(server), Path("test_db".to_string())).await;
 
         assert_eq!(response.status(), StatusCode::OK);
         // Should show node_count = 5
@@ -448,6 +514,11 @@ mod tests {
     async fn test_list_databases_response_format() {
         let ctx = TestContext::new();
         let manager = DatabaseManager::new(ctx.path().to_path_buf()).unwrap();
+        // phase0_fix-multi-database-persistence-and-default G2 — the default
+        // database is implicit and no longer present in
+        // `manager.list_databases()`; create a named one so the response
+        // still carries at least one entry.
+        manager.create_database("test_db").unwrap();
 
         let response = ListDatabasesResponse {
             databases: manager.list_databases(),
@@ -469,11 +540,17 @@ mod tests {
         }
 
         // Drop it
-        let _response1 = drop_database(State(state.clone()), Path("test_db".to_string())).await;
+        let _response1 = drop_database(
+            State(state.clone()),
+            Some(Extension(None)),
+            Path("test_db".to_string()),
+        )
+        .await;
 
         // Recreate with same name
         let response2 = create_database(
             State(state),
+            Some(Extension(None)),
             Json(CreateDatabaseRequest {
                 name: "test_db".to_string(),
             }),
@@ -501,11 +578,11 @@ mod tests {
     async fn test_concurrent_list_databases_does_not_starve_runtime() {
         use std::time::{Duration, Instant};
 
-        let test_state = TestState::new();
+        let server = build_test_server();
 
         // Seed a handful of databases so list_databases does actual work.
         {
-            let manager = test_state.state.manager.read();
+            let manager = server.database_manager.read();
             for i in 0..4 {
                 manager
                     .create_database(&format!("concurrency_test_db_{i}"))
@@ -516,9 +593,9 @@ mod tests {
         let start = Instant::now();
         let mut handles = Vec::with_capacity(32);
         for _ in 0..32 {
-            let state = test_state.state();
+            let server = server.clone();
             handles.push(tokio::spawn(
-                async move { list_databases(State(state)).await },
+                async move { list_databases(State(server)).await },
             ));
         }
 

@@ -446,6 +446,41 @@ impl Catalog {
         Ok(id)
     }
 
+    /// Best-effort registration of every top-level key of a property
+    /// object with the key name↔id mapping ([`Self::get_or_create_key`])
+    /// so `db.propertyKeys()` (and any other catalog-driven key
+    /// introspection) can see it. `properties` is typically a node's or
+    /// relationship's freshly-written property map; non-`Object` values
+    /// (`Null`, an empty map, ...) are a silent no-op.
+    ///
+    /// Call this at every place a node/relationship property map is
+    /// persisted — mirroring the existing per-write
+    /// [`Self::get_or_create_label`] / [`Self::get_or_create_type`] calls
+    /// already made at those same call sites. Before this method
+    /// existed, `get_or_create_key` was reachable only from DDL
+    /// (`CREATE INDEX` / `CREATE CONSTRAINT`), so a database with no
+    /// index/constraint ever created had an empty key mapping even
+    /// though every node/relationship carried named properties —
+    /// `db.propertyKeys()` returned nothing.
+    ///
+    /// A single failed key registration is logged and skipped rather
+    /// than propagated: this is bookkeeping for introspection, not
+    /// something that should ever abort a write. Each call is a
+    /// lock-free [`DashMap`](dashmap::DashMap) cache hit for every key
+    /// name already seen at least once anywhere in the database — the
+    /// LMDB write-txn path in [`Self::get_or_create_key`] only runs the
+    /// first time a given name is observed.
+    pub fn register_property_keys(&self, properties: &serde_json::Value) {
+        let Some(map) = properties.as_object() else {
+            return;
+        };
+        for key in map.keys() {
+            if let Err(e) = self.get_or_create_key(key) {
+                tracing::warn!("failed to register property key '{key}' in catalog: {e}");
+            }
+        }
+    }
+
     /// Get key ID by name.
     pub fn get_key_id(&self, key: &str) -> Result<KeyId> {
         // Try cache first (lock-free).

@@ -264,6 +264,11 @@ impl RateLimiter {
 pub struct AuthMiddleware {
     auth_manager: Arc<AuthManager>,
     require_auth: bool,
+    /// Whether `/stats` requires authentication (M3). Defaults to gated
+    /// (`true`); the server threads `config.auth.require_stats_auth` in via
+    /// [`Self::with_require_stats_auth`]. Only consulted outside cluster mode
+    /// (cluster mode gates every path unconditionally).
+    require_stats_auth: bool,
     /// When `true`, cluster-mode semantics are active: every endpoint
     /// requires authentication (including health/stats), and the
     /// middleware builds a [`UserContext`] from the resolved API key
@@ -279,6 +284,7 @@ impl AuthMiddleware {
         Self {
             auth_manager,
             require_auth,
+            require_stats_auth: true,
             cluster_enabled: false,
             rate_limiter: None,
             audit_logger: None,
@@ -294,6 +300,7 @@ impl AuthMiddleware {
         Self {
             auth_manager,
             require_auth,
+            require_stats_auth: true,
             cluster_enabled: false,
             rate_limiter: None,
             audit_logger: Some(audit_logger),
@@ -309,6 +316,7 @@ impl AuthMiddleware {
         Self {
             auth_manager,
             require_auth,
+            require_stats_auth: true,
             cluster_enabled: false,
             rate_limiter: Some(Arc::new(rate_limiter)),
             audit_logger: None,
@@ -326,6 +334,14 @@ impl AuthMiddleware {
     pub fn with_cluster_mode(mut self) -> Self {
         self.cluster_enabled = true;
         self.require_auth = true;
+        self
+    }
+
+    /// Set whether `/stats` requires authentication (M3). The server threads
+    /// `config.auth.require_stats_auth` through here so operators can opt out
+    /// of the default-gated `/stats` via `NEXUS_REQUIRE_STATS_AUTH=false`.
+    pub fn with_require_stats_auth(mut self, require_stats_auth: bool) -> Self {
+        self.require_stats_auth = require_stats_auth;
         self
     }
 
@@ -409,9 +425,12 @@ impl AuthMiddleware {
             return require_health_auth;
         }
 
-        // Stats endpoint - optional (can be made configurable later)
+        // Stats endpoint — gated by `require_stats_auth` (M3). Defaults to
+        // requiring auth when the middleware is active, closing the historical
+        // info-leak; operators can opt back into a public `/stats` via
+        // `NEXUS_REQUIRE_STATS_AUTH=false`.
         if uri == "/stats" {
-            return false;
+            return self.require_stats_auth;
         }
 
         // OpenAPI spec - public
@@ -878,7 +897,8 @@ mod tests {
 
         assert!(middleware.requires_auth("/api/cypher", false));
         assert!(!middleware.requires_auth("/health", false));
-        assert!(!middleware.requires_auth("/stats", false));
+        // M3: /stats is gated by default (require_stats_auth defaults to true).
+        assert!(middleware.requires_auth("/stats", false));
     }
 
     #[cfg(feature = "axum")]
@@ -923,8 +943,21 @@ mod tests {
 
         assert!(!middleware.requires_auth("/health", false));
         assert!(!middleware.requires_auth("/", false));
-        assert!(!middleware.requires_auth("/stats", false));
         assert!(!middleware.requires_auth("/openapi.json", false));
+    }
+
+    #[test]
+    fn stats_endpoint_gating_follows_require_stats_auth_flag() {
+        let config = super::super::AuthConfig::default();
+        let auth_manager = Arc::new(AuthManager::new(config));
+
+        // M3: /stats is gated by default (closes the info-leak)...
+        let gated = AuthMiddleware::new(auth_manager.clone(), true);
+        assert!(gated.requires_auth("/stats", false));
+
+        // ...and opt-out (NEXUS_REQUIRE_STATS_AUTH=false) makes it public again.
+        let public = AuthMiddleware::new(auth_manager, true).with_require_stats_auth(false);
+        assert!(!public.requires_auth("/stats", false));
     }
 
     #[test]

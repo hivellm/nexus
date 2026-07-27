@@ -4,13 +4,15 @@
 //! using a key-value store with JSON serialization.
 
 use crate::error::{Error, Result};
-use memmap2::{MmapMut, MmapOptions};
+use memmap2::{Mmap, MmapMut, MmapOptions};
 use serde_json;
 use std::collections::HashMap;
 use std::fs::{File, OpenOptions};
 use std::io::Write;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use tracing;
+
+use super::records::{NODE_RECORD_SIZE, NodeRecord, REL_RECORD_SIZE, RelationshipRecord};
 
 /// Property store for efficient property storage and retrieval
 pub struct PropertyStore {
@@ -44,6 +46,132 @@ struct PropertyEntry {
     properties: serde_json::Value,
     /// Size of the serialized data
     data_size: u32,
+}
+
+/// Byte size of a property entry's on-disk header:
+/// `entity_id: u64` (8) + `entity_type: u8` (1) + `data_size: u32` (4).
+const PROPERTY_ENTRY_HEADER_SIZE: u64 = 13;
+
+/// Reserved `entity_type` header byte marking a property entry as
+/// tombstoned (logically deleted). Distinct from every valid
+/// [`EntityType`] discriminant (`0` = Node, `1` = Relationship), so
+/// [`EntityType::from_u8`] always rejects it and the shared rebuild
+/// scanner ([`PropertyStore::scan_entry_at`]) can recognise it before
+/// attempting to parse the entry as live data.
+///
+/// Written by [`PropertyStore::write_tombstone`], called from both
+/// [`PropertyStore::delete_properties`] (forward fix) and the rebuild
+/// scanner's back-compat reconciliation against the authoritative record
+/// store (see [`RecordLiveness`]). The `data_size` header field and the
+/// payload it describes are left untouched, so a tombstoned entry's
+/// on-disk footprint — needed to stride over it correctly — never
+/// changes. See phase0_fix-deleted-properties-resurrected-on-rebuild.
+const ENTITY_TYPE_TOMBSTONE: u8 = 0xFF;
+
+/// A successfully parsed property-entry header at some on-disk offset.
+/// See [`PropertyStore::try_parse_entry`].
+struct PropertyEntryHeader {
+    /// Byte offset of this entry's header within the property file.
+    offset: u64,
+    entity_id: u64,
+    entity_type: EntityType,
+    /// Total footprint of this entry (header + payload), in bytes.
+    entry_size: u64,
+}
+
+/// Result of classifying the property entry at a given offset during an
+/// index-rebuild scan. See [`PropertyStore::scan_entry_at`].
+enum PropertyScanStep {
+    /// A live, successfully parsed entry (possibly found via resync).
+    Entry(PropertyEntryHeader),
+    /// Dead space that must be strided over but never indexed: either an
+    /// entry tombstoned by [`PropertyStore::delete_properties`], or a
+    /// pre-fix, un-tombstoned entry whose owning record was reconciled
+    /// as deleted/absent against the authoritative record store (and has
+    /// just been tombstoned in place so future scans skip the
+    /// reconciliation check).
+    Dead {
+        /// Total on-disk footprint of the dead entry, in bytes.
+        entry_size: u64,
+    },
+    /// A never-written, zeroed header — the legitimate end of live entries.
+    End,
+    /// The header at the scanned offset did not parse, and no later valid
+    /// header could be resynced to before the scan's `limit`.
+    Unrecoverable,
+}
+
+/// Read-only, best-effort view of the authoritative `nodes.store` /
+/// `rels.store` record files living beside this property store.
+///
+/// Used only to reconcile legacy (pre-tombstone) deleted entities during
+/// an index-rebuild scan: phase0_fix-deleted-properties-resurrected-on-rebuild
+/// §2.2. A property store used standalone — no sibling record files, e.g.
+/// this module's own unit tests — has nothing to reconcile against, so
+/// [`RecordLiveness::is_live`] trusts the parsed entry in that case,
+/// preserving pre-fix behavior.
+///
+/// Only the `is_deleted` flag bit is consulted, never `is_allocated`:
+/// `RecordStore::new` stamps the allocated bit on legacy records in a
+/// migration pass that runs *after* `PropertyStore::new` (and therefore
+/// after the first rebuild scan), so `is_allocated` cannot be trusted
+/// here. `is_deleted` predates that migration and is unaffected by it.
+struct RecordLiveness {
+    nodes: Option<Mmap>,
+    rels: Option<Mmap>,
+}
+
+impl RecordLiveness {
+    /// Open read-only mappings of `nodes.store` / `rels.store` in `dir`,
+    /// if present. Missing files (or files that fail to map) simply
+    /// disable reconciliation for that entity type — see
+    /// [`RecordLiveness::is_live`].
+    fn open(dir: &Path) -> Self {
+        let nodes = File::open(dir.join("nodes.store"))
+            .ok()
+            .and_then(|f| unsafe { MmapOptions::new().map(&f) }.ok());
+        let rels = File::open(dir.join("rels.store"))
+            .ok()
+            .and_then(|f| unsafe { MmapOptions::new().map(&f) }.ok());
+        Self { nodes, rels }
+    }
+
+    /// `true` unless the owning record is provably deleted or its slot
+    /// does not exist in the record store — the "deleted or absent" test
+    /// from phase0_fix-deleted-properties-resurrected-on-rebuild §2.2.
+    fn is_live(&self, entity_id: u64, entity_type: EntityType) -> bool {
+        let (mmap, record_size) = match entity_type {
+            EntityType::Node => (self.nodes.as_deref(), NODE_RECORD_SIZE),
+            EntityType::Relationship => (self.rels.as_deref(), REL_RECORD_SIZE),
+        };
+        let Some(mmap) = mmap else {
+            // No sibling record store to reconcile against.
+            return true;
+        };
+
+        let bounds = (entity_id as usize)
+            .checked_mul(record_size)
+            .and_then(|start| Some(start).zip(start.checked_add(record_size)));
+        let Some((start, end)) = bounds else {
+            // Overflowed the address space -- not a real record slot.
+            return false;
+        };
+        if end > mmap.len() {
+            // No slot for this id at all -- the "absent" half of §2.2.
+            return false;
+        }
+
+        match entity_type {
+            EntityType::Node => {
+                let record: NodeRecord = *bytemuck::from_bytes(&mmap[start..end]);
+                !record.is_deleted()
+            }
+            EntityType::Relationship => {
+                let record: RelationshipRecord = *bytemuck::from_bytes(&mmap[start..end]);
+                !record.is_deleted()
+            }
+        }
+    }
 }
 
 impl PropertyStore {
@@ -231,8 +359,11 @@ impl PropertyStore {
 
     /// Load properties at a specific offset
     pub fn load_properties_at_offset(&self, offset: u64) -> Result<Option<serde_json::Value>> {
-        if offset as usize >= self.mmap.len() {
-            return Ok(None);
+        // #3: reject any offset whose full 13-byte entry header would run past
+        // EOF (see get_entity_info_at_offset).
+        match offset.checked_add(PROPERTY_ENTRY_HEADER_SIZE) {
+            Some(end) if end <= self.mmap.len() as u64 => {}
+            _ => return Ok(None),
         }
 
         // Read entity_id (8 bytes)
@@ -261,8 +392,13 @@ impl PropertyStore {
     /// Check what entity type is stored at a given offset
     /// Returns (entity_id, entity_type) if found, None otherwise
     pub fn get_entity_info_at_offset(&self, offset: u64) -> Option<(u64, EntityType)> {
-        if offset as usize >= self.mmap.len() {
-            return None;
+        // #3: reject any offset whose full 13-byte entry header would run past
+        // EOF, not just `offset >= len`. A tail shorter than the header cannot
+        // hold a valid entry, and the read_u64/read_u8 below would otherwise
+        // walk off the mapping and panic on a corrupt/crafted prop_ptr.
+        match offset.checked_add(PROPERTY_ENTRY_HEADER_SIZE) {
+            Some(end) if end <= self.mmap.len() as u64 => {}
+            _ => return None,
         }
 
         // Read entity_id (8 bytes)
@@ -304,14 +440,25 @@ impl PropertyStore {
             new_data_size
         );
 
-        // If new data fits in existing space, update in place
-        if new_data_size <= existing_data_size {
+        // phase0_fix-property-store-shrink-corruption (§2.1, option b —
+        // grow-only): rewrite in place ONLY when the footprint is
+        // IDENTICAL. A strictly smaller payload used to reuse this slot by
+        // overwriting `data_size` and the leading bytes while leaving the
+        // freed tail of the old, longer payload untouched on disk. On
+        // reopen, `rebuild_index`/`ensure_index_populated` stride by the
+        // (now smaller) stored `data_size`, land inside that stale tail
+        // instead of at the next entity's true header, and either drop
+        // every later entity or fabricate a wrong mapping. Allocating fresh
+        // space for anything that isn't a same-size rewrite guarantees
+        // `data_size` on disk always equals the entry's physical footprint.
+        if new_data_size == existing_data_size {
             tracing::debug!("[update_properties] Updating in place: offset={}", offset);
             self.write_u32(offset + 9, new_data_size);
             self.write_bytes(offset + 13, &serialized);
             Ok(offset) // Return same offset
         } else {
-            // Need to allocate new space
+            // Need to allocate new space (grow OR shrink — see above: only
+            // an identical-size rewrite may reuse the existing slot).
             let new_offset = self.next_offset;
             tracing::debug!(
                 "[update_properties] Allocating new space: old_offset={}, new_offset={}",
@@ -341,9 +488,17 @@ impl PropertyStore {
     }
 
     /// Delete properties for an entity
+    ///
+    /// Removes the entity from the in-memory indexes AND tombstones its
+    /// on-disk entry (phase0_fix-deleted-properties-resurrected-on-rebuild
+    /// §3.1). Without the tombstone, the entry's bytes remain a
+    /// well-formed, fully-parseable entry and the next rebuild scan
+    /// (`rebuild_index` / `ensure_index_populated`) would re-index it,
+    /// resurrecting the "deleted" property after a restart.
     pub fn delete_properties(&mut self, entity_id: u64, entity_type: EntityType) -> Result<()> {
         if let Some(property_ptr) = self.reverse_index.remove(&(entity_id, entity_type)) {
             self.index.remove(&property_ptr);
+            self.write_tombstone(property_ptr);
         }
         Ok(())
     }
@@ -423,6 +578,144 @@ impl PropertyStore {
         Ok(())
     }
 
+    /// A successfully parsed property-entry header, produced by
+    /// [`PropertyStore::try_parse_entry`] and consumed by the index-rebuild
+    /// scanners ([`PropertyStore::rebuild_index`],
+    /// [`PropertyStore::ensure_index_populated`]).
+    ///
+    /// Kept as a private implementation detail shared by both scanners so
+    /// their stride and back-compat resync logic (see
+    /// [`PropertyStore::resync_to_next_entry`]) cannot diverge from each
+    /// other — phase0_fix-property-store-shrink-corruption §3.2/§3.3.
+    fn try_parse_entry(&self, offset: u64, limit: u64) -> Option<PropertyEntryHeader> {
+        if offset + PROPERTY_ENTRY_HEADER_SIZE > limit {
+            return None;
+        }
+
+        let entity_id = self.read_u64(offset);
+        let entity_type_byte = self.read_u8(offset + 8);
+        let data_size = self.read_u32(offset + 9);
+
+        let entity_type = EntityType::from_u8(entity_type_byte).ok()?;
+
+        let entry_size = PROPERTY_ENTRY_HEADER_SIZE + data_size as u64;
+        if offset + entry_size > limit {
+            return None;
+        }
+
+        // §2.2 back-compat: validating that the payload bytes deserialize
+        // as JSON is what lets the resync scan tell a genuine header apart
+        // from a false-positive match inside a pre-fix in-place shrink's
+        // stale, unzeroed tail (arbitrary JSON text bytes only rarely line
+        // up with a valid `EntityType` byte AND a `data_size` that stays in
+        // bounds AND happen to be followed by more valid JSON).
+        let data_start = (offset + PROPERTY_ENTRY_HEADER_SIZE) as usize;
+        let data_end = (offset + entry_size) as usize;
+        serde_json::from_slice::<serde_json::Value>(&self.mmap[data_start..data_end]).ok()?;
+
+        Some(PropertyEntryHeader {
+            offset,
+            entity_id,
+            entity_type,
+            entry_size,
+        })
+    }
+
+    /// Scan forward, byte by byte, from `start` for the next offset at
+    /// which [`PropertyStore::try_parse_entry`] succeeds.
+    ///
+    /// Used by [`PropertyStore::scan_entry_at`] to resync after landing on
+    /// an unparseable header — the symptom of striding into a pre-fix
+    /// in-place shrink's stale tail — instead of dropping every entity that
+    /// follows. Returns `None` if no valid header is found before `limit`,
+    /// which the caller treats as the (accepted) unrecoverable-tail case:
+    /// phase0_fix-property-store-shrink-corruption §2.2's caveat that an
+    /// entry whose header was already overwritten by a pre-fix mis-scan
+    /// write cannot be recovered.
+    fn resync_to_next_entry(&self, start: u64, limit: u64) -> Option<PropertyEntryHeader> {
+        let mut candidate = start;
+        while candidate < limit {
+            if let Some(parsed) = self.try_parse_entry(candidate, limit) {
+                return Some(parsed);
+            }
+            candidate += 1;
+        }
+        None
+    }
+
+    /// Classify the property entry at `offset` for an index-rebuild scan
+    /// bounded by `limit`, reconciled against `liveness`.
+    ///
+    /// Shared by [`PropertyStore::rebuild_index`] and
+    /// [`PropertyStore::ensure_index_populated`] so the two scanners cannot
+    /// diverge (phase0_fix-property-store-shrink-corruption §3.2/§3.3).
+    fn scan_entry_at(
+        &mut self,
+        offset: u64,
+        limit: u64,
+        liveness: &RecordLiveness,
+    ) -> PropertyScanStep {
+        if offset + PROPERTY_ENTRY_HEADER_SIZE > limit {
+            return PropertyScanStep::End;
+        }
+
+        let entity_id = self.read_u64(offset);
+        let entity_type_byte = self.read_u8(offset + 8);
+        let data_size = self.read_u32(offset + 9);
+
+        // A never-written, zeroed header is the legitimate end of the live
+        // entries — not corruption. This check must run BEFORE attempting a
+        // resync, otherwise every fresh store would pay for a byte-by-byte
+        // scan of its entire pre-allocated (zeroed) capacity.
+        if entity_id == 0 && entity_type_byte == 0 && data_size == 0 {
+            return PropertyScanStep::End;
+        }
+
+        // phase0_fix-deleted-properties-resurrected-on-rebuild §3.2: an
+        // entry tombstoned by `delete_properties` carries the reserved
+        // marker byte. `data_size` was never rewritten by the delete, so
+        // it still describes this entry's true footprint and we can
+        // stride over the dead payload without re-indexing it.
+        if entity_type_byte == ENTITY_TYPE_TOMBSTONE {
+            let entry_size = PROPERTY_ENTRY_HEADER_SIZE + data_size as u64;
+            if offset + entry_size <= limit {
+                return PropertyScanStep::Dead { entry_size };
+            }
+            // Bounds look wrong for a genuine tombstone (corruption) —
+            // fall through to the normal parse/resync path below.
+        }
+
+        if let Some(parsed) = self.try_parse_entry(offset, limit) {
+            return self.reconcile_parsed_entry(parsed, liveness);
+        }
+
+        match self.resync_to_next_entry(offset + 1, limit) {
+            Some(parsed) => self.reconcile_parsed_entry(parsed, liveness),
+            None => PropertyScanStep::Unrecoverable,
+        }
+    }
+
+    /// §2.2 back-compat: a pre-fix store may hold a deleted entity that was
+    /// never tombstoned (`delete_properties` only cleared the in-memory
+    /// index before phase0_fix-deleted-properties-resurrected-on-rebuild).
+    /// Reconcile a successfully parsed entry against the authoritative
+    /// record store: if the owning node/relationship record is deleted or
+    /// its slot doesn't exist, this entry must not be resurrected into the
+    /// index. Tombstone it now so later reopens don't pay the
+    /// reconciliation cost again.
+    fn reconcile_parsed_entry(
+        &mut self,
+        parsed: PropertyEntryHeader,
+        liveness: &RecordLiveness,
+    ) -> PropertyScanStep {
+        if liveness.is_live(parsed.entity_id, parsed.entity_type) {
+            return PropertyScanStep::Entry(parsed);
+        }
+        let entry_size = parsed.entry_size;
+        self.write_tombstone(parsed.offset);
+        PropertyScanStep::Dead { entry_size }
+    }
+
     /// Rebuild index from existing data
     fn rebuild_index(&mut self) -> Result<()> {
         // CRITICAL: Only rebuild if indexes are empty or if explicitly requested
@@ -473,35 +766,26 @@ impl PropertyStore {
 
             // Scan file to rebuild indexes, but don't update next_offset.
             // Entries start at offset 1 (offset 0 is the reserved sentinel);
-            // scanning from 0 would misalign every read.
+            // scanning from 0 would misalign every read. Uses the shared
+            // `scan_entry_at` classifier so this preserved-range scan
+            // cannot diverge from `rebuild_index`'s full scan or from
+            // `ensure_index_populated` (phase0_fix-property-store-shrink-corruption §3.2/§3.3).
+            let liveness = RecordLiveness::open(&self.path);
             let mut offset = 1;
-            while offset < self.mmap.len() as u64 && offset < preserved_next_offset {
-                if offset + 13 > self.mmap.len() as u64 {
-                    break;
+            loop {
+                match self.scan_entry_at(offset, preserved_next_offset, &liveness) {
+                    PropertyScanStep::Entry(parsed) => {
+                        self.index
+                            .insert(parsed.offset, (parsed.entity_id, parsed.entity_type));
+                        self.reverse_index
+                            .insert((parsed.entity_id, parsed.entity_type), parsed.offset);
+                        offset = parsed.offset + parsed.entry_size;
+                    }
+                    PropertyScanStep::Dead { entry_size } => {
+                        offset += entry_size;
+                    }
+                    PropertyScanStep::End | PropertyScanStep::Unrecoverable => break,
                 }
-
-                let entity_id = self.read_u64(offset);
-                let entity_type_byte = self.read_u8(offset + 8);
-                let data_size = self.read_u32(offset + 9);
-
-                if entity_id == 0 && entity_type_byte == 0 && data_size == 0 {
-                    break;
-                }
-
-                let entity_type = match EntityType::from_u8(entity_type_byte) {
-                    Ok(et) => et,
-                    Err(_) => break,
-                };
-
-                let entry_size = 8 + 1 + 4 + data_size as usize;
-                if offset + entry_size as u64 > self.mmap.len() as u64 {
-                    break;
-                }
-
-                self.index.insert(offset, (entity_id, entity_type));
-                self.reverse_index.insert((entity_id, entity_type), offset);
-
-                offset += entry_size as u64;
             }
 
             // Restore preserved next_offset
@@ -536,67 +820,70 @@ impl PropertyStore {
         // Entries start at offset 1 (offset 0 is the reserved sentinel because
         // prop_ptr=0 means "no properties"); scanning from 0 misaligns every
         // read and fabricates a phantom (0, Node) entry (issue #4).
+        //
+        // phase0_fix-property-store-shrink-corruption §3.2: `max_valid_offset`
+        // — the end of the LAST successfully parsed entry — is what
+        // `next_offset` is derived from below, never the raw scan cursor.
+        // Before this fix, an invalid `EntityType` byte (the pre-fix
+        // in-place-shrink stale-tail symptom) `break`-ed straight to
+        // `self.next_offset = offset`, landing `next_offset` mid-garbage —
+        // the exact corruption this task closes. `scan_entry_at` now also
+        // resyncs forward past a stale tail to recover later entities
+        // instead of dropping them (§2.2 back-compat).
+        let mmap_len = self.mmap.len() as u64;
+        let liveness = RecordLiveness::open(&self.path);
         let mut offset = 1;
         let mut max_valid_offset = 0;
         let mut found_valid_entries = false;
 
-        while offset < self.mmap.len() as u64 {
-            if offset + 13 > self.mmap.len() as u64 {
-                break;
-            }
+        loop {
+            match self.scan_entry_at(offset, mmap_len, &liveness) {
+                PropertyScanStep::Entry(parsed) => {
+                    self.index
+                        .insert(parsed.offset, (parsed.entity_id, parsed.entity_type));
+                    self.reverse_index
+                        .insert((parsed.entity_id, parsed.entity_type), parsed.offset);
 
-            let entity_id = self.read_u64(offset);
-            let entity_type_byte = self.read_u8(offset + 8);
-            let data_size = self.read_u32(offset + 9);
-
-            // Check if this looks like a valid entry (not all zeros)
-            if entity_id == 0 && entity_type_byte == 0 && data_size == 0 {
-                // Found first empty entry, stop scanning
-                tracing::debug!(
-                    "[rebuild_index] Found empty entry at offset={}, found_valid_entries={}, max_valid_offset={}",
-                    offset,
-                    found_valid_entries,
-                    max_valid_offset
-                );
-                // Only set next_offset if we found valid entries, otherwise keep it at 1
-                if found_valid_entries {
-                    self.next_offset = offset;
-                } else {
-                    // CRITICAL: Reset to 1, not 0, because prop_ptr=0 means "no properties"
-                    self.next_offset = 1;
+                    found_valid_entries = true;
+                    max_valid_offset = parsed.offset + parsed.entry_size;
+                    offset = max_valid_offset;
                 }
-                break;
-            }
-
-            // Validate entity type
-            let entity_type = match EntityType::from_u8(entity_type_byte) {
-                Ok(et) => et,
-                Err(_) => {
-                    // Invalid entity type, stop scanning
+                PropertyScanStep::Dead { entry_size } => {
+                    // Dead space (tombstoned, or just-reconciled orphan)
+                    // still occupies its footprint on disk, so it must
+                    // still advance next_offset — only indexing is
+                    // skipped.
+                    found_valid_entries = true;
+                    max_valid_offset = offset + entry_size;
+                    offset = max_valid_offset;
+                }
+                PropertyScanStep::End => {
+                    tracing::debug!(
+                        "[rebuild_index] Found empty entry at offset={}, found_valid_entries={}, max_valid_offset={}",
+                        offset,
+                        found_valid_entries,
+                        max_valid_offset
+                    );
                     break;
                 }
-            };
-
-            let entry_size = 8 + 1 + 4 + data_size as usize;
-            if offset + entry_size as u64 > self.mmap.len() as u64 {
-                break;
+                PropertyScanStep::Unrecoverable => {
+                    tracing::debug!(
+                        "[rebuild_index] Unrecoverable gap at offset={} (no parseable header before end of file); \
+                         stopping scan, found_valid_entries={}, max_valid_offset={}",
+                        offset,
+                        found_valid_entries,
+                        max_valid_offset
+                    );
+                    break;
+                }
             }
-
-            // Update indexes
-            self.index.insert(offset, (entity_id, entity_type));
-            self.reverse_index.insert((entity_id, entity_type), offset);
-
-            found_valid_entries = true;
-            max_valid_offset = offset + entry_size as u64;
-
-            offset += entry_size as u64;
         }
 
         // CRITICAL FIX: Only update next_offset if we found valid entries
         // If the file contains only old data (from previous runs), don't use it
         // This prevents rebuild_index from resetting next_offset to old values
         if found_valid_entries {
-            self.next_offset = offset;
+            self.next_offset = max_valid_offset;
         } else {
             // No valid entries found, keep next_offset at 1
             // CRITICAL: Reset to 1, not 0, because prop_ptr=0 means "no properties"
@@ -663,33 +950,62 @@ impl PropertyStore {
         self.mmap[offset as usize..offset as usize + data.len()].copy_from_slice(data);
     }
 
-    /// Read a u64 value from the given offset
+    /// Overwrite the `entity_type` header byte of the property entry
+    /// starting at `entry_offset` with [`ENTITY_TYPE_TOMBSTONE`], so the
+    /// shared rebuild scanner ([`PropertyStore::scan_entry_at`]) strides
+    /// over it without re-indexing it. The `data_size` field (and the
+    /// payload it describes) is left untouched, so the entry's on-disk
+    /// footprint never changes. See
+    /// phase0_fix-deleted-properties-resurrected-on-rebuild.
+    fn write_tombstone(&mut self, entry_offset: u64) {
+        self.write_u8(entry_offset + 8, ENTITY_TYPE_TOMBSTONE);
+    }
+
+    /// Read a u64 value from the given offset.
+    ///
+    /// #3: bounds-checked so a caller that omits its own pre-check cannot
+    /// panic here. Returns 0 when the 8-byte read would run past EOF — never
+    /// reached with a valid header offset, which the call sites already guard.
     fn read_u64(&self, offset: u64) -> u64 {
+        let start = offset as usize;
+        match start.checked_add(8) {
+            Some(end) if end <= self.mmap.len() => {}
+            _ => return 0,
+        }
         u64::from_le_bytes([
-            self.mmap[offset as usize],
-            self.mmap[offset as usize + 1],
-            self.mmap[offset as usize + 2],
-            self.mmap[offset as usize + 3],
-            self.mmap[offset as usize + 4],
-            self.mmap[offset as usize + 5],
-            self.mmap[offset as usize + 6],
-            self.mmap[offset as usize + 7],
+            self.mmap[start],
+            self.mmap[start + 1],
+            self.mmap[start + 2],
+            self.mmap[start + 3],
+            self.mmap[start + 4],
+            self.mmap[start + 5],
+            self.mmap[start + 6],
+            self.mmap[start + 7],
         ])
     }
 
-    /// Read a u32 value from the given offset
+    /// Read a u32 value from the given offset (bounds-checked; see read_u64).
     fn read_u32(&self, offset: u64) -> u32 {
+        let start = offset as usize;
+        match start.checked_add(4) {
+            Some(end) if end <= self.mmap.len() => {}
+            _ => return 0,
+        }
         u32::from_le_bytes([
-            self.mmap[offset as usize],
-            self.mmap[offset as usize + 1],
-            self.mmap[offset as usize + 2],
-            self.mmap[offset as usize + 3],
+            self.mmap[start],
+            self.mmap[start + 1],
+            self.mmap[start + 2],
+            self.mmap[start + 3],
         ])
     }
 
-    /// Read a u8 value from the given offset
+    /// Read a u8 value from the given offset (bounds-checked; see read_u64).
     fn read_u8(&self, offset: u64) -> u8 {
-        self.mmap[offset as usize]
+        let start = offset as usize;
+        if start >= self.mmap.len() {
+            return 0;
+        }
+        self.mmap[start]
     }
 
     /// Return the byte-offset stored in the reverse index for `(entity_id, entity_type)`.
@@ -719,40 +1035,35 @@ impl PropertyStore {
         }
 
         // Full scan: start at offset 1 (offset 0 is always zero because
-        // prop_ptr=0 means "no properties").
+        // prop_ptr=0 means "no properties"). Uses the shared `scan_entry_at`
+        // classifier so this scanner is IDENTICAL to `rebuild_index`'s full
+        // scan and cannot diverge from it
+        // (phase0_fix-property-store-shrink-corruption §3.2/§3.3): both
+        // stride by the parsed entry's true footprint and resync forward
+        // past an unparseable (stale-tail) header instead of dropping every
+        // later entity.
         let mut offset: u64 = 1;
         let mmap_len = self.mmap.len() as u64;
+        let liveness = RecordLiveness::open(&self.path);
         let mut found_next_offset: u64 = 1;
 
-        while offset < mmap_len {
-            if offset + 13 > mmap_len {
-                break;
+        loop {
+            match self.scan_entry_at(offset, mmap_len, &liveness) {
+                PropertyScanStep::Entry(parsed) => {
+                    self.index
+                        .insert(parsed.offset, (parsed.entity_id, parsed.entity_type));
+                    self.reverse_index
+                        .insert((parsed.entity_id, parsed.entity_type), parsed.offset);
+
+                    found_next_offset = parsed.offset + parsed.entry_size;
+                    offset = found_next_offset;
+                }
+                PropertyScanStep::Dead { entry_size } => {
+                    found_next_offset = offset + entry_size;
+                    offset = found_next_offset;
+                }
+                PropertyScanStep::End | PropertyScanStep::Unrecoverable => break,
             }
-
-            let entity_id = self.read_u64(offset);
-            let entity_type_byte = self.read_u8(offset + 8);
-            let data_size = self.read_u32(offset + 9);
-
-            // Stop at the first all-zero header — no more entries.
-            if entity_id == 0 && entity_type_byte == 0 && data_size == 0 {
-                break;
-            }
-
-            let entity_type = match EntityType::from_u8(entity_type_byte) {
-                Ok(et) => et,
-                Err(_) => break,
-            };
-
-            let entry_size = 8u64 + 1 + 4 + data_size as u64;
-            if offset + entry_size > mmap_len {
-                break;
-            }
-
-            self.index.insert(offset, (entity_id, entity_type));
-            self.reverse_index.insert((entity_id, entity_type), offset);
-
-            found_next_offset = offset + entry_size;
-            offset += entry_size;
         }
 
         // Advance next_offset to the end of the last valid entry so that new
@@ -819,6 +1130,7 @@ mod tests {
     use super::*;
     use crate::testing::TestContext;
     use serde_json::json;
+    use std::io::{Seek, SeekFrom};
     use std::sync::{Arc, RwLock};
 
     #[test]
@@ -826,6 +1138,34 @@ mod tests {
         let ctx = TestContext::new();
         let store = PropertyStore::new(ctx.path().to_path_buf()).unwrap();
         assert_eq!(store.property_count(), 0);
+    }
+
+    /// #3: a `prop_ptr` landing in the last 12 bytes before EOF must make the
+    /// header readers return `None`/`Ok(None)` — not over-read past
+    /// `mmap.len()` and panic. The old guard only rejected `offset >= len`,
+    /// so any offset in `[len - 12, len)` passed and then `read_u64` walked
+    /// off the end of the mapping. This is reachable from `read_node` /
+    /// `repair_corrupt_node_prop_ptrs` on a corrupt on-disk pointer.
+    #[test]
+    fn header_read_near_eof_returns_none_not_panic() {
+        let ctx = TestContext::new();
+        let store = PropertyStore::new(ctx.path().to_path_buf()).unwrap();
+        let len = store.mmap.len() as u64;
+        assert!(len >= PROPERTY_ENTRY_HEADER_SIZE, "fixture too small");
+
+        // Every offset whose 13-byte header would run past EOF must be
+        // rejected cleanly, including the exact last byte (`len - 1`).
+        for offset in (len - (PROPERTY_ENTRY_HEADER_SIZE - 1))..len {
+            assert_eq!(
+                store.get_entity_info_at_offset(offset),
+                None,
+                "get_entity_info_at_offset({offset}) (len {len}) must return None"
+            );
+            assert!(
+                matches!(store.load_properties_at_offset(offset), Ok(None)),
+                "load_properties_at_offset({offset}) (len {len}) must return Ok(None)"
+            );
+        }
     }
 
     #[test]
@@ -895,6 +1235,75 @@ mod tests {
                 .load_properties(1, EntityType::Node)
                 .unwrap()
                 .is_none()
+        );
+    }
+
+    /// phase0_fix-deleted-properties-resurrected-on-rebuild §1.1: a deleted
+    /// property must stay deleted after the store is dropped and reopened
+    /// (reopen drives `PropertyStore::new` -> `rebuild_index`, the same
+    /// path a server restart takes). Before the fix, `delete_properties`
+    /// only cleared the in-memory index, so the rebuild scan re-parsed the
+    /// still-intact on-disk bytes and resurrected the property.
+    #[test]
+    fn test_deleted_properties_do_not_resurrect_on_reopen() {
+        let ctx = TestContext::new();
+        let dir = ctx.path().to_path_buf();
+
+        {
+            let mut store = PropertyStore::new(dir.clone()).unwrap();
+            store
+                .store_properties(1, EntityType::Node, json!({"secret": "x"}))
+                .unwrap();
+            store.delete_properties(1, EntityType::Node).unwrap();
+            store.flush().unwrap();
+        }
+
+        let reopened = PropertyStore::new(dir).unwrap();
+        assert!(
+            reopened
+                .load_properties(1, EntityType::Node)
+                .unwrap()
+                .is_none(),
+            "deleted property resurrected after reopen"
+        );
+    }
+
+    /// phase0_fix-deleted-properties-resurrected-on-rebuild §4.2: a
+    /// deleted entity must stay deleted even when live neighbours are
+    /// interleaved with it on disk, and the scanner must still stride
+    /// correctly past the dead entry to find them.
+    #[test]
+    fn test_deleted_properties_do_not_resurrect_among_live_neighbours() {
+        let ctx = TestContext::new();
+        let dir = ctx.path().to_path_buf();
+
+        {
+            let mut store = PropertyStore::new(dir.clone()).unwrap();
+            store
+                .store_properties(1, EntityType::Node, json!({"secret": "x"}))
+                .unwrap();
+            store
+                .store_properties(2, EntityType::Node, json!({"name": "Bob"}))
+                .unwrap();
+            store.delete_properties(1, EntityType::Node).unwrap();
+            store.flush().unwrap();
+        }
+
+        let reopened = PropertyStore::new(dir).unwrap();
+        assert!(
+            reopened
+                .load_properties(1, EntityType::Node)
+                .unwrap()
+                .is_none(),
+            "deleted property resurrected after reopen"
+        );
+        assert_eq!(
+            reopened
+                .load_properties(2, EntityType::Node)
+                .unwrap()
+                .unwrap(),
+            json!({"name": "Bob"}),
+            "live neighbour was lost or corrupted by the tombstone scan"
         );
     }
 
@@ -1078,6 +1487,120 @@ mod tests {
 
         assert_eq!(loaded_node, node_props);
         assert_eq!(loaded_rel, rel_props);
+    }
+
+    /// Edge case: re-adding properties for an entity after they were
+    /// deleted must not resurrect the OLD (tombstoned) value, and must
+    /// survive a reopen with the NEW value.
+    #[test]
+    fn test_store_after_delete_reuses_entity_with_new_value() {
+        let ctx = TestContext::new();
+        let dir = ctx.path().to_path_buf();
+
+        {
+            let mut store = PropertyStore::new(dir.clone()).unwrap();
+            store
+                .store_properties(1, EntityType::Node, json!({"name": "Alice"}))
+                .unwrap();
+            store.delete_properties(1, EntityType::Node).unwrap();
+            store
+                .store_properties(1, EntityType::Node, json!({"name": "Bob"}))
+                .unwrap();
+            store.flush().unwrap();
+        }
+
+        let reopened = PropertyStore::new(dir).unwrap();
+        assert_eq!(
+            reopened
+                .load_properties(1, EntityType::Node)
+                .unwrap()
+                .unwrap(),
+            json!({"name": "Bob"}),
+            "re-added property was lost, or the stale deleted value resurrected"
+        );
+    }
+
+    /// Edge case: deleting properties for an entity that was never stored
+    /// must not error and must not tombstone unrelated bytes.
+    #[test]
+    fn test_delete_properties_for_nonexistent_entity_is_a_noop() {
+        let ctx = TestContext::new();
+        let dir = ctx.path().to_path_buf();
+
+        let mut store = PropertyStore::new(dir).unwrap();
+        store
+            .store_properties(1, EntityType::Node, json!({"name": "Alice"}))
+            .unwrap();
+
+        // Deleting an entity that was never stored must succeed silently.
+        store.delete_properties(999, EntityType::Node).unwrap();
+
+        // The unrelated, still-live entity must be unaffected.
+        assert_eq!(
+            store.load_properties(1, EntityType::Node).unwrap().unwrap(),
+            json!({"name": "Alice"})
+        );
+    }
+
+    /// phase0_fix-deleted-properties-resurrected-on-rebuild §2.2 back-compat:
+    /// a pre-fix store may hold a deleted entity that was never tombstoned
+    /// (only its owning node record was marked deleted). Reopening must
+    /// reconcile against the record store and not resurrect it, while a
+    /// live neighbour with no record store entry (no reconciliation data)
+    /// is trusted as before.
+    #[test]
+    fn test_back_compat_reconciles_untombstoned_deleted_entity_against_record_store() {
+        let ctx = TestContext::new();
+        let dir = ctx.path().to_path_buf();
+
+        {
+            let mut store = PropertyStore::new(dir.clone()).unwrap();
+            store
+                .store_properties(1, EntityType::Node, json!({"secret": "x"}))
+                .unwrap();
+            store
+                .store_properties(2, EntityType::Node, json!({"name": "Bob"}))
+                .unwrap();
+            // Simulate the pre-fix delete path: entity 1's property blob is
+            // left fully parseable on disk (no tombstone).
+            store.flush().unwrap();
+        }
+
+        // Simulate node 1 having been deleted at the record-store level
+        // (the authoritative signal a pre-fix property store had no way to
+        // record itself). Node 2's slot is present but not deleted, to
+        // confirm reconciliation only drops the deleted entity.
+        let nodes_path = dir.join("nodes.store");
+        let mut deleted_record = NodeRecord::new();
+        deleted_record.mark_deleted();
+        let mut file = OpenOptions::new()
+            .create(true)
+            .write(true)
+            .truncate(true)
+            .open(&nodes_path)
+            .unwrap();
+        file.set_len(3 * NODE_RECORD_SIZE as u64).unwrap();
+        file.seek(SeekFrom::Start(NODE_RECORD_SIZE as u64)).unwrap();
+        file.write_all(bytemuck::bytes_of(&deleted_record)).unwrap();
+        file.sync_all().unwrap();
+        drop(file);
+
+        let reopened = PropertyStore::new(dir).unwrap();
+        assert!(
+            reopened
+                .load_properties(1, EntityType::Node)
+                .unwrap()
+                .is_none(),
+            "pre-fix, un-tombstoned deleted entity resurrected after reopen"
+        );
+        assert_eq!(
+            reopened
+                .load_properties(2, EntityType::Node)
+                .unwrap()
+                .unwrap(),
+            json!({"name": "Bob"}),
+            "live neighbour was wrongly reconciled away as deleted"
+        );
     }
 }
 

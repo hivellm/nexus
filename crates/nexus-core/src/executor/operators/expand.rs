@@ -13,6 +13,15 @@ use crate::{Error, Result};
 use serde_json::{Map, Value};
 use std::collections::HashMap;
 
+/// Internal-only row key used by the source-less relationship scan in
+/// `execute_expand` when a fully-anonymous relationship pattern (no
+/// `source_var`, no `rel_var`) would otherwise emit a row carrying only
+/// the target node's identity. See the call site's doc comment for why
+/// this is needed. Never a name a Cypher query can bind, so it can't
+/// collide with a user-declared variable and never surfaces in RETURN
+/// output.
+const ANON_REL_IDENTITY_KEY: &str = "__nexus_anon_rel_identity";
+
 impl Executor {
     /// Execute Expand operator
     #[allow(clippy::too_many_arguments)]
@@ -62,8 +71,7 @@ impl Executor {
             // Only use rows_from_result_set directly - don't filter yet
             rows_from_result_set
         } else {
-            let materialized = self.materialize_rows_from_variables(context);
-            materialized
+            self.materialize_rows_from_variables(context)?
         };
 
         // DEBUG: Log number of input rows for debugging relationship expansion issues
@@ -181,6 +189,25 @@ impl Executor {
                         if !rel_var.is_empty() {
                             let relationship_value = self.read_relationship_as_value(&rel_info)?;
                             new_row.insert(rel_var.to_string(), relationship_value);
+                        } else {
+                            // Fully-anonymous relationship pattern (no rel_var
+                            // AND no source_var, e.g. `()-[:TYPE]->()`):
+                            // without either endpoint bound and no relationship
+                            // variable, this row would carry only the target
+                            // node's identity. `update_result_set_from_rows`
+                            // dedups a single-node row purely by that node's
+                            // id, which collapses every relationship sharing a
+                            // target node into one row (undercounting whenever
+                            // the pattern fans in, e.g. many messages authored
+                            // by the same person). Stash the relationship's own
+                            // identity under an internal-only key so the dedup
+                            // step keys on the relationship instead, giving
+                            // this row the same cardinality as the
+                            // rel_var-bound form. The key never surfaces in
+                            // RETURN output: only user-declared variables are
+                            // ever projected.
+                            let relationship_value = self.read_relationship_as_value(&rel_info)?;
+                            new_row.insert(ANON_REL_IDENTITY_KEY.to_string(), relationship_value);
                         }
 
                         push_with_row_cap(&mut expanded_rows, new_row, "Expand (source-less)")?;
@@ -437,6 +464,27 @@ impl Executor {
                         let target_node =
                             self.read_node_as_value_with_store(&expand_store, target_id)?;
 
+                        // phase0_fix-delete-node-dangling-relationships §3.5 — a
+                        // non-`Value::Null` relationship record that resolves to a
+                        // `Value::Null` endpoint means the endpoint node was hard-deleted
+                        // out from under a live relationship (the only case
+                        // `read_node_as_value_with_store` returns `Null` is
+                        // `node_record.is_deleted()`). For a NON-optional pattern this is
+                        // graph corruption, not a legitimate "no match" — skip the row
+                        // instead of surfacing a phantom `null` endpoint, mirroring the
+                        // empty-relationship-list skip above. OPTIONAL MATCH keeps its
+                        // existing behavior (a `Null` endpoint is pushed, not skipped) so
+                        // its LEFT OUTER JOIN semantics are unaffected.
+                        if !optional && target_node.is_null() {
+                            tracing::trace!(
+                                "Expand: skipping relationship {} (rel_id: {}) - target node {} is dangling (deleted), refusing to surface a null endpoint",
+                                rel_idx + 1,
+                                rel_info.id,
+                                target_id
+                            );
+                            continue;
+                        }
+
                         // CRITICAL FIX: Check if target variable is already bound in the row
                         // If so, we must ensure the relationship's target matches the bound value
                         // This prevents Cartesian product issues where Expand overwrites the target variable
@@ -525,28 +573,54 @@ impl Executor {
             }
         }
 
-        // If no rows were expanded but we had input rows, preserve columns to indicate MATCH was executed but returned empty
-        if expanded_rows.is_empty() && !rows.is_empty() {
+        // If no rows were expanded, preserve columns to indicate the MATCH was
+        // executed but returned empty — INCLUDING when the input row set was
+        // itself already empty (a later hop of a multi-hop pattern whose
+        // earlier hop matched nothing). Falling through to the `else` branch in
+        // that case would call `update_result_set_from_rows(&[])`, which wipes
+        // `result_set.columns` and destroys the `has_match_columns` signal the
+        // Aggregate operator relies on — so `count(*)` over a 0-match multi-hop
+        // pattern would synthesize a phantom `1`.
+        if expanded_rows.is_empty() {
             // Preserve columns to indicate MATCH was executed but returned empty
             // This will be detected by Aggregate operator via has_match_columns check
             // Don't clear columns - they indicate that MATCH was executed
-            tracing::warn!(
-                "Expand: No expanded rows created from {} input rows - this may indicate a problem",
+            tracing::trace!(
+                "Expand: no expanded rows from {} input rows; preserving MATCH-executed column signal",
                 rows.len()
             );
             context.result_set.rows.clear();
-            // CRITICAL FIX: Clear variables related to this Expand operation to prevent Project
-            // from materializing rows from variables when no relationships were found.
-            // This ensures that queries like MATCH (a)-[r:KNOWS]->(b) RETURN a.name don't return
-            // rows for nodes that don't have the specified relationship type.
-            if !source_var.is_empty() {
-                context.variables.remove(source_var);
-            }
-            if !target_var.is_empty() {
-                context.variables.remove(target_var);
-            }
-            if !rel_var.is_empty() {
-                context.variables.remove(rel_var);
+            if optional {
+                // OPTIONAL MATCH keeps its existing LEFT-OUTER semantics:
+                // only this hop's own vars need clearing (they're about to
+                // be re-established as NULL by the caller/downstream row
+                // padding); earlier bindings must survive so the padded row
+                // still carries them.
+                if !source_var.is_empty() {
+                    context.variables.remove(source_var);
+                }
+                if !target_var.is_empty() {
+                    context.variables.remove(target_var);
+                }
+                if !rel_var.is_empty() {
+                    context.variables.remove(rel_var);
+                }
+            } else {
+                // A REQUIRED expand that produced zero output rows means
+                // the whole downstream row-space collapses to zero (a
+                // required MATCH that matches nothing yields zero result
+                // rows for the entire query, not a partially-bound row).
+                // Clearing only this hop's three vars left earlier-hop
+                // bindings (e.g. `a` in a multi-hop chain whose LAST hop
+                // failed) alive in `context.variables`; `execute_project`'s
+                // variable-materialization fallback (`operators/project.rs`)
+                // then resurrected them into a phantom partial row —
+                // `[a, Null, Null]` instead of zero rows — once it saw
+                // `result_set.rows` empty. Clear every binding, mirroring
+                // the unconditional `result_set.rows.clear()` above, so
+                // that fallback correctly observes "nothing bound" and
+                // returns zero rows too.
+                context.variables.clear();
             }
         } else {
             // CRITICAL: Always update result_set with all expanded rows

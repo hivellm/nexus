@@ -18,6 +18,35 @@ use serde_json::{Map, Value};
 /// 64 MiB cap per-property (matches spec §types-bytes "size-limit enforced").
 pub(crate) const MAX_BYTES_PER_PROPERTY: usize = 64 * 1024 * 1024;
 
+/// Rejects a base64 payload whose ENCODED length already guarantees a
+/// decoded size over [`MAX_BYTES_PER_PROPERTY`], before any decode
+/// buffer is allocated.
+///
+/// Base64 encodes 3 raw bytes as 4 characters, so `decoded_len <=
+/// floor(encoded_len * 3 / 4)`. Every `B64.decode` call site in this
+/// module previously decoded first and only checked the size of the
+/// RESULT (via [`bytes_from_vec`]) — or, for [`bytes_value_to_vec`],
+/// never checked at all — so a caller-supplied base64 string of
+/// several GB made the decoder allocate a several-GB `Vec<u8>` before
+/// any cap could reject it. Checking the cheap `s.len()` upfront (an
+/// `O(1)` string-length read, no allocation) closes that gap: this
+/// runs BEFORE `B64.decode`, not after.
+pub(crate) fn reject_oversize_base64(s: &str) -> Result<()> {
+    // Inverse of the encode-size formula with headroom for padding
+    // (`+4`): any encoded string longer than this cannot possibly
+    // decode to <= `MAX_BYTES_PER_PROPERTY` raw bytes.
+    let max_encoded_len = MAX_BYTES_PER_PROPERTY * 4 / 3 + 4;
+    if s.len() > max_encoded_len {
+        return Err(Error::CypherExecution(format!(
+            "ERR_BYTES_TOO_LARGE: base64 payload of {} characters exceeds the \
+             {max_encoded_len}-character encoded-length cap (decodes to more than the \
+             {MAX_BYTES_PER_PROPERTY}-byte per-property limit)",
+            s.len()
+        )));
+    }
+    Ok(())
+}
+
 /// True iff `v` is the `{"_bytes": "<base64>"}` wire shape that the
 /// Nexus runtime treats as a BYTES scalar.
 pub(crate) fn is_bytes_value(v: &Value) -> bool {
@@ -61,6 +90,7 @@ pub(crate) fn bytes_value_to_vec(v: &Value) -> Result<Vec<u8>> {
             });
         }
     };
+    reject_oversize_base64(s)?;
     B64.decode(s).map_err(|e| {
         Error::CypherExecution(format!("ERR_INVALID_BYTES: base64 decode failed: {e}"))
     })
@@ -91,6 +121,7 @@ pub(crate) fn coerce_param_to_bytes(v: &Value) -> Result<Value> {
         return Ok(v.clone());
     }
     if let Value::String(s) = v {
+        reject_oversize_base64(s)?;
         let raw = B64.decode(s).map_err(|e| {
             Error::CypherExecution(format!(
                 "ERR_INVALID_BYTES: parameter is not valid base64: {e}"
@@ -155,6 +186,20 @@ mod tests {
         let too_big = vec![0u8; MAX_BYTES_PER_PROPERTY + 1];
         let err = bytes_from_vec(too_big).unwrap_err();
         assert!(format!("{err}").contains("ERR_BYTES_TOO_LARGE"));
+    }
+
+    #[test]
+    fn reject_oversize_base64_rejects_before_decode_and_accepts_valid() {
+        // A base64 string longer than the encoded cap must be rejected on
+        // its length alone — BEFORE any decode buffer is allocated.
+        let over_cap = "A".repeat(MAX_BYTES_PER_PROPERTY * 4 / 3 + 5);
+        let err = reject_oversize_base64(&over_cap).unwrap_err();
+        assert!(
+            format!("{err}").contains("ERR_BYTES_TOO_LARGE"),
+            "over-cap base64 must be rejected on encoded length; got {err}"
+        );
+        // A normal, in-bounds base64 payload passes the pre-check.
+        reject_oversize_base64("SGVsbG8gd29ybGQ=").expect("valid small base64 must pass");
     }
 
     #[test]

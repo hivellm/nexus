@@ -72,13 +72,38 @@ impl Engine {
         // lets us route both Ok and Err through the same cleanup
         // path without the borrow-checker conflict.
         self.current_params = params;
+        self.side_effects = executor::types::SideEffects::default();
+        self.storage.reset_nodes_created();
+        self.storage.reset_relationships_created();
+        self.storage.reset_labels_created();
+        self.storage.reset_properties_created();
         let result = self.execute_cypher_with_context(
             query,
             None,
             crate::cluster::TenantIsolationMode::None,
         );
         self.current_params.clear();
-        result
+        let mut side_effects = std::mem::take(&mut self.side_effects);
+        // Node creations are counted in the storage layer rather than here:
+        // both the engine write path and the executor's create operator
+        // funnel through `create_node_with_label_bits_inner`, and which one
+        // runs depends on the clause mix (see the routing at :659-666).
+        // Counting at the shared chokepoint is what keeps the number right
+        // for both shapes.
+        side_effects.nodes_created = self.storage.nodes_created();
+        side_effects.relationships_created = self.storage.relationships_created();
+        // Labels come from two sources: labels on CREATE-d nodes (counted in
+        // the storage chokepoint) plus `SET n:Label` on existing nodes
+        // (already accumulated on `side_effects` by the write path). Add, do
+        // not overwrite.
+        side_effects.labels_added += self.storage.labels_created();
+        // Inline properties on CREATE-d entities count toward `+properties`;
+        // `SET`/`REMOVE` property writes are already on `side_effects`. Add.
+        side_effects.properties_set += self.storage.properties_created();
+        result.map(|mut rs| {
+            rs.side_effects = side_effects;
+            rs
+        })
     }
 
     /// Same as [`Self::execute_cypher_with_params`], but for callers that
@@ -108,6 +133,11 @@ impl Engine {
         params: HashMap<String, Value>,
     ) -> Result<executor::ResultSet> {
         self.current_params = params;
+        self.side_effects = executor::types::SideEffects::default();
+        self.storage.reset_nodes_created();
+        self.storage.reset_relationships_created();
+        self.storage.reset_labels_created();
+        self.storage.reset_properties_created();
         let result = self.execute_cypher_ast_with_context(
             ast,
             query_str,
@@ -115,7 +145,15 @@ impl Engine {
             crate::cluster::TenantIsolationMode::None,
         );
         self.current_params.clear();
-        result
+        let mut side_effects = std::mem::take(&mut self.side_effects);
+        side_effects.nodes_created = self.storage.nodes_created();
+        side_effects.relationships_created = self.storage.relationships_created();
+        side_effects.labels_added += self.storage.labels_created();
+        side_effects.properties_set += self.storage.properties_created();
+        result.map(|mut rs| {
+            rs.side_effects = side_effects;
+            rs
+        })
     }
 
     /// Execute a Cypher query, optionally rewriting catalog-visible
@@ -447,8 +485,12 @@ impl Engine {
             .clauses
             .iter()
             .any(|c| matches!(c, executor::parser::Clause::DropIndex(_)));
+        let has_show_indexes = ast
+            .clauses
+            .iter()
+            .any(|c| matches!(c, executor::parser::Clause::ShowIndexes));
 
-        if has_create_index || has_drop_index {
+        if has_create_index || has_drop_index || has_show_indexes {
             return self.execute_index_commands(ast);
         }
 
@@ -565,7 +607,11 @@ impl Engine {
                     "DELETE requires an upstream MATCH, CREATE, or WITH".to_string(),
                 ));
             };
-            self.refresh_executor()?;
+            // `deleted_count` (from `execute_match_delete_query`)
+            // counts every relationship/node it actually deleted; `0` means
+            // the MATCH matched nothing and nothing was touched, so the
+            // executor's cloned state is unchanged.
+            self.refresh_executor_if_mutated(deleted_count != 0)?;
 
             // Check if there's a RETURN clause after DELETE
             let return_clause_opt = ast.clauses.iter().find_map(|c| {
@@ -681,11 +727,31 @@ impl Engine {
                         Some("")
                     }
                 };
+                // phase0_fix-create-path-index-and-constraints — watermarks for
+                // the post-write engine-side index/constraint maintenance the
+                // executor CREATE operator skips (same as the standalone branch).
+                let pre_create_node_count = self.storage.node_count();
+                let pre_create_rel_count = self.storage.relationship_count();
                 let result = self.execute_match_create_query(ast, query_str_opt)?;
 
                 // CRITICAL: Sync executor's store back to engine's storage
                 // The executor has a cloned store, so changes need to be synced back
                 self.storage = self.executor.get_store();
+
+                // M-2 — enforce NODE KEY / property-type + populate composite
+                // B-trees for the just-created nodes (rolling the statement back
+                // on a violation); the executor CREATE operator never reaches the
+                // engine's extended-constraint set.
+                self.enforce_and_index_new_created_nodes(
+                    pre_create_node_count,
+                    pre_create_rel_count,
+                )?;
+                // C-5 — the executor CREATE operator maintains only its cloned
+                // label index; index the typed property B-tree for these nodes
+                // here (as the standalone-CREATE branch already does) so they are
+                // visible to `find_exact` / `NodeIndexSeek` and the index-backed
+                // MERGE existence check.
+                self.index_typed_properties_for_new_nodes(pre_create_node_count);
 
                 match source {
                     DispatchSource::TopLevel(_) => {
@@ -698,7 +764,19 @@ impl Engine {
                         // CALL-subquery recursion) — there is no
                         // follow-up batched statement to defer the
                         // refresh to, so do it eagerly.
-                        self.refresh_executor()?;
+                        //
+                        // This branch is reached only for
+                        // MATCH...CREATE (has_merge/set/remove/foreach were
+                        // already routed to `execute_write_query` above), so
+                        // node/relationship creation is the *only* possible
+                        // mutation here. `execute_match_create_query` runs
+                        // CREATE once per matched row and skips entirely
+                        // when the MATCH matched nothing, so a node/rel
+                        // count delta against the pre-CREATE watermarks
+                        // reliably tells us whether it created anything.
+                        let mutated = self.storage.node_count() != pre_create_node_count
+                            || self.storage.relationship_count() != pre_create_rel_count;
+                        self.refresh_executor_if_mutated(mutated)?;
                     }
                 }
 
@@ -754,6 +832,7 @@ impl Engine {
             // (manual pattern walk in `match_exec.rs`), which never
             // indexed the node at all.
             let pre_create_node_count = self.storage.node_count();
+            let pre_create_rel_count = self.storage.relationship_count();
             let result = match source {
                 DispatchSource::TopLevel(query) => {
                     let query_obj = executor::Query {
@@ -776,6 +855,14 @@ impl Engine {
             // CRITICAL: Sync executor's store back to engine's storage
             self.storage = self.executor.get_store();
 
+            // phase0_fix-create-path-index-and-constraints M-2 — the executor
+            // CREATE operator runs only its local UNIQUE / EXISTS check, never
+            // the engine's NODE KEY / property-type enforcement or composite-index
+            // maintenance. Enforce + populate composite B-trees here (rolling the
+            // statement back on a violation) BEFORE the typed-index step, so a
+            // rejected CREATE leaves no index residue.
+            self.enforce_and_index_new_created_nodes(pre_create_node_count, pre_create_rel_count)?;
+
             self.index_typed_properties_for_new_nodes(pre_create_node_count);
 
             // Refresh executor to see the changes (only if not in transaction)
@@ -786,10 +873,45 @@ impl Engine {
             };
 
             if !in_transaction {
-                self.refresh_executor()?;
+                // This branch handles a standalone CREATE only
+                // (has_match is false and has_merge/set/remove/foreach were
+                // already routed to `execute_write_query` above), so a
+                // node/relationship count delta against the pre-CREATE
+                // watermarks captured above is a complete mutation signal —
+                // it also correctly reports "unmutated" for the `ON
+                // CONFLICT MATCH` corner case that resolves to an existing
+                // node instead of creating one.
+                let mutated = self.storage.node_count() != pre_create_node_count
+                    || self.storage.relationship_count() != pre_create_rel_count;
+                self.refresh_executor_if_mutated(mutated)?;
             }
 
             return Ok(result);
+        }
+
+        // phase7 §4.3/§4.4 — dynamic relationship types (`-[r:$type]->`).
+        // The parser encodes a `:$param` type as the `"$param"` sentinel;
+        // resolve it against the runtime params BEFORE planning (the planner
+        // has none — the same reason the read-side dynamic-label fix defers
+        // to a runtime Filter) and hand the executor the rewritten AST via a
+        // preparsed override so it does NOT re-parse the sentinel back. A
+        // STRING param becomes one type, a LIST<STRING> a `:A|B` union; an
+        // invalid param (NULL/missing/empty/non-STRING/…) raises
+        // `ERR_INVALID_RELATIONSHIP_TYPE` rather than silently matching
+        // nothing (which would also hit the "empty type set = match every
+        // type" trap in Expand). Resolving the name on the AST means the
+        // existing plan-time lowering works unchanged for the single-hop
+        // `Expand`, `VariableLengthPath`, and `QuantifiedExpand` operators.
+        if query_has_dynamic_rel_types(ast) {
+            let mut rewritten = ast.clone();
+            resolve_ast_dynamic_rel_types(&mut rewritten, &self.current_params)?;
+            self.executor
+                .install_preparsed_ast_override(Some(rewritten));
+            let query_obj = executor::Query {
+                cypher: String::new(),
+                params: self.current_params.clone(),
+            };
+            return self.executor.execute(&query_obj);
         }
 
         // Execute the query normally. TopLevel attaches the scoped AST by
@@ -832,18 +954,16 @@ impl Engine {
         query: &executor::parser::CypherQuery,
         query_str: &str,
     ) -> Result<executor::ResultSet> {
-        // Use the query AST directly if it has clauses, otherwise parse the string
+        // Plan via the executor's real planning path (`plan_ast`) so the
+        // displayed plan matches execution: it wires property_index AND
+        // composite_index (as well as the r-tree), which the ad-hoc planner
+        // this used to build did not — so a WHERE-equality query on an indexed
+        // property showed NodeByLabel+Filter instead of the NodeIndexSeek /
+        // CompositeBtreeSeek it actually runs
+        // (phase0_fix-where-clause-index-seek-extensions §3).
         let operators = if !query.clauses.is_empty() {
-            // Use the planner directly with the AST
-            let mut planner = executor::planner::QueryPlanner::new(
-                &self.catalog,
-                &self.indexes.label_index,
-                &self.indexes.knn_index,
-            )
-            .with_rtree(self.indexes.rtree.clone());
-            planner.plan_query(query)?
+            self.executor.plan_ast(query)?
         } else {
-            // Fallback: parse and plan from string
             self.executor.parse_and_plan(query_str)?
         };
 
@@ -879,18 +999,12 @@ impl Engine {
 
         let start_time = Instant::now();
 
-        // Use the query AST directly if it has clauses, otherwise parse the string
+        // Plan via the executor's real planning path so the displayed plan
+        // matches execution (wires property_index + composite_index; see
+        // execute_explain_with_string / phase0_fix-where-clause-index-seek-extensions §3).
         let operators = if !query.clauses.is_empty() {
-            // Use the planner directly with the AST
-            let mut planner = executor::planner::QueryPlanner::new(
-                &self.catalog,
-                &self.indexes.label_index,
-                &self.indexes.knn_index,
-            )
-            .with_rtree(self.indexes.rtree.clone());
-            planner.plan_query(query)?
+            self.executor.plan_ast(query)?
         } else {
-            // Fallback: parse and plan from string
             self.executor.parse_and_plan(query_str)?
         };
 
@@ -954,5 +1068,71 @@ impl Engine {
         ast: &executor::parser::CypherQuery,
     ) -> Result<executor::ResultSet> {
         self.dispatch(ast, DispatchSource::Internal)
+    }
+}
+
+// ── phase7 §4.3/§4.4 — dynamic relationship-type (`-[r:$type]->`) AST walk ──
+
+/// True when any `MATCH` pattern in the query carries a relationship type
+/// with a `$param` sentinel that must be resolved at runtime.
+fn query_has_dynamic_rel_types(ast: &executor::parser::CypherQuery) -> bool {
+    ast.clauses.iter().any(|c| {
+        if let executor::parser::Clause::Match(m) = c {
+            m.pattern.elements.iter().any(element_has_dynamic_rel_types)
+        } else {
+            false
+        }
+    })
+}
+
+fn element_has_dynamic_rel_types(el: &executor::parser::PatternElement) -> bool {
+    match el {
+        executor::parser::PatternElement::Relationship(r) => {
+            // `contains_dynamic` is entity-agnostic (a `$`-prefix check),
+            // so the node-label helper serves relationship types too.
+            crate::engine::dynamic_labels::contains_dynamic(&r.types)
+        }
+        executor::parser::PatternElement::QuantifiedGroup(g) => {
+            g.inner.iter().any(element_has_dynamic_rel_types)
+        }
+        executor::parser::PatternElement::Node(_) => false,
+    }
+}
+
+/// Rewrite every `$param` relationship-type sentinel in the query's `MATCH`
+/// patterns to its resolved concrete type name(s), in place on the cloned
+/// AST. Propagates `ERR_INVALID_RELATIONSHIP_TYPE` for an invalid parameter.
+fn resolve_ast_dynamic_rel_types(
+    ast: &mut executor::parser::CypherQuery,
+    params: &std::collections::HashMap<String, serde_json::Value>,
+) -> Result<()> {
+    for c in &mut ast.clauses {
+        if let executor::parser::Clause::Match(m) = c {
+            for el in &mut m.pattern.elements {
+                resolve_element_dynamic_rel_types(el, params)?;
+            }
+        }
+    }
+    Ok(())
+}
+
+fn resolve_element_dynamic_rel_types(
+    el: &mut executor::parser::PatternElement,
+    params: &std::collections::HashMap<String, serde_json::Value>,
+) -> Result<()> {
+    match el {
+        executor::parser::PatternElement::Relationship(r) => {
+            if crate::engine::dynamic_labels::contains_dynamic(&r.types) {
+                r.types = crate::engine::dynamic_types::resolve_types(&r.types, params)?;
+            }
+            Ok(())
+        }
+        executor::parser::PatternElement::QuantifiedGroup(g) => {
+            for inner in &mut g.inner {
+                resolve_element_dynamic_rel_types(inner, params)?;
+            }
+            Ok(())
+        }
+        executor::parser::PatternElement::Node(_) => Ok(()),
     }
 }

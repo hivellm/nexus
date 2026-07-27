@@ -225,4 +225,207 @@ impl Error {
     pub fn replication(msg: impl Into<String>) -> Self {
         Self::Replication(msg.into())
     }
+
+    /// openCypher-TCK classification of this error. A structured `ERR_*`
+    /// code prefix wins; otherwise the Rust variant decides. Errors we
+    /// cannot confidently classify return [`OpenCypherErrorKind::Uncategorized`].
+    pub fn opencypher_kind(&self) -> OpenCypherErrorKind {
+        if let Some(kind) = self
+            .structured_code()
+            .and_then(OpenCypherErrorKind::from_error_code)
+        {
+            return kind;
+        }
+        match self {
+            Error::CypherSyntax(_) | Error::QueryParser(_) => OpenCypherErrorKind::SyntaxError,
+            Error::TypeMismatch { .. } => OpenCypherErrorKind::TypeError,
+            Error::ConstraintViolation(_) => OpenCypherErrorKind::ConstraintVerificationFailed,
+            Error::NotFound(_) | Error::InvalidId(_) => OpenCypherErrorKind::EntityNotFound,
+            Error::InvalidInput(_) => OpenCypherErrorKind::ArgumentError,
+            _ => OpenCypherErrorKind::Uncategorized,
+        }
+    }
+
+    /// The leading `ERR_*` code token of the message, if present. Nexus
+    /// emits these as a structured prefix (`"ERR_CRS_MISMATCH: …"`) on the
+    /// string-bearing variants.
+    fn structured_code(&self) -> Option<&str> {
+        let msg = match self {
+            Error::CypherSyntax(m)
+            | Error::CypherExecution(m)
+            | Error::Executor(m)
+            | Error::InvalidInput(m)
+            | Error::ConstraintViolation(m)
+            | Error::Storage(m)
+            | Error::Index(m)
+            | Error::Catalog(m)
+            | Error::Transaction(m)
+            | Error::Internal(m)
+            | Error::NotFound(m)
+            | Error::InvalidId(m) => m.as_str(),
+            _ => return None,
+        };
+        let msg = msg.trim_start();
+        if !msg.starts_with("ERR_") {
+            return None;
+        }
+        let end = msg
+            .find(|c: char| !(c.is_ascii_uppercase() || c.is_ascii_digit() || c == '_'))
+            .unwrap_or(msg.len());
+        Some(&msg[..end])
+    }
+}
+
+/// openCypher-TCK error classification. Nexus's [`Error`] variants are
+/// mapped onto these so the TCK harness can assert the *kind* of failure,
+/// not merely that some substring appears in the message.
+///
+/// Precedence is code-first: a structured `ERR_*` prefix carries more
+/// specific semantics than the coarse Rust variant and wins over it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OpenCypherErrorKind {
+    /// Malformed query text / static composition error.
+    SyntaxError,
+    /// Statically-detectable semantic error (scope, aggregation, union shape).
+    SemanticError,
+    /// Value/CRS/argument type mismatch.
+    TypeError,
+    /// Bad argument value, count, or shape.
+    ArgumentError,
+    /// A referenced node/relationship no longer exists.
+    EntityNotFound,
+    /// A constraint (uniqueness, index-build precondition, …) was violated.
+    ConstraintVerificationFailed,
+    /// A referenced query parameter was not supplied.
+    ParameterMissing,
+    /// A called procedure failed or does not exist.
+    ProcedureError,
+    /// Nexus cannot (yet) prove a specific openCypher kind for this error.
+    Uncategorized,
+}
+
+impl OpenCypherErrorKind {
+    /// Map a Nexus structured `ERR_*` code to a TCK kind. Codes absent here
+    /// are either Cypher-surface-irrelevant (storage/crypto/WAL/sharding
+    /// internals) or not yet validated against a TCK scenario, and fall
+    /// back to variant-based classification. Extend as the full-corpus
+    /// runner validates more codes against real scenarios.
+    fn from_error_code(code: &str) -> Option<Self> {
+        Some(match code {
+            "ERR_CRS_MISMATCH" | "ERR_INVALID_ARG_TYPE" => Self::TypeError,
+            "ERR_BBOX_MALFORMED" | "ERR_INVALID_ARG_VALUE" | "ERR_MISSING_ARG" => {
+                Self::ArgumentError
+            }
+            "ERR_MISSING_PARAMETER" => Self::ParameterMissing,
+            "ERR_PROC_NOT_FOUND" => Self::ProcedureError,
+            "ERR_RTREE_BUILD" | "ERR_CONSTRAINT_VIOLATED" => Self::ConstraintVerificationFailed,
+            _ => return None,
+        })
+    }
+
+    /// Parse a TCK Gherkin error-kind word into a kind. Accepts the
+    /// Nexus-spatial-corpus alias `ConstraintError` for the upstream
+    /// `ConstraintVerificationFailed`.
+    pub fn parse_tck_name(name: &str) -> Option<Self> {
+        Some(match name {
+            "SyntaxError" => Self::SyntaxError,
+            "SemanticError" => Self::SemanticError,
+            "TypeError" => Self::TypeError,
+            "ArgumentError" => Self::ArgumentError,
+            "EntityNotFound" => Self::EntityNotFound,
+            "ConstraintVerificationFailed" | "ConstraintError" => {
+                Self::ConstraintVerificationFailed
+            }
+            "ParameterMissing" => Self::ParameterMissing,
+            "ProcedureError" => Self::ProcedureError,
+            _ => return None,
+        })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn crs_mismatch_code_overrides_syntax_variant_default() {
+        let err = Error::CypherSyntax("ERR_CRS_MISMATCH: a=cartesian, b=wgs-84".into());
+        assert_eq!(err.opencypher_kind(), OpenCypherErrorKind::TypeError);
+    }
+
+    #[test]
+    fn crs_mismatch_code_classifies_from_execution_variant() {
+        let err = Error::CypherExecution("ERR_CRS_MISMATCH: a=cartesian, b=wgs-84".into());
+        assert_eq!(err.opencypher_kind(), OpenCypherErrorKind::TypeError);
+    }
+
+    #[test]
+    fn rtree_build_code_classifies_as_constraint_verification_failed() {
+        let err = Error::CypherExecution("ERR_RTREE_BUILD: node 5 has no bbox".into());
+        assert_eq!(
+            err.opencypher_kind(),
+            OpenCypherErrorKind::ConstraintVerificationFailed
+        );
+    }
+
+    #[test]
+    fn uncoded_syntax_error_falls_back_to_variant_default() {
+        let err = Error::CypherSyntax("Cypher syntax error: unexpected token".into());
+        assert_eq!(err.opencypher_kind(), OpenCypherErrorKind::SyntaxError);
+    }
+
+    #[test]
+    fn type_mismatch_variant_classifies_as_type_error() {
+        let err = Error::TypeMismatch {
+            expected: "Integer".into(),
+            actual: "String".into(),
+        };
+        assert_eq!(err.opencypher_kind(), OpenCypherErrorKind::TypeError);
+    }
+
+    #[test]
+    fn constraint_violation_variant_classifies_as_constraint_verification_failed() {
+        let err = Error::ConstraintViolation("unique".into());
+        assert_eq!(
+            err.opencypher_kind(),
+            OpenCypherErrorKind::ConstraintVerificationFailed
+        );
+    }
+
+    #[test]
+    fn not_found_variant_classifies_as_entity_not_found() {
+        let err = Error::NotFound("node 9".into());
+        assert_eq!(err.opencypher_kind(), OpenCypherErrorKind::EntityNotFound);
+    }
+
+    #[test]
+    fn uncoded_execution_error_falls_back_to_uncategorized() {
+        let err = Error::CypherExecution("some uncoded runtime failure".into());
+        assert_eq!(err.opencypher_kind(), OpenCypherErrorKind::Uncategorized);
+    }
+
+    #[test]
+    fn missing_parameter_code_classifies_from_execution_variant() {
+        let err = Error::CypherExecution("ERR_MISSING_PARAMETER: $foo".into());
+        assert_eq!(err.opencypher_kind(), OpenCypherErrorKind::ParameterMissing);
+    }
+
+    #[test]
+    fn parse_tck_name_accepts_constraint_error_alias_and_rejects_unknown() {
+        assert_eq!(
+            OpenCypherErrorKind::parse_tck_name("ConstraintError"),
+            Some(OpenCypherErrorKind::ConstraintVerificationFailed)
+        );
+        assert_eq!(
+            OpenCypherErrorKind::parse_tck_name("TypeError"),
+            Some(OpenCypherErrorKind::TypeError)
+        );
+        assert!(OpenCypherErrorKind::parse_tck_name("Nonsense").is_none());
+    }
+
+    #[test]
+    fn trailing_code_is_not_treated_as_a_leading_structured_code() {
+        let err = Error::CypherExecution("failed: ERR_CRS_MISMATCH".into());
+        assert_eq!(err.opencypher_kind(), OpenCypherErrorKind::Uncategorized);
+    }
 }

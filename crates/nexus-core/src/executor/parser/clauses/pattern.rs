@@ -521,28 +521,44 @@ impl CypherParser {
         Ok(labels)
     }
 
-    /// Parse types
+    /// Parse types.
+    ///
+    /// A `:$param` relationship type is encoded as the sentinel string
+    /// `"$param"` (mirrors `parse_labels`; the leading `$` is never a valid
+    /// identifier character, so it is resolved against the execution-time
+    /// parameter map by `crate::engine::dynamic_types::resolve_types`).
     pub(super) fn parse_types(&mut self) -> Result<Vec<String>> {
         let mut types = Vec::new();
 
         // First type must be preceded by ':'
         if self.peek_char() == Some(':') {
             self.consume_char(); // consume ':'
-            let r#type = self.parse_identifier()?;
-            types.push(r#type);
+            types.push(self.parse_type_name()?);
 
             // Additional types can be separated by '|' (e.g., :TYPE1|TYPE2)
             self.skip_whitespace();
             while self.peek_char() == Some('|') {
                 self.consume_char(); // consume '|'
                 self.skip_whitespace();
-                let r#type = self.parse_identifier()?;
-                types.push(r#type);
+                types.push(self.parse_type_name()?);
                 self.skip_whitespace();
             }
         }
 
         Ok(types)
+    }
+
+    /// Parse a single relationship type name, accepting the `$param`
+    /// dynamic-type sentinel (encoded verbatim as `"$param"`, exactly like a
+    /// `:$param` label in `parse_labels`).
+    fn parse_type_name(&mut self) -> Result<String> {
+        if self.peek_char() == Some('$') {
+            self.consume_char(); // consume '$'
+            let param = self.parse_identifier()?;
+            Ok(format!("${param}"))
+        } else {
+            self.parse_identifier()
+        }
     }
 
     /// Parse property map

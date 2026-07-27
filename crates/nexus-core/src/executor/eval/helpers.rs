@@ -91,6 +91,61 @@ impl Executor {
             return Ok(());
         }
 
+        // Audit (phase0_fix-cypher-oom-process-abort §3.3): this function has
+        // exactly two sites that size an allocation from a product of counts
+        // rather than from data already in hand — the per-column rebuild
+        // below (`Vec::with_capacity(arr.len() * new_count)`) and the
+        // new-variable expansion further down
+        // (`Vec::with_capacity(new_count * current_count)`). Both derive
+        // their length from the same `current_count * new_count` product
+        // computed here, so a single pre-allocation check bounds both. The
+        // clone loops that follow only push into these pre-sized vecs and
+        // never allocate beyond them. No other allocation in this function
+        // is sized from a product of counts.
+        //
+        // Check the size BEFORE allocating: `Vec::with_capacity` on an
+        // unchecked product aborts the process rather than failing the
+        // query — an UNWIND of 5 000 rows over two 5 000-node patterns
+        // reaches 1.25e11 cells and asks the allocator for ~4 TB. The
+        // budget is expressed in bytes, not rows, because the true cost is
+        // `rows * size_of::<Value>() * columns` and a row limit means a
+        // different amount of memory for a 2-column context than for a
+        // 20-column one.
+        let product = current_count.checked_mul(new_count).ok_or_else(|| {
+            Error::OutOfMemory(format!(
+                "Cartesian product {} x {} overflows usize; add LIMIT or narrow the query",
+                current_count, new_count
+            ))
+        })?;
+
+        // Every existing variable is rebuilt to `product` length, plus the
+        // new variable itself adds one more column.
+        let columns = context.variables.len() + 1;
+        let est_bytes = product
+            .checked_mul(columns)
+            .and_then(|cells| cells.checked_mul(std::mem::size_of::<Value>()));
+
+        let budget = self.config.cartesian_product_max_bytes;
+        match est_bytes {
+            Some(bytes) if bytes <= budget => {}
+            Some(bytes) => {
+                return Err(Error::OutOfMemory(format!(
+                    "Cartesian product would materialise {} rows ({} x {}) across {} \
+                     columns (~{} bytes), exceeding the configured budget of {} bytes; \
+                     add LIMIT or narrow the query",
+                    product, current_count, new_count, columns, bytes, budget
+                )));
+            }
+            None => {
+                return Err(Error::OutOfMemory(format!(
+                    "Cartesian product would materialise {} rows ({} x {}) across {} \
+                     columns, and the estimated byte size overflows usize, far exceeding \
+                     the configured budget of {} bytes; add LIMIT or narrow the query",
+                    product, current_count, new_count, columns, budget
+                )));
+            }
+        }
+
         // 2. Expand existing variables: repeat each element M times (M = new_count)
         // We need to collect keys first to avoid borrowing issues
         let keys: Vec<String> = context.variables.keys().cloned().collect();
@@ -122,14 +177,14 @@ impl Executor {
     pub(in crate::executor) fn materialize_rows_from_variables(
         &self,
         context: &ExecutionContext,
-    ) -> Vec<HashMap<String, Value>> {
+    ) -> Result<Vec<HashMap<String, Value>>> {
         // TRACE: Log variables before creating cartesian product
         let mut has_relationships = false;
         let mut var_types: Vec<(String, String)> = Vec::new();
         for (var, value) in &context.variables {
             let var_type = match value {
-                Value::Object(obj) => {
-                    if obj.contains_key("type") {
+                Value::Object(_) => {
+                    if crate::executor::is_relationship_value(value) {
                         has_relationships = true;
                         "RELATIONSHIP".to_string()
                     } else {
@@ -137,13 +192,7 @@ impl Executor {
                     }
                 }
                 Value::Array(arr) => {
-                    let has_rel = arr.iter().any(|v| {
-                        if let Value::Object(obj) = v {
-                            obj.contains_key("type")
-                        } else {
-                            false
-                        }
-                    });
+                    let has_rel = arr.iter().any(crate::executor::is_relationship_value);
                     if has_rel {
                         has_relationships = true;
                     }
@@ -186,7 +235,7 @@ impl Executor {
         }
 
         if arrays.is_empty() {
-            return Vec::new();
+            return Ok(Vec::new());
         }
 
         // CRITICAL FIX: Implement true cartesian product instead of zip
@@ -211,10 +260,56 @@ impl Executor {
             let array_values: Vec<Vec<Value>> =
                 var_names.iter().map(|k| arrays[k].clone()).collect();
 
-            // Calculate total number of combinations
-            let total_combinations: usize = array_values.iter().map(|arr| arr.len()).product();
+            // Calculate total number of combinations with CHECKED
+            // arithmetic — the unguarded `.product()` this replaced
+            // wraps silently on overflow in a release build (overflow
+            // checks are off) and panics in debug, neither of which is
+            // a Cypher error. Mirrors the same checked-multiplication +
+            // byte-budget precheck `apply_cartesian_product` (above,
+            // same file) already applies, so both cross-product sources
+            // in this module share one budget contract. Do NOT change
+            // `apply_cartesian_product`'s own guard/message — this is a
+            // parallel check, not a shared call, because the two
+            // functions size their `columns` differently (`var_names.len()`
+            // here vs. `context.variables.len() + 1` there).
+            let mut total_combinations: usize = 1;
+            for arr in &array_values {
+                total_combinations =
+                    total_combinations.checked_mul(arr.len()).ok_or_else(|| {
+                        Error::OutOfMemory(format!(
+                            "materialize_rows_from_variables: cartesian product across {} \
+                         variables overflows usize; add LIMIT or narrow the query",
+                            array_values.len()
+                        ))
+                    })?;
+            }
 
-            let mut rows = Vec::new();
+            let columns = var_names.len();
+            let est_bytes = total_combinations
+                .checked_mul(columns)
+                .and_then(|cells| cells.checked_mul(std::mem::size_of::<Value>()));
+
+            let budget = self.config.cartesian_product_max_bytes;
+            match est_bytes {
+                Some(bytes) if bytes <= budget => {}
+                Some(bytes) => {
+                    return Err(Error::OutOfMemory(format!(
+                        "materialize_rows_from_variables would produce {total_combinations} \
+                         rows across {columns} columns (~{bytes} bytes), exceeding the \
+                         configured budget of {budget} bytes; add LIMIT or narrow the query"
+                    )));
+                }
+                None => {
+                    return Err(Error::OutOfMemory(format!(
+                        "materialize_rows_from_variables would produce {total_combinations} \
+                         rows across {columns} columns, and the estimated byte size overflows \
+                         usize, far exceeding the configured budget of {budget} bytes; add \
+                         LIMIT or narrow the query"
+                    )));
+                }
+            }
+
+            let mut rows = Vec::with_capacity(total_combinations);
 
             // Generate all combinations using nested iteration
             let mut indices = vec![0usize; array_values.len()];
@@ -247,10 +342,12 @@ impl Executor {
                 }
             }
 
-            return rows;
+            return Ok(rows);
         }
 
-        // FALLBACK: Old zip-based logic for single arrays or mixed sizes
+        // FALLBACK: Old zip-based logic for single arrays or mixed sizes.
+        // Bounded by `max_len` (not a product of array lengths), so no
+        // cartesian-style guard is needed here.
         let max_len = arrays
             .values()
             .map(|values| values.len())
@@ -258,7 +355,7 @@ impl Executor {
             .unwrap_or(0);
 
         if max_len == 0 {
-            return Vec::new();
+            return Ok(Vec::new());
         }
 
         let mut rows = Vec::new();
@@ -326,6 +423,78 @@ impl Executor {
             }
         }
 
+        Ok(rows)
+    }
+
+    /// Materialises rows by ZIPPING already-aligned column variables — the
+    /// index-aligned counterpart to the cross-producing path in
+    /// [`Self::materialize_rows_from_variables`].
+    ///
+    /// Called right after [`Self::apply_cartesian_product`], which leaves
+    /// every array variable aligned to the SAME product length (index `i`
+    /// is one output row). Running the general materialiser there instead
+    /// would hit its `needs_cartesian_product` branch and RE-cross the
+    /// already-crossed columns into `N^k` rows (`384^3 ≈ 56.6M` for a
+    /// two-pattern `MATCH` over an 8-node label with 6 driving rows — a
+    /// ~13 GB allocation that freezes the host). Zipping returns the `N`
+    /// rows those aligned columns already represent.
+    /// (phase0_fix-materialize-recrosses-aligned-columns)
+    ///
+    /// Length-1 arrays and scalars broadcast across all rows, matching the
+    /// fallback (zip) semantics of [`Self::materialize_rows_from_variables`];
+    /// all-`Null` rows are dropped identically.
+    pub(in crate::executor) fn materialize_aligned_rows(
+        &self,
+        context: &ExecutionContext,
+    ) -> Vec<HashMap<String, Value>> {
+        let mut arrays: HashMap<String, Vec<Value>> = HashMap::new();
+        for (var, value) in &context.variables {
+            match value {
+                Value::Array(values) => {
+                    if !values.is_empty() {
+                        arrays.insert(var.clone(), values.clone());
+                    }
+                }
+                other => {
+                    if !matches!(other, Value::Null) {
+                        arrays.insert(var.clone(), vec![other.clone()]);
+                    }
+                }
+            }
+        }
+
+        if arrays.is_empty() {
+            return Vec::new();
+        }
+
+        let max_len = arrays.values().map(|v| v.len()).max().unwrap_or(0);
+        if max_len == 0 {
+            return Vec::new();
+        }
+
+        let mut rows = Vec::with_capacity(max_len);
+        for idx in 0..max_len {
+            let mut row = HashMap::new();
+            let mut all_null = true;
+            for (var, values) in &arrays {
+                let value = if values.len() == max_len {
+                    values.get(idx).cloned().unwrap_or(Value::Null)
+                } else if values.len() == 1 {
+                    values[0].clone()
+                } else if idx < values.len() {
+                    values[idx].clone()
+                } else {
+                    Value::Null
+                };
+                if !matches!(value, Value::Null) {
+                    all_null = false;
+                }
+                row.insert(var.clone(), value);
+            }
+            if !all_null {
+                rows.push(row);
+            }
+        }
         rows
     }
 
@@ -337,13 +506,7 @@ impl Executor {
         // TRACE: Check if input rows contain relationships
         let mut rows_with_relationships = 0;
         for row in rows {
-            let has_rel = row.values().any(|value| {
-                if let Value::Object(obj) = value {
-                    obj.contains_key("type") // Relationships have "type" property
-                } else {
-                    false
-                }
-            });
+            let has_rel = row.values().any(crate::executor::is_relationship_value);
             if has_rel {
                 rows_with_relationships += 1;
             }
@@ -388,6 +551,28 @@ impl Executor {
                 }
             }
 
+            // Fold non-entity columns (values with no `_nexus_id`, e.g. an
+            // `UNWIND` driving map like `{s: 10}`) into the dedup key. Without
+            // it, two rows that matched the SAME nodes from DIFFERENT driving
+            // rows collapse to one, dropping every driving row after the first
+            // — the truncation that surfaced once the aligned multi-pattern
+            // path stopped re-crossing into `N^k`
+            // (phase0_fix-materialize-recrosses-aligned-columns). Keying by
+            // content only makes keys MORE specific (keeps more rows), which is
+            // the correct direction: Cypher `MATCH` does not deduplicate rows.
+            let non_entity_suffix = {
+                let mut parts: Vec<String> = row_map
+                    .iter()
+                    .filter(|(_, v)| {
+                        !matches!(v, Value::Object(o) if o.contains_key("_nexus_id"))
+                            && !matches!(v, Value::Null)
+                    })
+                    .map(|(k, v)| format!("{}={}", k, serde_json::to_string(v).unwrap_or_default()))
+                    .collect();
+                parts.sort();
+                parts.join("|")
+            };
+
             // CRITICAL FIX: Determine deduplication key based on number of entity IDs
             // Relationship rows typically have multiple entity IDs (source node + target node + relationship)
             // Non-relationship rows have only one entity ID (just the node)
@@ -397,9 +582,13 @@ impl Executor {
                 // This ensures that rows with the same relationship ID are considered duplicates
                 // even if they appear in different contexts (e.g., bidirectional relationships from source vs target)
                 let relationship_id = row_map.values().find_map(|value| {
-                    if let Value::Object(obj) = value {
-                        // Relationship objects have a "type" property
-                        if obj.contains_key("type") {
+                    // Structural check. A NODE carrying a property named
+                    // `type` (LDBC `Organisation.type`) used to be picked
+                    // here, in HashMap order, and the key below then
+                    // dropped both real node variables, collapsing
+                    // unrelated rows into one.
+                    if crate::executor::is_relationship_value(value) {
+                        if let Value::Object(obj) = value {
                             if let Some(Value::Number(nid)) = obj.get("_nexus_id") {
                                 return nid.as_u64();
                             }
@@ -419,9 +608,12 @@ impl Executor {
                         if let Value::Object(obj) = value {
                             if let Some(Value::Number(nid)) = obj.get("_nexus_id") {
                                 if let Some(entity_id) = nid.as_u64() {
-                                    // Skip relationship ID
-                                    if entity_id != rel_id && !obj.contains_key("type") {
-                                        // This is a node variable
+                                    // Every node variable belongs in the
+                                    // key; skip only the relationship
+                                    // itself, already keyed above.
+                                    if entity_id != rel_id
+                                        && !crate::executor::is_relationship_value(value)
+                                    {
                                         var_entries.push((key.clone(), entity_id));
                                     }
                                 }
@@ -436,6 +628,9 @@ impl Executor {
                     let mut key_parts = vec![format!("rel_{}", rel_id)];
                     for (var_name, var_id) in &var_entries {
                         key_parts.push(format!("{}_{}", var_name, var_id));
+                    }
+                    if !non_entity_suffix.is_empty() {
+                        key_parts.push(non_entity_suffix.clone());
                     }
                     let row_key = key_parts.join("_");
 
@@ -461,10 +656,13 @@ impl Executor {
                     var_entries.sort_by(|a, b| a.0.cmp(&b.0));
 
                     // Build key: var1_id1_var2_id2_var3_id3...
-                    let key_parts: Vec<String> = var_entries
+                    let mut key_parts: Vec<String> = var_entries
                         .iter()
                         .map(|(var_name, var_id)| format!("{}_{}", var_name, var_id))
                         .collect();
+                    if !non_entity_suffix.is_empty() {
+                        key_parts.push(non_entity_suffix.clone());
+                    }
                     let row_key = key_parts.join("_");
 
                     let is_dup = !seen_row_keys.insert(row_key.clone());
@@ -898,10 +1096,19 @@ impl Executor {
             }
         };
 
-        // Add _nexus_id for internal ID extraction (e.g., for type() function)
-        // Add type property to identify this as a relationship object in deduplication
+        // `_nexus_id` carries the internal id; `type` carries the relationship
+        // type under the name the Neo4j-shaped flat format and `type(r)`
+        // expect. Neither can be used to TELL a relationship from a node:
+        // `type` is an ordinary property name a node may legitimately carry
+        // (LDBC's `Organisation.type` / `Place.type` do), which is why
+        // `_nexus_rel_type` exists — a reserved key that only this constructor
+        // writes. See `is_relationship_value`.
         let mut rel_obj = properties_map;
         rel_obj.insert("_nexus_id".to_string(), Value::Number(rel.id.into()));
+        rel_obj.insert(
+            crate::executor::REL_TYPE_MARKER.to_string(),
+            Value::String(type_name.clone()),
+        );
         rel_obj.insert("type".to_string(), Value::String(type_name));
 
         // Return only the properties as a flat object, matching Neo4j's format
@@ -932,5 +1139,165 @@ impl Executor {
         }
 
         result
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    //! phase0_fix-cypher-oom-process-abort §4.2 — unit coverage for the
+    //! byte budget check in [`Executor::apply_cartesian_product`]. The
+    //! integration-level regression test (the §1.1 minimal repro shape
+    //! surviving end-to-end instead of aborting the process) lives in
+    //! `crates/nexus-core/tests/cypher_oom_guard_test.rs`; these tests
+    //! pin the ceiling itself: it fires deterministically, is
+    //! configurable via `ExecutorConfig::cartesian_product_max_bytes`,
+    //! and does not reject legitimate small products under the default
+    //! budget.
+
+    use super::*;
+    use crate::testing::create_test_executor;
+    use serde_json::json;
+
+    #[test]
+    fn apply_cartesian_product_rejects_when_budget_is_absurdly_low() {
+        let (mut executor, _ctx) = create_test_executor();
+        // A trivial 2x2 product estimates to 2 * 2 * columns * 32 bytes
+        // (>= 128 bytes even at columns=1). A 1-byte budget must reject
+        // it regardless of how small the product actually is.
+        executor.config.cartesian_product_max_bytes = 1;
+
+        let mut context = ExecutionContext::new(HashMap::new(), None);
+        context.set_variable("a", Value::Array(vec![json!(1), json!(2)]));
+
+        let result = executor.apply_cartesian_product(&mut context, "b", vec![json!(3), json!(4)]);
+
+        match result {
+            Err(Error::OutOfMemory(msg)) => {
+                assert!(
+                    msg.contains("Cartesian product"),
+                    "OutOfMemory message should name the offending operation: {msg}"
+                );
+            }
+            other => {
+                panic!("expected Err(Error::OutOfMemory(_)) under a 1-byte budget, got {other:?}")
+            }
+        }
+    }
+
+    #[test]
+    fn apply_cartesian_product_succeeds_under_default_budget() {
+        // Same shape as the low-budget test above, but with the
+        // default (1 GiB) budget left untouched — proves the rejection
+        // above comes specifically from the configured ceiling, not
+        // from `apply_cartesian_product` being broken for any input.
+        let (mut executor, _ctx) = create_test_executor();
+
+        let mut context = ExecutionContext::new(HashMap::new(), None);
+        context.set_variable("a", Value::Array(vec![json!(1), json!(2)]));
+
+        executor
+            .apply_cartesian_product(&mut context, "b", vec![json!(3), json!(4)])
+            .expect("a 2x2 product must stay well under the default 1 GiB budget");
+
+        assert_eq!(
+            context.get_variable("a"),
+            Some(&Value::Array(vec![json!(1), json!(1), json!(2), json!(2)]))
+        );
+        assert_eq!(
+            context.get_variable("b"),
+            Some(&Value::Array(vec![json!(3), json!(4), json!(3), json!(4)]))
+        );
+    }
+
+    /// phase0_fix-materialize-recrosses-aligned-columns — DISCRIMINATING.
+    /// After `apply_cartesian_product` aligns two columns to length 4
+    /// (`a=[1,1,2,2]`, `b=[3,4,3,4]`, each index = one output row), the
+    /// aligned materialiser must ZIP them into exactly 4 rows, while the
+    /// general materialiser RE-crosses them into 4*4 = 16. The `k`-column
+    /// gap is `N^(k-1)`; at query scale (`N=384`, `k=3`) that same
+    /// re-cross is `384^3 ≈ 56.6M` rows (~13 GB), which froze the host.
+    #[test]
+    fn materialize_aligned_rows_zips_instead_of_recrossing() {
+        let (mut executor, _ctx) = create_test_executor();
+
+        let mut context = ExecutionContext::new(HashMap::new(), None);
+        context.set_variable("a", Value::Array(vec![json!(1), json!(2)]));
+        executor
+            .apply_cartesian_product(&mut context, "b", vec![json!(3), json!(4)])
+            .expect("2x2 product stays under the default budget");
+
+        // Preconditions: both columns are aligned to length 4.
+        assert_eq!(
+            context.get_variable("a"),
+            Some(&Value::Array(vec![json!(1), json!(1), json!(2), json!(2)]))
+        );
+        assert_eq!(
+            context.get_variable("b"),
+            Some(&Value::Array(vec![json!(3), json!(4), json!(3), json!(4)]))
+        );
+
+        // The general materialiser RE-crosses the aligned columns: 4 x 4 = 16.
+        // This is the over-production the fix avoids (documented, not desired).
+        let recrossed = executor
+            .materialize_rows_from_variables(&context)
+            .expect("materialize should succeed for this small aligned context");
+        assert_eq!(
+            recrossed.len(),
+            16,
+            "materialize_rows_from_variables re-crosses aligned columns (N^k); \
+             this pins the bug the aligned path must avoid"
+        );
+
+        // The aligned materialiser ZIPS: exactly the 4 rows the columns
+        // already represent, in index order.
+        let zipped = executor.materialize_aligned_rows(&context);
+        assert_eq!(
+            zipped.len(),
+            4,
+            "materialize_aligned_rows must zip aligned columns to N rows, not N^k"
+        );
+
+        let mut pairs: Vec<(i64, i64)> = zipped
+            .iter()
+            .map(|row| {
+                (
+                    row["a"].as_i64().expect("a is an integer"),
+                    row["b"].as_i64().expect("b is an integer"),
+                )
+            })
+            .collect();
+        pairs.sort_unstable();
+        assert_eq!(
+            pairs,
+            vec![(1, 3), (1, 4), (2, 3), (2, 4)],
+            "zipped rows must be the exact index-aligned (a, b) pairs"
+        );
+    }
+
+    /// The cartesian-materialisation path inside
+    /// `materialize_rows_from_variables` (two-plus same-length,
+    /// multi-element arrays) must reject with `Error::OutOfMemory` when
+    /// the estimated product exceeds the configured byte budget, instead
+    /// of building the full row set — the same contract
+    /// `apply_cartesian_product` enforces.
+    #[test]
+    fn materialize_rows_rejects_cartesian_product_over_budget() {
+        let (mut executor, _ctx) = create_test_executor();
+        // A 1-byte budget rejects any real product (each row is >= a few
+        // dozen bytes even for one column).
+        executor.set_cartesian_product_max_bytes(1);
+
+        let mut context = ExecutionContext::new(HashMap::new(), None);
+        // Two same-length, multi-element arrays => the cartesian branch.
+        context.set_variable("a", Value::Array(vec![json!(1), json!(2), json!(3)]));
+        context.set_variable("b", Value::Array(vec![json!(4), json!(5), json!(6)]));
+
+        let err = executor
+            .materialize_rows_from_variables(&context)
+            .expect_err("a cartesian materialisation over the byte budget must error");
+        assert!(
+            matches!(err, crate::Error::OutOfMemory(_)),
+            "expected Error::OutOfMemory, got {err:?}"
+        );
     }
 }

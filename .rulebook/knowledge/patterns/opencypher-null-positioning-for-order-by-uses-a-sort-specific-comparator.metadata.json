@@ -1,0 +1,18 @@
+{
+  "id": "opencypher-null-positioning-for-order-by-uses-a-sort-specific-comparator",
+  "type": "pattern",
+  "title": "openCypher null-positioning for ORDER BY uses a sort-specific comparator",
+  "category": "code",
+  "description": "openCypher ORDER BY puts NULLs last in ASC and first in DESC — the opposite polarity of what most base comparators return (where null-less-than-everything is correct for WHERE / `<` / `>` predicate semantics). Do NOT change the base comparator to satisfy the sort rule, because predicate comparisons still need the internal total order with null-as-less. Instead, wrap a sort-specific null-aware comparator around the base one, returning the FINAL ordering (both the ASC/DESC reversal AND the null positioning folded in), and drop the caller's `ordering.reverse()` for DESC. Two code paths usually need the wrapper: the standard sort_by and the top-K sort optimisation.",
+  "example": "fn cypher_null_aware_order<F>(left: &Value, right: &Value, ascending: bool, base_cmp: F) -> Ordering\nwhere F: FnOnce(&Value, &Value) -> Ordering,\n{\n    match (left.is_null(), right.is_null()) {\n        (true, true) => Ordering::Equal,\n        (true, false) => if ascending { Ordering::Greater } else { Ordering::Less },\n        (false, true) => if ascending { Ordering::Less } else { Ordering::Greater },\n        (false, false) => {\n            let base = base_cmp(left, right);\n            if ascending { base } else { base.reverse() }\n        }\n    }\n}",
+  "whenToUse": "Sorting a result set where `ORDER BY col [ASC|DESC]` needs to follow openCypher / SQL-null-positioning rules, and the base value comparator is also used by predicate evaluation.",
+  "whenNotToUse": "Comparisons inside WHERE / boolean expressions — those should keep the base total order (null < non-null) so `x < 5` on a null `x` doesn't accidentally become true.",
+  "createdAt": "2026-04-20T16:38:30.508Z",
+  "tags": [
+    "cypher",
+    "order-by",
+    "null-semantics",
+    "sorting"
+  ],
+  "source": "manual"
+}

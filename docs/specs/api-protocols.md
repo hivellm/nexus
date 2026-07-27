@@ -114,9 +114,39 @@ Content-Type: application/json
   "params": {
     "min_age": 25
   },
+  "database": "neo4j",
   "timeout_ms": 30000
 }
 ```
+
+**Database selection**. The optional `database` field selects which database the
+query runs against. Resolution precedence: the `database` field → the server
+default (`neo4j`). There is no session-scoped database (the stateless HTTP model
+has no per-connection identity — the former `GET`/`PUT /session/database`
+endpoints were removed); the per-request `database` field is the only mechanism.
+
+- Absent, or `"neo4j"` → the default engine (existing single-database clients are
+  unaffected).
+- Any other name → that database's **isolated** store (create it first with
+  `CREATE DATABASE <name>`). Databases do not share nodes, relationships, or
+  indexes.
+- A name that was never created returns an error (`"Database '<name>' does not
+  exist"`) — it is **never** implicitly created; a typo fails loudly rather than
+  silently writing to the default store.
+
+Only `POST /cypher` honors `database`. `POST /cypher/stream`, `POST /ingest`,
+`POST /knn_traverse`, `POST /graphql`, and the RPC `CYPHER` command do not accept
+a `database` field and operate on the **default database only**.
+
+**Persistence & management.** Databases are durable: on startup the server
+re-discovers every database directory created in a prior run, so a created
+database (and its data) survives a restart. The default database (`neo4j`) is
+served by the primary engine — it is always present, `SHOW DATABASES` / `GET
+/databases` list it and report its real node/relationship counts, but it cannot
+be dropped. Creating (`CREATE DATABASE` / `POST /databases`) and dropping
+(`DROP DATABASE` / `DELETE /databases/{name}`) a database require the calling key
+to hold `Admin` (or `Super`); listing and `USE DATABASE` are unrestricted. With
+authentication disabled these management operations are unrestricted (bootstrap).
 
 **Response**:
 ```json
@@ -274,44 +304,50 @@ Content-Type: application/json
 }
 ```
 
-**Response**:
+**Semantics**:
+- **Correlation Keys**: The `id` field in each node object is honoured as a **request-scoped correlation key**. When a relationship's `src` or `dst` field references a node, it is resolved first against the `id` values supplied in the same request. If no match is found, the value is treated as a literal internal node ID, so relationships between pre-existing nodes continue to work without a `nodes` array in the request.
+- **Collision Caveat**: Because `src`/`dst` share the same u64 namespace as client-supplied correlation keys, if a request both creates a node with a client `id` AND references a pre-existing internal node, and those numbers collide, the reference resolves to the newly-created node. Guidance: within a single `/ingest` request, use correlation keys consistently; do not mix client-supplied `id` values with references to pre-existing internal IDs that could overlap.
+- **Batch Semantics**: The batch is **best-effort, not atomic**. Valid rows commit even if others fail. Every failure is surfaced in the response's `error` field (a flat string, not a structured array).
+
+**Response** (success):
 ```json
 {
   "nodes_ingested": 2,
   "relationships_ingested": 1,
+  "node_ids": [42, 43],
   "ingestion_time_ms": 15,
-  "throughput": {
-    "nodes_per_sec": 133,
-    "relationships_per_sec": 66
-  },
-  "errors": []
+  "error": null
 }
 ```
 
-**Error Response** (partial failure):
+**Response** (partial failure):
 ```json
 {
   "nodes_ingested": 1,
   "relationships_ingested": 0,
+  "node_ids": [42],
   "ingestion_time_ms": 10,
-  "errors": [
-    {
-      "type": "node",
-      "index": 1,
-      "id": 2,
-      "error": "Duplicate node ID: 2"
-    },
-    {
-      "type": "relationship",
-      "index": 0,
-      "error": "Source node not found: 1"
-    }
+  "error": "relationship at index 0: source node 2 not found"
+}
+```
+
+**Composition Example** (ingest nodes and their relationships in one request):
+```json
+{
+  "nodes": [
+    {"id": "user:1", "labels": ["User"], "properties": {"name": "Alice"}},
+    {"id": "user:2", "labels": ["User"], "properties": {"name": "Bob"}}
+  ],
+  "relationships": [
+    {"src": "user:1", "dst": "user:2", "type": "FOLLOWS", "properties": {}}
   ]
 }
 ```
 
+The response will include `node_ids: [42, 43]` (the internal IDs assigned to Alice and Bob). In the same request, the relationship's `src` and `dst` are resolved against the correlation keys `"user:1"` and `"user:2"`, creating the edge between the newly-created nodes.
+
 **Status Codes**:
-- `200 OK`: Ingestion completed (may have partial errors, check errors array)
+- `200 OK`: Ingestion completed (may have partial failures; check `error` field and counts)
 - `400 Bad Request`: Invalid input format
 - `500 Internal Server Error`: Ingestion failed completely
 
@@ -520,6 +556,18 @@ Nexus can be queried via MCP for AI/LLM integrations.
   }
 }
 ```
+
+#### Host Header & DNS-Rebinding Protection
+
+The `/mcp` endpoint enforces DNS-rebinding protection and requires a `Host` header on every request:
+
+- **Host Header Required**: Requests without a `Host` header return HTTP 400 (Bad Request).
+- **Allowed Hosts (Default)**: By default, only `localhost`, `127.0.0.1`, and `::1` are permitted. Requests from other hostnames or IPs return HTTP 403 (Forbidden).
+- **Network Deployments — `NEXUS_MCP_ALLOWED_HOSTS`**: If you expose `/mcp` on `0.0.0.0` or access it via a hostname/IP other than the defaults, set `NEXUS_MCP_ALLOWED_HOSTS` to a comma-separated list of the hostnames or `host:port` authorities clients will send, e.g. `NEXUS_MCP_ALLOWED_HOSTS=nexus.example.com,10.0.0.5:15474`. This **replaces** rmcp's built-in default rather than extending it — include `localhost`/`127.0.0.1`/`::1` explicitly if local access must keep working alongside the remote host(s). Leaving it unset keeps the secure loopback-only default untouched. If the server binds a non-loopback address (e.g. `NEXUS_ADDR=0.0.0.0:15474`) with `NEXUS_MCP_ALLOWED_HOSTS` unset, the server logs a startup warning that `/mcp` will reject every remote client's Host header until this is configured.
+- **Escape Hatch — `NEXUS_MCP_ALLOWED_HOSTS_DISABLE`**: Set `NEXUS_MCP_ALLOWED_HOSTS_DISABLE=true` to disable Host-header validation entirely (any `Host` is accepted). This removes the DNS-rebinding protection and is **NOT recommended for public deployments** — prefer an explicit `NEXUS_MCP_ALLOWED_HOSTS` allow-list instead.
+- **No Client Change Required**: Clients connecting to `localhost:15474` (the default) are unaffected; the Host header is automatically supplied by HTTP clients.
+
+**Advertised Protocol Version**: The `/mcp` endpoint advertises MCP `ProtocolVersion` 2025-11-25. Client negotiation falls back to 2024-11-05 if needed, so existing clients remain compatible.
 
 #### Available Tools
 
@@ -897,7 +945,11 @@ Full command reference, wire-format notes, RESP2 downgrade matrix, and
 ## Native Binary RPC
 
 Nexus ships a **length-prefixed MessagePack RPC** on port `15475` as the
-preferred transport for first-party SDKs. It exists to eliminate the
+preferred transport for first-party SDKs. Since
+`phase10_thunder-server-migration` the wire is the shared **Thunder wire v1**
+(the [`thunder-rpc`](https://crates.io/crates/thunder-rpc) crate), byte-identical
+to the original hand-rolled Nexus RPC wire — see
+[`rpc-wire-format.md`](rpc-wire-format.md). It exists to eliminate the
 five costs HTTP + JSON pays on every request: HTTP framing overhead,
 JSON encode/decode on both sides, the impossibility of request
 multiplexing, the lack of a server-initiated push channel, and the

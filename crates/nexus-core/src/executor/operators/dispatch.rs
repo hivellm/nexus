@@ -38,16 +38,64 @@ impl Executor {
                 label_id,
                 key_id,
                 value,
+                key_expression,
                 variable,
             } => {
-                let nodes = self.execute_node_index_seek(*label_id, *key_id, value)?;
-                tracing::debug!(
-                    "execute_operator NodeIndexSeek: found {} nodes for label_id {}/key_id {}, variable '{}'",
-                    nodes.len(),
-                    label_id,
-                    key_id,
-                    variable
-                );
+                if let Some(expr) = key_expression {
+                    // Correlated seek — evaluate the key per driving row
+                    // instead of scanning the label and cross-joining. See
+                    // `phase0_fix-correlated-predicate-index-seek` §3.
+                    self.execute_correlated_index_seek(
+                        context, *label_id, *key_id, expr, variable,
+                    )?;
+                } else {
+                    let nodes = self.execute_node_index_seek(*label_id, *key_id, value)?;
+                    tracing::debug!(
+                        "execute_operator NodeIndexSeek: found {} nodes for label_id {}/key_id {}, variable '{}'",
+                        nodes.len(),
+                        label_id,
+                        key_id,
+                        variable
+                    );
+                    self.seed_scan_variable(context, variable, nodes)?;
+                }
+            }
+            Operator::NodeIndexRangeSeek {
+                label_id,
+                key_id,
+                op,
+                value,
+                variable,
+            } => {
+                let nodes = self.execute_node_index_range_seek(*label_id, *key_id, *op, value)?;
+                self.seed_scan_variable(context, variable, nodes)?;
+            }
+            Operator::NodeIndexInSeek {
+                label_id,
+                key_id,
+                values,
+                variable,
+            } => {
+                let nodes = self.execute_node_index_in_seek(*label_id, *key_id, values)?;
+                self.seed_scan_variable(context, variable, nodes)?;
+            }
+            Operator::NodeIndexPrefixSeek {
+                label_id,
+                key_id,
+                prefix,
+                variable,
+            } => {
+                let nodes = self.execute_node_index_prefix_seek(*label_id, *key_id, prefix)?;
+                self.seed_scan_variable(context, variable, nodes)?;
+            }
+            Operator::NodeIndexParamSeek {
+                label_id,
+                key_id,
+                parameter,
+                variable,
+            } => {
+                let nodes =
+                    self.execute_node_index_param_seek(context, *label_id, *key_id, parameter)?;
                 self.seed_scan_variable(context, variable, nodes)?;
             }
             Operator::AllNodesScan { variable } => {
@@ -64,17 +112,26 @@ impl Executor {
                 }
 
                 // CRITICAL FIX: Materialize rows from variables so Project can process them
-                let rows = self.materialize_rows_from_variables(context);
+                let rows = self.materialize_rows_from_variables(context)?;
                 self.update_result_set_from_rows(context, &rows);
             }
-            Operator::Filter { predicate } => {
-                self.execute_filter(context, predicate)?;
+            Operator::Filter {
+                predicate,
+                predicate_ast,
+            } => {
+                self.execute_filter(context, predicate, predicate_ast.as_deref())?;
             }
             Operator::OptionalFilter {
                 predicate,
+                predicate_ast,
                 optional_vars,
             } => {
-                self.execute_optional_filter(context, predicate, optional_vars)?;
+                self.execute_optional_filter(
+                    context,
+                    predicate,
+                    predicate_ast.as_deref(),
+                    optional_vars,
+                )?;
             }
             Operator::Expand {
                 type_ids,
@@ -97,6 +154,9 @@ impl Executor {
             }
             Operator::Limit { count } => {
                 self.execute_limit(context, *count)?;
+            }
+            Operator::Skip { count } => {
+                self.execute_skip(context, *count)?;
             }
             Operator::Sort { columns, ascending } => {
                 self.execute_sort(context, columns, ascending)?;
@@ -289,7 +349,7 @@ impl Executor {
                 self.execute_unwind(context, expression, variable)?;
             }
             Operator::VariableLengthPath {
-                type_id,
+                type_ids,
                 direction,
                 source_var,
                 target_var,
@@ -298,7 +358,7 @@ impl Executor {
                 quantifier,
             } => {
                 self.execute_variable_length_path(
-                    context, *type_id, *direction, source_var, target_var, rel_var, path_var,
+                    context, type_ids, *direction, source_var, target_var, rel_var, path_var,
                     quantifier,
                 )?;
             }
@@ -503,17 +563,11 @@ impl Executor {
         // CRITICAL FIX: Remove relationship objects from variables before creating cartesian product
         // Relationship objects have a "type" property - filter them out to avoid contamination
         context.variables.retain(|_var_name, var_value| {
-            let is_relationship = if let Value::Object(obj) = var_value {
-                obj.contains_key("type") // Relationships have "type" property
+            let is_relationship = if matches!(var_value, Value::Object(_)) {
+                crate::executor::is_relationship_value(var_value)
             } else if let Value::Array(arr) = var_value {
                 // Check if array contains relationship objects
-                arr.iter().any(|v| {
-                    if let Value::Object(obj) = v {
-                        obj.contains_key("type")
-                    } else {
-                        false
-                    }
-                })
+                arr.iter().any(crate::executor::is_relationship_value)
             } else {
                 false
             };
@@ -533,7 +587,7 @@ impl Executor {
         }
 
         // CRITICAL FIX: Materialize rows from variables so Project can process them
-        let rows = self.materialize_rows_from_variables(context);
+        let rows = self.materialize_rows_from_variables(context)?;
         self.update_result_set_from_rows(context, &rows);
         Ok(())
     }

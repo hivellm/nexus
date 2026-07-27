@@ -10,14 +10,63 @@ impl<'a> QueryPlanner<'a> {
         &self,
         expr: &Expression,
     ) -> Result<String> {
+        self.expr_to_string_impl(expr, false)
+    }
+
+    /// Convert a WHERE predicate expression to its Cypher string
+    /// representation, faithfully preserving grouping.
+    ///
+    /// WHERE clauses are lowered to a plain string (stored on
+    /// `Operator::Filter` / `Operator::OptionalFilter`) and re-parsed later
+    /// by the `Filter` operator. Re-parsing applies default operator
+    /// precedence, so any grouping the author wrote with parentheses must
+    /// survive the round trip or the re-parsed tree silently diverges from
+    /// what was written (e.g. `(a OR b) AND c` must not round-trip to the
+    /// unparenthesised `a OR b AND c`, which re-parses as `a OR (b AND c)`).
+    /// This wraps every compound (`BinaryOp`/`UnaryOp`) operand in
+    /// parentheses so the string always re-parses to the same tree,
+    /// regardless of the concrete operators involved.
+    pub(in crate::executor::planner) fn predicate_to_string(
+        &self,
+        expr: &Expression,
+    ) -> Result<String> {
+        self.expr_to_string_impl(expr, true)
+    }
+
+    /// Shared expression-to-string implementation. When `parenthesize` is
+    /// `true`, every compound (`BinaryOp`/`UnaryOp`) child operand is
+    /// wrapped in `(...)` so the resulting string re-parses to the exact
+    /// same tree — required for WHERE-predicate lowering (see
+    /// [`Self::predicate_to_string`]). The flag propagates through every
+    /// nested position (function-call args, list elements, map values,
+    /// array-index base/index, IS NULL operand, EXISTS inner WHERE, …)
+    /// since the precedence hazard can nest inside any of them.
+    fn expr_to_string_impl(&self, expr: &Expression, parenthesize: bool) -> Result<String> {
+        // Renders `child`'s string form, wrapping it in parentheses when
+        // `parenthesize` is set and `child` is itself a compound
+        // (`BinaryOp`/`UnaryOp`) expression whose default precedence could
+        // otherwise be reinterpreted differently once re-parsed.
+        let render_operand = |child: &Expression| -> Result<String> {
+            let child_str = self.expr_to_string_impl(child, parenthesize)?;
+            if parenthesize
+                && matches!(
+                    child,
+                    Expression::BinaryOp { .. } | Expression::UnaryOp { .. }
+                )
+            {
+                Ok(format!("({})", child_str))
+            } else {
+                Ok(child_str)
+            }
+        };
         match expr {
             Expression::Variable(name) => Ok(name.clone()),
             Expression::PropertyAccess { variable, property } => {
                 Ok(format!("{}.{}", variable, property))
             }
             Expression::ArrayIndex { base, index } => {
-                let base_str = self.expression_to_string(base)?;
-                let index_str = self.expression_to_string(index)?;
+                let base_str = self.expr_to_string_impl(base, parenthesize)?;
+                let index_str = self.expr_to_string_impl(index, parenthesize)?;
                 Ok(format!("{}[{}]", base_str, index_str))
             }
             Expression::Literal(literal) => match literal {
@@ -31,8 +80,8 @@ impl<'a> QueryPlanner<'a> {
                 Literal::Point(p) => Ok(p.to_string()),
             },
             Expression::BinaryOp { left, op, right } => {
-                let left_str = self.expression_to_string(left)?;
-                let right_str = self.expression_to_string(right)?;
+                let left_str = render_operand(left)?;
+                let right_str = render_operand(right)?;
                 let op_str = match op {
                     BinaryOperator::Equal => "=",
                     BinaryOperator::NotEqual => "!=",
@@ -59,7 +108,7 @@ impl<'a> QueryPlanner<'a> {
             }
             Expression::Parameter(name) => Ok(format!("${}", name)),
             Expression::IsNull { expr, negated } => {
-                let expr_str = self.expression_to_string(expr)?;
+                let expr_str = self.expr_to_string_impl(expr, parenthesize)?;
                 if *negated {
                     Ok(format!("{} IS NOT NULL", expr_str))
                 } else {
@@ -69,14 +118,14 @@ impl<'a> QueryPlanner<'a> {
             Expression::List(elements) => {
                 let elem_strs: Result<Vec<String>> = elements
                     .iter()
-                    .map(|e| self.expression_to_string(e))
+                    .map(|e| self.expr_to_string_impl(e, parenthesize))
                     .collect();
                 Ok(format!("[{}]", elem_strs?.join(", ")))
             }
             Expression::Map(map) => {
                 let mut pairs = Vec::new();
                 for (key, value) in map {
-                    let value_str = self.expression_to_string(value)?;
+                    let value_str = self.expr_to_string_impl(value, parenthesize)?;
                     pairs.push(format!("{}: {}", key, value_str));
                 }
                 Ok(format!("{{{}}}", pairs.join(", ")))
@@ -97,12 +146,14 @@ impl<'a> QueryPlanner<'a> {
                         return Ok(format!("{}:{}", var, label));
                     }
                 }
-                let arg_strs: Result<Vec<String>> =
-                    args.iter().map(|a| self.expression_to_string(a)).collect();
+                let arg_strs: Result<Vec<String>> = args
+                    .iter()
+                    .map(|a| self.expr_to_string_impl(a, parenthesize))
+                    .collect();
                 Ok(format!("{}({})", name, arg_strs?.join(", ")))
             }
             Expression::UnaryOp { op, operand } => {
-                let operand_str = self.expression_to_string(operand)?;
+                let operand_str = render_operand(operand)?;
                 let op_str = match op {
                     UnaryOperator::Not => "NOT",
                     UnaryOperator::Minus => "-",
@@ -116,7 +167,7 @@ impl<'a> QueryPlanner<'a> {
             } => {
                 let pattern_str = self.pattern_to_string(pattern)?;
                 if let Some(where_expr) = where_clause {
-                    let where_str = self.expression_to_string(where_expr)?;
+                    let where_str = self.expr_to_string_impl(where_expr, parenthesize)?;
                     Ok(format!("EXISTS {{ {} WHERE {} }}", pattern_str, where_str))
                 } else {
                     Ok(format!("EXISTS {{ {} }}", pattern_str))

@@ -8,6 +8,44 @@ use crate::error::{Error, Result};
 use crate::simd::rle as simd_rle;
 use std::collections::HashMap;
 
+/// Encode adjacency entries into a little-endian `[u64 rel_id]` byte buffer.
+///
+/// Pairs with [`decode_adjacency_entries_le`]. Using explicit `to_le_bytes`
+/// instead of reinterpreting the `&[AdjacencyEntry]` slice as bytes via
+/// `slice::from_raw_parts` makes the on-disk adjacency encoding independent of
+/// host byte order, so a buffer written on one target decodes identically on
+/// any other.
+fn encode_adjacency_entries_le(entries: &[AdjacencyEntry]) -> Vec<u8> {
+    let mut bytes = Vec::with_capacity(entries.len() * std::mem::size_of::<u64>());
+    for entry in entries {
+        bytes.extend_from_slice(&entry.rel_id.to_le_bytes());
+    }
+    bytes
+}
+
+/// Decode a little-endian `[u64 rel_id]` byte buffer into adjacency entries
+/// without assuming any pointer alignment.
+///
+/// Replaces an unaligned `slice::from_raw_parts::<AdjacencyEntry>` cast, which
+/// is undefined behaviour the instant the misaligned typed slice is
+/// constructed: its safety contract requires 8-byte alignment, yet
+/// `decompress_none` runs directly against an mmap sub-slice whose
+/// `list_offset` carries no alignment guarantee. `chunks_exact(8)` +
+/// `u64::from_le_bytes` is both alignment-agnostic and byte-order-portable.
+/// Callers guarantee `bytes.len() == entry_count * 8`, so the whole buffer is
+/// consumed with no remainder.
+fn decode_adjacency_entries_le(bytes: &[u8], entry_count: usize) -> Vec<AdjacencyEntry> {
+    let mut entries = Vec::with_capacity(entry_count);
+    for chunk in bytes.chunks_exact(8) {
+        let mut buf = [0u8; 8];
+        buf.copy_from_slice(chunk);
+        entries.push(AdjacencyEntry {
+            rel_id: u64::from_le_bytes(buf),
+        });
+    }
+    entries
+}
+
 /// Compressor for relationship adjacency lists and other graph structures
 pub struct RelationshipCompressor {
     // Configuration for compression algorithms
@@ -112,14 +150,8 @@ impl RelationshipCompressor {
     // Compression implementations
 
     fn compress_none(&self, entries: &[AdjacencyEntry]) -> Result<Vec<u8>> {
-        // No compression - just copy the bytes
-        let bytes = unsafe {
-            std::slice::from_raw_parts(
-                entries.as_ptr() as *const u8,
-                entries.len() * std::mem::size_of::<AdjacencyEntry>(),
-            )
-        };
-        Ok(bytes.to_vec())
+        // No compression - serialize each rel_id as little-endian bytes.
+        Ok(encode_adjacency_entries_le(entries))
     }
 
     fn compress_varint(&self, entries: &[AdjacencyEntry]) -> Result<Vec<u8>> {
@@ -221,12 +253,7 @@ impl RelationshipCompressor {
 
     fn compress_lz4(&self, entries: &[AdjacencyEntry]) -> Result<Vec<u8>> {
         // LZ4 compression for fast decompression
-        let input_bytes = unsafe {
-            std::slice::from_raw_parts(
-                entries.as_ptr() as *const u8,
-                entries.len() * std::mem::size_of::<AdjacencyEntry>(),
-            )
-        };
+        let input_bytes = encode_adjacency_entries_le(entries);
 
         // Simple LZ4-like compression (simplified implementation)
         // In production, this would use the lz4 crate
@@ -273,12 +300,7 @@ impl RelationshipCompressor {
 
     fn compress_zstd(&self, entries: &[AdjacencyEntry]) -> Result<Vec<u8>> {
         // Zstandard compression for high compression ratios
-        let input_bytes = unsafe {
-            std::slice::from_raw_parts(
-                entries.as_ptr() as *const u8,
-                entries.len() * std::mem::size_of::<AdjacencyEntry>(),
-            )
-        };
+        let input_bytes = encode_adjacency_entries_le(entries);
 
         // Simplified Zstd-like compression
         // In production, this would use the zstd crate
@@ -436,11 +458,7 @@ impl RelationshipCompressor {
             )));
         }
 
-        let entries = unsafe {
-            std::slice::from_raw_parts(compressed.as_ptr() as *const AdjacencyEntry, entry_count)
-        };
-
-        Ok(entries.to_vec())
+        Ok(decode_adjacency_entries_le(compressed, entry_count))
     }
 
     fn decompress_varint(
@@ -601,11 +619,7 @@ impl RelationshipCompressor {
             )));
         }
 
-        let entries = unsafe {
-            std::slice::from_raw_parts(result.as_ptr() as *const AdjacencyEntry, entry_count)
-        };
-
-        Ok(entries.to_vec())
+        Ok(decode_adjacency_entries_le(&result, entry_count))
     }
 
     fn decompress_zstd(
@@ -643,11 +657,7 @@ impl RelationshipCompressor {
             )));
         }
 
-        let entries = unsafe {
-            std::slice::from_raw_parts(result.as_ptr() as *const AdjacencyEntry, entry_count)
-        };
-
-        Ok(entries.to_vec())
+        Ok(decode_adjacency_entries_le(&result, entry_count))
     }
 
     fn decompress_zstd_block(&self, compressed: &[u8]) -> Result<Vec<u8>> {
@@ -923,5 +933,90 @@ mod tests {
         compressor.encode_varint(123456789, &mut output).unwrap();
         let (decoded, _) = compressor.decode_varint(&output, 0).unwrap();
         assert_eq!(decoded, 123456789);
+    }
+
+    /// phase0_fix-adjacency-decompress-unaligned-ub regression.
+    ///
+    /// `decompress_none` runs directly against an mmap sub-slice whose start
+    /// (`list_offset` in `graph_engine::engine`) has no 8-byte alignment
+    /// guarantee. This builds exactly that shape — a compressed `None` buffer
+    /// beginning at an odd byte offset inside a larger backing `Vec<u8>` — and
+    /// confirms the decode reconstructs the original entries. The old
+    /// `slice::from_raw_parts::<AdjacencyEntry>` cast was undefined behaviour on
+    /// this input (its safety contract requires 8-byte alignment, breached the
+    /// instant the misaligned typed slice is constructed); the `from_le_bytes`
+    /// decode is alignment-agnostic. `cargo miri test` flags the old code here
+    /// and reports no UB for the new code.
+    #[test]
+    fn test_decompress_none_from_misaligned_offset() {
+        let compressor = RelationshipCompressor::new();
+        let entries = vec![
+            AdjacencyEntry { rel_id: 0 },
+            AdjacencyEntry { rel_id: 1 },
+            AdjacencyEntry { rel_id: u64::MAX },
+            AdjacencyEntry {
+                rel_id: 0xDEAD_BEEF_CAFE_F00D,
+            },
+        ];
+
+        let compressed = compressor
+            .compress_adjacency_list(&entries, CompressionType::None)
+            .unwrap();
+
+        // Prefix one byte and slice it off so the sub-slice's `.as_ptr()` sits
+        // at an odd offset from the (highly aligned) Vec base — mirroring an odd
+        // `list_offset` into the mmap.
+        let mut backing = Vec::with_capacity(compressed.len() + 1);
+        backing.push(0xFFu8);
+        backing.extend_from_slice(&compressed);
+        let misaligned = &backing[1..];
+        assert_eq!(misaligned.len(), compressed.len());
+
+        let decompressed = compressor
+            .decompress_adjacency_list(misaligned, CompressionType::None, entries.len())
+            .unwrap();
+        assert_eq!(
+            entries, decompressed,
+            "decode from a misaligned offset must reconstruct the entries exactly"
+        );
+    }
+
+    #[test]
+    fn test_lz4_compression_roundtrip() {
+        let compressor = RelationshipCompressor::new();
+        let entries = vec![
+            AdjacencyEntry { rel_id: 7 },
+            AdjacencyEntry { rel_id: 7 },
+            AdjacencyEntry { rel_id: 42 },
+            AdjacencyEntry {
+                rel_id: 0x0102_0304_0506_0708,
+            },
+        ];
+        let compressed = compressor
+            .compress_adjacency_list(&entries, CompressionType::LZ4)
+            .unwrap();
+        let decompressed = compressor
+            .decompress_adjacency_list(&compressed, CompressionType::LZ4, entries.len())
+            .unwrap();
+        assert_eq!(entries, decompressed);
+    }
+
+    #[test]
+    fn test_zstd_compression_roundtrip() {
+        let compressor = RelationshipCompressor::new();
+        let entries = vec![
+            AdjacencyEntry { rel_id: 1 },
+            AdjacencyEntry { rel_id: 999 },
+            AdjacencyEntry {
+                rel_id: 0xFFEE_DDCC_BBAA_9988,
+            },
+        ];
+        let compressed = compressor
+            .compress_adjacency_list(&entries, CompressionType::Zstd)
+            .unwrap();
+        let decompressed = compressor
+            .decompress_adjacency_list(&compressed, CompressionType::Zstd, entries.len())
+            .unwrap();
+        assert_eq!(entries, decompressed);
     }
 }

@@ -48,6 +48,33 @@ impl Executor {
                 }
                 registry.register_empty(&index_key);
             }
+            Some("vector") => {
+                // phase20_knn-write-path-wiring §1.5 — register the
+                // definition in the shared `VectorIndexRegistry` so the
+                // KNN write-path hooks (autopopulate/refresh/evict) can
+                // find it. There is no dedicated index-name parameter on
+                // this executor entry point (unlike the parser's
+                // `CreateIndexClause::name`, which is not threaded down
+                // here — see the doc comment on `execute_create_index`);
+                // mirror the `index_key` (`"{label}.{property}"`) the
+                // spatial arm above already uses as ITS registry key, so
+                // the vector index is addressed identically.
+                //
+                // `VectorIndexRegistry::register` is already idempotent
+                // for an exact `(name, label, property)` repeat and
+                // already returns `ERR_VECTOR_INDEX_EXISTS` for a
+                // *distinct* index without `replace` (only one active
+                // vector index is allowed — single global HNSW graph).
+                // `IF NOT EXISTS` only needs to short-circuit when THIS
+                // specific index is already the active one, matching the
+                // per-index-identity semantics the spatial/property arms
+                // use above.
+                if if_not_exists && self.knn_registry().contains(&index_key) {
+                    return Ok(());
+                }
+                self.knn_registry()
+                    .register(&index_key, label, property, or_replace)?;
+            }
             None | Some("property") => {
                 // Property index — register in the catalog AND in the typed
                 // `property_index` that `has_index` / `find_exact` consult,
@@ -213,6 +240,36 @@ impl Executor {
         Ok(())
     }
 
+    /// Execute `DROP INDEX <name>` for the single shared vector index
+    /// (phase20_knn-write-path-wiring §1.5).
+    ///
+    /// Unlike the property/spatial `DROP INDEX ON :Label(property)` shape
+    /// (dispatched separately by `Engine::execute_index_commands`, keyed
+    /// on `label`+`property` — there is no name-only DROP INDEX grammar
+    /// for those today), a vector index is identified purely by its
+    /// registry name: `VectorIndexRegistry` only ever holds a single
+    /// active definition, so a name match against it is unambiguous.
+    ///
+    /// Drops the registry definition AND clears the global HNSW graph
+    /// (`KnnIndex::clear`) together — the two must stay in lockstep since
+    /// every vector index shares the one graph. Returns `Ok(())` (no-op)
+    /// when `name` is not the active index and `if_exists` is set;
+    /// otherwise returns a `CypherExecution` error naming the missing
+    /// index.
+    pub fn execute_drop_index(&self, name: &str, if_exists: bool) -> Result<()> {
+        if self.knn_registry().drop_index(name) {
+            self.knn_index_mut().clear()?;
+            return Ok(());
+        }
+        if if_exists {
+            return Ok(());
+        }
+        Err(Error::CypherExecution(format!(
+            "Vector index '{}' does not exist",
+            name
+        )))
+    }
+
     /// Execute SHOW DATABASES command
     pub(in crate::executor) fn execute_show_databases(&self) -> Result<ResultSet> {
         if let Some(db_manager_arc) = self.shared.database_manager() {
@@ -237,29 +294,49 @@ impl Executor {
                 "constituents".to_string(),
             ];
 
-            let rows: Vec<Row> = databases
-                .iter()
-                .map(|db| {
-                    let is_default = db.name == default_db;
-                    Row {
-                        values: vec![
-                            Value::String(db.name.clone()),
-                            Value::String("standard".to_string()),
-                            Value::Array(vec![]),
-                            Value::String("read-write".to_string()),
-                            Value::String("localhost:7687".to_string()),
-                            Value::String("primary".to_string()),
-                            Value::Bool(true),
-                            Value::String("online".to_string()),
-                            Value::String("online".to_string()),
-                            Value::String("".to_string()),
-                            Value::Bool(is_default),
-                            Value::Bool(is_default),
-                            Value::Array(vec![]),
-                        ],
-                    }
-                })
-                .collect();
+            // phase0_fix-multi-database-persistence-and-default G2 — the
+            // default database is implicit and no longer present in
+            // `list_databases()` (it is served by the primary engine, not a
+            // manager-owned one). Prepend its row explicitly so `SHOW
+            // DATABASES` still lists it first.
+            let mut rows: Vec<Row> = vec![Row {
+                values: vec![
+                    Value::String(default_db.to_string()),
+                    Value::String("standard".to_string()),
+                    Value::Array(vec![]),
+                    Value::String("read-write".to_string()),
+                    Value::String("localhost:7687".to_string()),
+                    Value::String("primary".to_string()),
+                    Value::Bool(true),
+                    Value::String("online".to_string()),
+                    Value::String("online".to_string()),
+                    Value::String("".to_string()),
+                    Value::Bool(true),
+                    Value::Bool(true),
+                    Value::Array(vec![]),
+                ],
+            }];
+
+            rows.extend(databases.iter().map(|db| {
+                let is_default = db.name == default_db;
+                Row {
+                    values: vec![
+                        Value::String(db.name.clone()),
+                        Value::String("standard".to_string()),
+                        Value::Array(vec![]),
+                        Value::String("read-write".to_string()),
+                        Value::String("localhost:7687".to_string()),
+                        Value::String("primary".to_string()),
+                        Value::Bool(true),
+                        Value::String("online".to_string()),
+                        Value::String("online".to_string()),
+                        Value::String("".to_string()),
+                        Value::Bool(is_default),
+                        Value::Bool(is_default),
+                        Value::Array(vec![]),
+                    ],
+                }
+            }));
 
             Ok(ResultSet::new(columns, rows))
         } else {

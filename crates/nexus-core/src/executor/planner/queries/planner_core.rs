@@ -17,6 +17,7 @@ impl<'a> QueryPlanner<'a> {
             knn_index,
             rtree_registry: None,
             property_index: None,
+            composite_index: None,
             plan_cache: QueryPlanCache::new(1000, Duration::from_secs(300)), // 1000 plans, 5min TTL
             aggregation_cache: AggregationCache::new(500, Duration::from_secs(180)), // 500 results, 3min TTL
             notifications: Vec::new(),
@@ -58,6 +59,22 @@ impl<'a> QueryPlanner<'a> {
         self
     }
 
+    /// Builder shim: install a composite B-tree index registry handle
+    /// so an inline multi-property selector (`MATCH (n:L {a: 1, b:
+    /// 2})`) can seek a registered composite index / NODE KEY
+    /// constraint instead of falling back to a single-property index
+    /// seek or a full label scan. Idiomatic call:
+    /// `QueryPlanner::new(...).with_composite_index(reg)`. Without a
+    /// handle the planner never emits `Operator::CompositeBtreeSeek`,
+    /// matching the legacy behaviour of callers with no index handle.
+    pub fn with_composite_index(
+        mut self,
+        registry: &'a crate::index::composite_btree::CompositeBtreeRegistry,
+    ) -> Self {
+        self.composite_index = Some(registry);
+        self
+    }
+
     /// Generate a hash for query caching based on query structure
     pub(super) fn hash_query(&self, query: &CypherQuery) -> u64 {
         use std::collections::hash_map::DefaultHasher;
@@ -77,6 +94,30 @@ impl<'a> QueryPlanner<'a> {
 
     /// Plan a Cypher query into optimized operators with caching
     pub fn plan_query(&mut self, query: &CypherQuery) -> Result<Vec<Operator>> {
+        // A `MATCH` that follows a `WITH` opens a new query segment whose
+        // pattern variables the "bucket" planner below would otherwise
+        // collapse into the pre-`WITH` match phase (phase7 §4.11). Route
+        // those queries through the segment planner, which plans each
+        // `WITH`-delimited segment in order and threads the carried bindings
+        // across the boundary. Every other query keeps the single-segment
+        // path unchanged.
+        if Self::has_match_after_with(query) {
+            return self.plan_segmented(query);
+        }
+        self.plan_query_bound(query, &std::collections::HashSet::new())
+    }
+
+    /// Core of [`Self::plan_query`], parameterised by the set of variables
+    /// already bound by a prior query segment. `already_bound` is empty for
+    /// a top-level (non-segmented) plan, so this is byte-for-byte the legacy
+    /// planner in that case; the segment planner calls it with the
+    /// accumulated carried bindings so a post-`WITH` `MATCH` expands from
+    /// them instead of re-scanning.
+    pub(super) fn plan_query_bound(
+        &mut self,
+        query: &CypherQuery,
+        already_bound: &std::collections::HashSet<String>,
+    ) -> Result<Vec<Operator>> {
         // Reset planner-level notifications: every plan starts with a
         // clean slate so the engine drains only the notes produced by
         // *this* query. Notifications from a prior call belong to the
@@ -165,6 +206,7 @@ impl<'a> QueryPlanner<'a> {
                 // Extract ORDER BY and LIMIT clauses that come after UNION
                 let mut post_union_order_by: Option<(Vec<String>, Vec<bool>)> = None;
                 let mut post_union_limit: Option<usize> = None;
+                let mut post_union_skip: Option<usize> = None;
 
                 for clause in query.clauses.iter().skip(right_end_idx) {
                     match clause {
@@ -192,8 +234,14 @@ impl<'a> QueryPlanner<'a> {
                                 post_union_limit = Some(*count as usize);
                             }
                         }
+                        Clause::Skip(skip_clause) => {
+                            if let Expression::Literal(Literal::Integer(count)) = &skip_clause.count
+                            {
+                                post_union_skip = Some(*count as usize);
+                            }
+                        }
                         _ => {
-                            // Other clauses after UNION are not supported (e.g., SKIP, another UNION)
+                            // Other clauses after UNION are not supported (e.g., another UNION)
                             // For now, we'll skip them
                         }
                     }
@@ -222,6 +270,7 @@ impl<'a> QueryPlanner<'a> {
                     knn_index: self.knn_index,
                     rtree_registry: self.rtree_registry.clone(),
                     property_index: self.property_index,
+                    composite_index: self.composite_index,
                     plan_cache: QueryPlanCache::new(0, std::time::Duration::from_secs(0)), // Empty cache
                     aggregation_cache: AggregationCache::new(
                         100,
@@ -249,6 +298,11 @@ impl<'a> QueryPlanner<'a> {
                     operators.push(Operator::Sort { columns, ascending });
                 }
 
+                // Add SKIP after UNION (and ORDER BY if present), before LIMIT
+                if let Some(count) = post_union_skip {
+                    operators.push(Operator::Skip { count });
+                }
+
                 // Add LIMIT after UNION (and ORDER BY if present) if present
                 if let Some(count) = post_union_limit {
                     operators.push(Operator::Limit { count });
@@ -263,10 +317,16 @@ impl<'a> QueryPlanner<'a> {
             }
         }
 
-        // Try to get cached plan first (for non-UNION queries)
-        if let Some(cached_plan) = self.plan_cache.get(query_hash) {
-            // Return cached operators (clone them since they're cached)
-            return Ok(cached_plan.operators.clone());
+        // Try to get cached plan first (for non-UNION queries). Skip the
+        // cache entirely when planning a segment with carried bindings: the
+        // same query hash yields DIFFERENT operators depending on which
+        // variables are already bound (a pre-bound anchor drops its scan),
+        // so a cache keyed on the hash alone would return the wrong plan.
+        if already_bound.is_empty() {
+            if let Some(cached_plan) = self.plan_cache.get(query_hash) {
+                // Return cached operators (clone them since they're cached)
+                return Ok(cached_plan.operators.clone());
+            }
         }
 
         let mut operators = Vec::new();
@@ -278,8 +338,23 @@ impl<'a> QueryPlanner<'a> {
         let mut where_clauses: Vec<(Expression, Vec<String>)> = Vec::new();
         // Track variables from the most recent OPTIONAL MATCH
         let mut last_optional_vars: Vec<String> = Vec::new();
+        // Track every variable bound by a MATCH clause processed so far
+        // (both regular MATCH and OPTIONAL MATCH — an OPTIONAL MATCH's
+        // variables are still in scope for later clauses even though
+        // their values may be NULL). Used below to compute an OPTIONAL
+        // MATCH's nullable-variable set as
+        // `(pattern variables) - (already-bound variables)`, which is
+        // correct regardless of whether the already-bound anchor sits
+        // first, last, or nowhere in the pattern's textual order.
+        let mut bound_vars: std::collections::HashSet<String> = std::collections::HashSet::new();
         let mut return_items = Vec::new();
         let mut limit_count = None;
+        // Collected alongside `limit_count`. Consumed both by the
+        // no-pattern branch below (`CALL ... YIELD ... RETURN` / bare
+        // `RETURN` with no `MATCH`) and, via the `skip_count` parameter,
+        // by the pattern-based `plan_execution_strategy` path (see
+        // `strategy.rs`) for `MATCH`-driven queries.
+        let mut skip_count: Option<usize> = None;
         let mut return_distinct = false;
         let mut unwind_operators = Vec::new(); // Collect UNWIND to insert after MATCH
         let mut create_patterns: Vec<(
@@ -327,55 +402,42 @@ impl<'a> QueryPlanner<'a> {
                     // Store pattern with optional flag for LEFT OUTER JOIN semantics
                     patterns.push((match_clause.pattern.clone(), match_clause.optional));
 
+                    // Extract every variable this pattern introduces —
+                    // nodes, relationships, and quantified-group members —
+                    // with no positional skip.
+                    let pattern_vars = Self::collect_pattern_variables(&match_clause.pattern);
+
                     // Extract variables from this MATCH for optional context
                     if match_clause.optional {
-                        // Extract target and relationship variables from OPTIONAL MATCH pattern
-                        // IMPORTANT: Skip the first node as it's typically the "anchor" that's already bound
-                        // Only include variables from subsequent nodes and relationships
-                        last_optional_vars.clear();
-                        let mut is_first_node = true;
-                        for element in &match_clause.pattern.elements {
-                            match element {
-                                PatternElement::Node(node) => {
-                                    if is_first_node {
-                                        // Skip the first node - it's the anchor from previous MATCH
-                                        is_first_node = false;
-                                    } else if let Some(var) = &node.variable {
-                                        last_optional_vars.push(var.clone());
-                                    }
-                                }
-                                PatternElement::Relationship(rel) => {
-                                    if let Some(var) = &rel.variable {
-                                        last_optional_vars.push(var.clone());
-                                    }
-                                }
-                                PatternElement::QuantifiedGroup(group) => {
-                                    for inner in &group.inner {
-                                        match inner {
-                                            PatternElement::Node(n) => {
-                                                if let Some(var) = &n.variable {
-                                                    last_optional_vars.push(var.clone());
-                                                }
-                                            }
-                                            PatternElement::Relationship(r) => {
-                                                if let Some(var) = &r.variable {
-                                                    last_optional_vars.push(var.clone());
-                                                }
-                                            }
-                                            PatternElement::QuantifiedGroup(_) => {}
-                                        }
-                                    }
-                                }
-                            }
-                        }
+                        // The nullable-variable set is the pattern's
+                        // variables MINUS whatever prior clauses already
+                        // bound. This correctly identifies the anchor by
+                        // its BINDING STATE rather than by assuming it is
+                        // always the first node: it handles the forward
+                        // anchor (`(a)-[:KNOWS]->(b)` with `a` bound),
+                        // the reverse direction (`(b)-[:KNOWS]->(a)` with
+                        // `a` bound), and the standalone case (no prior
+                        // binding at all, so every pattern variable is
+                        // nullable) uniformly.
+                        last_optional_vars = pattern_vars
+                            .iter()
+                            .filter(|var| !bound_vars.contains(*var))
+                            .cloned()
+                            .collect();
                         tracing::debug!(
-                            "PLANNER: OPTIONAL MATCH detected, tracking NEW vars (excluding anchor): {:?}",
+                            "PLANNER: OPTIONAL MATCH detected, tracking NEW vars (not already bound): {:?}",
                             last_optional_vars
                         );
                     } else {
                         // Regular MATCH clears optional context
                         last_optional_vars.clear();
                     }
+
+                    // This pattern's variables are now in scope for
+                    // subsequent clauses — including a later OPTIONAL
+                    // MATCH's own binding-state diff — regardless of
+                    // whether this MATCH was optional.
+                    bound_vars.extend(pattern_vars);
 
                     if let Some(where_clause) = &match_clause.where_clause {
                         // WHERE inside MATCH clause inherits the optional context from this MATCH
@@ -501,6 +563,11 @@ impl<'a> QueryPlanner<'a> {
                         limit_count = Some(*count as usize);
                     }
                 }
+                Clause::Skip(skip_clause) => {
+                    if let Expression::Literal(Literal::Integer(count)) = &skip_clause.count {
+                        skip_count = Some(*count as usize);
+                    }
+                }
                 Clause::OrderBy(order_by_clause_parsed) => {
                     // Collect ORDER BY clause to add after projection
                     // We'll resolve these to column aliases later
@@ -621,12 +688,14 @@ impl<'a> QueryPlanner<'a> {
                 &where_clauses,
                 &return_items,
                 limit_count,
+                skip_count,
                 return_distinct,
                 &unwind_operators,
                 unwind_before_match,
                 &match_hints,
                 &order_by_clause,
                 &with_aggregation_where,
+                already_bound,
                 &mut operators,
             )?;
         }
@@ -744,7 +813,7 @@ impl<'a> QueryPlanner<'a> {
             // If WITH has a WHERE clause, insert a Filter operator AFTER the WITH operator
             // This ensures the WHERE clause filters the projected WITH variables, not the original variables
             if let Some(where_expression) = where_expr {
-                let filter_str = self.expression_to_string(where_expression)?;
+                let filter_str = self.predicate_to_string(where_expression)?;
                 tracing::debug!(
                     "WITH WHERE: Inserting Filter at position {} (after WITH at {})",
                     insert_pos + 1,
@@ -754,6 +823,7 @@ impl<'a> QueryPlanner<'a> {
                     insert_pos + 1, // Insert right after the WITH operator we just inserted
                     Operator::Filter {
                         predicate: filter_str,
+                        predicate_ast: Some(Box::new(where_expression.clone())),
                     },
                 );
                 // DEBUG: Show operator order after insertion
@@ -762,7 +832,7 @@ impl<'a> QueryPlanner<'a> {
                         Operator::NodeByLabel { variable, .. } => {
                             format!("NodeByLabel({})", variable)
                         }
-                        Operator::Filter { predicate } => {
+                        Operator::Filter { predicate, .. } => {
                             format!("Filter({})", predicate.chars().take(30).collect::<String>())
                         }
                         Operator::With { items, .. } => format!("With({} items)", items.len()),
@@ -774,17 +844,23 @@ impl<'a> QueryPlanner<'a> {
             }
         }
 
-        // Add CREATE operators AFTER MATCH/Filter but BEFORE Project
+        // Add CREATE operators AFTER MATCH/Filter but BEFORE Project OR Aggregate
         // This ensures CREATE runs after all nodes are matched but before
-        // the RETURN projection destroys the node objects with _nexus_id
+        // the RETURN projection (or aggregation) destroys the node objects
+        // with _nexus_id. Aggregate must be included here for the same reason
+        // WITH-insertion above matches `Project | Aggregate` (phase6 §5.3):
+        // an aggregating RETURN/WITH collapses rows and overwrites
+        // `context.variables` before CREATE would otherwise run, silently
+        // dropping the write (e.g. `MATCH (a),(b) CREATE (a)-[:R]->(b)
+        // RETURN count(*)`).
         if !create_patterns.is_empty() {
-            // Find the position of the first Project operator
-            let project_pos = operators
+            // Find the position of the first Project or Aggregate operator
+            let sink_pos = operators
                 .iter()
-                .position(|op| matches!(op, Operator::Project { .. }));
+                .position(|op| matches!(op, Operator::Project { .. } | Operator::Aggregate { .. }));
 
-            // Insert CREATE operators before Project (or at end if no Project)
-            let insert_pos = project_pos.unwrap_or(operators.len());
+            // Insert CREATE operators before Project/Aggregate (or at end if no sink)
+            let insert_pos = sink_pos.unwrap_or(operators.len());
             for (i, (create_pattern, external_id_expr, conflict_policy)) in
                 create_patterns.into_iter().enumerate()
             {
@@ -810,12 +886,16 @@ impl<'a> QueryPlanner<'a> {
             // Add filter operators for WHERE clauses (when there are no patterns)
             // This handles cases like: RETURN 42 WHERE false, RETURN 5 WHERE 5 > 10, etc.
             for (where_clause, optional_vars) in &where_clauses {
-                let predicate = self.expression_to_string(where_clause)?;
+                let predicate = self.predicate_to_string(where_clause)?;
                 if optional_vars.is_empty() {
-                    operators.push(Operator::Filter { predicate });
+                    operators.push(Operator::Filter {
+                        predicate,
+                        predicate_ast: Some(Box::new(where_clause.clone())),
+                    });
                 } else {
                     operators.push(Operator::OptionalFilter {
                         predicate,
+                        predicate_ast: Some(Box::new(where_clause.clone())),
                         optional_vars: optional_vars.clone(),
                     });
                 }
@@ -1182,13 +1262,14 @@ impl<'a> QueryPlanner<'a> {
 
                     // If WITH had a WHERE clause with aggregation, add Filter after Aggregate
                     if let Some(ref where_expression) = with_aggregation_where {
-                        let filter_str = self.expression_to_string(where_expression)?;
+                        let filter_str = self.predicate_to_string(where_expression)?;
                         tracing::debug!(
                             "WITH aggregation WHERE: Adding Filter '{}' after Aggregate",
                             filter_str
                         );
                         operators.push(Operator::Filter {
                             predicate: filter_str,
+                            predicate_ast: Some(Box::new(where_expression.clone())),
                         });
                     }
                 } else {
@@ -1225,6 +1306,22 @@ impl<'a> QueryPlanner<'a> {
                 }
             }
 
+            // (phase0_fix-order-by-on-call-yield) This branch has no
+            // `patterns`, so `plan_execution_strategy` — the only other
+            // place `order_by_clause`/SKIP get turned into `Sort`/`Skip`
+            // operators — never runs. Without this, `CALL proc() YIELD
+            // col RETURN col ORDER BY col` (and any other no-MATCH
+            // `RETURN`, e.g. `UNWIND ... RETURN ... ORDER BY`) silently
+            // dropped its ORDER BY/SKIP: `order_by_clause`/`skip_count`
+            // were collected above but never consumed on this path.
+            // Standard openCypher pipeline order: ORDER BY, then SKIP,
+            // then LIMIT.
+            if let Some((columns, ascending)) = order_by_clause.clone() {
+                operators.push(Operator::Sort { columns, ascending });
+            }
+            if let Some(skip) = skip_count {
+                operators.push(Operator::Skip { count: skip });
+            }
             if let Some(limit) = limit_count {
                 operators.push(Operator::Limit { count: limit });
             }
@@ -1242,7 +1339,16 @@ impl<'a> QueryPlanner<'a> {
                 ));
             }
 
-            // Apply LIMIT if specified
+            // Apply ORDER BY / SKIP / LIMIT, in that order, over the raw
+            // procedure output columns — same rationale as the sibling
+            // branch above; this is the shape with no RETURN at all
+            // (e.g. `CALL db.labels() YIELD label ORDER BY label`).
+            if let Some((columns, ascending)) = order_by_clause.clone() {
+                operators.push(Operator::Sort { columns, ascending });
+            }
+            if let Some(skip) = skip_count {
+                operators.push(Operator::Skip { count: skip });
+            }
             if let Some(limit) = limit_count {
                 operators.push(Operator::Limit { count: limit });
             }
@@ -1256,14 +1362,152 @@ impl<'a> QueryPlanner<'a> {
         // estimated cost is below the legacy `NodeByLabel + Filter`.
         let operators = self.try_rewrite_spatial_seek(query, operators);
 
-        // Cache the planned operators for future use
-        // Estimate cost using the improved cost model
-        let estimated_cost = self
-            .estimate_plan_cost(&operators)
-            .unwrap_or(operators.len() as f64);
-        self.plan_cache
-            .put(query_hash, operators.clone(), estimated_cost);
+        // Cache the planned operators for future use. Never cache a
+        // segment planned with carried bindings — its operators are
+        // specific to that `already_bound` set, not to the query hash, so
+        // caching it would poison later lookups of the same text.
+        if already_bound.is_empty() {
+            // Estimate cost using the improved cost model
+            let estimated_cost = self
+                .estimate_plan_cost(&operators)
+                .unwrap_or(operators.len() as f64);
+            self.plan_cache
+                .put(query_hash, operators.clone(), estimated_cost);
+        }
 
         Ok(operators)
+    }
+
+    /// Collect every variable a pattern introduces — node variables,
+    /// relationship variables, and the variables of any quantified-group
+    /// members — with no positional skip. Used to compute an OPTIONAL
+    /// MATCH's nullable-variable set as a set difference against
+    /// variables already bound by prior clauses, instead of assuming the
+    /// pattern's first node is always the already-bound anchor (that
+    /// assumption breaks for reverse-direction patterns like
+    /// `(b)-[:KNOWS]->(a)` where `a` is the bound anchor, and for
+    /// standalone patterns with no bound anchor at all).
+    /// True when a `MATCH` clause textually follows a `WITH` clause. Such a
+    /// query must be planned segment-by-segment (phase7 §4.11): the bucket
+    /// planner would otherwise fold the post-`WITH` `MATCH` into the
+    /// pre-`WITH` pattern phase, and the `WITH` projection would then drop
+    /// every variable that `MATCH` introduced. Deliberately scoped to
+    /// `MATCH` only — `WITH … CREATE/MERGE/…` are separate concerns and keep
+    /// the single-segment path.
+    fn has_match_after_with(query: &CypherQuery) -> bool {
+        let mut seen_with = false;
+        for clause in &query.clauses {
+            match clause {
+                Clause::With(_) => seen_with = true,
+                Clause::Match(_) if seen_with => return true,
+                _ => {}
+            }
+        }
+        false
+    }
+
+    /// Plan a query that crosses one or more `WITH → MATCH` boundaries by
+    /// splitting it into `WITH`-delimited segments and planning each in
+    /// order. Every non-final segment ends with its `WITH` clause (the
+    /// projection that closes it); the trailing clauses form the final
+    /// segment. Each segment is planned by [`Self::plan_query_bound`] with
+    /// the set of variables the previous segment's `WITH` carried forward,
+    /// so a post-`WITH` `MATCH` expands from those bindings (or
+    /// Cartesian-joins a fresh scan against them) instead of re-scanning and
+    /// clobbering them. The per-segment operator lists are concatenated; the
+    /// executor runs them against one shared context, where each segment's
+    /// terminal projection leaves exactly the carried scope for the next.
+    fn plan_segmented(&mut self, query: &CypherQuery) -> Result<Vec<Operator>> {
+        // Split clauses into segments. A `WITH` closes the segment it ends.
+        let mut segments: Vec<Vec<Clause>> = Vec::new();
+        let mut current: Vec<Clause> = Vec::new();
+        for clause in &query.clauses {
+            current.push(clause.clone());
+            if matches!(clause, Clause::With(_)) {
+                segments.push(std::mem::take(&mut current));
+            }
+        }
+        if !current.is_empty() {
+            segments.push(current);
+        }
+
+        let mut all_ops: Vec<Operator> = Vec::new();
+        let mut bound: std::collections::HashSet<String> = std::collections::HashSet::new();
+        let seg_count = segments.len();
+        for (idx, seg_clauses) in segments.into_iter().enumerate() {
+            // A segment's terminal `WITH` restricts the scope to exactly the
+            // variables it projects — those become the next segment's
+            // carried bindings (replace, not accumulate, since `WITH` drops
+            // everything it does not re-export).
+            let seg_output = Self::segment_output_vars(&seg_clauses);
+            let seg_query = CypherQuery {
+                clauses: seg_clauses,
+                params: query.params.clone(),
+                graph_scope: query.graph_scope.clone(),
+            };
+            let seg_ops = self.plan_query_bound(&seg_query, &bound)?;
+            all_ops.extend(seg_ops);
+            if idx + 1 < seg_count {
+                bound = seg_output;
+            }
+        }
+        Ok(all_ops)
+    }
+
+    /// The variables a segment exports to the next one: the aliases (or bare
+    /// variable names) projected by the segment's terminal `WITH`. Returns
+    /// empty for the final segment (which ends in `RETURN` and has no
+    /// successor) or any segment not ending in `WITH`.
+    fn segment_output_vars(clauses: &[Clause]) -> std::collections::HashSet<String> {
+        let mut out = std::collections::HashSet::new();
+        if let Some(Clause::With(with)) = clauses.last() {
+            for item in &with.items {
+                if let Some(alias) = &item.alias {
+                    out.insert(alias.clone());
+                } else if let Expression::Variable(v) = &item.expression {
+                    out.insert(v.clone());
+                }
+                // A non-aliased non-variable projection (e.g. `WITH a.x`)
+                // is not a legal downstream identifier, so it contributes
+                // no carried binding.
+            }
+        }
+        out
+    }
+
+    fn collect_pattern_variables(pattern: &Pattern) -> Vec<String> {
+        let mut vars = Vec::new();
+        for element in &pattern.elements {
+            match element {
+                PatternElement::Node(node) => {
+                    if let Some(var) = &node.variable {
+                        vars.push(var.clone());
+                    }
+                }
+                PatternElement::Relationship(rel) => {
+                    if let Some(var) = &rel.variable {
+                        vars.push(var.clone());
+                    }
+                }
+                PatternElement::QuantifiedGroup(group) => {
+                    for inner in &group.inner {
+                        match inner {
+                            PatternElement::Node(n) => {
+                                if let Some(var) = &n.variable {
+                                    vars.push(var.clone());
+                                }
+                            }
+                            PatternElement::Relationship(r) => {
+                                if let Some(var) = &r.variable {
+                                    vars.push(var.clone());
+                                }
+                            }
+                            PatternElement::QuantifiedGroup(_) => {}
+                        }
+                    }
+                }
+            }
+        }
+        vars
     }
 }

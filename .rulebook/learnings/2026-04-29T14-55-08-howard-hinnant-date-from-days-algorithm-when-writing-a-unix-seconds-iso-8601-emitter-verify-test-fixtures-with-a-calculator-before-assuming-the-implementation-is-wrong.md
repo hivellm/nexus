@@ -1,0 +1,10 @@
+# Howard Hinnant date-from-days algorithm: when writing a unix-seconds → ISO-8601 emitter, verify test fixtures with a calculator before assuming the implementation is wrong
+**Source**: manual
+**Date**: 2026-04-29
+**Related Task**: phase7_knn-recall-benchmark
+**Tags**: rust, date, test-fixtures, knn-bench
+Implementing `format_unix_seconds(i64) -> String` from scratch (to avoid pulling in `chrono` for one timestamp) is straightforward — the standard recipe is Howard Hinnant's `civil_from_days`. The trap is on the *test* side: it's easy to plug in a hand-computed unix timestamp that's a few days off and conclude the algorithm is broken.
+
+To recover quickly: for any fixture YYYY-MM-DD, compute `days_since_1970 = (years_since_1970 * 365) + leap_days + day_of_year - 1`, multiply by 86400, then add hours*3600 + minutes*60 + seconds. For the Nexus knn-bench `report.rs`, my first fixture for 2026-04-29T12:34:56Z used `1_777_682_096`, which is actually 2026-05-02T00:34:56Z (3 days off). The correct value is `1_777_466_096`. Always include 1970-01-01 (epoch) and 2000-01-01 in the test set as anchors that don't depend on leap-year arithmetic.
+
+The Hinnant algorithm works back from days = days+719468 (epoch shift to 0000-03-01), divides by 146097 (Gregorian 400-year cycle), then unwinds the year, day-of-year, and shifts March → January. It handles negative days correctly with `div_euclid` / `rem_euclid` semantics — i.e. plain `/` would round toward zero and break dates before 1970.

@@ -118,7 +118,7 @@ impl CypherParser {
     }
 
     /// Parse CREATE INDEX clause
-    /// Syntax: CREATE [OR REPLACE] [SPATIAL] INDEX [IF NOT EXISTS] ON :Label(property)
+    /// Syntax: CREATE [OR REPLACE] [SPATIAL|VECTOR] INDEX [IF NOT EXISTS] ON :Label(property)
     pub(super) fn parse_create_index_clause(&mut self) -> Result<CreateIndexClause> {
         // Check for OR REPLACE before INDEX
         let or_replace = if self.peek_keyword("OR") {
@@ -131,10 +131,17 @@ impl CypherParser {
         };
 
         // Check for SPATIAL keyword
+        // phase20_knn-write-path-wiring §1.3 — `CREATE VECTOR INDEX` mirrors
+        // the SPATIAL branch exactly: same identifier/label/property path,
+        // just a different `index_type` tag consumed by the KNN write path.
         let index_type = if self.peek_keyword("SPATIAL") {
             self.parse_keyword()?; // consume "SPATIAL"
             self.skip_whitespace();
             Some("spatial".to_string())
+        } else if self.peek_keyword("VECTOR") {
+            self.parse_keyword()?; // consume "VECTOR"
+            self.skip_whitespace();
+            Some("vector".to_string())
         } else {
             None
         };
@@ -229,6 +236,9 @@ impl CypherParser {
         // as equivalent to the leading `SPATIAL` keyword keeps a
         // Neo4j-dialect script with `... USING RTREE` parsing
         // unchanged.
+        // phase20_knn-write-path-wiring §1.3 — `USING VECTOR` is the
+        // analogous alias for `CREATE [VECTOR] INDEX`, mirrored 1:1
+        // with the RTREE branch above.
         self.skip_whitespace();
         let index_type = if self.peek_keyword("USING") {
             self.parse_keyword()?; // consume "USING"
@@ -236,14 +246,19 @@ impl CypherParser {
             if self.peek_keyword("RTREE") {
                 self.parse_keyword()?;
                 Some("spatial".to_string())
+            } else if self.peek_keyword("VECTOR") {
+                self.parse_keyword()?;
+                Some("vector".to_string())
             } else {
                 let raw = self.parse_identifier()?;
                 let lower = raw.to_lowercase();
                 match lower.as_str() {
                     "rtree" | "spatial" => Some("spatial".to_string()),
+                    "vector" => Some("vector".to_string()),
                     other => {
                         return Err(self.error(&format!(
-                            "CREATE INDEX: unknown USING <type> {other:?}; expected RTREE"
+                            "CREATE INDEX: unknown USING <type> {other:?}; expected RTREE or \
+                             VECTOR"
                         )));
                     }
                 }

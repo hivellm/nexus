@@ -6,12 +6,10 @@
 //! - `core`     — `execute_aggregate` / `execute_aggregate_with_projections`
 //! - `alias`    — `aggregation_alias`
 //! - `columnar` — columnar fast-path helpers (§4 SIMD reduce kernels)
-//! - `parallel` — `execute_parallel_aggregation` / `execute_sequential_aggregation`
 
 mod alias;
 mod columnar;
 mod core;
-mod parallel;
 
 // Re-export the types used by external callers so existing import paths
 // (`crate::executor::operators::aggregate::…`) remain valid.

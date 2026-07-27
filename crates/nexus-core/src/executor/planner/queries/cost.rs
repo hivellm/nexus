@@ -20,6 +20,28 @@ impl<'a> QueryPlanner<'a> {
                     // far cheaper than a label scan; bias the planner toward it.
                     total_cost += 5.0;
                 }
+                Operator::NodeIndexRangeSeek { .. } => {
+                    // Range seek over the property B-tree: a bounded key-range
+                    // scan — wider than a point seek, far cheaper than a full
+                    // label scan.
+                    total_cost += 50.0;
+                }
+                Operator::NodeIndexInSeek { values, .. } => {
+                    // One point seek per listed value: the point-seek cost
+                    // scaled by the list length, still far below a label scan
+                    // for any realistic list.
+                    total_cost += 5.0 * values.len() as f64;
+                }
+                Operator::NodeIndexPrefixSeek { .. } => {
+                    // Anchored prefix run over the property B-tree: wider than
+                    // a point seek, narrower than an open-ended range.
+                    total_cost += 25.0;
+                }
+                Operator::NodeIndexParamSeek { .. } => {
+                    // Point lookup like `NodeIndexSeek`, just with the key
+                    // resolved at execution time.
+                    total_cost += 5.0;
+                }
                 Operator::AllNodesScan { .. } => {
                     // Scanning all nodes is more expensive than label scan
                     // Assume full scan of all nodes
@@ -44,6 +66,10 @@ impl<'a> QueryPlanner<'a> {
                 Operator::Limit { count } => {
                     // Limit reduces cost
                     total_cost *= (*count as f64) / 1000.0;
+                }
+                Operator::Skip { .. } => {
+                    // Skip is cheap — a single pass drain, no re-sort.
+                    total_cost += 1.0;
                 }
                 Operator::Sort { .. } => {
                     // Sorting is moderately expensive
@@ -293,8 +319,16 @@ impl<'a> QueryPlanner<'a> {
                 join_type,
                 ..
             } => {
-                let left_cardinality = self.estimate_plan_cost(&[*left.clone()])?;
-                let right_cardinality = self.estimate_plan_cost(&[*right.clone()])?;
+                // Cardinality (expected ROW COUNT) of each side, not the
+                // cost of producing it — `estimate_plan_cost` returns a
+                // cost figure in abstract cost units, which is the wrong
+                // category to feed into a cartesian-product / output-row
+                // estimate below. Mirrors the `Union` arm's use of
+                // `estimate_operator_cardinality` for the same purpose.
+                let left_cardinality =
+                    self.estimate_operator_cardinality(std::slice::from_ref(left.as_ref()))?;
+                let right_cardinality =
+                    self.estimate_operator_cardinality(std::slice::from_ref(right.as_ref()))?;
 
                 let (join_cost, output_cardinality) = match join_type {
                     JoinType::Inner => {
@@ -544,32 +578,99 @@ impl<'a> QueryPlanner<'a> {
             return Ok(operators);
         }
 
-        // Check if there's a WITH operator followed immediately by a Filter
-        // If so, keep them together (WITH WHERE pattern) and skip optimization
-        for i in 0..operators.len() - 1 {
-            if matches!(&operators[i], Operator::With { .. }) {
-                if matches!(&operators[i + 1], Operator::Filter { .. }) {
-                    tracing::debug!(
-                        "Skipping operator optimization - WITH followed by Filter (WITH WHERE pattern)"
-                    );
-                    return Ok(operators);
+        // `With` and `Project` are projection BARRIERS: each restricts or
+        // rebinds the row scope. The bucket reorder below assumes a single
+        // match phase; run across a projection barrier it would hoist a
+        // later segment's scan/expand ahead of the projection that closes an
+        // earlier segment, collapsing a segmented `WITH → MATCH` plan
+        // (phase7 §4.11) back to the broken bucket order that drops the
+        // post-`WITH` bindings. So split the plan at every barrier and
+        // reorder only WITHIN each maximal barrier-free run, leaving the
+        // barriers pinned in place. For a single-segment query the only
+        // barrier is the trailing `Project` (plus an optional `WITH`), so
+        // the pre-barrier run is the whole match phase and the result is
+        // identical to the legacy whole-plan reorder. This also subsumes the
+        // former "WITH immediately followed by Filter" special case: the
+        // `With` barrier ends its run and the trailing `Filter` opens the
+        // next one, so the two stay adjacent without a bespoke guard.
+        // `Aggregate` is a barrier for the same reason as `With`/`Project`:
+        // it collapses the row stream, so a later segment's scan must never
+        // be hoisted ahead of it (that would aggregate over the Cartesian
+        // product instead of the pre-join rows). Position is unchanged for a
+        // normal aggregation query, where the Aggregate already sat after
+        // the scans.
+        let is_barrier = |op: &Operator| {
+            matches!(
+                op,
+                Operator::With { .. } | Operator::Project { .. } | Operator::Aggregate { .. }
+            )
+        };
+        let has_barrier = operators.iter().any(&is_barrier);
+        if has_barrier {
+            let mut result = Vec::with_capacity(operators.len());
+            let mut run: Vec<Operator> = Vec::new();
+            for op in operators {
+                if is_barrier(&op) {
+                    result.extend(self.optimize_operator_run(std::mem::take(&mut run))?);
+                    result.push(op);
+                } else {
+                    run.push(op);
                 }
             }
+            result.extend(self.optimize_operator_run(run)?);
+            return Ok(result);
         }
 
-        // Check if UNWIND comes before any scan in the original operator order
-        // This happens in queries like: UNWIND [...] AS x MATCH (n:Label {prop: x})
-        // In this case, UNWIND must run first to create the variable bindings
+        self.optimize_operator_run(operators)
+    }
+
+    /// Reorder a single barrier-free operator run so every variable-binding
+    /// operator (scan / seek / expansion / per-row binder) precedes the
+    /// `Filter`s that reference it, cheapest scan first. Callers must not
+    /// pass a run containing a `With` or `Project` barrier —
+    /// [`Self::optimize_operator_order`] splits those out first.
+    fn optimize_operator_run(&self, operators: Vec<Operator>) -> Result<Vec<Operator>> {
+        if operators.len() <= 1 {
+            return Ok(operators);
+        }
+
+        // Check if a per-row binder (UNWIND or LOAD CSV) comes before any scan
+        // in the original operator order. This happens in queries like
+        // `UNWIND [...] AS x MATCH (n:Label {prop: x})` or
+        // `LOAD CSV FROM '...' AS row MATCH (n:Label {id: row.id})`. In that
+        // case the binder must run first to create the variable bindings the
+        // scan/seek (and any residual filter) depend on.
         let mut unwind_before_scan = false;
         let mut seen_unwind = false;
         for operator in &operators {
             match operator {
-                Operator::Unwind { .. } => {
+                // UNWIND and LOAD CSV both bind a fresh per-row variable
+                // independent of any upstream row stream, so either one
+                // preceding a scan triggers the binder-before-scan order.
+                Operator::Unwind { .. } | Operator::LoadCsv { .. } => {
                     seen_unwind = true;
                 }
+                // Index seeks bind a node variable exactly like a label scan
+                // does (they generate fresh rows independent of any upstream
+                // row stream), so they must be detected here too — otherwise
+                // `UNWIND ... MATCH (a:P {id: r.s})` is missed and the seek
+                // ends up reordered after a `Filter` that references the
+                // variable it binds. See
+                // phase0_fix-correlated-predicate-index-seek.
+                //
+                // A spatial R-tree seek (`SpatialSeek`) belongs here for the
+                // same reason: it generates fresh node rows independent of
+                // upstream input, exactly like a label scan.
                 Operator::NodeByLabel { .. }
                 | Operator::AllNodesScan { .. }
-                | Operator::IndexScan { .. } => {
+                | Operator::IndexScan { .. }
+                | Operator::NodeIndexSeek { .. }
+                | Operator::NodeIndexRangeSeek { .. }
+                | Operator::NodeIndexInSeek { .. }
+                | Operator::NodeIndexPrefixSeek { .. }
+                | Operator::NodeIndexParamSeek { .. }
+                | Operator::CompositeBtreeSeek { .. }
+                | Operator::SpatialSeek { .. } => {
                     if seen_unwind {
                         unwind_before_scan = true;
                         break;
@@ -587,24 +688,62 @@ impl<'a> QueryPlanner<'a> {
         let mut unwinds = Vec::new();
         let mut others = Vec::new();
 
+        // INVARIANT: every variable-BINDING operator (any operator that
+        // introduces a NEW row-scoped binding for a pattern variable —
+        // a node from a scan/seek, or a relationship-traversal target)
+        // must land in a bucket that is recombined BEFORE `filters`
+        // (`scans` or `expansions` below). A `Filter` referencing a
+        // variable that has not been bound yet evaluates that variable
+        // as `Null`, which is always falsy, so the predicate silently
+        // drops every row instead of raising an error. The `_ => others`
+        // catch-all is recombined AFTER `filters` in both branches, so it
+        // must never receive a binding operator — any new binding
+        // operator variant added to `Operator` must be added to `scans`,
+        // `expansions`, or (for a per-row binder like UNWIND / LOAD CSV)
+        // `unwinds` here, not left to fall through to `others`.
         for operator in operators {
             match &operator {
+                // Index seeks and spatial seeks bind a node variable
+                // exactly like a label scan — they must be ordered with
+                // the scans, before any `Filter`/`Expand` that references
+                // the variable they bind, or the residual predicate runs
+                // against unbound input and is silently dropped. See
+                // phase0_fix-correlated-predicate-index-seek.
                 Operator::NodeByLabel { .. }
                 | Operator::AllNodesScan { .. }
-                | Operator::IndexScan { .. } => {
+                | Operator::IndexScan { .. }
+                | Operator::NodeIndexSeek { .. }
+                | Operator::NodeIndexRangeSeek { .. }
+                | Operator::NodeIndexInSeek { .. }
+                | Operator::NodeIndexPrefixSeek { .. }
+                | Operator::NodeIndexParamSeek { .. }
+                | Operator::CompositeBtreeSeek { .. }
+                | Operator::SpatialSeek { .. } => {
                     scans.push(operator);
                 }
                 Operator::Filter { .. } => {
                     filters.push(operator);
                 }
-                Operator::Expand { .. } => {
+                // `VariableLengthPath` and `QuantifiedExpand` are
+                // relationship-traversal operators that consume a source
+                // variable and bind a target variable, exactly like
+                // `Expand`, so they must recombine before any `Filter`
+                // that references the variable they bind.
+                Operator::Expand { .. }
+                | Operator::VariableLengthPath { .. }
+                | Operator::QuantifiedExpand { .. } => {
                     expansions.push(operator);
                 }
                 Operator::Join { .. } => {
                     joins.push(operator);
                 }
-                Operator::Unwind { .. } => {
-                    // UNWIND must come before Filter because Filter operates on rows created by UNWIND
+                // UNWIND and LOAD CSV both bind a fresh per-row variable and
+                // must recombine before `filters` — a `Filter` referencing that
+                // variable before it is bound evaluates it as `Null` (always
+                // false) and silently drops every row. `LoadCsv` shares the
+                // `unwinds` bucket so a `LOAD CSV`/`UNWIND` pair keeps its
+                // original relative order.
+                Operator::Unwind { .. } | Operator::LoadCsv { .. } => {
                     unwinds.push(operator);
                 }
                 _ => {

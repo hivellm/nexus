@@ -25,21 +25,39 @@ use super::ast::*;
 use crate::{Error, Result};
 use std::collections::HashMap;
 
-/// Extract the reserved `_id` property from the first node pattern in a
-/// CREATE / MERGE clause, removing it from the property map and returning
-/// the parsed expression. Only literal-string and parameter expressions
-/// are accepted; anything else is a parse error.
+/// Extract the reserved `_id` property from node patterns in a CREATE /
+/// MERGE clause, removing it from each node's property map. Only
+/// literal-string and parameter expressions are accepted; anything else is
+/// a parse error.
+///
+/// Every node whose property map carries `_id` also gets that expression
+/// stored on its own `NodePattern::external_id_expr`, so callers that walk
+/// individual pattern nodes (e.g. relationship-`MERGE` endpoint resolution)
+/// can resolve each node's external id independently. The clause-level
+/// return value is the *first* `_id` found in the pattern, kept for the
+/// existing `CREATE` and single-node `MERGE` paths that only ever consume
+/// the clause-level slot.
+///
+/// `allow_per_node` gates whether a *second* node in the pattern may also
+/// carry `_id`:
+/// - `false` (CREATE): a second `_id` is a parse error, since CREATE only
+///   reads the clause-level slot and a second `_id` would otherwise be
+///   silently dropped.
+/// - `true` (MERGE): each node may carry its own `_id` — needed for
+///   `MERGE (a {_id:...})-[r]->(b {_id:...})` to resolve both endpoints by
+///   external id.
 ///
 /// Returns `Ok(None)` when no node carries `_id`.
 pub(super) fn extract_underscore_id_from_pattern(
     pattern: &mut Pattern,
+    allow_per_node: bool,
 ) -> Result<Option<Expression>> {
     let mut found: Option<Expression> = None;
     for element in pattern.elements.iter_mut() {
         if let PatternElement::Node(np) = element {
             if let Some(prop_map) = np.properties.as_mut() {
                 if let Some(expr) = prop_map.properties.remove("_id") {
-                    if found.is_some() {
+                    if found.is_some() && !allow_per_node {
                         return Err(Error::executor(
                             "Cypher: _id may only appear once in CREATE/MERGE pattern",
                         ));
@@ -52,7 +70,10 @@ pub(super) fn extract_underscore_id_from_pattern(
                             ));
                         }
                     }
-                    found = Some(expr);
+                    np.external_id_expr = Some(expr.clone());
+                    if found.is_none() {
+                        found = Some(expr);
+                    }
                 }
             }
         }
@@ -223,9 +244,11 @@ impl CypherParser {
                     Ok(Clause::CreateDatabase(create_db_clause))
                 } else if self.peek_keyword("INDEX")
                     || self.peek_keyword("SPATIAL")
+                    || self.peek_keyword("VECTOR")
                     || self.peek_keyword("OR")
                 {
-                    // Check for CREATE INDEX (including CREATE SPATIAL INDEX and CREATE OR REPLACE INDEX)
+                    // Check for CREATE INDEX (including CREATE SPATIAL INDEX,
+                    // CREATE VECTOR INDEX, and CREATE OR REPLACE INDEX)
                     let create_index_clause = self.parse_create_index_clause()?;
                     Ok(Clause::CreateIndex(create_index_clause))
                 } else if self.peek_keyword("CONSTRAINT") {
@@ -330,6 +353,9 @@ impl CypherParser {
                 } else if self.peek_keyword("CONSTRAINTS") {
                     self.parse_keyword()?; // consume "CONSTRAINTS"
                     Ok(Clause::ShowConstraints)
+                } else if self.peek_keyword("INDEXES") {
+                    self.parse_keyword()?; // consume "INDEXES"
+                    Ok(Clause::ShowIndexes)
                 } else if self.peek_keyword("QUERIES") {
                     self.parse_keyword()?; // consume "QUERIES"
                     Ok(Clause::ShowQueries)
@@ -340,7 +366,7 @@ impl CypherParser {
                     Ok(Clause::ShowApiKeys(show_api_keys_clause))
                 } else {
                     Err(self.error(
-                        "SHOW must be followed by DATABASES, USERS, USER, FUNCTIONS, CONSTRAINTS, QUERIES, or API KEYS",
+                        "SHOW must be followed by DATABASES, USERS, USER, FUNCTIONS, CONSTRAINTS, INDEXES, QUERIES, or API KEYS",
                     ))
                 }
             }

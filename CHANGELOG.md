@@ -5,3183 +5,347 @@ All notable changes to Nexus will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [2.5.0] — 2026-07-14
 
-> **Write-path unification, transport correctness, and concurrency.** This
-> release eliminates a class of transport-dependent data-loss bugs (the same
-> query silently behaved differently over HTTP / RPC / RESP3 / GraphQL /
-> streaming), by routing every transport through one tested engine write path
-> and deleting the divergent forks. 18+ correctness bugs closed, verified by a
-> new 26-case write-path parity harness and a cross-transport parity runner.
-> On performance: autocommit reads no longer take the global engine lock
-> (~2.6x concurrent reads), `count(n)` at 64 workers went 21.8x, and a
-> mimalloc global allocator lifts concurrent reads a further 37–84%. The
-> Docker image is now `FROM scratch` static musl — **0 CVEs** — and multi-arch
-> (linux/amd64 + linux/arm64). A canonical, reproducible vs-Neo4j benchmark
-> (Nexus leads 84% of comparable serial scenarios) plus first-measured KNN
-> recall (SIFT1M / GloVe) replace the prior contradictory numbers.
+## [3.0.0] — Unreleased
 
-### Benchmarks — canonical 2026 re-baseline
+> **Engine audit remediation.** A deep audit of the execution engine
+> uncovered several chronic, systemic correctness and durability problems
+> that require substantial refactoring to address properly. Rather than
+> accumulate workarounds, this major version line was opened off 2.6.0 to
+> carry these fixes. The remediation is tracked across 27 `phase0_fix-*`
+> tasks and will land incrementally under this release.
 
-- **`docs/performance/BENCHMARK_2026.md` is the new canonical vs-Neo4j reference** (Nexus 2.5.0-dev vs Neo4j 5.26.28, pinned versions/hardware, fully reproducible). Headline: Nexus leads **84% of 57 comparable serial scenarios** (0 gaps >2x); the historical CREATE-relationship contradiction is settled with a dedicated 5-repetition verdict — **Nexus 2.40x faster** (2.35 ms vs 5.63 ms median). Remaining losses are concentrated in high-concurrency scaling (tracked with numeric gates in `phase8_neo4j-concurrency-gaps`). The Dec-2025 report is marked SUPERSEDED.
-- **First measured KNN recall numbers** (`KNN_RECALL.md`): SIFT1M 64-cell HNSW sweep — sweet spot m16/efc100/efs50 delivers **95.0% recall@1 at 1.02 ms p95**; the "<2 ms p95" claim holds up to ~97% recall@10 (now backed by data instead of assertion).
-- **Per-transport parity suite** (`scripts/compatibility/test-transport-parity.sh`): the same write battery over HTTP, RPC, and RESP3 with normalized result diffing — 7/7 parity, the permanent release-gate regression net for the write-path unification.
+### Added — `phase7_opencypher-gap-closure` (openCypher TCK conformance + dynamic labels/types on reads)
 
-### Performance
+- **Dynamic labels and relationship types now resolve at execution time in MATCH patterns.** `MATCH (n:$label)` and `MATCH (a)-[:$type]->(b)` resolve `$label` and `$type` parameters against the query envelope at runtime (STRING = single label/type; LIST<STRING> = label intersection / type union; NULL/empty → zero rows). Relationship types in variable-length paths are also dynamic: `MATCH (a)-[:$type*1..5]->(b)` matches edges of the resolved type(s). **New syntax for write-side dynamic types**: `CREATE (a)-[r:$type]->(b)`, `MERGE` with `$type`. See `docs/specs/cypher-subset.md` § Dynamic labels and relationship types.
+- **`SHOW INDEXES`** now introspects registered property and composite indexes, returning name, type, entityType, labelsOrTypes, and properties. Complements the existing `SHOW CONSTRAINTS` for schema inspection.
+- **Three correctness fixes tied to the conformance measurement:**
+  - *Fully-anonymous relationship counting*: `MATCH ()-[:TYPE]->() RETURN count(*)` now counts every matching relationship instead of deduplicating by target node.
+  - *Required Expand no-match semantics*: a required (non-OPTIONAL) pattern expansion that finds no matching relationships drops the input row entirely instead of emitting a phantom partial row with the expansion's variables bound to NULL.
+  - *Labelled scan lock-in*: `MATCH (n:Label)` returns only nodes carrying that label; `MATCH (n)` returns all nodes. This was already correct and is locked in by regression tests.
+- **openCypher TCK conformance baseline taken.** The runner vendored the upstream openCypher TCK corpus (220 files, 1615 scenarios → 3868 outline-expanded), implemented side-effect counters and error taxonomy, and measured a first baseline. **3868 scenarios → 509 passed (13.2%), 3175 failed, 184 skipped.** This is a *strict conformance* metric against the specification (distinct from the 300/300 Neo4j differential suite). See `docs/compatibility/OPENCYPHER_TCK_REPORT.md` for per-category breakdown and reproduction instructions.
 
-- **Autocommit reads no longer take the exclusive engine lock (~2.6x concurrent read throughput).** Every MATCH previously held `engine.write().await` for its whole parse+plan+execute; read-only autocommit queries (classified from the AST by `routing::is_read_only` — exhaustive per-clause match, conservative on unknown procedures) now run on a cloned executor snapshot in `spawn_blocking` behind a brief shared lock. Writes and in-transaction reads are unchanged (read-your-own-writes preserved). Measured: 667 → 1727 qps at 8 concurrent clients (release build; benchmark ships as an on-demand `#[ignore]`d test). Same change applied to the RPC dispatcher.
-- **Traversal and aggregation fast paths.** The unfiltered `COUNT` label-bitmap shortcut covers more plan shapes (all-nodes scan, alias forms) with delete-correct results; relationship-type filtering happens at record-header level before materialization in the traversal walk; GROUP BY pre-sizes its hash map from upstream cardinality; and the planner's cost model now scales NodeByLabel/Expand costs with real catalog cardinalities (lower-cardinality join side drives first), falling back to the previous constants on cold catalogs. Plan-quality and correctness tests included; benchmarks reproducible via the `#[ignore]`d suites.
+### Changed — `phase10_thunder-server-migration` (native RPC now runs on `thunder-rpc`)
 
-### Added — multi-arch Docker image (linux/amd64 + linux/arm64)
+- **The native binary RPC server (port 15475) was migrated from a
+  hand-rolled MessagePack transport onto the shared HiveLLM `thunder-rpc`
+  crate (Thunder wire v1).** No wire change — Thunder wire v1 is
+  byte-identical to the previous Nexus RPC wire (same `u32` LE length prefix
+  + rmp-serde externally-tagged body, same `Request`/`Response`/value model,
+  same `PUSH_ID`), so **deployed SDKs and CLIs keep working unchanged**
+  (proven end-to-end by `rpc_integration_test.rs`, a raw-framing client
+  round-tripping the migrated server, plus `thunder_rpc_tests.rs` driving it
+  through the real `thunder::client::Client`). The server now inherits
+  Thunder's hardening (pre-allocation frame-cap validation, idle timeout,
+  connection ceiling, metrics observer, session identity) and deletes
+  ~230 lines of duplicated accept-loop / framing / writer-task code.
+- **The RPC command catalog, arg conventions, response encodings, error
+  strings, ports and env vars are unchanged.** `NEXUS_RPC_{ADDR,
+  MAX_FRAME_BYTES,MAX_IN_FLIGHT,SLOW_MS,REQUIRE_AUTH}` still apply
+  (mapped onto Thunder's `Config`/`ListenerConfig`). HTTP/REST (15474),
+  RESP3 (15476), MCP and GraphQL are untouched.
+- **`nexus-protocol::rpc` was removed.** The RPC wire is now the shared
+  `thunder-rpc` registry crate, consumed directly by the server, the CLI,
+  and the SDKs (each side normalizes on Thunder — no shared protocol crate).
+  The Rust SDK (`nexus-graph-sdk`) consequently no longer depends on
+  `nexus-protocol` at all and depends only on published crates. The rest of
+  `nexus-protocol` (REST/MCP/UMICP/RESP3 clients) is unaffected.
+- API-level note (not a wire change): consumers that reached into
+  `nexus_protocol::rpc::{types,codec}` now use `thunder::{Value, Request,
+  Response, wire::*, PUSH_ID}` directly. `thunder::Value::Bytes` holds
+  `Arc<[u8]>` (build with `Value::bytes(..)`), and Thunder's async frame
+  read/write helpers also return the frame size.
 
-- **The Docker image now ships as a multi-arch manifest** (Synap pattern: each platform builds natively via a `TARGETARCH`-selected musl target; the arm64 leg builds under qemu/binfmt on amd64 hosts — no cross-toolchain). Apple Silicon, AWS Graviton, and Ampere pull a native arm64 image (21.6 MB, NEON SIMD runtime-dispatched) instead of emulating amd64. Both platform digests scan **0C 0H 0M 0L, 0 packages**. Note: arm64 runtime validation requires real arm64 hardware — qemu-user lacks `get_robust_list`, which LMDB's robust mutexes need at env-open.
+### Changed — `phase11_thunder-client-migration` (all six SDK RPC transports now use published Thunder packages)
 
-### Security — zero-CVE Docker image
+- **All six SDKs (Rust, TypeScript, Python, Go, C#, PHP) migrated their RPC transports from hand-rolled TCP socket + frame reader + MessagePack codec to thin wrappers around the published Thunder client package for each language.** Wire format unchanged (Thunder wire v1 is byte-identical to the previous Nexus RPC wire), so deployed servers work with newly-built SDKs and vice versa. Per-SDK: Rust SDK (`nexus-graph-sdk`) uses `thunder-rpc` 0.2.2 (crates.io); TypeScript uses `@hivehub/thunder` ^0.2.2 (npm); Python uses `hivellm-thunder` >=0.2.2 (PyPI); Go uses `github.com/hivellm/thunder-go` v0.2.2; C# uses `HiveLLM.Thunder` 0.2.2 (NuGet); PHP uses `hivellm/thunder` ^0.2.2 (Packagist).
+- **`nexus-protocol` crate removed.** The RPC wire was already moved to `thunder-rpc` in `phase10` (server-side), and SDK codecs now live in each language's Thunder client; there is no shared protocol crate. Each SDK depends only on published registry crates (no local protocol dependencies). The Rust SDK (`nexus-graph-sdk`) publish flow simplified: one-step crates.io upload instead of the previous `nexus-protocol` → index-wait → `nexus-graph-sdk` sequence.
+- **Per-SDK msgpack/framing codec deleted** (owned by Thunder now). Command-map grammar, transport selection (`nexus://` vs `http://`), HTTP fallback, handshake (Thunder's `auth_command` + `arg_less` HELLO paired with server's AUTH gate), and credential handling are all unchanged. See `docs/specs/sdk-transport.md` for transport internals.
 
-- **The runtime image is now `FROM scratch` with a fully static musl binary — 0 OS packages, 0 CVEs.** Docker Scout reported 14 disputed/won't-fix low CVEs on the previous DHI/debian runtime (glibc ×7, systemd ×4, coreutils ×2, openssl ×1) with no Debian fix available; since the seven glibc findings attach to `libc6`, no amount of package removal could reach zero with a dynamically-linked binary. `nexus-server` is now built for `x86_64-unknown-linux-musl` (fully static, jemalloc retained via `disable_initial_exec_tls`) and shipped in an empty base: Scout reports **0C 0H 0M 0L, 0 packages**. Image size drops 70.2 MB → 25.8 MB (−63%). Trade-off: the image has no shell — `docker exec … sh` no longer works; debug via `docker logs` and the HTTP API.
+### Security — rmcp 0.8.3 to 2.2.0 migration (RUSTSEC-2026-0189)
 
-### Fixed
+- **nexus-server now runs on rmcp 2.2.0, remediating RUSTSEC-2026-0189 (use-after-free in rmcp 0.8.3).** The MCP streaming HTTP server is the only nexus-server consumer of rmcp. Two client-visible behavior changes accompany rmcp >= 1.x; both are documented below and require no migration for deployments listening on loopback (the default bind). **(DNS-rebinding protection)** `/mcp` now requires a `Host` header and enforces DNS-rebinding protection via rmcp's `StreamableHttpServerConfig` default `allowed_hosts` list. Requests with a missing or disallowed Host header return HTTP 400 or 403 respectively. By default, only `localhost`, `127.0.0.1`, and `::1` are allowed; network deployments exposing `/mcp` on `0.0.0.0` or via hostname must explicitly configure allowed hosts — tracked as a follow-up (`phase19_expose-mcp-allowed-hosts-config`). The server keeps the secure default; this is a configuration requirement only for public-facing deployments. **(ProtocolVersion change)** The advertised MCP `ProtocolVersion` moved from 2025-03-26 to 2025-11-25; rmcp negotiates with clients (2024-11-05 is still supported), so practical impact is minimal. **(Dependency cleanup)** The unused rmcp `macros` feature was dropped; `cargo audit` now reports RUSTSEC-2026-0189 cleared. Not a breaking change for production deployments on localhost. See `docs/specs/api-protocols.md` § MCP Integration for host-header details.
 
-- **HTTP `CREATE`/`MERGE` queries now execute through the engine write path** instead of the `write_ops.rs` fork, closing the transport-dependent bug class: `MERGE (a)-[r:T]->(b)` creates the edge (idempotently, with inline properties), `SET r.k` on relationship variables persists, and `CREATE ... RETURN r.prop` projects the stored value. Write audit logging moved to the handler wrapper (unchanged coverage). Verified by the 23-case write-path parity harness — **all 23 green**.
-- **Query routing is now AST-based, shared between HTTP and RPC.** The HTTP handler's string-prefix heuristics (`starts_with("CREATE")` etc.) misrouted comment-prefixed and mixed queries to the read-only path (HTTP 200, nothing persisted). Routing now derives from the parsed AST via the shared `api/cypher/routing.rs` predicate (12-case routing test table), and the 1,109-line `write_ops.rs` fork plus its 265 lines of dead helpers were **deleted** — every transport executes writes through the single tested engine path.
-- **Engine write gaps closed** (found by the parity harness while rerouting): `SET x = $param` and CREATE inline `$param` properties resolve (previously stored `null`/errored), `SET x = null` removes the key (Neo4j semantics), `UNWIND $param AS row` iterates a parameter-bound list, leading `//`/`/* */` comments parse, CREATE-bound variables are visible to `REMOVE` in the same statement, and standalone `MERGE` with a relationship pattern routes to the write interpreter instead of degrading to a read-only match.
-- **Aggregation output preserves the written RETURN/WITH column order.** `RETURN count(r) AS c, r.w AS w` returned the columns positionally swapped (`[w, c]`) because the aggregate assembles `[group-by keys..., aggregates...]`; the planner now records the clause order and the executor permutes the output back. SDK clients consume rows positionally, so this was a client-visible wrong-order bug.
-- **GraphQL mutations and the streaming MCP handler no longer lose writes.** GraphQL mutations executed against the raw executor, where the planner stubs `MERGE` as a read-only match and has no `SET`/`REMOVE`/`FOREACH` operators — mutations returned success while persisting nothing. The streaming handler carried its own literal-only CREATE loop that stored `null` for `$param` properties. Both now route write queries through `Engine::execute_cypher_with_params` via the shared AST routing predicate (reads stay on the lock-free executor). Red-tests-first: the new integration tests were confirmed failing against the old code.
-- **RPC and RESP3 transports no longer drop `$params` on write queries.** The RPC dispatch (port 15475 — the default transport for every first-party SDK) and the RESP3 `CYPHER` handler called the params-dropping `engine.execute_cypher(&str)`, so `CREATE (n {x:$v})` silently stored `null` over those transports — the same data-loss class fixed for HTTP in 2.4.0. Both now call `execute_cypher_with_params`; parameterized writes persist and round-trip on every transport.
+### Added — phase19_expose-mcp-allowed-hosts-config
 
-- **Engine dispatch consolidated — PROFILE can no longer drift from real execution.** `execute_cypher_dispatch` and `execute_cypher_ast` were ~200-line near-duplicates serving normal vs EXPLAIN/PROFILE/internal execution; fixes applied to one silently missed the other. Diffing them surfaced 6 real divergences — missing `SHOW CONSTRAINTS` routing on the internal path, a legacy `LOAD CSV`/`CALL {}` special case bypassing the native operators, the typed-property-index CREATE fix reaching only one fork, a double CREATE/DELETE replay risk on `DELETE ... RETURN <expr>`, and `$param` values silently dropped through an always-empty `ast.params` in two spots. All unified into one private dispatch (net −106 lines) with regression tests, and `Engine::execute_cypher(&str)` now structurally cannot drop parameters (delegates to the params variant).
+- **`/mcp`'s DNS-rebinding `Host` allow-list is now configurable, closing the follow-up left by the rmcp 0.8→2.2 migration above.** New `NEXUS_MCP_ALLOWED_HOSTS` env var (comma-separated hostnames or `host:port` authorities) lets network deployments extend past rmcp's built-in `localhost`/`127.0.0.1`/`::1` default — e.g. `NEXUS_MCP_ALLOWED_HOSTS=nexus.example.com,10.0.0.5:15474`. It **replaces** the built-in list via rmcp's `StreamableHttpServerConfig::with_allowed_hosts` rather than extending it, so operators who also need local access must list `localhost` explicitly alongside their remote host(s). A new escape hatch, `NEXUS_MCP_ALLOWED_HOSTS_DISABLE=true`, maps to `disable_allowed_hosts()` and turns the Host check off entirely — **not recommended for public deployments**. Non-breaking: leaving both unset keeps `StreamableHttpServerConfig::default()` exactly as it was (loopback-only, unchanged default behavior). As a safety net, if the server is configured to bind a non-loopback address (e.g. `NEXUS_ADDR=0.0.0.0:...`) with `NEXUS_MCP_ALLOWED_HOSTS` unset and the disable escape hatch not set, the server now logs a startup warning that `/mcp` will 403 every remote client's Host header until one of those is configured, instead of failing silently. See `docs/specs/api-protocols.md` § MCP Integration and `crates/nexus-server/src/config.rs::Config::mcp_allowed_hosts`.
 
-### Added
+### Added — `phase20_knn-write-path-wiring` (native vector search now functional end-to-end)
 
-- **New Cypher scalar functions**: `randomUUID()` (v4 UUID string), `ascii()` / `chr()` (character ↔ Unicode code point), `lpad()` / `rpad()` (pad to a target length or truncate — truncation always keeps the first `length` characters, Oracle-style, regardless of pad side), `normalize()` (Unicode `NFC`/`NFD`/`NFKC`/`NFKD`, NFC default), two-argument `log(x, base)` (the one-argument natural-log form is unchanged), `isNaN()`, and `shuffle()` (random list permutation via `rand`, non-deterministic by design). Also verified that multiple comma-separated patterns in one `CREATE` (`CREATE (a:L1), (b:L2), (a)-[r:T]->(b)`) already execute correctly end to end via both engine entry points — the compatibility gap analysis's "Missing" entry for this was stale; added regression tests to lock in the behavior going forward.
-- **`elementId(node | relationship)`** — new function returning a Neo4j-5-style *opaque* stable string (`"n:<internal-id>"` for nodes, `"r:<internal-id>"` for relationships). It did not exist before this change — no prior implementation was found in the executor's function dispatch (calling it silently returned `NULL`, same as any unrecognised function name), despite the compatibility gap analysis describing it as "returns internal 64-bit ID". `id()` is unchanged and keeps returning the plain integer. Treat `elementId()`'s output as opaque — it is not the same shape as real Neo4j's `<database-id>:<uuid>:<id>` and callers must not parse it.
-- **`nexus-server --healthcheck`** — std-only HTTP/1.0 probe against `127.0.0.1:<port from NEXUS_ADDR>/health`, exiting 0/1. Used as the container `HEALTHCHECK` (exec-form) since the scratch image has no bash.
+- **Native HNSW vector search now works end-to-end: the write path automatically populates the KNN index, DDL registers and manages vector indexes, and queries return real scored results via three transports.** Previously the HNSW index was a documented gap — it was never populated by any user write path (CREATE/SET/DELETE). Now: (1) **New DDL**: `CREATE VECTOR INDEX ON :Label(property)` registers a vector index on a fixed-dimension (128 floats) HNSW graph; `CREATE OR REPLACE VECTOR INDEX` resets an existing index; `DROP INDEX ON :Label(property)` removes it. V1 constraints: only ONE active index per database at a time (a second distinct index without `CREATE OR REPLACE` errors); dimension is fixed at `DEFAULT_VECTORIZER_DIMENSION` (128); vector properties must be numeric arrays (Cypher `List<Float>`), supplied via query parameters or the data API (inline literals in the CREATE DDL are NOT supported). (2) **Write-path maintenance**: `CREATE`, `SET`, and `DELETE` (both engine data API and Cypher) now automatically populate and maintain the HNSW index. `SET` that updates a vector property deletes the old vector and inserts the new one (delete-then-add, mirroring full-text index maintenance). WAL entries `KnnVectorAdd` and `KnnVectorDelete` are emitted for durability and recovery. (3) **Label-aware query**: `CALL vector.knn(label, vector, k)` is now label-aware — it post-filters HNSW hits to the requested label with 10x oversampling to ensure k results. An unknown label returns an empty result (not an error). Queries reach three transport surfaces: HTTP `POST /knn_traverse` (previously a stub returning fabricated scores — now fixed to run a real search), RPC `KNN_SEARCH`, and RESP3 `KNN.SEARCH`. (4) **Durability**: the vector-index definition is persisted in the catalog and the HNSW graph is repopulated from the property store on restart (verified by restart-recovery tests). Not a breaking change for existing index-less deployments; adds functional vector search where previously there was a gap. See `docs/specs/knn-integration.md` and `docs/specs/cypher-subset.md`.
 
-### Fixed
+### Added — `phase12_thunder-interop-validation` (cross-language interop gate)
 
-- **`percentileDisc()` / `percentileCont()` / `stDev()` / `stDevP()` now compute correct values when the aggregated argument is a property access** (e.g. `stdev(n.v)`, the overwhelmingly common case). They previously returned `NULL` silently: the aggregate operator looked up the literal string `"n.v"` in the raw pre-projection column list instead of resolving it against the bound node the way `sum()` / `avg()` / `min()` / `max()` already did, so the column lookup always missed. An existing regression test only asserted the row count collapsed to one row and never checked the computed value, so the break went unnoticed. Verified against hand-computed references: `stDev([1,2,3,4]) = 1.2909944`, `stDevP([1,2,3,4]) = 1.1180339`, `percentileDisc([1..5], 0.5) = 3`, `percentileCont([1..4], 0.5) = 2.5`.
+- **A cross-language interop matrix (`scripts/interop/`) now gates the Thunder migration: one `nexus-server` build, every SDK plus a from-scratch pre-Thunder client, the same four wire steps (`auth`, `cypher` round-trip, `knn_bytes` byte-exact f32-LE, typed `error` with the connection surviving).** All **seven cells green** — `rust`, `typescript`, `python`, `csharp`, `go`, `php`, and `legacy`. The driver boots the server (auth required, off-default ports 25474/25475/25476), runs each `clients/<lang>/` cell against the contract `argv → STEP … PASS|FAIL → exit`, and exits non-zero on any red. See `docs/protocol/thunder-interop-matrix.md`.
+- **The `legacy` cell replays the pre-Thunder wire with no SDK** — map-shaped Request frames and `Bytes`-as-int-array — and stays green because the server's rmp-serde decode tolerates both (WIRE-013 / WIRE-011). A pre-Thunder client still in the wild keeps working against the migrated server, with no casualties.
+- **Untouched-surface regression proof.** Transport parity (`test-transport-parity.sh`): **7/7 OK, 0 divergent** — HTTP == RPC(Thunder) == RESP3 produce identical `{columns, rows}` envelopes. Neo4j differential suite (`test-neo4j-nexus-compatibility-200.ps1`, vs a live Neo4j 5): **308 / 325** — the 2 failures (MERGE 15.08 / 15.12) are pre-existing Cypher-executor write-path limitations (multi-variable RETURN and WITH between writes), not transport regressions: the same queries return the identical executor rejection over HTTP and RPC(Thunder), and the guard predates the migration.
+- Minor SDK enablement: the TypeScript SDK now re-exports its raw transport surface (`RpcTransport`, `nx`, `TransportCredentials`) at the package root, mirroring the Rust SDK's `pub mod transport` and the Python SDK's `nexus_sdk.transport.rpc`, so callers can drive the wire directly (interop harnesses, diagnostics) without reaching into `dist/` internals. Additive only.
 
-## [2.4.0] — 2026-07-11
+### Fixed — `phase0_fix-where-clause-index-seek-extensions` (range seek + EXPLAIN/PROFILE accuracy)
 
-> Fixes a data-loss bug in the HTTP write path — query parameters used as
-> property *values* in `CREATE`/`MERGE`/`SET` were silently stored as
-> `null`. Also corrects an AVX2 popcount miscount that could over-count
-> label-bitmap cardinality on large sets, and hardens the Docker image by
-> removing `tar` (clears the disputed CVE-2025-45582 medium finding).
+- **A range WHERE predicate (`n.age > 30`, `>=`, `<`, `<=`) on an indexed property now index-seeks instead of full-scanning, and EXPLAIN/PROFILE now show the real plan.** Follow-up to `phase0_fix-where-clause-index-seek`, which scoped its seeks to constant-literal equality; range/IN/STARTS WITH still full-scanned (they emitted the `Nexus.Performance.UnindexedPropertyAccess` notification but never sought). **Range seek:** the single-property B-tree already supported range and prefix scans (`find_range`/`find_greater_than`/`find_less_than`); a new `Operator::NodeIndexRangeSeek { op, value }` and `where_range_seek_operand` lift `var.prop <op> <literal>` (and the mirrored `<literal> <op> var.prop`, which inverts the operator) to a bounded key-range scan. Because the B-tree range is inclusive on both ends, exclusive `>` / `<` subtract the exact-match bitmap for the threshold, so the results are identical to a full scan (residual `Filter`s still run). When both bounds are present (`age > 10 AND age < 40`) one lifts to the seek and the other stays a residual filter. **EXPLAIN/PROFILE accuracy:** `execute_explain_with_string` / `execute_profile_with_string` built their display plan via an ad-hoc `QueryPlanner` that wired neither `property_index` nor `composite_index`, so an EXPLAIN'd plan showed `NodeByLabel`+`Filter` where execution actually runs a `NodeIndexSeek`/`CompositeBtreeSeek`; they now plan via the executor's real `plan_ast`, so the shown plan matches execution. Not a breaking change — plan-selection / diagnostics only; results are unchanged. The remaining forms (`IN`, `STARTS WITH`, and `$parameter` equality) are split into the follow-up `phase0_fix-where-in-prefix-param-index-seek`. Regression tests: `tests/cypher/where_range_index_seek_test.rs` (result-parity for `>`/`>=`/`<`/`<=`, the mirrored form, and a combined-bound case) and planner unit tests (each comparison lifts to the right `NodeIndexRangeSeek`; no index → no seek). See `docs/specs/cypher-subset.md`.
 
-### Fixed — parameterized write-path property values
+### Fixed — `phase0_fix-where-predicate-case-comprehension-lost`
 
-- **`CREATE (n {k:$v})`, `CREATE (a)-[r:T {k:$v}]->(b)`, and `SET n.k = $v` now persist the parameter value instead of `null`.** The server's write path converted property expressions to JSON without the request's parameter map: `expression_to_json_value` hit a `Parameter(_) => Null` arm that logged "Parameter expression not supported in CREATE" and dropped the value. Literals worked, so `CREATE (n {k:5})` persisted while the parameterized form silently stored `null` — a data-loss bug affecting every first-party SDK that binds write values via `$params`. The parameter map is now threaded through `expression_to_json_value` / `property_map_to_json` and every CREATE/MERGE/SET call site, resolving `$name` against the bound parameters (including nested map expressions and multi-key property maps). The read path already resolved params (`WHERE n.k = $v`), so only writes were affected.
+- **A `WHERE` clause containing a `CASE` expression (or any node `expression_to_string` cannot render) no longer degrades to the predicate string `"?"` and silently returns the wrong rows.** WHERE predicates were lowered by serializing the parsed `Expression` to a string stored in `Operator::Filter`/`OptionalFilter` and re-parsed at evaluation time. `expression_to_string` has no arm for `Expression::Case` (nor list/pattern comprehensions), so they fell through its `_ => "?"` catch-all: `MATCH (n) WHERE CASE WHEN n.x > 4 THEN true ELSE false END RETURN n` became the predicate `"?"`, which does not re-parse to the intended CASE — the query returned wrong rows. (A `CASE` in a *projection* always worked, because projections evaluate the `&Expression` directly; only the WHERE string round-trip was lossy.) Fixed by carrying the parsed AST through to the filter operator: `Operator::Filter`/`OptionalFilter` gained a `predicate_ast: Option<Box<Expression>>` alongside the existing `predicate: String` (kept for cost heuristics, EXPLAIN/plan-debug display, and the string fast-paths — index seek and label check). Every WHERE-clause lowering site now stores `Some(ast)`, and `execute_filter`/`execute_optional_filter` evaluate that AST directly via the same `evaluate_predicate_on_row` projections already use (no re-parse) — closing both the `"?"` hazard and the residual re-parse cost for user WHERE clauses. Synthetic predicates (inline label/property checks, which are simple and never contain CASE) keep `None` and re-parse the string as before. This is the second, independent hazard on the WHERE serialize/re-parse round-trip; the precedence hazard was fixed separately in `phase0_fix-where-predicate-reparse-precedence` (faithful parenthesizing serialization), and this one — which a string simply cannot represent — required carrying the AST. Not a breaking change — internal field addition (the `Operator` enum derives only Debug/Clone, no serde, so no wire/cache format is affected) and a query-semantics correctness fix. Regression tests (`tests/cypher/where_case_comprehension_predicate_test.rs`): a simple-CASE WHERE, a searched-CASE-equality WHERE, an `OPTIONAL MATCH ... WHERE CASE`, and a projected-CASE control that already passed. See `docs/specs/cypher-subset.md`.
 
-### Fixed — AVX2 bitmap popcount over-count
+### Fixed — `phase0_fix-wal-checkpoint-truncate-production`
 
-- **`popcount_u64_avx2` / `and_popcount_u64_avx2` no longer over-count on ≥128-word bitmaps.** The kernels accumulated per-byte partial sums in a `u8` lane (`_mm256_add_epi8`, max +8/lane) but only flushed every 255 chunks, so the lane overflowed after 32 adds — a 1024-word bitmap returned 4096 instead of the correct 16384. The flush interval is now 31 chunks (31×8 = 248 ≤ 255), keeping every partial sum within the `u8` lane. The AVX-512 path (64-bit lanes) was already correct. Adds a direct-kernel regression test across sizes `[0,1,8,31,32,124,128,256,512,1000,1024,4096]`.
+- **The WAL is now checkpoint-truncated in production, so it no longer grows forever, no longer eventually fails `health_check`'s 1 GiB gate (a hard availability cliff), and no longer makes every boot re-scan the entire lifetime history.** `Wal::checkpoint`/`Wal::truncate` existed and worked but had zero production callers (only tests), so a live server appended to the WAL forever. Fixed by wiring a size-driven compaction into the async WAL writer thread — the component that actually owns the live `Wal`: after a successful batch flush, if the WAL has grown past `AsyncWalConfig::checkpoint_size_bytes` (new, default 64 MiB — far below the 1 GiB gate; `u64::MAX` disables it), the thread writes a checkpoint marker and `truncate()`s the log to empty, incrementing a new `wal_checkpoints` stat. Because the compaction runs on the writer thread, the batch it just flushed is durable before the truncate — no cross-thread coordination needed. **A full truncate is safe because the WAL is redundant for recovery:** the only production consumer, `recover_external_ids_from_wal`, replays only `ExternalIdAssigned` entries via idempotent `put_if_absent`, and an external-id is committed to the LMDB catalog *before* its WAL entry is appended (write order `catalog.put_if_absent → LMDB commit → WAL append`), so the catalog is always at least as current as the WAL, and node/relationship state lives in the fsynced record stores. This is also why no checkpoint-marker offset or resume-from-checkpoint machinery was built — a truncated WAL is just a shorter log recovery reads normally, with the LMDB authoritative for the dropped entries. This is the split-out gap #6 of `phase0_fix-wal-durability-gaps`, sequenced after `phase0_fix-wal-torn-tail-recovery` (which settled the recovery contract). Not a breaking change — additive; compaction only discards entries already durably reflected in the LMDB/record stores; the sync fallback path (no async writer) simply does not compact, and production always runs the async writer. Regression tests (`wal/async_wal.rs`): with the trigger disabled the WAL grows unbounded and never checkpoints (the pre-fix baseline); past the threshold the writer checkpoint-truncates repeatedly and a reopened WAL stays bounded below the threshold (never the ~30 KB its raw frames would occupy). See `docs/specs/wal-mvcc.md`.
 
-### Security — Docker image hardening
+### Fixed — `phase0_fix-wal-torn-tail-recovery`
 
-- **Removed `tar` from the published image, clearing CVE-2025-45582 (medium).** `nexus-server` never invokes `tar`; the DHI base shipped it and scanners flagged the DISPUTED, upstream-`won't-fix` CVE-2025-45582. The runtime stage now removes the `tar` binaries plus its `dpkg` metadata in **both** `/var/lib/dpkg/status.d/tar` (the distroless per-package file Grype/Trivy read) and the monolithic `/var/lib/dpkg/status` stanza (what Docker Scout reads). Docker Scout now reports `0C 0H 0M 0L` — no vulnerable packages.
+- **A normal crash-residue partial WAL frame no longer makes `recover()` discard every entry it parsed — including the valid prefix before the torn frame — and no longer poisons every subsequent boot.** WAL appends are un-fsynced until the async batch flush, so a crash mid-append is *expected* to leave a partial trailing frame on disk; the v3/encrypted recovery path already truncated such residue correctly, but the v1/v2 plaintext body reads (`type`/`len`/`payload`/`crc`) used bare `?`, propagating `UnexpectedEof` as a hard `Err`, and any CRC mismatch was unconditionally fatal. Because `recover()` builds its entries into a local `Vec` returned only on `Ok`, and the caller (`recover_external_ids_from_wal`) treats any `Err` as "give up entirely", an error at frame N discarded frames `0..N` too. Worse, `recover()` never truncated the torn frame, and the next append seeks to EOF (past it), so the residue was never overwritten — **every** future boot re-hit the same offset, re-failed, and re-discarded the (growing) valid prefix, permanently, until the file was manually repaired. Fixed by giving the v1/v2 arms the same torn-tail handling as v3: a shared `read_frame_body` helper truncates to the current frame's start and returns the parsed prefix on `UnexpectedEof`; a declared frame length that would run past EOF is likewise treated as a torn tail (which also caps the recovery-time allocation so a torn length field can't request a huge buffer); and a CRC mismatch is treated as a truncated tail **only when the bad frame is the last one in the file** (`file_offset + frame_len >= file_len`) — a CRC mismatch on a frame followed by more bytes stays a hard error, since only the trailing case is ambiguous with crash residue. All three frame formats now agree on the "truncated tail" definition, and because the residue is truncated, recovery is idempotent (a second boot is a no-op). Not a breaking change — recovery becomes strictly more permissive (fewer spurious full-discards); the on-disk frame format and `recover()`'s signature are unchanged. Regression tests (`wal/mod.rs`): torn-tail EOF recovers the 4-entry prefix and truncates and a second recovery is a no-op; a CRC mismatch on the last frame recovers the prefix and truncates; a mid-file CRC mismatch still hard-errors (the existing `test_crc_corruption_detection` was updated to corrupt a non-trailing frame, matching the new semantics). See `docs/specs/wal-mvcc.md`.
 
-## [2.3.4] — 2026-06-20
+### Fixed — `phase0_fix-wal-durability-gaps` (#4 emergency-save replay, #5 directory fsync)
 
-> Fixes the openCypher MERGE relationship-property gap (GH #25): inline
-> rel props are now persisted on create and `SET` works on relationship
-> variables — idempotent edge upsert with properties via MERGE, no more
-> delete-then-create workaround. Also rolls up the `target/`-size build
-> hygiene work (#24).
+- **Two WAL/storage durability gaps closed: the emergency-save fallback now writes recoverable frames that are actually replayed on boot, and newly created WAL/record-store files fsync their parent directory so a crash right after first-run creation cannot leave them undiscoverable.** (This task's third gap — the WAL never being checkpointed/truncated in production — was split into `phase0_fix-wal-checkpoint-truncate-production`, sequenced after `phase0_fix-wal-torn-tail-recovery` because its recovery-from-checkpoint contract depends on that task.) **(#4 — emergency batch was unreplayable)** When a live batch flush exhausted its 3 retries, `AsyncWalWriter::flush_batch` called an emergency-save that wrote `[len][bincode]` frames — no magic/algo/CRC, a format `Wal::recover()` never parses — to a **CWD-relative** `data/wal-emergency-<ts>.log` outside the configured data directory, and nothing ever scanned for or replayed those files. The code's own log said "entries lost!" — accurately, because the save changed nothing. Replaced with `Wal::emergency_save`, which writes a `wal-emergency-<ns>.log` in the **main WAL's own directory** using the **real frame format** (it opens a second `Wal` mirroring the main WAL's cipher and calls `append()`, so frames are byte-identical and, when the WAL is encrypted, are not leaked in plaintext), and a boot-time scan (`Wal::recover_emergency`) in `recover_external_ids_from_wal` that decodes those files with the WAL's cipher and merges their entries into recovery (idempotent `put_if_absent`, so order is irrelevant), then `Wal::clear_emergency` removes them once durably applied. **(#5 — no directory fsync after file creation)** `Wal::new`/`Wal::with_cipher` (WAL file) and `RecordStore::new` (`nodes.store`/`rels.store`) fsynced the *files* but never the *parent directory*; POSIX does not guarantee a new file's directory entry is durable until the directory itself is fsynced, so a crash between "file data fsynced" and "directory fsynced" can leave the file undiscoverable after recovery. Added a shared `storage::fs::sync_parent_dir` helper called from all three constructors — best-effort (a failure is logged, not propagated, so a filesystem without directory fsync can't become a hard startup failure) and a no-op on non-Unix platforms (Windows has no std directory fsync). Not a breaking change — both are additive hardening; the normal (non-emergency) on-disk frame format is unchanged. Regression tests: `wal/mod.rs` (emergency frames are recoverable and land in the WAL's directory; an encrypted WAL's emergency file does not leak plaintext; `clear_emergency` removes the files), `wal/async_wal.rs` (an entry that hits the retry-exhaustion emergency path via the `fail_flush` hook is recoverable by a fresh `Wal`), and `storage/fs.rs` (helper is panic-safe). Directory-fsync observation isn't feasible on the CI platform (Windows no-op), so #5 is inspection-verified per the task's allowance. See `docs/specs/wal-mvcc.md`.
 
-### Fixed — `phase7_merge-persists-rel-props` (#25)
+### Fixed — `phase0_fix-store-size-per-clone-divergence`
 
-- **`MERGE (a)-[r:T {k:v}]->(b)` now persists inline relationship properties** when the edge is created. Previously the MERGE create path used a hardcoded empty property map, so the edge was created but `r.k` read back as `null` — while the same inline props via `CREATE` persisted. The create branch now evaluates `rel_pattern.properties` (resolving UNWIND `row.*` bindings) and stores them; `ON CREATE SET` still layers on top. Re-running the MERGE stays idempotent and keeps the properties.
-- **`SET` on a relationship variable is now supported.** `MATCH (a)-[r:T]->(b) SET r.k = v` (and `SET r += {…}`) previously failed with "Unknown variable 'r' in SET clause" because the write-path MATCH never bound relationship variables. The MATCH now binds a matched `(a)-[r:T]->(b)` relationship (honouring direction) into a relationship context, and `apply_set_clause` resolves rel-variable targets — `SET r.k = v` writes the property, `SET r += {…}` merges the map (a null value removes the key), `SET r.k = null` removes the key. This removes the need for the non-idempotent delete-then-create edge-rewrite workaround.
+- **A `RecordStore` clone's cached file-size fields no longer diverge from the shared mmap they bound-check against — closing a spurious-`NotFound` bug under concurrent growth and an out-of-bounds slice under concurrent `clear_all`.** `RecordStore` shares its mmaps across clones via `Arc<RwLock<MmapMut>>` (a fresh clone is taken on every `refresh_executor`) but cached the file sizes used to bound-check against them as plain per-instance `usize` fields copied by value on `Clone`, so the engine's store and an executor's cloned store held one physical mmap but two independent size snapshots. `grow_nodes_file`/`grow_rels_file` replace the shared mmap but update only the growing clone's own size, so a reader holding an older clone bound-checked a node that physically exists (grown in by another clone) against its own stale-small size and returned a spurious `NotFound` (a missing-rows correctness bug). `clear_all` shrinks the shared mmap but likewise updates only its own size, so a reader on a clone created before the clear kept its stale-large size, passed the `offset + RECORD_SIZE > cached_size` check, and sliced the now-smaller mmap out of bounds (an OOB panic in the lock-free `spawn_blocking` read task — mostly gated today because `clear_all` also resets the `next_*_id` atomics that most entry points check first, but a real invariant violation for any path that reaches the size check). Fixed by making `read_node`/`read_rel` bound-check the record's end offset against the **live** `guard.len()` of the mmap **inside the same read lock** used to copy the record — never a cached field — so there is no second piece of state that can go stale (the discipline `read_all_node_headers` already used). The cached `nodes_file_size`/`rels_file_size` remain only on the write/grow path, which is safe under the single-writer model (the sole writer both mutates the mmap and updates its own size, so they never diverge for it) — so the proposal's optional `Arc<AtomicUsize>` conversion was unnecessary. As defense in depth, `Engine::clear_all_data` now calls `refresh_executor()` after `storage.clear_all()` so the reset size is observed promptly instead of at the next natural refresh; `next_node_id`/`next_rel_id` were already correctly shared via `Arc<AtomicU64>` (unchanged). Not a breaking change — internal bound-checking mechanism only; no public API or on-disk format change. Regression tests (`tests/storage/record_store_clone_divergence_test.rs`): a stale clone reads a node the original grew into the shared mmap (was spurious `NotFound`); a stale clone agrees with the freshly-sized original on readability after `clear_all` (was a stale-size disagreement / OOB); plus concurrent reader-thread stress tests over a live grow and a live `clear_all`. See `docs/specs/storage-format.md`.
 
-### Changed — `phase7_bound-target-dir-size` (#24)
+### Fixed — `phase18_de-flake-fulltext-ranking-tests`
 
-- **Dev builds emit `line-tables-only` debuginfo instead of full debuginfo.** `[profile.dev]` now sets `debug = "line-tables-only"` — panics and backtraces keep file:line, but the bulky per-variable/per-type DWARF emitted for every workspace crate *and* every dependency is gone. This is the single biggest `target/` size lever (and ~30-40% faster incremental rebuilds). `[profile.release]` already strips symbols. No runtime behavior change.
-- **Added `scripts/sweep-target.sh` and `scripts/sweep-target.ps1`** wrapping [`cargo-sweep`](https://github.com/holmgr/cargo-sweep): remove artifacts not accessed in N days (default 14) without breaking incrementality, with `--dry-run` and `--clean` (full `cargo clean`) options; auto-installs cargo-sweep if missing.
-- **CI sets `CARGO_INCREMENTAL: 0`** on the Rust workflows (rust-test, rust-lint, rust-bench) — runners start cold, so incremental compilation only adds artifacts and slows the build.
-- **New `docs/development/rust-target-hygiene.md`** documenting the levers, the sweep scripts, and a scheduled-job suggestion to keep `target/` bounded with no manual effort.
+- **Full-text index writes no longer intermittently fail on Windows with `PermissionDenied` (OS error 5) on Tantivy segment files.** Each `FullTextIndex` write opened a fresh Tantivy `IndexWriter` whose `commit()` could schedule a background merge; `IndexWriter::drop` does not wait for that merge (only `wait_merging_threads()` does), so a surviving merge thread raced a later call's `garbage_collect_files()` pass. On Windows — where Tantivy's `MmapDirectory` opens segment files without `FILE_SHARE_DELETE` — that race surfaced as a transient `PermissionDenied` on `.fast`/`.fieldnorm`/`.pos` files. Fixed by (1) calling `wait_merging_threads()` after each commit so a generation's merges settle before its writer drops, and (2) a bounded exponential-backoff retry (5 attempts, 10 ms → 160 ms, mirroring the existing `TempDirGuard::drop` `remove_dir_all` precedent) that absorbs the residual window where Windows releases the mmap handle asynchronously — retrying ONLY the Windows-lock error class, never masking a genuine error. This is a production robustness fix (real Windows index rebuilds hit the same race); it also de-flakes the fulltext ranking / crash-recovery / async-writer regression tests (was ≈1-in-5 on Windows, now 25/25 consecutive green). Separately, the env-var-racing `hub::client` unit tests are now `#[serial]` so a sibling test mutating the same `HIVEHUB_*` variables can't race them. Not a breaking change — internal writer-lifecycle robustness only.
 
-## [2.3.3] — 2026-06-10
+### Fixed — `phase17_fix-duplicate-node-in-write-path-create`
 
-> Audit-closure release: finishes the 2.3.3 audit-task batch (GH
-> #14–#22) and fixes seven additional pre-existing bugs found by manual
-> Docker validation — index correctness on SET/CREATE, explicit
-> transactions over HTTP, rollback of executor-created nodes, async-WAL
-> shutdown durability, the chain-walk off-by-one, and top-level
-> EXPLAIN/PROFILE parsing. Full workspace suite green (4716 tests);
-> Docker E2E battery 11/11 + durability checks.
+- **A `CREATE` statement combining a relationship pattern with a write clause (`SET`, `REMOVE`, `MERGE`, or `FOREACH` in the same query) no longer creates a phantom duplicate of the relationship's target node and binds the query variable to an orphan copy.** The bug was introduced by pattern-element processing: when a `CREATE` inlined a target node in a relationship pattern like `CREATE (a)-[:LINKS]->(b:Beta) SET a.k=1`, the relationship arm materialized `b` immediately to wire the edge, but then the loop's own node-processing arm re-created the same element on its next iteration — producing two `:Beta` nodes with identical properties, one connected (wired by the relationship), one orphaned (unconnected). All downstream references in the query (e.g., `SET b.x=1`, `RETURN b`) operated on the orphan (the stale binding from the second creation), silently writing to the wrong node. Plain `CREATE` without subsequent write clauses was never affected (it follows a different code path). Fixed by introducing a `consumed_node_indices` set in the pattern-element loop: the relationship-processing arm now marks inline target nodes as consumed, and the node-processing arm skips them rather than re-creating. This ensures each pattern element is materialized exactly once, and query variables are bound to the correct (connected) nodes. **Data-safety remediation:** Deployments that ran affected query shapes may have orphaned nodes in their databases. See `docs/data-corruption/CREATE-relationship-phantom-target-audit.md` for detection queries and cleanup guidance. This is the only known silent-corruption vector in the 3.0 release; the fix is complete and verified via regression tests. Not a breaking change — a correctness fix only; no public API or wire format affected. Regression tests: `tests/regression/create_rel_with_set_phantom_node_test.rs` (inline target nodes in `CREATE` with and without a subsequent `SET` in the same query, chained `(a)-[:R]->(b)-[:S]->(c)` patterns, and confirmation the `UNWIND`+`CREATE` arm is unaffected). See `docs/specs/cypher-subset.md` § CREATE for the corrected semantics.
 
-### Fixed — `phase7_point-property-accessors-parity`
+### Fixed — `phase0_fix-storage-oob-panics`
 
-- **Query-initial `WITH` now operates on the implicit unit row.** Any query starting with `WITH` and no upstream row source — `WITH 1 AS x RETURN x`, `WITH point({…}) AS p RETURN p.x` — returned ZERO rows: `execute_with` cleared everything on empty input, unlike `execute_project`, which already seeded a unit row for standalone `RETURN`. The same seed rule now applies to `WITH` (only when no variables are bound and every item is evaluable without variables, so an empty `MATCH` correctly stays empty through `WITH`). This was the root cause of all ten section-18 compatibility-suite failures — far beyond points.
-- **Point property accessor parity:** `p.height` on WGS-84 3D points now resolves to the stored `z` coordinate (joining the existing `longitude`/`latitude` aliases); `p.x`/`p.y`/`p.z`/`p.crs` work through `WITH` projections; 3D construction (`point({x,y,z})`, `point({longitude,latitude,height})`) and the CRS names (`cartesian`/`cartesian-3d`/`wgs-84`/`wgs-84-3d`) verified end-to-end.
-- **`point.withinBBox` accepts the Neo4j positional form** `point.withinBBox(p, lowerLeft, upperRight)` in addition to the legacy `{bottomLeft, topRight}` map form.
+- **Three independent record/property-store bounds defects — each of which let a corrupt or adversarially-crafted on-disk value slip past its length guard and panic on an out-of-bounds slice (aborting the query thread or the process) instead of returning a storage error — are closed.** All three are reachable from ordinary graph reads/writes over merely-corrupt data, not from any Rust-level API misuse. **(#2 — overflow-unsafe record offsets)** `read_node`/`write_node`/`read_rel`/`write_rel` (`storage/record_store_ops.rs`) computed the byte offset as `id as usize * RECORD_SIZE` and the bound as `offset + RECORD_SIZE` with unchecked arithmetic. The workspace release profile does not set `overflow-checks`, so in release both wrap: a crafted id makes `offset + RECORD_SIZE` wrap to `0`, passes the `> file_size` guard, and the subsequent `mmap[start..end]` slice runs past the mapping and panics (an ordinary `MATCH ()-->()` over a single corrupt/self-referential `dst_id` was enough). Fixed with checked `u64` arithmetic (`checked_mul`/`checked_add`) that returns `NotFound` (read) / `Storage` (write) on overflow; because the multiply is now native `u64` rather than `id as usize`, the 32-bit-target truncation the proposal flagged is closed at the same time. **(#3 — property-store header over-read)** `get_entity_info_at_offset` and `load_properties_at_offset` (`storage/property_store.rs`) guarded only with `offset >= mmap.len()`, then read a 9–13-byte entry header via `read_u64`/`read_u8`/`read_u32`, none of which re-checked bounds — so any `offset` in `[len-12, len)` walked past `mmap.len()` and panicked (a corrupt `prop_ptr`, reached from `read_node` and from `repair_corrupt_node_prop_ptrs` — the very code that exists to sanitize corrupt pointers). Fixed by rejecting any offset whose full 13-byte header (`PROPERTY_ENTRY_HEADER_SIZE`) would exceed EOF in both call sites, and by making `read_u64`/`read_u32`/`read_u8` themselves bounds-checked (returning `0` rather than indexing past the map) so a future caller that omits its own pre-check stays panic-safe. **(#4 — grow not sized to the write target)** `grow_nodes_file`/`grow_rels_file` (`storage/record_store.rs`) sized the new file from the current size only (`max(1.5x, +2 MB)`), never the offset the caller was about to write; a sparse write more than ~2 MB past EOF grew once, was still too small, and sliced past the freshly-remapped mmap. Fixed by threading the target offset through and sizing to `…​.max(target_offset + RECORD_SIZE)`, mirroring `property_store::ensure_capacity`'s existing `.max(required_size)`. Not a breaking change — all three turn a panic into an existing `Result`/`Option` error path already used by the same functions; no on-disk format or public-signature change (the `grow_*_file` signatures that gained a parameter are `pub(super)`, single-caller). Scope note: §2.3's optional `id < next_*_id` read-gate was **not** taken — it would change `read_node`'s established contract (`Ok(zeroed)` → `Err` for an unallocated but in-range id, which callers already distinguish via the `FLAG_ALLOCATED` bit) and would require advancing `next_*_id` on every raw `write_node`, a public-API semantics change out of proportion to a bounds-panic fix; checked arithmetic plus the existing file-size guard fully close the panic and the wrap. Regression tests: `tests/storage/record_store_bounds_test.rs` (overflow-id read/write for nodes and rels return `Err` not panic; sparse writes 6.4 MB / 10.4 MB past EOF grow enough and round-trip) and an in-module property-store test (`header_read_near_eof_returns_none_not_panic`) covering every offset in the 12-byte pre-EOF blind spot — all verified failing (multiply-overflow / slice-OOB / garbage-`Some`) before the fix. See `docs/specs/storage-format.md`.
 
-### Fixed — `phase6_fix-rebuild-indexes-per-commit` (#15)
+### Fixed — `phase0_fix-shortestpath-multi-reltype-dropped`
 
-- **Explicit-transaction COMMIT no longer runs a full `rebuild_indexes_from_storage()` scan.** Every explicit `COMMIT` previously rebuilt the label, relationship, and (since #11) every property index from scratch — an O(N_nodes + N_rels) cost per commit, even for single-row transactions, that serialized transaction-heavy workloads. COMMIT now applies **scoped incremental maintenance** over the transaction's own write set: storage watermarks captured at `BEGIN` (node/relationship counts — the single-writer model guarantees ids allocated since then belong to this transaction) plus the session's tracked created-entity lists. For each created node the label bitmap and the typed property B-tree (the part the rebuild was load-bearing for — `find_exact`/`NodeIndexSeek`) are maintained; for each created relationship the in-memory relationship index is re-asserted (idempotent, #18 self-heal on failure). Commit cost now scales with the transaction's write set, not graph size. Guarded by the `explicit_commit_keeps_property_index_seek` contract test and a new `explicit_commit_incremental_indexes_match_full_rebuild` equivalence test (incremental result == ground-truth full rebuild). Note: SET-modified properties of pre-existing nodes are not reindexed at commit — identical to the non-transactional SET path (pre-existing gap, tracked separately).
+- **`shortestPath()` / `allShortestPaths()` over a multi-type relationship pattern (`shortestPath((a)-[:R1|R2*..5]->(b))`) no longer traverse only the first named type.** Any path that required a non-first type was silently missed, returning a wrong or empty shortest path with no error. Same first-type-only bug class as `phase0_fix-varlength-multi-reltype-dropped` (commit c76e41c5), but in the sibling shortest-path helpers, which are a separate code path the earlier fix left untouched. Root cause: `find_shortest_path`, `find_all_shortest_paths`, and `find_paths_dfs` (`executor/operators/path.rs`) took `type_id: Option<u32>` and narrowed it to an at-most-one-element slice (`let type_ids_slice: Vec<u32> = type_id.into_iter().collect();`) before every `find_relationships` call, so their BFS/DFS could only ever match a single type; their only callers — the `shortestPath`/`allShortestPaths` functions in `executor/eval/projection/fn_graph.rs` — extracted just `r.types.first()` from the pattern. Fixed by retyping the three helpers to take `type_ids: &[u32]` and passing the full slice straight into `find_relationships` (removing the single-element reconstruction, mirroring the `execute_variable_length_path` fix), and by rebuilding both `fn_graph.rs` call sites to map the pattern's entire `types` list to type ids (`r.types.iter().filter_map(get_type_id).collect()`) and pass `&type_ids`. Semantics preserved: empty list (unqualified `[*..n]`) = match all types; populated = OR-membership — the same rule `find_relationships` already applies for `Expand`. Regression tests (`tests/executor/shortestpath_multi_reltype_test.rs`): a path reachable only via the second named type in `[:R1|R2*1..5]`, only via the third in `[:R1|R2|R3*1..5]`, an `allShortestPaths` multi-type case, and an unqualified `[*1..5]` control — each registers the decoy first type(s) in the catalog so the first-type-only bug actually manifests (an unregistered decoy would resolve to `None`, collapse the filter to match-all, and mask the bug). Verified discriminating: the three multi-type tests fail with the pre-fix single-type behavior, the control passes. Not a breaking change — multi-type shortest-path queries return the correct path instead of missing paths that use non-first types. See `docs/specs/cypher-subset.md`.
 
-### Fixed — `phase7_fix-query-to-string-debug-reconstruction`
+### Fixed — `phase0_fix-skip-dropped-on-pattern-queries`
 
-- **`EXPLAIN` / `PROFILE` now parse at the top level.** The main parse loop only enters a clause at an `is_clause_boundary()` keyword, and `EXPLAIN`/`PROFILE` were missing from the boundary list — any `EXPLAIN ...` / `PROFILE ...` input parsed to an EMPTY AST, the engine never saw the Explain/Profile clause, and the executor's planner rejected the empty re-parse with `Query must contain at least one clause`. The existing EXPLAIN/PROFILE tests were soft (treated the error as "not yet implemented") so the regression was invisible. Both keywords are now clause boundaries, and the EXPLAIN/PROFILE inner parsers gained the missing `CALL` arm (subquery and procedure shapes), so `PROFILE CALL { ... } IN TRANSACTIONS` parses and profiles.
-- **The legacy `execute_cypher_ast` read fallback no longer re-parses Debug output.** `query_to_string` emits `format!("{:?}")` dumps, not Cypher, so every consumer that re-parsed it failed (`CypherSyntax: Expected identifier ...`) — this broke every inner read subquery on the legacy CALL path. The fallbacks now hand the already-parsed AST to the executor via the one-shot `preparsed_ast_override` (the same mechanism cluster mode uses), with no re-serialization.
+- **`SKIP` is no longer silently ignored on pattern-driven (`MATCH`) queries — pagination now works on `MATCH` as documented and as Neo4j behaves.** `MATCH (n) RETURN n.v AS v ORDER BY v SKIP 2` returned *every* row: `ORDER BY` (`Sort`) and `LIMIT` were applied, but `SKIP` was dropped. `Operator::Skip { count }` and its executor (`execute_skip`), dispatch, and cost arms already existed (added under `phase0_fix-order-by-on-call-yield`, commit f95d4458), but only the *pattern-less* branches (procedure `YIELD`, bare `RETURN`) emitted it; the pattern-based lowering pass never consumed the collected `skip_count`. Root cause: `plan_execution_strategy` (`executor/planner/queries/strategy.rs`) — the pattern-to-operator lowering used by every `MATCH`-driven query, including aggregation projections and `WITH` pipelines — had no `skip_count` parameter and emitted only `Sort` then `Limit`; its caller (`planner_core.rs`) collected `skip_count` from `Clause::Skip` but passed only `limit_count`. Separately, the post-`UNION` projection branch parsed `ORDER BY`/`LIMIT` after a `UNION` but explicitly discarded `SKIP` (its clause loop had no `Clause::Skip` arm; a comment even noted SKIP was "not supported"). Fixed by threading `skip_count` into `plan_execution_strategy` and emitting `Operator::Skip` **between** the `ORDER BY` (`Sort`) and `LIMIT` pushes — the standard openCypher `ORDER BY → SKIP → LIMIT` pipeline order, mirroring the pattern-less branches — and by adding a `post_union_skip` extraction plus its `Skip` emission (between the post-UNION `Sort` and `Limit`) in `planner_core.rs`. Regression tests (`tests/cypher/skip_pattern_queries_test.rs`): `SKIP` after `ORDER BY`, `SKIP`+`LIMIT` ordering, `SKIP` on a descending sort, `SKIP 0` no-op, a no-`SKIP` control lock, `SKIP` after an aggregation projection, `SKIP` on a `WITH` pipeline, and `SKIP` after a post-`UNION` `ORDER BY`; the pattern-less `SKIP` tests (`test_call_procedures.rs`) remain green, confirming that path is unaffected. Not a breaking change — it corrects silently wrong (over-returning) results. Note on clause attachment: a `SKIP`/`LIMIT` written after a `UNION` *without* an accompanying `ORDER BY` binds to the nearest `RETURN` (the right-hand UNION arm), matching openCypher; add `ORDER BY` after the final `UNION` to page the merged result. See `docs/specs/cypher-subset.md`.
 
-### Fixed — `phase6_fix-set-indexed-property-stale-index`
+### Fixed — `phase0_fix-server-secure-defaults-and-dos`
 
-- **`SET` on an indexed property no longer leaves the typed property index stale.** Updating an indexed property produced wrong results in BOTH directions: a seek by the new value returned nothing (node invisible), and a seek by the old value returned the renamed node (stale entry). `persist_node_state` — the choke point for `SET` property / `SET +=` / `REMOVE` / label changes — now captures the pre-write property bag + labels and refreshes the typed B-tree (evict old `(label, key, value)` entries, add new ones, registered indexes only), joining the existing FTS and spatial refresh siblings. Reproduced over HTTP on the published 2.3.2 image.
-- **Non-transactional Cypher `CREATE` now maintains the typed property index immediately.** The executor CREATE operator maintains the label index but not the typed B-tree, so a freshly created node was invisible to `find_exact`/`NodeIndexSeek` (and a follow-up `MATCH {prop} SET` silently no-opped) until a restart or an explicit-transaction commit rebuilt it. The standalone-CREATE dispatch branch now indexes the id range the executor allocated (watermark capture, same write-set source as the #15 scoped-commit maintenance).
+- **Six server-hardening gaps in the default configuration and request pipeline are closed; three are intentional breaking changes that make an accidental wide-open deployment fail loudly instead of silently serving the internet.** Found in a server/auth security audit. **(H1 — public-bind guard, BREAKING)** The server shipped with authentication off by default (`AuthConfig::enabled = false`) and no guard against binding publicly; `required_for_public` was parsed from nothing and read nowhere (dead). A boot-time `Config::security_preflight()` now refuses to start when the bind address is non-loopback and auth is disabled — unless the operator deliberately opts out with `NEXUS_AUTH_REQUIRED_FOR_PUBLIC=false`. The default bind (`127.0.0.1:15474`) is loopback, so local/dev startup is unchanged; only an explicit `NEXUS_ADDR=0.0.0.0:…` with auth off now fails. **(M2 — default root password, BREAKING)** With auth enabled and the root account active, booting with the literal default `root` password is refused; set `NEXUS_ROOT_PASSWORD` (or `NEXUS_ROOT_PASSWORD_FILE`). The default password lives once as `DEFAULT_ROOT_PASSWORD` and drives both the default and the guard. **(H2 — rate limiting)** The constructed limiter was discarded (`let _rate_limiter = RateLimiter::new();`) and never layered. It is now wired onto the router via `from_fn_with_state`, keyed on the client socket IP, and the server serves with `into_make_service_with_connect_info::<SocketAddr>()` so the middleware's `ConnectInfo` resolves — throttling `POST /auth/login` and API-key floods per IP. **(H4 — request timeout)** No `TimeoutLayer` existed, so a slowloris connection or a request that never completes could pin a worker indefinitely. A `tower_http::timeout::TimeoutLayer` (default 30 s, `NEXUS_REQUEST_TIMEOUT_SECS`) now bounds every request at the HTTP layer, returning `408`. (CPU-bound *statement-level* cancellation inside the Cypher executor is a documented follow-up — the executor has no cooperative-cancellation plumbing today; the TimeoutLayer covers the HTTP/slow-connection vector.) **(M3 — `/stats` gating, BREAKING when auth on)** `requires_auth` hardcoded `/stats` to public. `/stats` now sits behind the auth boundary when auth is enabled (node/relationship/storage counts no longer leak); operators who scrape it can opt back to public with `NEXUS_REQUIRE_STATS_AUTH=false`. **(M4 — CORS, BREAKING)** `CorsLayer::permissive()` reflected any `Origin`, letting any website read API responses cross-origin. Replaced with `middleware::build_cors_layer`, driven by a `NEXUS_CORS_ALLOWED_ORIGINS` allow-list that defaults to empty (no cross-origin access). New tests: `Config::security_preflight` matrix (H1/M2), a per-key rate-limiter budget/independence unit test (H2), `requires_auth`/`with_require_stats_auth` gating (M3), and `tests/server_hardening_test.rs` exercising the timeout (H4) and CORS allow-list (M4) via `oneshot`. See `docs/security/AUTHENTICATION.md`.
 
-### Fixed — `phase6_fix-rollback-executor-created-nodes`
+### Verified — `phase0_fix-relationship-write-clauses-dropped`
 
-- **HTTP: explicit transaction commands now reach the engine.** `BEGIN` / `COMMIT` / `ROLLBACK` / `SAVEPOINT` sent over `POST /cypher` matched no routing branch in the server handler and fell through to the bare executor clone, which silently no-opped them (HTTP 200, empty result) — so over HTTP, `BEGIN` never opened a transaction, `ROLLBACK` rolled nothing back, and `COMMIT`/`ROLLBACK` without `BEGIN` "succeeded". The handler now routes transaction-command ASTs through `engine.execute_cypher`, engaging the session-transaction machinery (and surfacing proper errors for COMMIT/ROLLBACK without BEGIN). Found by manual Docker validation; pre-existing (reproduces on the published 2.3.2 image).
-- **`ROLLBACK TRANSACTION` now actually undoes a standalone Cypher `CREATE` executed inside an explicit transaction.** A standalone CREATE inside a transaction routes through the executor write path, which never reported created ids into the session — the rollback arm iterated exactly that (empty) list, so the "rolled-back" node survived and stayed visible (reproduced on the published 2.3.2 image; found during manual Docker validation of this release). The rollback arm now also sweeps the session's storage watermark range captured at `BEGIN` (the same write-set source as the #15 scoped-commit fix; exact under the single-writer model), gated on an active transaction so a stray ROLLBACK can never sweep ids from a stale watermark. Pre-existing data is untouched; covered by `rollback_undoes_executor_created_nodes`.
+- **Regression-locked two relationship write-clause behaviors that were previously silent no-ops; both underlying fixes had already landed under sibling tasks, verified here with new coverage.** (H-2) A relationship-pattern `MERGE (a)-[r:KNOWS]->(b) ON CREATE/ON MATCH SET ...` now dispatches every SET item to the correct entity — node property, node label, and node map-merge (`a += {..}`) items apply instead of being filtered to only the relationship variable. This was fixed when `apply_merge_rel_set` was replaced by `apply_merge_relationship_set`, which delegates to the general `apply_set_clause` (commit a047eade); this task adds the missing regression tests (`tests/executor/relationship_merge_set_dispatch_test.rs`: node property, label, and map-merge on both the ON CREATE and ON MATCH branches). (M-4) `MATCH (a)-[r]->(b) DELETE r` removes the edge (rather than reporting success while doing nothing) — fixed under `phase0_fix-cypher-relationship-delete-noop`, whose regression suite (`tests/executor/relationship_delete_test.rs`) already covers relationship-only delete and the mixed `DELETE r, a` clause. No code change in this task; behavior confirmed correct and pinned by tests. See `docs/specs/cypher-subset.md`.
 
-### Fixed — `phase6_wal-async-backpressure` (#19)
+### Fixed — `phase0_fix-relationship-publish-ordering`
 
-- **Async WAL shutdown no longer drops accepted entries.** The shutdown flag could pop the writer loop while `Append` commands that `append()` had already acknowledged still sat in the channel — they were silently lost (observed: a 2000-entry burst recovered only 1990 after replay). The writer thread now drains the channel on exit before the final flush, restoring the "accepted ⇒ durable" contract. Found by extending the #19 backpressure test with a WAL-replay durability assertion.
-- **Backpressure made observable and the queue-depth knob honest** (shipped in b8f6e521): the command channel is sized from `max(channel_buffer_size, max_queue_depth)` (the depth knob previously only fed a counter while the channel blocked at 1000), and submission goes through `try_send` — a genuinely full channel increments a `backpressure_blocks` stat and warns before the ordered blocking send. The task's original "fall back to synchronous WAL append on Full" idea was deliberately not taken: a sync append racing the queued batch would interleave entries out of order in the log; the blocking send preserves WAL ordering while making the stall visible.
+- **A concurrent lock-free read (`MATCH`/traversal/edge lookup) running alongside a `CREATE`/`MERGE` that adds an edge no longer observes a phantom edge to node 0 or a silently truncated adjacency list.** Nexus has no per-record MVCC version: the server read path clones the executor, releases the engine lock, and runs the query under `spawn_blocking` holding no lock, against the same shared `nodes_mmap`/`rels_mmap` a writer may be mutating — so the *order* in which a write publishes its record writes is the entire isolation contract. `RecordStore::create_relationship` (`storage/record_store_ops.rs`) published the source node's new `first_rel_ptr` via `write_node` **before** writing the relationship record itself via `write_rel`. Because the node and relationship mmaps are independent `Arc<RwLock<MmapMut>>` (each individual record read/write is atomic, but the cross-mmap pair is not), a reader that cloned the store could observe the just-published pointer and then `read_rel` the still-zeroed slot it points to. An all-zero slot has `is_deleted() == false`, so the reader treated it as live and either surfaced a phantom edge to node 0 (`dst_id == 0`) or — since `next_src_ptr == 0` is also the end-of-chain sentinel — terminated its adjacency walk immediately, dropping every older edge in that node's list (`Engine::find_relationship_between` likewise reported "not found" for an edge that exists). Fixed by reordering `create_relationship` to publish **record before pointer**: the complete `RelationshipRecord` (with its `next_src_ptr`/`next_dst_ptr` chaining to the prior list heads) is written to `rels_mmap` first, a `fence(Release)` follows, and only then is `first_rel_ptr` published via `write_node` as the last, externally-visible step; the reader path (`executor/operators/path.rs::find_relationships`) issues a matching `fence(Acquire)` before reading the node so the two fences form a real happens-before edge. A reader that has not observed the new pointer sees the prior consistent list; one that has always finds a fully-initialized record. Regression tests (`tests/storage/relationship_publish_ordering_test.rs`): a deterministic test pinning that an allocated-but-unwritten slot reads as a live edge to node 0, and a concurrent stress test (6 lock-free readers walking a 100+-edge node's chain while a writer appends ~4000 edges) that reproduced the phantom on 100% of pre-fix runs and passes reliably after. Not a breaking change — the on-disk record layout is unchanged; only the write order within a single relationship-creation call changed. See `docs/specs/wal-mvcc.md`.
 
-### Changed — `phase6_share-recordstore-arc` (#16)
+### Fixed — `phase0_fix-multi-hop-count-star-incorrect`
 
-- **`RecordStore::clone` is now a shared handle — no file re-open or re-mmap per write.** `Engine::refresh_executor` runs at the tail of every write and rebuilds the executor, which clones the record store; previously each clone re-opened and re-mmapped `nodes.store` + `rels.store` (2–6 file-open + mmap syscalls per write) and allocated throwaway managers — the dominant sustained-ingest throughput ceiling. The memory mappings, file handles, property store, and id counters now live behind shared `Arc`s inside `RecordStore` (the "interior-shared handle" shape, chosen over an engine-level `Arc<RwLock<RecordStore>>` so every existing call site keeps compiling), making clone a handful of `Arc::clone`s. A file grow through one handle is immediately visible to every other handle (previously stale per-clone mappings). Single-writer + mmap durability semantics unchanged. Guarded by a structural test (`clone_is_shared_handle_not_reopen`: `Arc::ptr_eq` on mmaps/files/property store + cross-handle write visibility + shared id counters); full workspace suite green.
+- **`count(*)` over a multi-hop relationship pattern with zero matches no longer returns a phantom `1`.** `MATCH (a)-[:R1]->(b)-[:R2]->(c) RETURN count(*)` reported `1` when the pattern had no matches (e.g. isolated nodes with neither edge). Root cause was in the `Expand` operator's empty-result tail (`executor/operators/expand.rs`): when a *later* hop of a multi-hop pattern ran on an already-empty row set (an earlier hop matched nothing), it fell through to the branch that calls `update_result_set_from_rows(&[])`, which wiped `result_set.columns`. `Aggregate` (`executor/operators/aggregate/core.rs`) uses non-empty `columns` (`has_match_columns`) as the "the MATCH executed but matched nothing" signal; with it erased, the aggregate could not distinguish "pattern matched nothing" from "there was no pattern at all" (a bare `RETURN count(*)`) and synthesized a virtual row whose `count(*)` arm returns `1`. A single-hop empty pattern never triggered it — only a second or later `Expand` on an emptied pipeline reached the column-wiping branch — which is why the bug was multi-hop-specific and `count(a)` was accidentally correct (`0`), being masked by the virtual row's `column.is_some()` arm rather than by skipping a null. Fixed by broadening the guard so that ANY zero-row expansion (`expanded_rows.is_empty()`) takes the column-preserving path instead of only the non-empty-input case (`… && !rows.is_empty()`), keeping the `has_match_columns` signal intact so `Aggregate` returns the correct `0`. Regression tests (`tests/executor/multi_hop_count_test.rs`) cover `count(*)`/`count(var)` at 0/1/N matches on 2-hop and 3-hop patterns plus a shared-intermediate-node fan-out; the chained-inline-targets test in `write_refresh_visibility_test.rs` now asserts the direct 2-hop `count(*)` (its prior per-hop workaround is kept as extra coverage). Not a breaking change — corrects wrong counts. A separate, still-open defect in the same operator (a failed *required* `Expand` leaving an upstream binding alive, so `RETURN a,b,c` over a partially-matched required pattern can leak a `[a, Null, Null]` partial row) is out of this task's `count(*)` scope. See `docs/specs/cypher-subset.md`.
 
-### Fixed — `phase6_relwalk-warn-at-fallback` (#20)
+### Fixed — `phase0_fix-loadcsv-reorder-drops-predicates`
 
-- **Fixed an off-by-one that silently broke the authoritative chain-walk fallback in `find_relationship_between`.** Relationship chain pointers are stored as `rel_id + 1` (0 is the end-of-chain sentinel); the engine-side walk read `read_rel(rel_ptr)` without decoding, so whenever the exact-edge index missed (without the #18 dirty flag) the walk visited the wrong records and returned `None` — or a wrong, off-by-one rel id on a match. An edge-MERGE in that state could create a duplicate edge. The walk now decodes pointers like the executor's canonical reader (`path.rs`), returns the true rel id, and skips deleted records (parity with the fast path). Surfaced by the new #20 threshold-warning test; pre-existing since the walk was written.
-- **Chain-walk telemetry completed (#20):** the 1000-hop hub warning fires DURING the walk (shipped in 412f1acf — including when the edge is eventually found, which the old post-loop warning never reported), and the fast-path miss itself is now visible at debug level at fallback entry. New test captures the warning with a counting tracing layer against a 1100-edge hub and asserts it fires for a found edge.
+- **`LOAD CSV ... AS row` queries with a `WHERE` on the row variable — or a correlated `MATCH` seeded from it — no longer silently drop every row.** `optimize_operator_order` (`executor/planner/queries/cost.rs`) buckets operators then recombines them `scans -> expansions -> unwinds -> filters -> joins -> others`, with `others` recombined AFTER `filters`. `Operator::LoadCsv` binds a fresh per-row variable exactly like `Operator::Unwind`, but fell through the bucketing match's `_ => others` catch-all, so a `Filter` referencing the CSV row ran before `LoadCsv` bound it — the unbound variable evaluated to `Null` (always false), dropping every row (`LOAD CSV ... AS row MATCH (n) WHERE row[0] = n.id` returned nothing / garbage). The `unwind_before_scan` detection loop also recognized only `Operator::Unwind`, so `LOAD CSV ... AS row MATCH (n:Label {id: row.id})` — which compiles the inline property to a correlated `NodeIndexSeek` keyed on `row` — reordered the seek ahead of the `LoadCsv` that binds its key. Fixed by adding `Operator::LoadCsv` alongside `Operator::Unwind` in both the `unwind_before_scan` detection loop and the bucketing match (routing it into the `unwinds` bucket, which is recombined before `filters` and — unlike `scans` — is not cost-reordered, so a `LOAD CSV`/`UNWIND` pair keeps its original relative order). This is the same bug class already fixed for `VariableLengthPath`/`QuantifiedExpand`/`SpatialSeek`/`NodeIndexSeek` under `phase0_fix-plan-reorder-drops-predicates`, now extended to the last per-row binder that was still non-compliant with the "every variable-binding operator recombines before filters" invariant. Regression tests: plan-order guards (`LoadCsv` precedes the `Filter` / the correlated `NodeIndexSeek`) plus a behavioral case (a `WHERE` on the row variable returns the matching row instead of `Null`). Not a breaking change — `LOAD CSV` queries that filter on the row variable now return correct rows instead of empty/garbage results. See `docs/specs/cypher-subset.md`.
 
-### Fixed — `phase6_propagate-relindex-add-error` (#18)
+### Fixed — `phase0_fix-match-create-rel-aggregating-return-dropped`
 
-- **A failed relationship-index update is no longer silently swallowed on `create_relationship`** (shipped in 06ac218d): the write still succeeds (storage is authoritative) but the failure is logged at error level and the index is marked dirty; the next `find_relationship_between` self-heals by rebuilding the index from storage, restoring the O(1) exact-edge fast path. This task completes the audit: the Phase-8 manager updates (`RelationshipStorageManager`, `RelationshipPropertyIndex`) stay logged-at-warn — they are secondary acceleration structures that do not participate in MERGE existence checks, and a dirty-bit/rebuild path for them is not low-cost. New test proves a repeated edge-MERGE after a simulated index-add failure does not duplicate the edge.
+- **`MATCH (a)-[:R]->(b) CREATE (a)-[:T]->(c) RETURN count(*)` and the `WITH`-aggregation variant no longer silently drop the CREATE relationship write.** The planner's `plan_execution_strategy` function (`executor/planner/queries/strategy.rs`) computed the sink predicate that marks where projections (Aggregate, Project, Distinct) are allowed to run, but only allowed `Project` as a valid sink when determining where a `Create` operator could be placed. When a `RETURN count(*)` aggregation was present, the sink predicate was `Aggregate` (the only allowed terminal), but the planner inserted `Create` *after* the aggregation as part of the `others` bucket, so the write ran in a context where its output rows were never materialized — the aggregation consumed no rows for `Create` to emit, and zero relationships were persisted (the executor reported `relationships_created: 0`). The sink predicate now includes both `Project` and `Aggregate`, so `Create` is inserted *before* any projection sink, allowing the write to complete and emit rows for aggregation to consume. Fixed by widening the sink predicate in the `can_run_at_sink` and `is_sink_op` checks (`executor/planner/queries/strategy.rs`) to recognize `Aggregate` as a valid sink for write operators, mirroring the existing `Project` branch. Regression tests (`tests/executor/match_create_return_aggregation_test.rs`): `MATCH ... CREATE ... RETURN count(*)`, `RETURN count(DISTINCT ...)`, `MATCH ... WITH count(*) ... CREATE ... RETURN *` over 1/N results, and an unaffected `UNWIND ... RETURN count(*)` control — all verified to drop zero relationships before the fix and complete the write after. Not a breaking change — queries that silently lost writes now complete them correctly. See `docs/specs/cypher-subset.md`.
 
-### Changed — `phase6_prefilter-indexed-properties` (#21)
+### Fixed — `phase0_fix-engine-temp-dir-catalog-lock-residual`
 
-- **Per-write indexed-property maintenance now also early-exits when the node's labels have no registered index.** The first #21 slice (`has_any_index`) skipped all work when no property index exists at all; this completes it with a per-node prefilter (`PropertyIndex::has_index_for_label`) so that on a graph WITH indexes, writes to nodes of un-indexed labels skip the per-property `get_key_id` catalog (LMDB) reads as well. The registration set is the index's own `(label, key)` tree map — kept in sync by `CREATE INDEX` / `DROP INDEX` and the #11 startup rebuild, no parallel state to drift. Tests cover registration tracking across create/drop and the existing index-maintenance behavior.
+- **The server no longer leaks two temp directories (each a full record store + LMDB catalog) into `%TEMP%`/`/tmp` on every boot, `Catalog::default()` no longer leaks its temp directory, and `Engine::new()`'s temp directory is now removed deterministically on drop.** The task was filed against the small `Engine::new()` residual, but profiling the actual on-disk accumulation (≈4.5 GB, 700+ orphaned dirs) traced the dominant leak to the HTTP server: `build_default_comparison_graphs` eagerly built the two `/comparison/*` scratch graphs at startup via `tempfile::tempdir().keep()` + `RecordStore::new()`/`Catalog::new()`, a persistent (guard-less) store rooted in a `.keep()`-disarmed temp dir — so every server process (and every test that constructed a `NexusServer`) left two directories behind forever. **(root cause)** The comparison graphs are now created **lazily** on first `/comparison/*` request: `graph_a`/`graph_b` hold `Arc<Mutex<Option<ComparisonGraph>>>` initialized to `None`, and a server that never hits a comparison endpoint allocates no temp directory at all. When first accessed, each graph is materialized inside a self-removing `tempfile::TempDir` (prefix `nexus-cmp-<label>-`); `ComparisonGraph { graph, _tempdir }` orders its fields so the graph (record-store mmaps + catalog LMDB handles) drops before the directory is removed — required on Windows, where an open handle anywhere in the tree blocks `remove_dir_all`. A best-effort `sweep_stale_comparison_dirs()` runs once at server startup to reclaim `nexus-cmp-*` orphans older than one hour left by hard-killed prior processes (live dirs stay locked and are skipped; a stale-age guard keeps a concurrently-starting sibling server untouched). **(catalog)** `Catalog::default()` — reached in production via the server's boot-time `Executor::default()` as well as by tests — previously `tempfile::tempdir().keep()`-leaked its LMDB directory; it now attaches a shared `Arc<TempDirGuard>` (prefix `nexus-catalog-`) declared as the catalog's last field, so the directory is removed once the last `Catalog` clone drops, after `env_closer` has run `prepare_for_closing` and released the LMDB file handles. **(engine)** `Engine` gained a last-declared `_temp_dir_cleanup: Option<Arc<TempDirGuard>>` holding an independent clone of its temporary store's guard, so the temp directory is removed only after `catalog`/`wal`/`indexes` (Tantivy)/`executor` have all dropped — closing the intermittent Windows residual of `phase0_fix-tempdir-record-store-leak` where the guard fired while a sibling field still held a handle. **(hardening)** `TempDirGuard::drop` now retries `remove_dir_all` up to five times with exponential backoff (10 ms → 160 ms), absorbing the brief window where an async handle (e.g. a Tantivy background merge thread) is still closing. New regression test `regression_engine_tempdir_removed_after_drop` asserts an `Engine::new()` directory (catalog + WAL + index, not a bare `RecordStore`) is gone after the engine drops. Not a breaking change — the `graph_a`/`graph_b` fields stay `Arc`-wrapped (identity checks unaffected) and every leak fix is internal robustness; verified by a full test run leaving zero `nexus-cmp-*` / `nexus-store-*` / `nexus-catalog-*` directories behind.
 
-### Fixed — `phase6_fix-unwind-match-merge-edge-upsert` (#14)
+### Fixed — `phase0_fix-password-hashing`
 
-- **`UNWIND ... MATCH ... MERGE (a)-[r:T]->(b)` edge upserts now work per row, and `RETURN count(r)` reflects every row.** The batched edge-upsert shape was rejected with "Unsupported clause after UNWIND" (fixed in the initial #14 slice: per-row MATCH against a fresh row context + ON CREATE/ON MATCH SET via `apply_merge_rel_set`). This completes the contract: relationship bindings now accumulate one entry per row (previously a per-variable overwrite kept only the last edge), so a trailing `RETURN count(r)` returns the number of distinct edges upserted across the whole batch (consistent with the #13 node-count semantics) instead of `null`. Covered by `unwind_match_merge_edge_upsert` (single row, ON CREATE/ON MATCH, idempotency) and the new `unwind_match_merge_edge_upsert_every_row` (multi-row count + per-row property values).
+- **Passwords are now stored as salted Argon2id, API-key verification is O(1) instead of O(N), and `POST /auth/login` no longer leaks internal errors or lets an attacker enumerate valid usernames by timing.** A server/auth security audit found three chained defects. **(H3)** `hash_password`/`verify_password` (`nexus-core/src/auth/password.rs:6-11,16`) hashed passwords with plain, unsalted `Sha512` and compared digests with `==` — a fast, non-constant-time, rainbow-table-crackable scheme under which two users with the same password produced identical stored hashes, reachable via `POST /auth/login`, RESP3 `AUTH`, RPC `AUTH`, `create_user`, and the root-account seed. Passwords are now hashed with Argon2id and a fresh per-password random salt via `Argon2::default()` — the same KDF and configuration already used for API-key hashing (`AuthManager`) — so identical passwords never produce identical hashes, and `verify_password` is constant-time by construction (Argon2's `PasswordVerifier`). Every write site (`create_user`, the Cypher `CREATE USER` command, the root-user seed) and every verify site (REST login, RESP3/RPC `AUTH`) needed no call-site changes — they already went through `hash_password`/`verify_password`, which now do the right thing underneath. **Migration**: `verify_password` still accepts a legacy unsalted-SHA-512 hex digest (compared with a hand-rolled constant-time byte comparison, never `==`) so pre-existing accounts are not locked out; `POST /auth/login` calls the new `needs_rehash` helper after a successful legacy-hash verification and transparently rewrites the stored hash to Argon2id (rehash-on-next-login) — no forced reset required. **(M1)** `AuthManager::verify_api_key` (`nexus-core/src/auth/mod.rs:340-366`) ran a full Argon2 verify against *every* stored valid key on each attempt — CPU cost scaled O(N) with the number of active keys, letting authentication traffic alone exhaust server CPU. Newly generated keys now embed their own key ID right after the `nx_` prefix (`nx_{key_id}_{secret}`), so `verify_api_key` looks the single candidate up in the existing `id`-keyed map in O(1) and runs exactly one Argon2 verify, regardless of how many keys are stored; a token with a syntactically valid but unknown embedded ID is rejected outright (no scan fallback, so a forged token can't reintroduce the O(N) cost). Keys minted before this change (`nx_{secret}`, no embedded ID) still verify via the original linear scan, bounded to that shrinking population. **(L2)** The login handler returned the raw JWT-generation error text to the client (`api/auth.rs:665`, `format!("Failed to generate tokens: {}", e)`) and returned immediately for an unknown username while a known username always paid the password-hash cost first (`:670`) — a measurable timing side channel that let a caller enumerate valid usernames without ever guessing a password. JWT-generation failures now return a generic "Login failed" message (the real error is still recorded server-side in the audit log); the unknown-username path now runs a full dummy Argon2id verify (`verify_dummy_password`, against a fixed placeholder hash) before returning the same generic "Invalid username or password" response used for a wrong password, equalizing the two paths' cost. Not a breaking change to the login request/response shape beyond the (intentional) generic error text; API keys generated before this fix keep working unchanged, and existing password hashes keep authenticating through the legacy-verify + rehash-on-login path. See `docs/security/AUTHENTICATION.md`.
 
-### Fixed — `phase6_fix-relindex-nested-lock` (#17)
+### Fixed — `phase0_fix-ingest-bulk-path`
 
-- **`RelationshipIndex` lock-order discipline completed.** The #17 hotfix (46bb9101) removed the `stats.write()` → `node_index.read()` nested acquisition in `add_relationship` (a latent lock-order-cycle deadlock under concurrent edge inserts). This task finishes the audit item: the struct now documents the lock-order invariant (`type_index` → `node_index` → `edge_index` → `stats`, never inverse), `remove_relationship` follows the same read-len-before-stats discipline and now keeps `total_nodes` correct after removals (it previously went stale at the last add-time value), and tests cover concurrent-insert progress plus `total_nodes` across add/remove.
+- **`POST /ingest` now honours client-supplied node ids, composes nodes with relationships in one request, and is no longer ~11x slower than the plain `/cypher` path.** Three defects made the documented bulk-ingestion endpoint unable to bulk-ingest. (1) `NodeIngest.id` was parsed and never read by `create_node_in_batch` (`#[allow(dead_code)]` on the field was the compiler confirming it) — a client supplying stable ids got them silently discarded. (2) `IngestResponse` never returned the ids nodes were actually assigned, and `RelIngest.src`/`.dst` were interpreted as literal internal node ids the client cannot know in advance — so a request that ingested nodes and relationships together looked like it succeeded (no error, `relationships_ingested` incremented) while creating zero relationships, because the generated `MATCH (a), (b) WHERE id(a) = {src} AND id(b) = {dst}` matched no rows. (3) every row — node or relationship — built a Cypher string and executed it via `engine.execute_cypher`, each call separately acquiring `server.engine.write()` and paying a full parse + plan, measured at 469 nodes/s in release against 5 097 nodes/s for `UNWIND` over `/cypher`. Fixed by routing every row through `Engine::create_node`/`Engine::create_relationship` directly — the same entry points a standalone Cypher `CREATE` statement resolves to internally — which skips Cypher parsing and planning entirely, and by acquiring `server.engine.write()` once per batch (`request.batch_size`, or once for the whole request when batching is disabled) instead of once per row; per-row string building, JSON round-tripping, and the fake per-batch `BEGIN`/`COMMIT TRANSACTION` Cypher pair (which never guaranteed atomicity — a batch already continued past per-row failures) are gone. `NodeIngest.id`, when present, is now a request-scoped correlation key: `IngestResponse` gained `node_ids: Vec<u64>` (the real internal ids, in creation order) and `RelIngest.src`/`.dst` resolve against ids assigned earlier in the same request first, falling back to treating the raw value as a literal internal id — so relationship-only requests against already-existing nodes keep working unchanged. Two nodes reusing the same `id` in one request is rejected (that row errors, the rest of the batch still commits). A batch is explicitly documented as best-effort, not atomic: a failing row is skipped and reported in `error`, and every row before and after it still commits — the same behavior the previous (non-functional) transaction wrapper already had, now honestly represented rather than implied by a `BEGIN`/`COMMIT` pair that bought no real rollback. Not a breaking change for existing callers that only sent disconnected nodes (`id` was already inert); additive for the new `node_ids` response field. See `docs/specs/api-protocols.md`.
 
-### Changed — `phase6_call-in-tx-result-cap` (#22)
+### Fixed — `phase0_fix-fts-async-writer-ordering`
 
-- **The CALL IN TRANSACTIONS materialization cap (1M rows, added for #22) is now env-configurable via `NEXUS_CALL_IN_TX_MAX_ROWS`** and the check is extracted into a tested unit (`check_call_in_tx_result_cap`) returning the structured `ERR_CALL_IN_TX_RESULT_TOO_LARGE` error with a clean wrapper-transaction abort (nothing committed, no leaked write lock). Clarification over the original #22 premise: per-`OF n ROWS` commit batching **is** implemented for top-level queries — they route through the executor operator (`run_call_subquery_in_transactions`, per-chunk commits with ON ERROR / REPORT STATUS); the capped single-transaction materialization only applies to the legacy engine path used for internally dispatched ASTs.
+- **A SET/REMOVE that refreshes a fulltext-indexed node's content no longer vanishes from search results when the async fulltext writer is enabled.** `fts_refresh_node` (`engine/crud/index_maintenance.rs`) implements every property update as del-then-add: it calls `FullTextRegistry::remove_entity` (enqueues `Del{node}`) and then, if any indexed property still has content, `FullTextRegistry::add_node_document` (enqueues `Add{node, newContent}`). When `enable_async_writers` is on, `WriterHandle`'s background loop buffers commands and, at `apply_batch` (`index/fulltext_writer.rs`), split the drained batch into "every add" and "every del" and applied the two groups in that fixed order regardless of enqueue order — so a `Del{id}` enqueued *before* its matching `Add{id}` in the same batch still ran *after* it, deleting the node's fresh content from Tantivy while the registry's `members` bookkeeping (updated synchronously, independent of the writer) still reported the node as indexed — `indexes_containing` and the actual Tantivy index silently disagreed. The synchronous writer path applies commands as they arrive and was never affected. Fixed by coalescing each batch per `node_id` down to its net outcome (last command wins) while separately tracking whether a `Del` was seen anywhere in that id's sequence; ids whose net outcome is "add" but saw an intervening del are still routed through an explicit `remove_document` — run ahead of the bulk-add pass — before their fresh content is (re-)indexed, so a doc already committed in an earlier batch or superseded within this one can never survive alongside the new one. Unrelated ids in the same batch remain unaffected: only same-id ordering changed, so cross-id documents still share one `add_documents_bulk` call. Not a breaking change — corrects the async-writer path to match the synchronous path's already-correct del-then-add semantics.
 
-### Removed — `phase5_wire-or-remove-dead-integration-test`
+### Fixed — `phase0_fix-knn-index-divergence`
 
-- **Removed the dead root-level `tests/integration_test.rs` (2091 lines, 30 tests) with explicit user authorization.** The file was unwired dead code — no crate's `Cargo.toml` declared a `[[test]]` target for it, it never compiled (syntax error at line 687, stale `Executor::new`/`NexusServer` constructor signatures), and the coverage diff from item 1.1 showed zero unique compilable tests: all 15 storage/catalog/WAL/tx tests are identically covered by `crates/nexus-core/tests/integration.rs` (live versions stricter). Removal has no build or coverage impact.
+- **Re-inserting a node's vector into the KNN (HNSW) index no longer leaves the stale vector reachable, and `remove_vector` now reliably evicts.** `KnnIndex::add_vector` repointed only the forward `node_to_index` mapping when a node id already had a vector, orphaning the old `index_to_node[old_index]` entry — which stayed reachable through `search_knn_with_ef` (so a query near the *old* vector still returned the node, and a broad query returned it twice), and `total_vectors` double-counted the re-insert. Because `hnsw_rs` 0.3.x has no in-place update or delete API, the fix uses a *tombstone-by-unmapping* strategy: on re-insert, the old entry's `index_to_node` mapping is removed before the new vector is inserted, so exactly one HNSW slot ever resolves back to a node id (the raw vector data remains physically in the graph but is permanently unreachable through the public API), and the stats count nodes rather than physical slots. A `knn_evict_node` maintenance primitive (mirroring `fts_evict_node`/`spatial_evict_node`) is added and fully tested. Scope decision (recorded in the task proposal): the two mapping bugs are fixed against the existing test/bench callers; wiring KNN maintenance into the CREATE/SET and `delete_node` write paths is a real feature addition (per-label vectorization config, embedding extraction) left as an explicit follow-up — `knn_evict_node` exists ready for it. No breaking change, no observable behavior change for current callers. See `docs/specs/knn-integration.md`.
 
-### Changed — `phase5_wire-or-remove-dead-integration-test`
+### Fixed — `phase0_fix-deleted-properties-resurrected-on-rebuild`
 
-- **Completed test inventory and coverage analysis of `tests/integration_test.rs`.** Item 1.1 identifies that the root-level integration test file (2091 lines, 30 tests) is unwired dead code — no crate's `Cargo.toml` declares a `[[test]]` target pointing to it (never compiled, never runs in CI). Inventory groups tests into four categories: (A) storage/catalog/WAL/tx/cache integration (15 tests — all duplicated by `crates/nexus-core/tests/integration.rs`); (B) executor E2E (4 tests — uncompilable due to stale `Executor::new` API signature + 1 syntax error at line 687); (C) API error-handling (6 tests — uncompilable due to stale `NexusServer` constructor); (D) API performance (5 tests — similar issues). Coverage diff against existing per-crate tests shows zero unique compilable tests. All 15 Group-A storage tests are identically covered by live per-crate tests (live versions are stricter). API tests (Groups C–D) have stale constructor signatures incompatible with current `AppState`-based injection pattern. Recommendation: removal of dead file (after user authorization per Tier-1 rules) rather than wiring, since it provides zero compilable unique coverage and requires non-trivial repair for uncompilable sections.
+- **Deleted properties no longer resurrect after a store restart.** `PropertyStore::delete_properties` only removed entities from the in-memory index, leaving fully parseable on-disk entries that the next reopen's rebuild scan would re-index and resurrect. Now: (1) deletion writes an on-disk tombstone (`ENTITY_TYPE_TOMBSTONE = 0xFF`, a reserved marker byte outside the valid 0/1 range for entity types); (2) the rebuild scanner recognizes and strides over tombstones without re-indexing, while maintaining correct entry alignment; (3) for backward compatibility with stores written before this fix (which hold un-tombstoned deleted entries), on rebuild each entry is reconciled against the authoritative node/relationship record stores — a property blob whose owning record is deleted or absent is tombstoned-in-place instead of resurrected. The reconcile pass runs once per reopen (startup-only, O(1) per entry), a candidate for optimization via a format-version-stamp. Not a breaking change — behavior only becomes more correct. See `docs/specs/storage-format.md`.
 
-### Changed — `phase5_split-oversized-files`
+### Fixed — `phase0_fix-create-ignores-arrow-direction`
 
-- **Refactored 17 oversized source files (>1500 lines) into cohesive directory modules with facade `mod.rs` re-exports; zero logic/behavior changes; public API paths preserved.** Affected files: `crates/nexus-core/src/executor/` (planner/queries, eval/projection, parser/{clauses,expressions,tests}, operators/{aggregate,procedures}), `crates/nexus-core/src/engine/` ({mod,tests,crud}), `crates/nexus-core/src/wal/`, `crates/nexus-core/src/catalog/`, `crates/nexus-core/src/graph/correlation/` ({mod,pattern_recognition}), `crates/nexus-core/src/storage/mod`, `crates/nexus-server/src/api/` ({cypher/execute,streaming}). Engine module reduced from 5853 → 861 lines; all 300/300 Neo4j compatibility test semantics untouched (HTTP response format unchanged). Note: `tests/integration_test.rs` identified as unwired (never compiled) — follow-up task `phase5_wire-or-remove-dead-integration-test` created.
-- **Wave 2 (raw-line metric): split 10 more files >1500 lines into directory modules.** Refactored: `crates/nexus-core/src/index/mod.rs`, `crates/nexus-core/src/graph/{algorithms/traversal,clustering,core,procedures}.rs`, `crates/nexus-core/src/graph/correlation/{data_flow/mod,component}.rs`, `crates/nexus-core/src/executor/mod.rs`, `crates/nexus-core/src/storage/adjacency_list.rs`, and `crates/nexus-core/tests/neo4j_result_comparison_test.rs` (directory test target). Zero logic changes; all per-module test counts preserved; no source file in `crates/` now exceeds 1500 lines.
+- **`CREATE (a)<-[:T]-(b)` now writes the edge in the arrow's direction (b→a) instead of silently reversing it.** Every CREATE write path resolved a relationship's source and target from the pattern's left/right array order and never consulted the parsed `RelationshipDirection`, so any `<-` (incoming) relationship stored its endpoints swapped — `CREATE (x)<-[:T]-(y)` persisted `x→y`. The fix reads the direction in all three CREATE write sites (`execute_create_pattern_internal` and both arms of `execute_create_with_context` in `executor/operators/create.rs`): an `Incoming` arrow swaps (source, target); `Outgoing` is unchanged. The undirected form `-[:T]-` in CREATE, which has no defined write orientation, is now rejected with an explicit error before any endpoint node is created (Neo4j parity — Neo4j only supports directed relationships in CREATE), so an invalid pattern never leaves partial side effects. The same array-order assumption in the MERGE relationship path (`engine/write_exec.rs`) was audited and fixed identically, except MERGE keeps the undirected form and treats it as outgoing per the openCypher TCK (Merge5). This resolves the arrow-direction limitation noted under `phase0_fix-match-create-inline-node-rel-dropped`. Not a breaking change for well-formed directed patterns; previously-reversed edges now persist correctly, and the ambiguous undirected-CREATE form errors instead of guessing.
 
-## [2.3.2] — 2026-06-08
+### Fixed — `phase0_fix-match-create-inline-node-rel-dropped`
 
-> Bug-fix release continuing the read/MERGE index reliability line (GH
-> #11–#13): UNWIND-driven writes persist, property indexes survive
-> restarts, and a sustained-write 100% CPU busy-loop is fixed. All fixes
-> ship with regression tests; the full workspace suite is green.
+- **`MATCH (a) CREATE (a)-[:T]->(x:Label {...})` no longer silently drops the relationship when the target node is created inline.** The inline-created node persisted and was visible, but its incoming relationship record was never written, leaving a dangling reference. `execute_match_create_query` collected bound variables into `node_ids` but never looked ahead to inline-create fresh nodes when resolving relationship targets — so when the Relationship element tried to resolve the target it found nothing in the map (the node's own element hadn't run yet in the loop), logged a warning, and skipped the relationship write. The fix extracts node-creation logic into a shared helper (`create_pattern_node_with_context`) and introduces per-element lookahead in the Relationship arm: if the next pattern element's variable is unbound, create it immediately before writing the relationship, register it in `node_ids` with a skip-flag for the later Node arm (preventing double-creation). This generalizes to multi-hop chains with mixed bound and inline nodes for free (each relationship resolves its immediate neighbor). Anonymous nodes can now anchor relationships too, via a `last_node_id: u64` counter (replacing the prior variable-name-keyed `last_node_var: Option<String>`), so a two-node CREATE chain with no explicit variables works. Not a breaking change — patterns that previously silently dropped edges now persist the full write. Note: CREATE continues to treat pattern elements as source→target in left-to-right array order regardless of arrow direction; this is a separate, pre-existing limitation. See `docs/specs/cypher-subset.md`.
 
-### Fixed — `phase6_fix-unwind-write-persists` (#13)
+### Fixed — `phase0_fix-cypher-eval-panics`
 
-- **`UNWIND [...] AS row MERGE/SET ...` writes now persist every row in a single statement.** Previously a write that ranged over an UNWIND row list silently persisted nothing (HTTP 200, `count = 0`) — the engine write path rejected the UNWIND clause and the REST handler routed UNWIND-prefixed queries to the read executor, which dropped the write. This forced one request per row (~1-2 writes/sec), making bulk backfill ~100x slower.
-- **The engine write path now iterates UNWIND rows** for MERGE/SET/REMOVE/FOREACH, binding the row variable per iteration against a fresh per-row context so each row's `SET`/`REMOVE` touches only that row's node, and `RETURN count(n)` reflects all rows written. MERGE stays idempotent across rows. The REST `/cypher` handler now routes UNWIND+write queries to the engine (they previously fell through to the read executor); UNWIND+CREATE continues through the existing create path.
+- **Temporal arithmetic, duration arithmetic, and `percentileCont()` can no longer crash a query or silently return a wrong value from user-controlled numeric input.** Three eval-layer defects let ordinary Cypher arguments panic or wrap query execution. (1) **datetime/date ± duration**: the add/subtract path multiplied user-controlled `duration({..})` components into an unchecked `i64` and fed it to `chrono::Duration::seconds`/`::days` and `DateTime`/`NaiveDate`/`NaiveDateTime` `+`/`-`, which chrono panics on when the value leaves its representable range (an explicit `panic!`, independent of the release build's disabled overflow-checks) — e.g. `RETURN date('2020-01-01') + duration({days: 999999999})` and `datetime(...) + duration({days: 100000000})` hard-crashed. The component math now uses `checked_mul`/`checked_add`, and the chrono calls use `Duration::try_seconds`/`try_days` + `checked_add_signed`/`checked_sub_signed`, returning a Cypher error on overflow. (2) **duration ± duration**: the six components (`years`…`seconds`) were combined with plain `+`/`-`, which wrapped silently to a wrong duration in release (panicked in debug) — e.g. `duration({years: 9223372036854775807}) + duration({years: 1})`; now `checked_add`/`checked_sub` with a Cypher error on overflow. (3) **`percentileCont()`**: the percentile argument was never validated to `[0, 1]`, so `percentileCont(x, 1.5)` computed an out-of-range index and panicked with an out-of-bounds array access; it now rejects any percentile outside `[0, 1]` (including NaN) with a Cypher error and additionally clamps the interpolation indices as defense in depth (mirroring the already-safe `percentileDisc()`). Also removed the `aggregate::parallel` module — dead code (no call sites) whose AVG merge averaged per-chunk means unweighted (wrong for unequal chunks). No breaking change for well-formed queries; inputs that previously panicked or silently wrapped now return a bounded Cypher error. See `docs/specs/cypher-subset.md`.
 
-### Fixed — `phase6_fix-index-durability-restart` (#11)
+### Added — `phase13_sdk-release-trusted-publishing`
 
-- **Property indexes created via `CREATE INDEX FOR (n:Label) ON (n.prop)` now survive a server restart.** Previously the index definitions were not persisted and `rebuild_indexes_from_storage` rebuilt only the label/relationship indexes, so after any restart (deploy, crash, OOM) `has_index` was false: every `MATCH (n:Label {prop:val})` fell back to an O(N) label scan (emitting `Nexus.Performance.UnindexedPropertyAccess`) and index-backed MERGE existence degraded to O(N) — silently re-introducing the meltdown the #8/#9 fixes addressed, until a client re-issued `CREATE INDEX`. The catalog entry was lost too, so a duplicate `CREATE INDEX` wrongly succeeded after a restart.
-- **`CREATE INDEX` now persists each `(label_id, key_id)` definition in the LMDB catalog** (removed on `DROP INDEX`), and engine startup rebuilds the typed property index from those definitions by backfilling existing nodes. After a restart the seek engages with no `UnindexedPropertyAccess`, and a duplicate `CREATE INDEX` (without `IF NOT EXISTS`) correctly errors.
+- **One-command SDK releases with zero stored publishing secrets.** New `.github/workflows/sdk-release.yml` publishes the Rust (`nexus-graph-sdk` → crates.io), TypeScript (`@hivehub/nexus-sdk` → npm), Python (`hivehub-nexus-sdk` → PyPI), and C# (`Nexus.SDK` → NuGet) SDKs as one release train, each lane authenticating by OIDC **Trusted Publishing** — no `CARGO_REGISTRY_TOKEN`/`NODE_AUTH_TOKEN`/PyPI/NuGet API key stored anywhere. Triggered by publishing a GitHub Release (mirroring `release-server.yml`, not a bare tag push); a single `gate` job runs fmt/lint/tests for all four SDKs and fails the whole train unless the release version matches all four manifests, then the four publishers run in parallel, then a `verify` job confirms every registry landed the version. A weekly `sdk-release-train.yml` drift check asserts the registries agree with each other between releases, and `scripts/ci/check_published_sdk_versions.py` (with unit tests) backs both. PHP and Go are out of scope (moving to their own repos). Runbook + one-time registry/environment setup in `docs/releases/SDK_RELEASE.md`; note the crates.io lane requires `nexus-protocol` to be published (or the path dep removed) first.
 
-### Fixed — `phase6_fix-sustained-write-busyloop` (#12)
+### Fixed — management endpoints 500 with authentication disabled
 
-- **Fixed an infinite loop in `CALL { ... } IN TRANSACTIONS OF n ROWS`: the batching loop re-ran the whole subquery against the same dataset every iteration and only stopped when it returned zero rows or fewer than `n`.** A subquery returning `>= n` stable rows (e.g. a backfill `CALL { ... } IN TRANSACTIONS OF 1000 ROWS`) never terminated, pinning the engine write lock at 100% CPU with no active-query log — every other request (even `RETURN 1`) then blocked and the server appeared hung until restart. `CALL ... IN TRANSACTIONS` now runs the subquery once in a transaction and commits (commit granularity, not re-execution).
-- **Removed an O(N)-per-write cost: `LabelIndex` recomputed full label statistics** (iterating every node in every label bitmap) on every `add_node`/`remove_node`. Under sustained write load on a large graph this compounded into a steady CPU drain. Stats are diagnostic-only and are now computed lazily on read.
-- **Added telemetry: `find_relationship_between` now warns** (`RUST_LOG=nexus_core=warn`) when an edge-existence check degrades to an O(degree) chain walk on a high-degree hub node, surfacing the sustained edge-MERGE pathology that otherwise presents as an opaque no-query CPU climb.
+- **`/auth/*` and `/databases` management endpoints no longer return HTTP 500 "Missing request extension" when authentication is disabled.** Found by end-to-end Docker testing of multi-database. The auth middleware that inserts `Extension(None::<AuthContext>)` into every request is only applied when `config.auth.enabled || cluster_enabled` (main.rs), so with auth off no `Extension<Option<AuthContext>>` is present — but the 14 management handlers (12 in `api/auth.rs` plus `create_database`/`drop_database`, from `phase0_fix-auth-management-authorization` and `phase0_fix-multi-database-persistence-and-default` G3) extracted it via a bare, required `Extension<Option<AuthContext>>` parameter, so axum's extractor failed before the handler ran. All 14 handlers now extract the optional form `Option<Extension<Option<AuthContext>>>` (the same pattern `/cypher` already used) and treat a missing extension as `None` → the existing auth-disabled bootstrap path (allowed). The unit tests missed this because they invoke handlers directly with an explicit extension; a regression test (`create_database_succeeds_with_missing_auth_extension`, passing `None`) now covers the middleware-absent path, and the fix was verified end-to-end in Docker with `NEXUS_AUTH_ENABLED=false` (`POST`/`DELETE /databases`, `GET /auth/users` all return 200). Not a breaking change — restores management access under the (common, localhost/dev) auth-disabled configuration.
 
-## [2.3.1] — 2026-06-07
+### Fixed — `phase0_fix-multi-database-persistence-and-default`
 
-> Bug-fix release driven by field reports against 2.3.0 (GH #7–#9) plus the
-> null-keyed graph rebuild and the O(1) edge-MERGE existence index. Restores
-> the read/MERGE index path end-to-end: API-created property indexes now
-> register and populate, read `MATCH` uses index seeks, and comma-joined
-> endpoint lookups stop being cartesian. All fixes ship with regression tests
-> and were verified end-to-end over HTTP.
+- **Databases now survive a restart, the default database reports its real stats, and creating/dropping a database requires Admin.** Three gaps that were invisible while REST routing was dead and surfaced once `phase0_fix-cypher-database-routing` made the `database` field real. **(G1 — restart persistence)** `DatabaseManager::new` only created the default and never re-adopted database directories from a previous run, and there is no on-disk manifest — the list was purely the in-memory map. So after a restart a database `alpha` created last run was a live directory that `exists("alpha")` no longer knew about: queries naming it errored and its data was orphaned. `new()` now runs `discover_existing_databases()`, re-opening every `base_dir` subdirectory that carries a record store (`nodes.store`) — skipping the default, entries already tracked, invalid names, and non-database directories (auth/audit/logs carry no `nodes.store`); a directory whose engine fails to open is logged and skipped. **(G2 — phantom default eliminated)** `server.engine` (opened on the root data dir) is the real default used by query routing, but `DatabaseManager` also opened a SECOND `neo4j` engine at `data_dir/neo4j` — a phantom that was never queried, yet `GET /databases` reported ITS empty stats (0 nodes) for the default. The manager no longer owns a default engine: the default is served by the primary engine and is implicit (`exists("neo4j")` is true, but it is not in `list_databases()` and `get_database("neo4j")` returns an error directing callers to the primary engine). `SHOW DATABASES` (HTTP + RPC `DB_LIST`) still lists the default by injecting its name, and `GET /databases` / `GET /databases/{neo4j}` now report the default's REAL node/relationship counts from `server.engine`. **(G3 — database management authenticated)** `CREATE DATABASE` / `DROP DATABASE` (Cypher DDL) and `POST /databases` / `DELETE /databases/{name}` (REST) were completely open — any caller could create or drop databases. They now require the calling key to hold `Admin`/`Super` (via the shared `caller_is_admin` / `require_admin` from `phase0_fix-auth-management-authorization`); listing and `USE DATABASE` stay open; with auth disabled the check is a no-op (bootstrap preserved). Not a breaking change for query semantics; database management now requires Admin, and databases persist across restarts. Deeper engine-lock unification (making `server.engine` literally the manager's default so the two never diverge, rather than injecting the default at the list sites) is a larger `tokio`/`parking_lot` refactor left as a known follow-up. See `docs/specs/api-protocols.md`.
 
-### Added — `phase6_add-src-type-dst-edge-index`
+### Fixed — `phase0_fix-cypher-database-routing` (**breaking**)
 
-- **O(1) edge-MERGE existence check.** `find_relationship_between` walked the
-  source node's relationship chain (O(out-degree)); for a hub accumulating
-  high same-type degree via repeated `MERGE (hub)-[:T]->(x)` that was
-  O(degree) per merge. A new exact-edge index `(src_id, type_id, dst_id) ->
-  rel_ids` in the relationship index gives an O(1) existence hint (verified
-  against storage, with the chain walk as a correctness fallback). The
-  relationship index is now rebuilt from storage at startup so the fast path
-  survives a restart (the re-bootstrap write-burst scenario). Added
-  `Engine::flush()` for durable on-demand persistence.
+- **Multi-database isolation is now real over REST: `POST /cypher`'s `database` field routes to that database's isolated store, and naming a database that does not exist fails loudly instead of silently serving the default.** The field was parsed and never read, so every query hit the single default engine regardless of the requested database — a node written under `database:"alpha"` was readable under `beta`, `ldbc`, and even a never-created `nosuchdb_xyz` (which returned the default store's rows). The handler now resolves `database` through the `DatabaseManager` (which already owned a per-database `Engine` each): absent or `"neo4j"` → the default engine (unchanged for existing single-database clients); any other name → that database's engine, reached through a `spawn_blocking` bridge (the manager's engines use a synchronous `parking_lot` lock while the handler is async) so a `parking_lot` guard is never held across an `.await`. A name that was never created returns a typed error and is **never implicitly provisioned** — a typo fails instead of quietly corrupting the default store. Each database's `Engine` owns its own executor/plan cache, so plans cannot leak across databases. **Breaking**, deliberately: clients that relied on every database resolving to the default store now see real isolation, and requests naming a nonexistent database now error. The `GET`/`PUT /session/database` endpoints were **removed** — they could not be honored in the stateless HTTP model (no per-connection identity) and the switch was a stub that reported `{"success":true,"message":"Switched to database 'X'"}` while persisting nothing (`GET` always returned the default); the per-request `database` field is the supported mechanism. `/cypher/stream`, `/ingest`, `/knn_traverse`, `/graphql`, and the RPC `CYPHER` command do not accept a `database` field and remain default-database-only (documented in `docs/specs/api-protocols.md`). SDK note: the published SDKs' `switch_database` / `get_current_database` helpers targeted the removed `/session/database` endpoints and will now 404 — they should migrate to the per-request `database` field and ship a new release; the `database` field they already send on queries now takes effect. See `docs/specs/api-protocols.md` and CRITICAL constraint #4 in `CLAUDE.md`.
 
-### Fixed — `phase6_clean-graph-rebuild-null-ids`
+### Fixed — test-suite temporary-directory leak (LMDB env never closed)
 
-- **Null property values no longer pollute typed property indexes.** Property
-  values coercing to `NULL` are now treated as absent — they are never written
-  to the typed property index, so index seeks (`MATCH (n:L {id: $v})`) never
-  match null-keyed nodes and legacy null values no longer surface in query
-  results.
-- **`MERGE` with null property values now fails explicitly.** `MERGE (n:Label
-  {key: null})` returns `ERR_NULL_MERGE_KEY: Cannot merge node using null
-  property value for <key>` instead of creating a phantom null-keyed node
-  that cannot be queried.
-- **Documented clean graph rebuild procedure.** `docs/ops/graph-rebuild.md`
-  covers the full sequence: `DROP DATABASE`, recreate, rebuild indexes, and
-  re-ingest to eliminate legacy null-keyed nodes.
+- **The test suite no longer leaks a ~5 MiB temp directory per test — a full run used to strand tens of thousands of `.tmp*` directories (tens of GiB) under the system temp folder, most visibly on Windows.** Root cause: `heed` keeps every opened LMDB environment alive in an internal global registry (`OPENED_ENV`) until `Env::prepare_for_closing` is called; the catalog never called it, so `catalog.mdb/{data,lock}.mdb` stayed open for the entire process. On Windows those open handles block removing the directory, and because `let (engine, _ctx) = ...` drops `_ctx` (the `TempDir`) *before* `engine`, the automatic cleanup ran while the catalog was still open, failed silently, and leaked the directory (confirmed in isolation: a plain `heed::Env` drop leaves `remove_dir_all` failing with a sharing violation; `prepare_for_closing().wait()` releases it). Fixed on two levels: (1) `Catalog` now holds a shared `EnvCloser` guard (one per LMDB path, so the shared per-process test catalog pool is closed exactly once) that calls `prepare_for_closing` when the last catalog sharing that env is dropped — a correct LMDB shutdown for production too, not only tests; and (2) `TestContext` now roots every temp dir under a single dedicated base, sweeps stale leftovers (older than 30 min, so concurrently-running test binaries are never touched) once per process, and defers each dir's removal — retrying on every later context drop, by which point the owning engine has dropped and released its handles. Net effect: a test run keeps at most a handful of in-flight directories instead of thousands, and any residue is reclaimed by a later run's startup sweep. Test-only behavior change plus a production-correct LMDB close on catalog teardown; no query semantics affected.
 
-### Fixed — `phase6_fix-rest-parameters-null` (#7)
+### Fixed — `phase0_fix-create-path-index-and-constraints`
 
-- **`POST /cypher` now accepts an explicit `"parameters": null` in the request
-  body, treating it as an empty parameter map (restores 2.2.0 behaviour).** 
-  Previously serde rejected `null` for the non-`Option` map and returned HTTP 422,
-  breaking every no-parameter query from SDK clients that serialize `parameters`
-  as `null`. Absent, `{}`, a real map, and both the `params` and `parameters`
-  keys all continue to work.
+- **Both CREATE forms now maintain the typed property index and enforce `NODE KEY` / composite constraints — closing a silent index gap on `MATCH…CREATE` and a silent constraint bypass on bare `CREATE`.** Two CREATE variants each skipped index/constraint maintenance the sibling variant performed. (C-5) A node created via `MATCH…CREATE` was durable and label-indexed but absent from the engine's typed property B-tree (`Engine::indexes.property_index`) — the executor CREATE operator maintains only its cloned label index, and the `MATCH…CREATE` engine branch synced storage back but never called `index_typed_properties_for_new_nodes` (unlike the standalone-CREATE branch). Ordinary reads have a storage-scan fallback that masked the gap, but any consumer that trusts the index as complete — `NodeIndexSeek`, the index-only MERGE existence fast path, occupancy accounting — was silently corrupted. (M-2) A bare `CREATE` ran only the executor-local `check_constraints` (catalog UNIQUE / EXISTS), never the engine's extended constraint set (`enforce_extended_node_constraints`: `NODE KEY` + property-type) nor `index_composite_tuples`, so a `NODE KEY` constraint was silently unenforced and its composite B-tree left un-backed for the single most common way to create a node. Both CREATE branches in `query_pipeline.rs` now run a post-write, engine-side maintenance pass over the nodes the executor just allocated (`enforce_and_index_new_created_nodes`) that enforces the extended constraints against the composite B-tree populated so far (self-excluded, so an intra-statement or cross-statement duplicate tuple is caught) and populates every matching composite index — the same maintenance the engine-level `create_node` path has always done — followed by the typed-property-index step. On a constraint violation the WHOLE CREATE statement is rolled back (Neo4j rejects the entire write, never a partial one): relationships are soft-deleted before nodes so the `delete_node` live-relationship guard passes, and the violation error is returned. The executor-local `check_constraints` is retained as a fast local rejection. Not a breaking change — this closes silent duplication and silent constraint bypass; no correct query depended on either defect. See `docs/specs/cypher-subset.md`.
 
-### Fixed — `phase6_fix-read-match-index-seek` (#8)
+### Fixed — `phase0_fix-auth-management-authorization`
 
-- **Read-side `MATCH (n:Label {prop: val})` now uses a typed property-index seek** (new `NodeIndexSeek` operator) when a covering index exists, instead of a full label scan. A single-node lookup on an indexed property is now a point lookup (O(log N)/O(matches)) rather than O(N).
-- **Comma-joined multi-pattern reads** such as `MATCH (a:Turn {id:$a}), (b:ToolCall {id:$b})` now seed each leg via an independent index seek, so endpoint resolution is no longer a cartesian product of two full label scans (previously O(N²), timing out on large graphs). This unblocks edge-upsert throughput.
-- **The typed property index is shared with the read executor at construction**, so a `CREATE INDEX` is visible to subsequent read queries immediately. Results are unchanged; only performance improves.
+- **A low-privilege API key can no longer manage users/keys or escalate its own privileges — the `/auth/*` management surface now enforces authorization, not just authentication.** None of the management handlers checked the CALLING key's permissions before honoring the request body: with authentication enabled, a Read-only key could `POST /auth/keys {"permissions":["SUPER"]}` and receive a freshly minted Super key (full administrative control), grant itself or others `Admin`/`Super`, and create/delete users or enumerate every key and user. Every management handler now requires the caller to hold `Admin` (or `Super`, which includes it): `create_user`, `list_users`, `get_user`, `delete_user`, `grant_permissions`, `revoke_permission`, `get_user_permissions`, `create_api_key`, `list_api_keys`, `get_api_key`, `delete_api_key`, `revoke_api_key`. In addition, `create_api_key` and `grant_permissions` enforce a no-vertical-escalation rule: the caller's own permission set must be a superset of any permissions in the request body, so an Admin key cannot mint or grant `Super`. The `login`/`refresh_token` authentication flows are intentionally left open (a user logging in holds no key). Enforcement applies whenever a caller identity is present; with authentication disabled the request carries no identity and the check is a no-op (that surface is hardened by `phase0_fix-server-secure-defaults-and-dos`). **Breaking** only for deployments that relied on non-Admin keys self-managing permissions (never a supported use). See `docs/security/AUTHENTICATION.md`.
 
-### Fixed — `phase6_fix-create-index-api-populate` (#9)
+### Fixed — `phase0_fix-adjacency-decompress-unaligned-ub`
 
-- **`CREATE INDEX FOR (n:Label) ON (n.prop)` issued via the REST/RPC API now actually registers and backfills the typed property index** that read-side `NodeIndexSeek` (fix #8) and index-backed MERGE existence consult. Previously the API routed property-index DDL through the executor path, which only interned the catalog key — `has_index` stayed false, so every `MATCH (n:Label {prop:val})` fell back to a full label scan (emitting `Nexus.Performance.UnindexedPropertyAccess`) and MERGE existence stayed O(N), silently defeating both the fix in #8 and the index-backed MERGE fix.
-- **The REST handler now routes property `CREATE INDEX` / `DROP INDEX` through the engine handler** (`execute_index_commands`), which calls `property_index.create_index` + populates existing nodes; spatial and fulltext index DDL keep their executor path. The single-column `["index"]` response shape is preserved. The core executor `execute_create_index` also registers + backfills the typed index when a property-index handle is present.
+- **Removed undefined behaviour from every adjacency-list decompression.** All three decode paths (`decompress_none`, `decompress_lz4`, `decompress_zstd`) reinterpreted a `&[u8]` as `&[AdjacencyEntry]` via `slice::from_raw_parts`, whose safety contract requires the pointer to be 8-byte aligned. `decompress_none` runs directly against an mmap sub-slice whose start (`list_offset`) carries no alignment guarantee, so any outgoing/incoming adjacency lookup over a segment at an odd offset constructed a misaligned typed slice — UB by construction (independent of whether the data is ever dereferenced, and independent of x86's tolerance for unaligned scalar loads; the optimizer is entitled to assume the slice is aligned). `cargo miri test` flags the old cast as *"constructing invalid value: encountered an unaligned reference (required 8 byte alignment but found 1)"*. The reinterpret casts were replaced with an explicit, alignment-agnostic `chunks_exact(8)` + `u64::from_le_bytes` decode, and the matching encode side (`compress_none`/`compress_lz4`/`compress_zstd`, which wrote native-endian bytes via the reverse cast) now emits `u64::to_le_bytes`, so the on-disk adjacency encoding is byte-order-portable end to end. On little-endian targets the on-disk bytes are unchanged, so this is not a breaking change. The remaining `from_raw_parts` casts in the module (`AdjacencyEntry`/`Self` → `u8`, and the header checksum) go to a *less*-strict alignment and are not affected. A misaligned-offset regression test (clean under miri) guards the decode. See `docs/specs/storage-format.md`.
 
-## [2.3.0] — 2026-06-06
+### Fixed — `phase0_fix-update-node-index-divergence`
 
-> Bug-fix release driven by field reports against 2.2.0 (GH #3–#6) plus two
-> reconfirmed reliability bugs. All fixes ship with regression tests and were
-> verified end-to-end over HTTP.
+- **Updating a node through `Engine::update_node` (REST `PUT /data/nodes`, RPC `UPDATE_NODE`, RESP3 `NODE.UPDATE`) no longer silently corrupts every index that covers it — the node stays findable by its new value and its label change reaches the label index.** `update_node` was a second, independent property-write path that wrote the record and property blob directly and called none of the index-refresh helpers the Cypher SET path runs, so after an update the typed property B-tree still pointed at the OLD value (a seek on the new value returned nothing; a seek on the stale old value still falsely matched), a label change never reached the label-bitmap index (`MATCH (n:NewLabel)` found nothing), and the FTS/spatial indexes diverged the same way. It even re-incremented per-label node counts on every update. `update_node` now routes through `persist_node_state` — the same path Cypher SET uses — which captures the pre-write state, writes the new properties (preserving `first_rel_ptr`) and labels, and refreshes the label, typed-property, FTS, and spatial indexes. Additionally, `persist_node_state` now refreshes the composite / NODE KEY B-tree on every update (evict old tuple, insert new), closing a related divergence that affected the Cypher SET path too: updating a NODE KEY property left the old tuple behind, falsely blocking its reuse and hiding the new value. Not a breaking change — only the correctness of subsequent seeks. See `docs/specs/cypher-subset.md`.
 
-### Fixed — `phase6_fix-planner-merge-unindexed-on2`
+### Fixed — `phase0_fix-delete-path-index-cleanup`
 
-- **Index-backed node MERGE (O(N) → O(log N)).** `MERGE (n:Label {key: v})`
-  resolved existence with a full label-bitmap scan plus a per-candidate
-  property compare, so a batch of M merges over N label nodes was O(M·N) —
-  the cause of the production write-burst meltdown. The lookup now seeks via
-  the property B-tree (`find_exact`, intersecting per-property bitmaps) when a
-  covering index exists, falling back to the scan (and the unindexed warning)
-  otherwise. Edge-MERGE benefits too: its endpoints resolve through the same
-  now-index-backed lookup. `create_node` keeps the typed property index in
-  sync so MERGE stays idempotent for nodes created after `CREATE INDEX`.
-
-### Fixed — `phase6_fix-match-scopes-parallel-load-flake`
-
-- **Catalog label/type/key id allocation is now collision-free across shared
-  LMDB environments.** `get_or_create_label`/`_type`/`_key` allocated ids from
-  a per-`Catalog`-instance in-memory counter. When multiple `Catalog`
-  instances share one LMDB env (the shared test catalog, and any concurrent
-  use), two instances opened at the same state handed out the SAME id for
-  different names, so two labels collided on one id and `get_nodes(id)`
-  returned nodes of both labels — e.g. a `MATCH (:X …)` also matched `:Y`
-  nodes, producing wrong counts under load. Ids are now allocated from the
-  committed LMDB max **inside the write transaction** (LMDB serialises writers
-  across instances and processes), guaranteeing uniqueness. Also process-scopes
-  the shared test catalog/auth LMDB directories (`..._<pid>`) so concurrent
-  `cargo test` binaries no longer share/wipe one env. This was the root cause
-  of the load-dependent `match_scopes_by_label_and_property_together` flake
-  (now 8/8 green under full parallel `cargo test -p nexus-core`).
-
-### Fixed — `phase6_fix-windows-write-socket-exhaustion`
-
-- **HTTP clients now reuse pooled keep-alive connections.** The
-  `nexus-protocol` `RestClient` built a fresh `reqwest::Client` inside every
-  `post`/`get`/`stream` call, so each request got its own (empty) connection
-  pool and opened a new TCP connection. Under sustained writes on Windows
-  those connections piled up in `TIME_WAIT` and drained the ephemeral port
-  range (socket exhaustion), forcing callers into a batch-40 + retry +
-  item-by-item workaround. `RestClient` now builds the client once (bounded
-  idle pool + TCP keep-alive) and reuses it across requests. The Rust SDK
-  HTTP transport (which already reused its client) gains the same explicit
-  pool/keep-alive settings for parity. Verified by a connection-counting
-  test: five sequential POSTs share a single connection.
-
-### Fixed — `phase6_fix-cypher-nonascii-body` (GH #6)
-
-- **Non-ASCII text in Cypher no longer panics / drops the connection.** The
-  lexer's `consume_char` advanced `pos` by 1 byte per char; a multi-byte
-  UTF-8 char (any non-ASCII text in a string literal, property value, or
-  parameter) left `pos` mid-sequence and the next `self.input[pos..]` slice
-  panicked on a non-char boundary — surfacing over HTTP as a dropped
-  connection and forcing callers into lossy ASCII stripping (`versão` →
-  `verso`). `consume_char` and the keyword/whitespace scan loops now advance
-  by `ch.len_utf8()`, so UTF-8 in string literals, `WHERE` comparisons, and
-  `$param` values round-trips losslessly (accented Latin, CJK, Cyrillic,
-  emoji).
-
-### Fixed — `phase6_fix-groupby-expr-and-return-node` (GH #5)
-
-- **GROUP BY by a function/expression key now aggregates correctly.** The
-  parser dropped a postfix index after a function call, so `labels(n)[0]`
-  parsed as `labels(n)` — the term was then not treated as an implicit
-  grouping key, and `MATCH (n) RETURN labels(n)[0] AS label, count(*) AS c`
-  returned one raw row per node (column `labels(n)`, no count). The Cypher
-  parser now folds postfix `[index]` and `[start..end]` slices after a
-  function call into `ArrayIndex` / `ArraySlice` (e.g. `labels(n)[0]`,
-  `head(collect(x))[0]`), so every non-aggregating projection term —
-  including expressions — is an implicit grouping key. Fixes both the
-  `RETURN` and `WITH` forms.
-- **`RETURN <nodeVar>` returns the node object instead of null.** The HTTP
-  server's CREATE/MERGE…RETURN path hand-rolled projection and only handled
-  `PropertyAccess`/`Literal`, returning `null` for a bare `RETURN t` (and
-  naming the column `result`). It now serializes a bound node variable to
-  the same shape the executor uses (`{…properties, _nexus_id}`) and names
-  the column after the variable, matching `MATCH …RETURN n`.
-
-### Fixed — `phase6_fix-prop-ptr-corruption-startup` (GH #4)
-
-- **Property data no longer lost on reopen.** `PropertyStore::rebuild_index`
-  always seeded `next_offset = 1` before rebuilding, so on every reopen it took
-  the "preserve next_offset" branch and scanned only `[0, 1)` — reconstructing
-  an empty/garbage index from disk. Both scan loops also started at byte offset
-  0, but real entries begin at offset 1 (offset 0 is the reserved `prop_ptr=0`
-  sentinel), so the misaligned read fabricated a phantom `(0, Node)→0` entry.
-  Existing files now seed `next_offset = 0` to force a correct full on-disk
-  rebuild, and both scan loops start at offset 1. This is the root cause of the
-  "node returns only `_nexus_id`" and intermittent
-  `JSON error: expected value at line 1 column 1` symptoms after a restart.
-- **Durable, one-shot prop_ptr repair at startup.** `read_node` detected a
-  `prop_ptr` pointing at a Relationship entry and reset it in memory only
-  (`&self`), so the on-disk corruption recurred on every boot. `RecordStore::new`
-  now runs `repair_corrupt_node_prop_ptrs`, which scans node records, recovers
-  the correct property offset from the rebuilt reverse-index (or 0), persists the
-  correction via `write_node`, and flushes — so subsequent boots are clean and
-  `RETURN n` returns the full property map. Added `PropertyStore::offset_for`.
-- **`update_node` preserves the relationship chain.** It built a blank
-  `NodeRecord::new()`, zeroing `first_rel_ptr` and orphaning the node's
-  relationships; it now reads the existing record first.
-
-### Fixed — `phase6_fix-cypher-param-binding` (GH #3)
-
-- **Cypher `$param` binding now works on the read path.** `POST /cypher`
-  with a `parameters` map previously returned 0 rows for every
-  parametrized query: the MATCH handler called `execute_cypher`
-  (discarding `request.params`) and the engine read-fallthrough built
-  `executor::Query` with a hard-coded empty params map. Both the inline
-  property-map form `MATCH (s {id: $id})` and the `WHERE s.id = $id` form
-  now resolve parameters and return the same rows as the inlined literal.
-- **The `/cypher` body now accepts the standard `parameters` key.** The
-  request struct field was `params` with no alias, so the Neo4j/SDK-standard
-  `parameters` key was silently dropped by serde and parametrized queries
-  still saw an empty map. The field now has `#[serde(alias = "parameters")]`
-  (both `parameters` and `params` work). Verified end-to-end over HTTP.
-- **Missing parameters now surface a structured error** instead of silently
-  coalescing to `NULL`. A query referencing an unbound `$param` returns
-  `ERR_MISSING_PARAMETER: parameter $<name> not provided`, so callers can
-  detect binding failures programmatically. A parameter explicitly bound to
-  JSON `null` is still treated as provided (distinct from an absent key).
-
-## [2.2.0] — 2026-05-04
-
-> Ships two operator-hardening features driven by the
-> 2026-05-04 `cortex-nexus` 100 % CPU incident: a Cypher-planner
-> `Nexus.Performance.UnindexedPropertyAccess` notification that
-> surfaces missing-index pathologies *before* they wedge a
-> writer thread, and a slow-query observability stack
-> (background tick log, `GET /admin/queries` JSON endpoint,
-> RAII guard on the active-query tracker). All additive — pre-2.2
-> clients keep working unchanged; the new fields are opt-in via
-> response-envelope inspection.
-
-### Added — `phase6_merge-unindexed-property-warning`
-
-- **Planner notification**: `Nexus.Performance.UnindexedPropertyAccess`
-  (Neo4j-shape: `code`, `title`, `description`, `severity`,
-  `category`) emitted whenever the planner sees a node selector
-  of the form `(n:Label { prop: $v })`, `MERGE (n:Label { prop:
-  $v })`, or `WHERE n.prop = $v` against a `(label, property)`
-  pair without a covering property index. Description includes
-  the suggested `CREATE INDEX FOR (n:Label) ON (n.prop)` DDL
-  verbatim so the hint is copy-paste-actionable.
-- **Response envelope**: new `notifications: Vec<Notification>`
-  field on the `/cypher` JSON response and the native RPC
-  envelope. Field is omitted (not `null`, not `[]`) when empty so
-  the hot path keeps its byte count.
-- **Engine write-path coverage**: a free function
-  `compute_unindexed_property_access_notifications(catalog,
-  prop_idx, query)` is shared between the planner pre-pass (used
-  by `Executor::execute` on read paths) and the engine's
-  `execute_write_query` path (MERGE/SET/REMOVE/FOREACH bypass
-  the planner entirely; without this, the originating pathology
-  would have shipped silent).
-- **Rate-limited WARN log**: every notification mirrors to
-  `tracing::warn!(target = "nexus_core::executor::planner")`
-  with a process-global `OnceLock<Mutex<HashMap<(label_id,
-  key_id), Instant>>>` rate limiter. Window is configurable via
-  `NEXUS_PLANNER_WARN_INTERVAL_SECS` (default 60). The
-  notification still flows through the response envelope
-  regardless of the log setting.
-- **Docs**: `docs/performance/PERFORMANCE.md` gains a
-  "Recommended indexes for ingest workloads" section covering
-  `Artifact.natural_key`, `Artifact.path`, `Turn.id`,
-  `ToolCall.id`, `Session.id`, the wire format of the
-  `notifications` field, and the `NEXUS_PLANNER_WARN_INTERVAL_SECS`
-  knob.
-
-### Added — `phase6_slow-query-log-and-active-queries`
-
-- **Slow-query log tick**: background task in
-  `crates/nexus-server/src/lib.rs` polls the active-query map
-  every `NEXUS_SLOW_QUERY_TICK_MS` (default 1000) and emits a
-  WARN log under `target = "nexus_server::slow_query"` for any
-  query whose elapsed time crosses
-  `NEXUS_SLOW_QUERY_THRESHOLD_MS` (default 1000). Per-query
-  throttle: first warn on threshold crossing, then once per
-  `NEXUS_SLOW_QUERY_REPEAT_SECS` (default 30). Setting
-  `THRESHOLD_MS=0` disables the tick. Solves the reference
-  incident's missing diagnostic — `docker logs` was silent for
-  30+ minutes because the `Query executed successfully in Nms`
-  line only fires post-completion.
-- **`GET /admin/queries`** endpoint at
-  `crates/nexus-server/src/api/admin_queries.rs`. Read-only JSON
-  view of the active-query tracker, only touches the
-  active-query lock so it stays responsive even when the writer
-  thread is saturated and `/cypher` is timing out. Response
-  shape: `{total, running, entries: [{query_id, connection_id,
-  query, started_at_secs, elapsed_ms, status}], schema_version}`.
-  Entries sorted by `elapsed_ms` desc; query text truncated at
-  8 KiB at the wire boundary.
-- **`RegisteredQueryGuard` RAII** in
-  `crates/nexus-core/src/performance/connection_tracking.rs`.
-  Plugs a panic-safety hole in the previous Cypher handler
-  (which recycled `connection_id` as `query_id` and called
-  `mark_query_completed` manually on the success/error tails —
-  silently no-op'd on `connection_id != query_id` and leaked on
-  panic). The guard's `Drop` impl calls `complete_query`, so any
-  panic, early return, or `?` propagation flips the flag back.
-- **Parameter redaction utility**: `redact_parameters(&HashMap<String,
-  Value>) -> HashMap<String, Value>` at
-  `crates/nexus-core/src/performance/parameter_redaction.rs`.
-  Truncates strings > 256 chars with a `<<truncated N bytes>>`
-  suffix (byte count, not char count, so multibyte payloads
-  report their actual on-wire size); recurses through arrays /
-  objects with shape preserved; passes primitives through. The
-  current `QueryInfo` struct does not capture parameters, so
-  the diagnostic surfaces have nothing to redact today; the
-  utility is in place for the moment parameter capture lands on
-  the tracker.
-- **Docs**: `docs/operations/RUNBOOK.md` (newly created) under
-  "Diagnosing a wedged server" documents all three surfaces, the
-  env-var tuning knobs, and references the sister
-  `phase6_merge-unindexed-property-warning` notification as the
-  upstream signal.
-
-## [2.1.0] — 2026-05-02
-
-> Ships **`phase9_external-node-ids`**: caller-supplied stable
-> identifiers (`_id`) on nodes, with `ON CONFLICT
-> ERROR|MATCH|REPLACE` policies, REST surface, Cypher
-> integration (`CREATE`/`MERGE`/`MATCH`), and parity helpers in
-> all six SDKs. Drop-in addition — pre-2.1 graphs and clients
-> keep working unchanged.
-
-### Added — `phase9_external-node-ids`
-
-- **External node identifiers**: Reserved `_id` property on nodes stores caller-supplied external IDs (stable, deduplication-friendly). `ExternalId` enum supports Hash (Blake3/SHA-256/SHA-512), Uuid, String (≤256 bytes), and Bytes (≤64 bytes) variants with 1-byte wire discriminator.
-- **Conflict policies on CREATE**: `ON CONFLICT ERROR | MATCH | REPLACE` modifier controls behavior when external ID already exists. ERROR (default) fails; MATCH returns existing node unchanged; REPLACE updates properties while preserving internal ID.
-- **Cypher parser + planner**: `CREATE (n {_id: '...'}) ON CONFLICT MATCH` and `MERGE (n {_id: '...'})` parse into reserved AST fields; planner extracts `_id` from `MERGE` clauses and routes pure-`_id` constraints to the external-ID index fast path. `MATCH (n {_id: ...})` and `MATCH (n) WHERE n._id = ...` auto-select the index.
-- **Server `/cypher` handler**: `CREATE` with `_id` flows through the storage external-ID path; `RETURN n._id` projects the value back via the catalog reverse map. Behaviour for nodes without external IDs is unchanged.
-- **REST endpoints**: `POST /data/nodes` accepts `external_id` + `conflict_policy` parameters; new `GET /data/nodes/by-external-id` endpoint for lookup. Both follow the existing 200-with-error response pattern (never 404).
-- **Catalog persistence**: Two LMDB sub-databases (`external_ids` forward, `internal_ids` reverse) in catalog with atomic WAL updates and replay-safe recovery. Engine restart and transaction rollback both restore the index to a consistent state. Bidirectional mapping keeps lookup at `O(log n)`.
-- **SDK parity (all six)**: `create_node_with_external_id(labels, properties, external_id, conflict_policy)` and `get_node_by_external_id(external_id)` helpers in Rust, Python, TypeScript, Go, C#, and PHP — same names, same conflict-policy enum, same return shape. Each SDK ships a dedicated test file (`test_external_id.*` / `external-id.test.ts` / `ExternalIdTests.cs` / `ExternalIdTest.php`).
-- **Compat verification**: Docker-based external-ID and WAL-replay smoke scripts under [`scripts/compatibility/test-external-ids-docker.{sh,py}`](scripts/compatibility/) and [`scripts/compatibility/test-wal-replay-docker.{sh,py}`](scripts/compatibility/). Neo4j 4.8 diff suite re-verified at 300/300.
-- **Docs**: [`docs/reference/external-node-ids.md`](docs/reference/external-node-ids.md) (reference) and the user-guide section on external IDs cover the wire format, conflict-policy semantics, and per-SDK usage examples.
-
-### Fixed — `phase11_publish-2.1.0`
-
-- **PHP and C# SDK `createNode` / `getNode` / `updateNode` / `deleteNode`** were targeting the legacy `/nodes` route which the server retired before phase 9. The PHP and C# clients now POST to `/data/nodes`, GET via `?id=<id>`, and PUT / DELETE with `{node_id, ...}` in the body. New PHP `CreateNodeResponse` and `GetNodeResponse` model classes; new C# `GetNodeResponse` class. Behaviour for callers who only used `_id` helpers (the phase 9 surface) is unchanged.
-- **SDK manifest version drift** introduced during phase 10 reset: Python and TypeScript bumped to `2.1.1`, C# and PHP bumped to `2.2.0` while every CHANGELOG already had the `[2.1.0]` heading. Phase 11 realigned every SDK manifest on `2.1.0`.
-
-## [2.0.0] — 2026-04-30
-
-> **Major version bump**: 1.x → 2.0.0. Marks the first phase-8
-> ship train (encryption-at-rest core + KMS + WAL, quantified
-> path patterns with mode keywords, query-plan cache). The 1.15
-> interim line is collapsed into this entry; the previous
-> `release/v1.2.0` branch name continues to host the cut for
-> compat with upstream PR refs, and every workspace + SDK
-> manifest now reads `2.0.0`.
-
-### Added — `phase8_query-plan-cache`
-
-- **Process-wide query plan cache** at
-  [`crates/nexus-core/src/executor/planner/cache.rs`](crates/nexus-core/src/executor/planner/cache.rs).
-  `PlanCache<V>` is a generic LRU keyed by `xxh3_64` of the
-  canonicalised query, with atomic hit / miss / eviction counters
-  and a `planner_generation: AtomicU64` for schema-change
-  invalidation. Eviction policy: classic LRU (move-to-front on
-  hit, evict tail on capacity bound). Lookup is `O(1)` plus one
-  `parking_lot::Mutex` acquisition.
-- **Env knobs**:
-  - `NEXUS_PLAN_CACHE_ENTRIES` (default `1024`) sets the LRU
-    capacity. `0` disables the cache.
-  - `NEXUS_PLAN_CACHE_DISABLE` (when set to `1` / `true` / `yes`)
-    builds a permanently-disabled cache. Lookups return `None`,
-    inserts are no-ops, miss counter still ticks so an operator
-    who flips the knob mid-flight sees the impact.
-- **`QueryOptimizer` integration**: the per-instance
-  `HashMap<String, OptimizationResult>` + FIFO approximation that
-  shipped pre-phase-8 is replaced by an `Arc<PlanCache<...>>`.
-  Multiple executors share the same cache so a warmup in one
-  connection benefits the next; `bump_plan_cache_generation()`
-  surfaces the schema-change hook for callers that mutate the
-  catalog. `get_cache_stats()` returns the legacy
-  `CacheStats { cache_size, max_cache_size, hit_rate }` shape
-  computed from the new atomic counters.
-- **Operator-facing surface**: `PlanCache::top_n(n)` returns
-  `(canonical_hash, access_count, generation)` for `db.planCache.list`
-  consumers; `PlanCache::clear()` is the emergency flush;
-  `PlanCache::stats()` returns the full counter snapshot.
-- 12 new unit tests covering hit / miss / LRU eviction /
-  generation invalidation / clear-preserves-counters / disabled
-  no-op / zero-capacity-disabled / `top_n` ordering /
-  re-insert preserves access count / 16-thread concurrent
-  lookup / env-var disable knob.
-
-### Added — `phase8_quantified-path-patterns-execution`
-
-- **Path-mode keywords** for QPP: `WALK | TRAIL | ACYCLIC | SIMPLE`
-  precede the quantified group and constrain repeated edges /
-  nodes across the matched path. `WALK` is the implicit default
-  (matches the historical engine behaviour); the other three
-  carry the Cypher 25 / GQL semantics.
-- **`QppMode` enum** in
-  [`crates/nexus-core/src/executor/types.rs`](crates/nexus-core/src/executor/types.rs)
-  threads the mode through the `Operator::QuantifiedExpand`
-  variant, the planner, and the AST `QuantifiedGroup`.
-- **Per-frame visited-set tracking** in `execute_quantified_expand`
-  ([`crates/nexus-core/src/executor/operators/quantified_expand.rs`](crates/nexus-core/src/executor/operators/quantified_expand.rs)).
-  TRAIL / SIMPLE maintain a `path_edges: Vec<u64>` per BFS frame
-  and reject any walk extension whose new edges intersect that
-  set or repeat within the body iteration; ACYCLIC / SIMPLE do
-  the same for `path_nodes`. Wavefront dedup `(node, iteration)`
-  is disabled for non-WALK modes — distinct paths to the same
-  node at the same iteration count have distinct visited sets
-  and may extend into different futures.
-- **Parser support**: `clauses.rs` peeks for an optional
-  `WALK | TRAIL | ACYCLIC | SIMPLE` keyword right before the
-  opening paren of a QPP group. Backtracking restores both the
-  mode keyword and the QPP probe when the lookahead does not
-  form a real QPP, so identifiers that happen to start with one
-  of the four keyword letters keep parsing as identifiers.
-- **`mode_explicit` flag** on `QuantifiedGroup`: any explicit
-  mode keyword (including `WALK`) disables the legacy `*m..n`
-  fast-path lowering and routes through the dedicated
-  `QuantifiedExpand` operator. The implicit (no-keyword) default
-  keeps the lowering on so the textbook anonymous-body shape
-  takes the legacy path byte-for-byte unchanged.
-- 7 new TCK-style tests covering each mode against triangle
-  (loop) and diamond (parallel-paths) fixtures, the explicit
-  `WALK` keyword routing, ACYCLIC bounded against an unbounded
-  triangle loop, and the zero-length-quantifier interaction
-  with `SIMPLE`.
-
-### Added — `phase8_encryption-at-rest-wal`
-
-- **Encrypted WAL append + replay** in
-  [`crates/nexus-core/src/wal/mod.rs`](crates/nexus-core/src/wal/mod.rs).
-  New v3 frame format (`Aes256GcmCrc32C` algo, dispatched off the
-  existing v2 magic byte) carries AES-256-GCM ciphertext with a
-  tag, plus a CRC32C over the recovered plaintext for end-to-end
-  integrity. v3 layout: `[magic:1=0x00][algo:1=0x03][type:1]
-  [plain_len:4][crc_plain:4][ciphertext+tag: plain_len + 16]`.
-- **AAD-bound metadata**: `[type, plain_len, crc_plain,
-  frame_offset]` (17 bytes). A tamperer who relocates a frame to
-  a different file offset triggers an AEAD failure on replay.
-- **Nonce**: `PageNonce::new(FileId::Wal, frame_offset, 1)`. Nonce
-  uniqueness across the file follows from append-only semantics
-  between truncations.
-- **WAL key-rotation contract**: every `Wal::truncate()` must be
-  paired with a key rotation in production (the rotation runner
-  shipped under `phase8_encryption-at-rest-rotation` coordinates
-  with the checkpoint epoch). Documented in
-  `docs/security/ENCRYPTION_AT_REST.md` § "WAL encryption".
-- **On-disk EaR magic**: encrypted WAL files start with a 16-byte
-  `NXCP` page header (`FileId::Wal`, generation 1) so the boot
-  inventory scanner classifies them as `Encrypted`; without the
-  header, the per-frame `0x00` magic byte would otherwise look
-  plaintext to the inventory.
-- **Replay tolerance**: a short read mid-frame, or an AEAD
-  failure on a frame whose body extends to EOF, are both treated
-  as truncation (parity with the existing CRC-mismatch behaviour
-  for v1/v2 frames). Mid-WAL AEAD failures surface
-  `ERR_WAL_AEAD`; plaintext CRC mismatches after successful AEAD
-  surface `ERR_WAL_CRC`.
-- **Backward compatibility**: existing v1 plaintext frames and v2
-  algo-stamped frames continue to replay byte-for-byte unchanged;
-  the v3 dispatcher is gated behind the `Aes256GcmCrc32C` algo
-  byte and only fires when the WAL was opened via
-  `Wal::with_cipher`.
-- 10 new tests: round-trip recovery, EaR magic at offset 0,
-  ciphertext does not contain plaintext payload, wrong-key →
-  `ERR_WAL_AEAD`, mid-WAL bit-flip → `ERR_WAL_AEAD`,
-  trailing-frame truncation tolerance (both byte-truncated and
-  AEAD-failed), `with_cipher` rejects existing plaintext WAL,
-  plaintext WAL refuses v3 append, truncate preserves page
-  header, and post-truncate replay walks fresh frames cleanly.
-
-### Added — `phase8_encryption-at-rest-storage-hooks` (boot-invariant slice)
-
-- **Boot-time encryption inventory scanner** at
-  [`crates/nexus-core/src/storage/crypto/inventory.rs`](crates/nexus-core/src/storage/crypto/inventory.rs).
-  Walks the data directory before the executor opens any record
-  store, reads the first 16 bytes of each regular file, and
-  classifies the file as `Empty` / `Plaintext` /
-  `Encrypted { file_id, generation }` based on the EaR magic.
-- **Mixed-mode rejection** via `enforce_uniform_state`: refuses
-  to boot when at least one plaintext file sits alongside at
-  least one encrypted file (`ERR_ENCRYPTION_MIXED_MODE`),
-  rejects a flag-flipped configuration whose on-disk state
-  contradicts the boot config (`ERR_ENCRYPTION_UNEXPECTED_ENCRYPTED`
-  / `ERR_ENCRYPTION_NOT_INITIALIZED`).
-- **`enforce_data_dir_invariants`** in
-  [`crates/nexus-server/src/config.rs`](crates/nexus-server/src/config.rs)
-  drives the scan from the boot path; the resulting
-  `EncryptionInventorySummary { empty, plaintext, encrypted }`
-  rides along on `EncryptionConfig` and surfaces over
-  `GET /admin/encryption/status` as a counts-only `inventory`
-  field. Per-file paths land in the boot log line on error;
-  never sent over the network.
-- **Status quo on the actual page-stream wiring**: the catalog
-  (LMDB has no engine-side page hook), record stores (mutate
-  `MmapMut` in place — no buffer pool yet), page cache (no real
-  disk backing today), and the matching round-trip / crash-
-  recovery / benchmark items are all blocked on a storage-layer
-  refactor that is too large to land in this slice. The
-  inventory scanner is the floor those wirings will report
-  against once they ship; until then, every boot proves the
-  data directory is uniform and the operator surface honestly
-  reflects "no surfaces wired yet" via the empty
-  `storage_surfaces` array.
-- 19 new tests: 15 unit tests covering `classify_file` (empty /
-  short / plaintext / encrypted recovery), `scan_paths` /
-  `scan_directory` (skip list + recursion + missing-dir
-  tolerance), and `enforce_uniform_state` (every cell of the
-  decision matrix); 4 server-side tests covering
-  `enforce_data_dir_invariants` (clean dir, mixed mode,
-  encrypted-with-flag-off, uniform success).
-- Operator-facing docs at
-  [`docs/security/ENCRYPTION_AT_REST.md`](docs/security/ENCRYPTION_AT_REST.md)
-  § "Mixed-mode detection (boot invariant)" — decision matrix
-  + sample status JSON.
-
-### Added — `phase8_encryption-at-rest-kms`
-
-- **AWS KMS, GCP KMS, and HashiCorp Vault adapters** for the
-  `KeyProvider` trait at
-  [`crates/nexus-core/src/storage/crypto/kms/`](crates/nexus-core/src/storage/crypto/kms/).
-  DEK pattern: each adapter holds a wrapped data-key blob on
-  disk + a reference to a KMS-owned KEK; at boot the adapter
-  calls the KMS once to unwrap the DEK and caches the 32-byte
-  plaintext for the process lifetime. Transient KMS outages
-  after boot do not affect serving traffic.
-- **Feature-gated.** `kms-aws` (`aws-sdk-kms` + `aws-config`),
-  `kms-gcp` (`google-cloud-kms`), `kms-vault` (`vaultrs`); the
-  roll-up `kms` enables all three. Default builds skip the SDKs
-  entirely so dev / CI compile times are unaffected.
-- **Operator config** via `NEXUS_KMS_PROVIDER` ∈ `aws|gcp|vault`
-  plus per-provider `NEXUS_KMS_*` env vars. Boot resolution
-  precedence: KMS > `NEXUS_KEY_FILE` > `NEXUS_DATA_KEY`. An
-  unknown provider, or one whose feature is not built in,
-  surfaces a hard fail at boot — no silent fall-through to
-  plaintext.
-- **`EncryptionSource::Kms { provider, label }`** added to
-  `nexus-server::config` so `/admin/encryption/status` reports
-  which KMS unwrapped the master key. The label is the
-  adapter's `KeyProvider::label()` — provider-specific
-  identifier safe to log (KMS key ARN, GCP key resource path,
-  Vault transit mount/key); never the master key itself.
-- 24 new tests: 13 unit tests covering the shared `KmsError`
-  taxonomy + per-provider config-validation paths, 8 server-
-  side encryption tests covering the new resolution branches +
-  `EncryptionSource::Kms` JSON serialisation, and 3 ignored-by-
-  default integration tests against localstack (AWS), the
-  google-cloud-kms emulator (GCP), and `vault dev` (Vault).
-- Operator-facing docs at
-  [`docs/security/ENCRYPTION_AT_REST.md`](docs/security/ENCRYPTION_AT_REST.md)
-  § "KMS adapters" — recipes for one-shot DEK provisioning per
-  provider and a structured error catalogue.
-
-### Added — `phase8_query-plan-cache` (canonicaliser slice)
-
-- **Cypher canonicaliser landed at
-  `crates/nexus-core/src/executor/planner/cache.rs`** — turns a
-  query string into a cache-key-friendly form before hashing.
-- Strips line comments (`// ...`), block comments
-  (`/* ... */`, non-nested), collapses every run of ASCII
-  whitespace to a single space, trims leading + trailing
-  whitespace. **Does not touch string literals**: `'a  b'`
-  keeps its inner whitespace; `// inside a string` is not
-  treated as a comment marker.
-- Does **not** lower-case keywords (Cypher is case-sensitive on
-  identifiers; lower-casing would alias property names like
-  `match` with the keyword) and does **not** normalise
-  parameter placeholders (`$x` and `$y` participate in binding
-  scope and produce different plans).
-- `canonicalise_query(&str) -> Cow<'_, str>` — `Cow::Borrowed`
-  on already-canonical input (zero-allocation cache hit path),
-  owned `String` otherwise.
-- `hash_canonicalised(&str) -> u64` — xxh3 over the canonical
-  form + a `CANONICAL_VERSION = 1` stamp so a future shape
-  change forces a clean cache invalidation.
-- `executor::optimizer::QueryOptimizer::hash_query` now routes
-  through the canonicaliser. Two queries that differ only in
-  whitespace or comments now hit the same plan-cache entry,
-  closing the cache-miss path that templated workloads tripped
-  on every request.
-- 21 unit tests cover empty input, already-canonical
-  borrow-not-clone path, whitespace + tab + newline collapse,
-  leading/trailing trim, line-comment + block-comment
-  stripping, unterminated block comment to EOF, single +
-  double + escaped string-literal preservation, comment-inside-
-  string-literal preservation, multiple back-to-back comments,
-  keyword-case preservation, parameter-name distinction,
-  hash stability + collapse + distinction invariants.
-- The remaining `phase8_query-plan-cache` items (lookup at
-  `Engine::execute`, schema-change invalidation,
-  `db.planCache.*` procedures, env vars, `/stats` counters,
-  Prometheus metrics, hot-endpoint bench) consume the
-  canonicaliser without changing it; tracked under the same
-  task for follow-up sessions.
-- Quality gates: `cargo +nightly test -p nexus-core --lib`
-  2232 passed (same pre-existing parallel-flake on
-  `engine::tests::match_scopes_by_label_and_property_together`
-  noted under `phase8_optional-match-binding-leak`); `cargo
-  +nightly clippy -p nexus-core --all-targets -- -D warnings`
-  clean.
-
-### Added — `phase8_encryption-at-rest-indexes` (R-tree shipped)
-
-- **R-tree spatial index gains an encrypted page-store**, the
-  first index family to wire encryption-at-rest end-to-end.
-- New module `crates/nexus-core/src/index/rtree/encrypted_store.rs`:
-  `EncryptedFilePageStore` lives parallel to `FilePageStore` and
-  drops into every R-tree call site through the existing
-  `PageStore` trait — no R-tree internals needed modification.
-- On-disk slot layout: `ENCRYPTED_RTREE_SLOT_SIZE = 8224 bytes`
-  per logical 8 KB R-tree page, laid out as
-  `[16 B header][8192 B ciphertext][16 B AEAD tag]`. Header
-  carries magic `NXRT` (`0x4E58_5254`), `FileId::RTreeIndex`,
-  and a per-page `u32` generation counter; bound into the AEAD
-  as AAD so adversarial header swaps fail at decrypt.
-- Per-page nonce derives from `(FileId::RTreeIndex,
-  page_offset, generation)`. Generation bumps on every
-  overwrite, structurally preventing AES-GCM nonce reuse
-  (catastrophic with the same key).
-- Crash consistency mirrors `FilePageStore`: live-set sidecar
-  (`<path>.live`), `flush()` syncs both the data file and the
-  sidecar, reopening picks up every page that was committed.
-- 12 unit tests cover round-trip on a full 8192-byte page,
-  distinct pages get distinct slots, overwrite advances
-  generation, wrong-key surfaces a clean IO error, tampered
-  ciphertext is rejected, header swap is detected at decrypt,
-  restart recovers the live set + decrypts every page, delete +
-  re-read produces NotFound, page-id-zero rejected on every
-  method, wrong-size writes rejected, empty-store invariants,
-  on-disk slot layout matches the documented contract.
-- Spec: `docs/specs/rtree-index.md` gains an "Encrypted
-  page-store" section documenting the slot layout, nonce
-  derivation, performance overhead (~2-3 µs per page on
-  AES-NI), and the constructor-swap wiring recipe.
-- B-tree, full-text, and KNN remain follow-ups: the B-tree is
-  in-memory today (no on-disk format to encrypt yet); Tantivy
-  needs a custom `tantivy::Directory` adapter; `hnsw_rs` lacks
-  a streaming-IO seam. The R-tree pattern is the template the
-  three adopt as their IO seams land. Status documented in
-  `docs/security/ENCRYPTION_AT_REST.md` follow-up table;
-  `-indexes` now reads **partial**.
-- Quality gates: `cargo +nightly test -p nexus-core --lib
-  index::rtree::encrypted_store::` 12/12 green; `cargo +nightly
-  clippy -p nexus-core --all-targets -- -D warnings` clean.
-
-### Fixed — `phase8_optional-match-empty-driver`
-
-- **OPTIONAL MATCH against an empty driver now returns one NULL
-  row instead of zero rows**, matching the Neo4j contract.
-  `OPTIONAL MATCH (n:NonExistentLabel) RETURN n` returned `[]`
-  before the fix, returns `[[null]]` after. Property access
-  (`RETURN n.name`) and aggregation (`RETURN count(n)`) flow
-  through the same fix.
-- Root cause: the planner emitted a regular `NodeByLabel +
-  Project` pipeline that produced zero rows when the labelled
-  set was empty. OPTIONAL MATCH is a LEFT OUTER JOIN against an
-  implicit single-row driver when no prior clause feeds the
-  pipeline; the emitted plan had no driver.
-- Fix: new operator `Operator::EnsureNullRowIfEmpty { vars }` in
-  `crates/nexus-core/src/executor/types.rs`, executed in both
-  `executor::operators::dispatch` and the main `executor::mod`
-  exec loop. The planner appends it after the first OPTIONAL
-  pattern's scan when (a) `first_is_optional == true`, (b) no
-  prior driver (`unwind_before_match == false` and the only
-  operators in the pipeline so far are `NodeByLabel` /
-  `AllNodesScan` / `Filter`).
-- 6 regression tests in
-  `crates/nexus-core/tests/optional_match_empty_driver_test.rs`:
-  empty-label returns NULL row, property access returns NULL,
-  count returns 0, prior MATCH eliminating rows does NOT
-  resurrect them, OPTIONAL on a non-empty label returns the
-  actual rows (NOT a NULL row), and the existing
-  `phase8_optional-match-binding-leak` contract still holds.
-- Spec: `docs/specs/cypher-subset.md` § "OPTIONAL MATCH" gains
-  a "Standalone OPTIONAL MATCH semantics" subsection.
-- Quality gates: `cargo +nightly test -p nexus-core --lib` 2199
-  passed (1 pre-existing parallel-flake on
-  `engine::tests::match_scopes_by_label_and_property_together`,
-  unrelated to this fix, passes in isolation — same flake
-  documented under `phase8_optional-match-binding-leak`); the
-  new test file 6/6 green; the
-  `phase8_optional-match-binding-leak` regression suite 7/7
-  still green; `cargo +nightly clippy -p nexus-core --all-targets
-  -- -D warnings` clean.
-
-### Added — `phase8_encryption-at-rest-cli` (status surface)
-
-- **Operator surface for encryption-at-rest configuration.** The
-  cryptographic core + rotation runner already shipped; this commit
-  ships the boot-resolution + status endpoint + CLI subcommand so
-  operators can verify their key configuration without waiting on
-  the storage-hook follow-ups.
-- New `EncryptionConfig` struct in `crates/nexus-server/src/config.rs`
-  with `enabled`, `source` (env / file), and `fingerprint` fields.
-  Resolved at server boot via the new `resolve_encryption_config()`
-  helper: parses `NEXUS_ENCRYPT_AT_REST=true`, picks `NEXUS_KEY_FILE`
-  over `NEXUS_DATA_KEY`, instantiates the matching `KeyProvider`,
-  validates the master key, computes a SHA-256-derived fingerprint
-  (`nexus:` + first 16 hex digits of the digest — safe to log).
-- `Config::from_env()` now invokes the resolver and panics with
-  `ERR_ENCRYPTION_BOOT` on a malformed / missing key. An operator
-  who set `NEXUS_ENCRYPT_AT_REST=true` and got a typo'd key path
-  must NEVER see the server start in plaintext mode.
-- `NexusServer` carries a new `encryption_config` field; `main.rs`
-  populates it before wrapping the handle in `Arc` and logs the
-  fingerprint at boot when encryption is enabled.
-- New API endpoint `GET /admin/encryption/status` returning a
-  versioned `EncryptionStatusReport`: `enabled`, `source`,
-  `fingerprint`, `storage_surfaces` (empty today; populated by the
-  storage-hook follow-ups), `schema_version: 1`. Optional fields
-  use `skip_serializing_if` so the JSON shape stays clean for the
-  default-disabled case.
-- `nexus admin encryption status` CLI subcommand calls the new
-  endpoint via the new `NexusClient::get_json` helper. Supports
-  `--json` output. Pretty-prints the source / fingerprint or a
-  hint about how to enable encryption when disabled.
-- 10 new tests cover: fingerprint determinism + per-key
-  independence + no-key-byte leak; env-var resolution disabled
-  case; env-var resolution with a hex key (records source +
-  fingerprint); bad-format rejection; status-handler JSON shape +
-  field names + `skip_serializing_if` behaviour. Tests use a
-  shared `Mutex` to serialise env-var mutation against the
-  process-wide global.
-- `docs/security/ENCRYPTION_AT_REST.md` § "Activation" rewritten
-  with the live recipe + fingerprint explainer; follow-up table
-  marks `-cli` as **partial**.
-- `crates/nexus-server` gained a `sha2 = "0.10"` dep (paired with
-  the workspace `hkdf 0.12` digest 0.10 ecosystem; coexists with
-  nexus-core's `sha2 = "0.11"` for argon2/API keys).
-- Migration / rotation / mixed-mode-rejection subcommands stay
-  carved to `phase8_encryption-at-rest-storage-hooks`; the CLI
-  must not expose actions the engine cannot yet honour.
-- Quality gates: `cargo +nightly test -p nexus-server --lib encryption`
-  10/10 green; `cargo +nightly clippy -p nexus-server -p nexus-cli
-  --all-targets -- -D warnings` clean.
-
-### Added — `phase8_encryption-at-rest-rotation`
-
-- **Online key rotation** built on top of the encryption-at-rest
-  cryptographic core. NIST SP 800-57 recommends rotating
-  data-encryption keys at most annually; this commit ships the
-  runner that does it without downtime.
-- `EncryptedPageStream` extended with an optional **secondary**
-  cipher: `install_secondary` / `clear_secondary` / `has_secondary`.
-  The read path probes primary first, falls back to secondary on
-  `ERR_BAD_KEY`, surfaces the primary's error if both fail. The
-  write path always uses the primary so new pages are immediately
-  consistent with the post-rotation state.
-- New `KeySource` enum + `decrypt_with_source` so the runner can
-  tell whether a page was decrypted under the primary (no-op) or
-  the secondary (must re-encrypt).
-- `PageStore` trait — the storage-layer seam the runner walks.
-  `InMemoryPageStore` ships today; storage-hook follow-ups
-  (`-storage-hooks`, `-wal`, `-indexes`) provide concrete impls.
-- `RotationRunner` orchestrator: ascending `(file_id, page_offset)`
-  sweep, idempotent on already-primary pages, throttled by a
-  configurable `byte_budget_per_second` (default 64 MiB/s),
-  cancellable via an `Arc<AtomicBool>`, resumable from a
-  serde-serialisable `RotationCheckpoint`.
-- `RotationStats`: `pages_total`, `pages_rotated`,
-  `pages_already_primary`, `bytes_rotated` — ready to export to
-  Prometheus when the metrics layer wires up.
-- 9 new unit tests cover: read-path fallback to secondary,
-  read-path-without-secondary fails loudly, runner rejects
-  no-secondary state, runner rotates every page to primary,
-  runner skips already-primary pages, runner resumes from
-  checkpoint, runner honours cancel flag, write during rotation
-  uses primary (post-clear read still works), cleared-secondary
-  can be reinstalled (chained rotations).
-- `FileId` enum gained `Serialize`/`Deserialize` + `Ord` so
-  `PageRef` round-trips cleanly through the checkpoint.
-- Doc: [`docs/security/ENCRYPTION_AT_REST.md`](docs/security/ENCRYPTION_AT_REST.md)
-  § "Online key rotation" rewritten from follow-up placeholder
-  to the live spec.
-- Quality gates: 45/45 `storage::crypto::*` tests green; clippy
-  clean.
-
-### Added — `phase8_encryption-at-rest` (cryptographic core)
-
-- **Encryption-at-rest cryptographic foundation.** SOC2 / FedRAMP
-  / HIPAA / PCI-DSS gate. Neo4j Enterprise, Aura, ArangoDB
-  Enterprise, Memgraph Enterprise all ship this; Nexus's previous
-  posture ("rely on disk-level encryption") was disqualifying for
-  any regulated customer.
-- New module `crates/nexus-core/src/storage/crypto/`:
-  - `key_provider.rs` — `KeyProvider` trait, `EnvKeyProvider`
-    (reads `NEXUS_DATA_KEY` once at construction), `FileKeyProvider`
-    (0600-perm-checked on Unix, ACL-deferred on Windows). Master
-    key sources accept either 32 raw bytes or 64-char hex.
-  - `kdf.rs` — HKDF-SHA-256 per-database key derivation (RFC 5869).
-    Domain-separated via `nexus-encryption-at-rest-v1` tag;
-    rotatable per database via an `epoch` parameter.
-  - `aes_gcm.rs` — AES-256-GCM page cipher with deterministic
-    `(file_id, page_offset, generation)` 96-bit nonce. The
-    generation counter is non-negotiable — AES-GCM is
-    catastrophically broken under nonce reuse.
-  - `encrypted_file.rs` — `EncryptedPageStream` is the seam
-    storage hooks plug into. 8 KiB pages with a 16-byte
-    plaintext header (magic + file_id + generation) bound into
-    the AEAD as AAD so an adversary swapping the on-disk header
-    is detected at decrypt time.
-- Every secret wrapped in `zeroize::Zeroizing` so it gets wiped on
-  drop.
-- Failure surface: `ERR_BAD_KEY` (vague on purpose to avoid a
-  CCA-2 oracle), `ERR_KEY_NOT_FOUND`, `ERR_KEY_BAD_FORMAT`,
-  `ERR_KEY_IO`, `ERR_KEY_HEX`, `ERR_KDF_BAD_LENGTH`,
-  `ERR_KDF_EMPTY_DATABASE`, `ERR_PAGE_HEADER`,
-  `ERR_PAGE_TOO_LARGE`, `ERR_AEAD_EMPTY`.
-- 36 unit tests cover: nonce layout (round-trip, 48-bit truncation,
-  endianness), AEAD round-trip, wrong-key / wrong-database-key /
-  AAD-mismatch / nonce-mismatch / tampered-ciphertext / empty-input
-  rejection, no-plaintext-leak invariant, distinct-nonces-produce-
-  distinct-ciphertexts, HKDF determinism + per-name + per-epoch +
-  per-master independence, page-stream generation advancement,
-  on-disk header parsing + invalid-magic / unknown-file-id
-  rejection, header-swap detection at decrypt, key-rotation-via-
-  fresh-stream invalidates old pages, env-var hex parsing,
-  file-key newline stripping, missing-file IO error.
-- New doc:
-  [`docs/security/ENCRYPTION_AT_REST.md`](docs/security/ENCRYPTION_AT_REST.md) —
-  threat model, architecture, cryptographic choices, key-management
-  recipes, performance expectations, operational checklist.
-  [`AUTHENTICATION.md`](docs/security/AUTHENTICATION.md) cross-
-  links the new doc.
-- **Storage-layer wiring is intentionally NOT in this commit.**
-  Wiring the page stream into LMDB catalog, record stores, WAL,
-  and indexes is invasive; each module has its own invariants
-  that need a per-module review. Tracked under
-  `phase8_encryption-at-rest-storage-hooks`,
-  `-wal`, `-indexes`, `-kms`, `-rotation`, and `-cli`. The
-  contracts in this commit are stable and the follow-ups consume
-  them without changing any public API.
-- Workspace deps added: `aes-gcm = "0.10"`, `hkdf = "0.12"`,
-  `sha2_010` (sha2 0.10 alias to satisfy hkdf's digest 0.10
-  bound; coexists with the existing `sha2 = "0.11"` already in
-  nexus-core), `zeroize = "1.8"`.
-- Quality gates: `cargo +nightly test -p nexus-core --lib
-  storage::crypto::` 36/36 green; `cargo +nightly clippy
-  -p nexus-core --all-targets -- -D warnings` clean.
-
-### Added — `phase8_cross-shard-2pc`
-
-- **V2 cluster mode now supports atomic multi-shard writes.** Before
-  phase 8, the coordinator's scatter path `fail-atomics` any
-  mutation whose write set spanned more than one shard. The
-  remaining gate for advertising V2 as production-grade
-  multi-shard cluster mode (every other engine in this space —
-  Memgraph HA, ArangoDB cluster, Dgraph, NebulaGraph — supports
-  multi-shard writes).
-- **Pessimistic ordered locking, not 2PC.** ADR-009 documents
-  the choice: pessimistic locking has zero coordinator-state
-  recovery story (leases time out on the shard side if the
-  coordinator dies), Havender total-order deadlock prevention
-  (no cycle is possible), and forward-compatible API for a
-  future full-2PC swap. Tracked under
-  `phase9_full-2pc-cross-shard`.
-- New module
-  `crates/nexus-core/src/coordinator/multi_shard_tx.rs` (~700
-  LOC): `TxId` + `TxIdAllocator`, `WriteSet` (BTreeSet over
-  shards iterated in ascending order), `ShardLockManager` trait
-  + in-memory test impl with chaos hooks
-  (`inject_partition`, `inject_failure`, `force_release`),
-  `ShardMutator` trait, `MultiShardTx` orchestrator
-  (`acquire-in-order` → `mutate` → `release-in-reverse-order`,
-  with a deterministic abort path that rolls back every
-  previously-mutated shard).
-- Failure surface: `ERR_LOCK_BUSY`, `ERR_LOCK_TIMEOUT`,
-  `ERR_PARTITION`, `ERR_SHARD_FAILURE`, `ERR_SHARD_MUTATION`,
-  `ERR_ROLLBACK_FAILED`, `ERR_TX_TIMEOUT`,
-  `ERR_EMPTY_WRITE_SET`. Each maps to a specific recovery
-  procedure documented in
-  `docs/specs/cluster-transactions.md`.
-- Metrics counters surfaced for Prometheus:
-  `nexus_cluster_multi_shard_writes_total`,
-  `_writes_aborted_total`, `_lock_acquire_total`,
-  `_lock_timeout_total`. Recommended dashboards (abort ratio,
-  lease wait time, per-shard fairness) documented in the spec.
-- 11 unit tests pin every chaos case: leader churn mid-write,
-  partition mid-acquisition, busy-shard timeout, 64 concurrent
-  writers on overlapping shard sets (no deadlock), shard outage
-  mid-commit (atomic rollback in reverse order),
-  rollback-itself-fails (state preserved, root cause not
-  masked).
-- New spec: [`docs/specs/cluster-transactions.md`](docs/specs/cluster-transactions.md).
-- Updated guide: [`docs/guides/DISTRIBUTED_DEPLOYMENT.md`](docs/guides/DISTRIBUTED_DEPLOYMENT.md).
-- Quality gates: workspace tests `2154 passed; 0 failed` (11 new);
-  `cargo clippy -p nexus-core --all-targets` clean.
-
-### Documentation — `phase7_kuzu-migration-guide`
-
-- **New migration guide for displaced KuzuDB users.** Kùzu Inc.
-  archived its repository on 2025-10-10. `docs/migration/FROM_KUZU.md`
-  covers schema mapping (Kùzu node/rel tables → Nexus labels/types),
-  Cypher dialect deltas (`[*SHORTEST n..m]`, `CREATE_HNSW_INDEX`,
-  `CREATE_FTS_INDEX`, `QUERY_VECTOR_INDEX`, `QUERY_FTS_INDEX`),
-  vector + FTS index migration with the cosine score sign-flip
-  flagged, embedded-mode → RPC story, and a full gotchas section.
-- `scripts/migration/from_kuzu.py` ships three subcommands:
-  `load-csv` (emit a `LOAD CSV WITH HEADERS` driver per table),
-  `bulk-rpc` (stream into a running Nexus via the Python SDK's
-  batch helpers), and `rewrite-cypher` (regex translator for the
-  dialect deltas, with `-- TRANSLATOR-NOTE:` comments on every
-  rewrite so the operator can review).
-- Three before/after cookbooks under `scripts/migration/cookbook/`:
-  `graphrag/` (vector + traversal-augmented retrieval),
-  `recommendation/` (co-purchase shortest-path + cosine-similarity
-  fusion), `knowledge-graph/` (hybrid graph + vector + FTS).
-- 19 unit tests in `tests/migration/test_from_kuzu.py` cover the
-  spec parsers, Cypher emitters, CSV streamers, dialect
-  translator, and CLI subcommands. All green.
-
-### Fixed — `phase8_optional-match-binding-leak`
-
-- **HIGH-severity correctness bug fixed.** OPTIONAL MATCH against
-  a node with no matching relationships used to silently bind the
-  target (and relationship) variables to **the source node's
-  data** instead of NULL. Repro: `MATCH (a:Person) OPTIONAL MATCH
-  (a)-[:KNOWS]->(b) RETURN a.name, b.name` returned `['Alice',
-  'Alice']` when Alice had no `:KNOWS` edge — Neo4j returns
-  `['Alice', null]`. `b IS NULL` returned `false`, `count(b)`
-  returned `1`, every aggregation on top inherited the corruption.
-- Root cause: the scan-fallback in
-  `crates/nexus-core/src/executor/operators/path.rs::find_relationships`
-  (kept alive as a workaround for an mmap-sync edge case) read
-  rel_id=0 from the memmapped backing file as a zero-byte record
-  (`src=0`, `dst=0`, `type_id=0`). The existing skip filter
-  (`src=0 && dst=0 && rel_id > 0`) let rel_id=0 through. When the
-  source node was itself at id=0 (the very first node — Alice in
-  the canonical reproducer), the direction check accepted
-  `check_src_id (0) == node_id (0)` as a match and the operator
-  emitted a phantom relationship pointing back at the source.
-- Three-part fix in `path.rs`:
-  1. Short-circuit the scan when `relationship_count() == 0`.
-  2. Clamp the scan upper bound to `relationship_count() - 1` so
-     a node-with-no-edges does not pull zero-byte records off the
-     end of the in-use range.
-  3. Strengthen the uninitialized-record skip filter: drop the
-     `rel_id > 0` qualifier and key off `type_id == 0` instead.
-     Genuine relationships have non-zero `type_id` because the
-     catalog's type registry never assigns id 0.
-- 7 new regression tests in
-  `crates/nexus-core/tests/optional_match_binding_leak_test.rs`
-  pin every shape from the canonical repro: target-var NULL,
-  property-access NULL, `IS NULL` true, `count(b) = 0`, both rel
-  and target NULL on `[r:KNOWS]->(b)` shape, anonymous target
-  variant, plus a happy-path regression confirming OPTIONAL MATCH
-  with a real `:KNOWS` edge still returns the target. All 7 pass.
-- Quality gates: workspace `cargo +nightly clippy --all-targets
-  --all-features -- -D warnings` clean. Regression suites green:
-  `tck_runner` 22/22, `geospatial_predicates_test` 34/34,
-  `call_subquery_test` 20/20. Lib + integration suite reports
-  `2141 passed; 1 failed (pre-existing parallel-flake on
-  `engine::tests::match_scopes_by_label_and_property_together`,
-  passes in isolation, unrelated to this fix); 10 ignored`.
-- Sibling: `phase8_optional-match-empty-driver` covers the
-  separate row-count divergence on standalone OPTIONAL MATCH with
-  no prior driver.
-
-### Discovered (audit only) — `phase7_cross-test-row-count-parity`
-
-- The phase7 task asked to fix the 22-test row-count gap in the
-  74-test cross-bench (`docs/performance/BENCHMARK_NEXUS_VS_NEO4J.md`
-  Sections 11/12/15 list 0% Compatible categories). The audit ran
-  a Rust-only probe (deleted after capture) against
-  `Engine::execute_cypher` and surfaced two distinct correctness
-  problems plus three projection-semantics nits:
-  - **OPTIONAL MATCH binding leak** (HIGH severity, silent wrong
-    data): `MATCH (a:Person) OPTIONAL MATCH (a)-[:KNOWS]->(b:Person)
-    RETURN a.name, b.name` returns `['Alice', 'Alice']` when Alice
-    has no `:KNOWS` edge — Nexus binds `b` to `a` itself instead of
-    NULL. Carved out as `phase8_optional-match-binding-leak`. This
-    is wrong data on every OPTIONAL MATCH no-match path; aggregations
-    on top inherit the corruption.
-  - **OPTIONAL MATCH empty-driver row-count**: standalone
-    `OPTIONAL MATCH (n:Ghost) RETURN n` returns 0 rows; Neo4j returns
-    1 row with `n = null` (LEFT-OUTER-JOIN against an implicit
-    single-row driver). Carved out as `phase8_optional-match-empty-driver`.
-  - **Projection nits** (WITH grouping carry-through, write success-row
-    emission, ORDER BY tie-stability): folded into the
-    `phase8_bolt-protocol-shim` task, which already needs
-    Neo4j-exact row shapes for driver compatibility.
-- No engine code was changed in this task — the audit drove the
-  carve-out and re-sequencing. The sibling tasks each ship their
-  own repro + fix + tests when implemented.
-
-### Removed — `phase7_page-cache-property-index-eviction`
-
-- **Dead `warm_recent_indexes` helper** in
-  `crates/nexus-core/src/cache/mod.rs` and the matching
-  `CacheKey::Index(String)` variant. The function iterated
-  `last_access` filtered to `CacheKey::Index(_)` entries but no
-  production caller ever inserted a value of that variant — the
-  only `track_access` site is the page-cache `Page(u64)` path —
-  so the loop never ran and the placeholder marker inside it
-  ("`Check if index is actually cached`") could not be reached.
-  Removing both is pure dead-code cleanup, no behaviour change,
-  one Tier-1 marker fewer in shipping code.
-- **Audit finding (queued for follow-up):** `IndexKey::Property(label_id,
-  key_id)` is defined and unit-tested in
-  `crates/nexus-core/src/cache/index_cache.rs` but has **no
-  production producer** — no path in the property-lookup hot
-  path calls `index_cache.put(IndexKey::Property(...), ...)`.
-  The eviction policy + memory budget are already there
-  (`IndexCache` LRU with `max_memory` ceiling); the missing
-  piece is wiring the property-lookup code path into the cache.
-  Threading `IndexCache` through the property-index hot path is
-  a separate task and lives behind the same wider
-  index-handle-Arc refactor that gates
-  `phase7_planner-using-index-hints` engine wiring.
-- **Two new memory-budget tests** in
-  `crates/nexus-core/src/cache/index_cache.rs`:
-  `test_index_cache_property_keys_respect_memory_budget` and
-  `test_index_cache_fulltext_keys_respect_memory_budget`. Both
-  pin the LRU + memory-budget invariant for the typed `IndexKey`
-  variants so the future producer path inherits a verified
-  ceiling. 12/12 tests in the module passing.
-
-### Added — `phase7_planner-using-index-hints`
-
-- **`USING INDEX <var>:<Label>(<prop>)` validation at plan time.**
-  `QueryPlanner` now carries an optional `&PropertyIndex` handle
-  installed via the new `with_property_index(idx)` builder. When
-  the handle is present and the hinted `(label, property)` pair
-  has no matching registered property index, the planner raises
-  `ERR_USING_INDEX_NOT_FOUND` with a structured message naming the
-  pair. Without the handle the hint is accepted silently — that's
-  the legacy behaviour for unit-test callers and direct planner
-  consumers that don't construct an `IndexManager`. The handle is
-  intentionally not yet threaded through `Executor::execute`
-  because `ExecutorShared` does not currently carry a
-  `PropertyIndex` reference; threading it lives behind a wider
-  index-handle-Arc refactor and is queued.
-- **Catalog-level pre-check** — the planner short-circuits with
-  the same error when the hinted label or property key is not
-  registered in the catalog at all (typo in the hint).
-- 4 new planner unit tests in
-  `crates/nexus-core/src/executor/planner/tests.rs`:
-  `using_index_hint_accepted_silently_without_property_index_handle`,
-  `using_index_hint_validated_when_property_index_handle_installed_and_index_exists`,
-  `using_index_hint_errors_when_index_missing`,
-  `using_index_hint_errors_when_label_missing_in_catalog`. All
-  passing on `cargo +nightly test -p nexus-core --lib using_index_hint`.
-- `docs/specs/cypher-subset.md` updated to document the
-  validation behaviour. Existing 300/300 Neo4j diff suite stays
-  green; the TCK runner (22 scenarios) and geospatial predicates
-  suite (34 tests) stay green.
-
-### Discovered (no code change) — `phase7_call-in-transactions-executor`
-
-- The phase7 task asked to "finish executor batching for `CALL { } IN
-  TRANSACTIONS`" — but on audit the executor side was already
-  shipped end-to-end by `phase6_opencypher-subquery-transactions`
-  slice-2 (batching + `ON ERROR FAIL/CONTINUE/BREAK/RETRY n` +
-  `REPORT STATUS AS s`) and slice-3 (`IN CONCURRENT TRANSACTIONS`
-  + atomic per-batch rollback via `CompensatingUndoBuffer`).
-  Lives in `crates/nexus-core/src/executor/operators/call_subquery.rs`
-  (715 LOC); 20 passing tests in `crates/nexus-core/tests/call_subquery_test.rs`
-  (9 dedicated to IN TRANSACTIONS); spec already documents the
-  full surface at `docs/specs/cypher-subset.md:755-774`. The phase7
-  task is archived as a no-op audit; no behavior change.
-
-### Removed — `phase7_resolve-jit-module`
-
-- **JIT scaffold deleted** (`crates/nexus-core/src/execution/jit/`).
-  ~1320 LOC of half-implemented Cranelift codegen + a 173-line
-  `cranelift_jit.rs.disabled` shadow are gone, plus the matching
-  `pub use jit::{JitRuntime, QueryHints}` re-export from
-  `execution/mod.rs` and the commented-out
-  `// use crate::execution::jit::CraneliftJitCompiler;` import in
-  `executor/mod.rs`. ADR
-  `delete-the-unused-jit-scaffold-rather-than-finish-the-cranelift-codegen`
-  records the rationale: zero production callers across
-  `nexus-server` / `nexus-cli` / `nexus-protocol` / `nexus-bench` /
-  the integration tests; the columnar fast-path real-world ratio
-  is already ~1.13× per `PERFORMANCE_V1.md` so the gain a JIT
-  would deliver is dominated by materialisation cost; the
-  planner's bigger leverage is cardinality propagation. Existing
-  test suites (`tck_runner`, `geospatial_predicates_test`) stay
-  green. No public-API breakage — the re-exports were unused.
-
-### Fixed — `phase7_fix-ignored-engine-tests`
-
-- **Two stale `#[ignore]` attributes** removed from
-  `crates/nexus-core/src/engine/tests.rs` (`test_engine_default`,
-  `test_engine_new_default`). Both carried a placeholder comment
-  blaming "default data dir which conflicts with parallel tests"
-  but `Engine::default()` and `Engine::new_default()` both
-  delegate to `Engine::new()`, which has used
-  `tempfile::tempdir()` for per-instance isolation since at
-  least 1.13.0. The ignore markers were carry-over from a
-  pre-tempdir implementation. Added a block comment above the
-  two tests so future readers do not re-add the ignore. Lib test
-  count moved from `91 passed / 2 ignored` to `93 passed / 0
-  ignored` on `cargo +nightly test -p nexus-core --lib
-  engine::tests`.
-
-### Added — `phase6_opencypher-tck-spatial`
-
-- **openCypher-TCK-shaped spatial conformance suite** at
-  `crates/nexus-core/tests/tck/spatial/*.feature`. Four feature
-  files, **22 scenarios, 87 steps, all passing**:
-  - `Point1-construction.feature` — 7 scenarios covering 2D / 3D
-    Cartesian + WGS-84 constructors, negative-coordinate parsing,
-    explicit-CRS overrides over `x/y` and `longitude/latitude`
-    aliases.
-  - `Point2-distance.feature` — 5 scenarios covering Pythagorean
-    2D / 3D distance, symmetry, self-distance zero, and
-    `ERR_CRS_MISMATCH` on mixed-CRS inputs.
-  - `Point3-predicates.feature` — 7 scenarios covering
-    `point.withinBBox` (interior / exterior / boundary / CRS
-    mismatch) and `point.withinDistance` (within / outside /
-    exact-radius).
-  - `SpatialIndex1-rtree.feature` — 3 scenarios covering
-    `CREATE SPATIAL INDEX` feedback row, `db.indexes()` reporting
-    the registered RTREE index alongside the auto-LOOKUP entry,
-    and `ERR_RTREE_BUILD` on a non-Point sample row.
-- **Cucumber harness** at `crates/nexus-core/tests/tck_runner.rs`
-  (`cucumber = "0.21"` dev-dependency, runs as a `harness = false`
-  integration test). Discovers `.feature` files under
-  `tests/tck/spatial/`, drives every scenario through
-  `Engine::execute_cypher` with an isolated `Engine` per scenario,
-  and supports the standard openCypher TCK step grammar (`Given an
-  empty graph` / `having executed: """…"""` / `executing query:
-  """…"""` / `the result should be, in any order: <table>` /
-  `the result should be: <table>` / `the result should be empty` /
-  `a TypeError should be raised at runtime: <token>` / `no side
-  effects`). Custom TCK-cell parser handles unquoted-key map
-  literals (`{x: 1.0, y: 2.0, crs: 'cartesian'}`), single-quoted
-  strings, lists, booleans, null, and signed numbers; numeric
-  comparison uses a 1e-9 absolute tolerance for floats.
-- **Vendor notes** at `crates/nexus-core/tests/tck/spatial/VENDOR.md`
-  documenting that the upstream openCypher TCK has **no spatial
-  corpus** (verified 2026-04-28 against `opencypher/openCypher@main`
-  at `tck/features/`), so the Nexus corpus is authored under
-  Apache 2.0 and ready for upstream contribution if openCypher
-  ever opens a spatial track. Includes a one-line `curl` recipe
-  to re-verify upstream coverage on future bumps.
-- **Apache 2.0 attribution** at `LICENSE-NOTICE.md` covering the
-  openCypher TCK format and step grammar the Nexus corpus reuses.
-
-### Fixed — `phase6_opencypher-tck-spatial`
-
-- **Negative coordinates in inline `point()` literals**
-  (`crates/nexus-core/src/executor/parser/expressions.rs`).
-  `extract_number_from_expression` now accepts
-  `UnaryOp { Minus | Plus, Literal::Integer | Literal::Float }`
-  in addition to bare integer / float literals. Before this fix,
-  `point({longitude: -73.9857, latitude: 40.7484})` raised
-  `Cypher syntax error: Point coordinates must be numbers` because
-  the lexer tokenises `-73.9857` as `UnaryOp { Minus,
-  Literal::Float(73.9857) }`, not as a negative literal. Surfaced
-  by Point1 scenarios 3, 5, 6, and Point3 scenarios across the
-  withinBBox + withinDistance suite.
-- **Implicit WGS-84 CRS from `longitude`/`latitude`/`height` keys**
-  (same file). `parse_point_literal` now defaults to
-  `CoordinateSystem::WGS84` when any geographic key alias is
-  present *and* no explicit `crs:` field overrides. Before this
-  fix, `point({longitude: 13.4, latitude: 52.5, height: 100.0})`
-  silently defaulted to Cartesian and the `crs` accessor returned
-  `'cartesian-3d'` instead of `'wgs-84-3d'`. Matches Neo4j's
-  behaviour; explicit `crs:` always wins. Surfaced by Point1
-  scenario 4 + Point2 scenario 5 (CRS-mismatch path).
-
-### Known limitations exposed by the TCK harness
-
-The TCK suite intentionally avoids three Cypher shapes that
-surfaced engine bugs out of scope for this task; each is filed as
-a follow-up:
-- **`<expr>.<prop>` projection** — `RETURN point(...).x AS xx` and
-  `RETURN $param.x AS xx` drop the AS alias and the rest of the
-  projection list because the `PropertyAccess` AST is keyed by
-  `variable: String` rather than `expression: Box<Expression>`.
-  Workaround in scenarios: compare the full `point()` map shape,
-  not individual accessors.
-- **`WITH 1 AS x RETURN x` returns 0 rows** — value-only `WITH`
-  with no upstream pattern source emits no row. Workaround in
-  scenarios: keep the value inline in the same `RETURN`.
-- **`UNWIND [point(...)]` parser overrun** — the list-literal
-  parser misreads characters of `'cartesian'` inside an inlined
-  point. Workaround: pass points as parameters or reference a
-  matched node's property.
-
-### Added — `phase6_spatial-planner-followups`
-
-- **Function-style `point.nearest(<var>.<prop>, <pt>, <k>)`** —
-  callable in `RETURN` / `WITH` / `WHERE` expression position;
-  returns `LIST<NODE>` ordered ascending by distance. Resolves the
-  variable's label by reading the bound node's `_nexus_id` →
-  `label_bits` → catalog name, looks up the registered
-  `{Label}.{prop}` R-tree index, and walks the registry directly
-  when present. Without an index, falls back to a label scan +
-  sort + truncate so the `same result with and without index`
-  contract holds. Implementation lives at
-  `crates/nexus-core/src/executor/eval/projection.rs`.
-- **+25 Neo4j compat-diff scenarios** in
-  `scripts/compatibility/test-neo4j-nexus-compatibility-200.ps1`
-  Section 18 covering the cross-product `Bbox / WithinDistance /
-  Nearest` × `Cartesian / WGS-84` × `2D / 3D`. Live capture against
-  Neo4j 2025.09.0 still has to run; the scenarios themselves are
-  static query strings the harness diffs against the Neo4j
-  reference at runtime, so they land authored.
-- **3 new integration tests** in `geospatial_predicates_test.rs`
-  covering the function arm: `point_nearest_function_returns_same_list_with_and_without_index`,
-  `point_nearest_rejects_non_property_access_first_arg`, and
-  `point_nearest_returns_empty_list_when_k_is_zero`.
-- **TCK import carved out** to follow-up
-  `phase6_opencypher-tck-spatial`. Reason: vendoring requires
-  fetching the openCypher distribution at a pinned commit and
-  adding `cucumber 0.21` to the workspace dev-deps; both touches
-  are out of scope for the projection-side function-arm work.
-
-### Added — `phase6_spatial-planner-seek`
-
-- **`Operator::SpatialSeek` planner rewriter** at
-  `crates/nexus-core/src/executor/planner/queries.rs`. The planner
-  now recognises three Cypher shapes against an R-tree-indexed
-  property and rewrites the operator pipeline to drive directly
-  off `IndexManager::rtree` instead of `NodeByLabel + Filter`:
-   - `WHERE point.withinBBox(<var>.<prop>, {bottomLeft, topRight})`
-     → `SeekMode::Bbox`
-   - `WHERE point.withinDistance(<var>.<prop>, <pt-literal>, <d>)`
-     → `SeekMode::WithinDistance`
-   - `MATCH ... ORDER BY distance(<var>.<prop>, <pt-lit>) ASC
-     LIMIT <k>` → `SeekMode::Nearest { k }`
-- **Cost-based picker.** The cost arm at queries.rs:3067 was
-  already wired by `phase6_rtree-index-core`; the rewriter now
-  compares its `log_b(N) + matching` estimate against the legacy
-  `NodeByLabel + Filter` cost (`2*N`) and keeps the legacy plan
-  when the seek isn't cheaper. Selectivity defaults: 5 % for
-  bounded modes, `k` for k-NN.
-- **`QueryPlanner::with_rtree(Arc<RTreeRegistry>)` builder shim.**
-  The planner is opt-in: existing call sites that don't have a
-  registry handle (planner unit tests, the standalone
-  `Executor::parse_and_plan`) keep emitting the legacy plan.
-  `Engine::execute_*` and the executor `plan_with_indexes` path
-  install the handle automatically.
-- **`db.indexes()` RTREE rows** at
-  `crates/nexus-core/src/executor/operators/procedures.rs::execute_db_indexes_procedure`.
-  Every registered R-tree index now surfaces with
-  `type = "RTREE"`, `state = "ONLINE"`, `entityType = "NODE"`,
-  the matching `labelsOrTypes` / `properties` arrays, and
-  `indexProvider = "rtree-1.0"`.
-- **6 new planner regression tests** in
-  `crates/nexus-core/tests/spatial_planner_test.rs`: each rewriter
-  shape is exercised in isolation against a synthetic catalog
-  scaffold so the tests never depend on engine-level fixtures, and
-  the negative path (no registry handle) is covered by a paired
-  test that asserts the legacy plan stands. The `db.indexes()`
-  RTREE row shape is asserted end-to-end through the engine.
-- **Deferred to a follow-up slice**: §4 function-style
-  `point.nearest(<var>.<prop>, <k>)` (needs a multi-row
-  Project+Sort+Limit projection lowering that's out of scope for
-  the planner-only rewrite); §6 openCypher TCK import (vendoring
-  external `spatial.feature` distribution); §7 Neo4j compat-diff
-  +25 spatial scenarios (live Neo4j operator-gated).
-
-### Added — `phase6_spatial-index-autopopulate`
-
-- **Auto-populate spatial indexes on CREATE / SET / REMOVE / DELETE**
-  so `spatial.nearest` reflects live data without a manual
-  `spatial.addPoint` bulk-loader call. The hot-path contract now
-  mirrors FTS line-for-line: every `create_node` path runs
-  `Engine::spatial_autopopulate_node`, every `persist_node_state`
-  runs `Engine::spatial_refresh_node`, every `delete_node` runs
-  `Engine::spatial_evict_node`. Each hook walks
-  `IndexManager::rtree`, matches `(label, property)` against the
-  written node, inserts / refreshes / evicts the entry, and emits
-  the matching `WalEntry::RTreeInsert` / `RTreeDelete` so crash
-  recovery replays the write.
-- **Per-index membership tracking** via `RTreeRegistry::definitions`
-  + an in-`IndexSlot` `HashSet<u64>` mirroring the FTS
-  `NamedFullTextIndex::members` pattern. Refresh and evict paths
-  short-circuit on already-absent nodes; `indexes_containing(node_id)`
-  enumerates exactly the indexes a SET / DELETE has to touch.
-- **Registry relocation**. `ExecutorShared::spatial_indexes` is
-  removed; `execute_create_index`, `execute_spatial_nearest`, and
-  `execute_spatial_add_point` now re-source through
-  `IndexManager::rtree`. The engine crate's `engine::crud` module
-  reaches the registry the same way it reaches `indexes.fulltext`.
-- **`CREATE SPATIAL INDEX` type-check**. The executor samples up to
-  1 000 existing `Label` nodes and rejects with `ERR_RTREE_BUILD`
-  on the first non-Point sample, naming the offending `node_id`.
-  Catches the silent "index built, queries empty" trap when a
-  property is heterogeneously typed.
-- **Crash-recovery harness** at
-  `crates/nexus-core/tests/spatial_crash_recovery.rs` covering:
-  WAL replay restores every committed point after a registry drop;
-  unflushed entries stay absent after recovery; and an insert /
-  delete pair replayed in order converges to the post-delete
-  state. Mirrors the FTS crash-recovery suite.
-
-### Deprecated
-
-- **`spatial.addPoint` is no longer required** — Cypher CRUD
-  auto-populates spatial indexes. The procedure remains callable
-  and idempotent with the auto-populate hook for backward
-  compatibility, but every call now logs `tracing::info!` so
-  deployments can spot stragglers. **Scheduled for removal in
-  v2.0.0.**
-
-### Added — `phase6_rtree-index-core`
-
-- **Packed Hilbert R-tree backend for spatial indexes** in
-  `crates/nexus-core/src/index/rtree/`. Replaces the grid-backed
-  prototype at `crates/nexus-core/src/geospatial/rtree.rs` for
-  every read path (`spatial.nearest`, `point.withinDistance`,
-  `point.withinBBox`) without changing the Cypher surface.
-- **8 KB pages, fanout 64-127, deterministic bulk-load**. Two
-  replicas given the same input produce byte-identical page
-  files. The encoder writes every header byte and every padding
-  byte; the Hilbert sort breaks ties on `node_id` ascending so
-  the entire on-disk image is reproducible.
-- **k-NN priority-queue walk**. `spatial.nearest(p, label, k)`
-  swapped from `O(N)` linear `entries() + sort_by` scan to a
-  `BinaryHeap`-backed traversal that visits inner pages in
-  ascending bbox-to-point distance order and stops after `k`
-  leaves are popped — `O(log_b N + k)` page reads. Ties on
-  distance break on `node_id` ascending so the result is
-  deterministic across runs.
-- **Within-distance** (`RTree::within_distance`). Stack-based
-  descent pruning by squared bbox distance; results sorted by
-  ascending distance, ties on `node_id`.
-- **WAL framing** for spatial mutations: `RTreeInsert` (op-code
-  `0x50`), `RTreeDelete` (`0x51`), `RTreeBulkLoadDone` (`0x52`).
-  Crash recovery feeds every entry through
-  `RTreeRegistry::apply_wal_entry`.
-- **`RTreeRegistry`** with `RwLock<Arc<RTree>>` per index for
-  atomic-rebuild via pointer swap (`swap_in`). Readers grab a
-  snapshot through `RTreeRegistry::snapshot(name)` and keep
-  using it across a concurrent rebuild; the new tree only
-  becomes visible to subsequent snapshots. No reader observes
-  a half-built tree.
-- **MVCC visibility hook** via `RTreeRegistry::nearest_with_filter`.
-  The R-tree itself stays epoch-free; the executor hands a
-  closure that consults the transaction manager's snapshot
-  view and drops invisible ids before they count against `k`.
-  Two-pass over-fetch (2× then 8× target) keeps SLO under high
-  invisibility miss rates.
-- **`USING RTREE` parser alias**. `CREATE INDEX [name] FOR
-  (n:Label) ON (n.prop) USING RTREE` accepts the Cypher 25
-  shape; both this and the legacy `CREATE SPATIAL INDEX ON
-  :Label(prop)` register on `IndexManager::rtree`.
-- **Page-store abstraction** (`PageStore` trait) with
-  `MemoryPageStore` (HashMap-backed for tests / bulk-build) and
-  `FilePageStore` (file-backed, layout mirrors
-  `index/btree.rs`'s flat-array shape). Crash consistency:
-  `flush()` calls `sync_all`, live set persists through a
-  tmp + rename atomic replace.
-- **73 new tests** covering every layer: 12 page codec, 11
-  Hilbert sort, 9 packer (incl. byte-identical replica), 8
-  mutable tree (insert/split/delete/underflow), 13 search
-  (k-NN / within-distance / bbox helpers), 9 page-store
-  (memory + file + crash recovery), 8 registry (WAL replay,
-  atomic swap, visibility filter), 3 crash-recovery integration
-  (`tests/rtree_crash_recovery.rs` — 5 500 inserts after a
-  partial bulk-load, marker-only no-op, interleaved
-  insert/delete order replay). 4 parser tests for the new
-  `USING RTREE` alias.
-- **Spec + guide**: new `docs/specs/rtree-index.md` (page
-  layout, bulk-load, MVCC, WAL framing, SLOs); new
-  `docs/guides/GEOSPATIAL.md` (predicates, procedures, DDL,
-  performance, crash recovery, limitations).
-  `docs/specs/knn-integration.md` updated with the spatial
-  vs. vector retrieval comparison.
-
-### Added — `phase6_opencypher-subquery-transactions`
-
-- **`CALL { … }` subquery executor** wired through planner +
-  dispatch. The inner subquery executes once per outer row; outer ×
-  inner rows are joined into the outer result set
-  (Neo4j-compatible CALL semantics). Standalone `CALL { MATCH …
-  RETURN … }` runs against a single empty driver row. Nested CALLs
-  flow through the same path.
-- **Write-bearing inner subqueries** (`CALL { CREATE … }` /
-  `MERGE` / `DELETE` / `SET`). The dispatch path picks
-  `execute_create_pattern_with_variables` for empty-scope and
-  `execute_create_with_context` for row-scoped CREATE, the latter
-  newly handling anonymous nodes and resolving property
-  expressions against the row scope.
-- **`CALL { … } IN TRANSACTIONS [OF N ROWS] [REPORT STATUS AS s]
-  [ON ERROR CONTINUE|BREAK|FAIL|RETRY n]`** end-to-end: per-batch
-  ON ERROR policy, per-batch status rows under the declared name,
-  retry-then-escalate. Multi-worker `IN CONCURRENT TRANSACTIONS`
-  is rejected with `ERR_CALL_IN_TX_CONCURRENCY_UNSUPPORTED`
-  pending the V2 sharded MVCC branch.
-- **Cypher 25 scoped subqueries** — `CALL (var1, var2) { … }` and
-  the empty form `CALL () { … }`. The inner sees only the listed
-  outer variables; everything else is shadowed.
-- **`COLLECT { … }` subquery expression**. Folds the inner row
-  stream into a LIST: single-column → `LIST<T>`, multi-column →
-  `LIST<MAP>` keyed by column names, aggregating-inner →
-  single-element list, empty inner → empty list (NOT NULL).
-- 8 new compatibility scenarios in
-  `scripts/compatibility/compatibility-test-queries.cypher`
-  (SUB-1 through SUB-8). `docs/guides/BULK_INGEST.md` documents
-  the recommended ingest patterns.
-- **Atomic per-batch rollback (§3)** via a per-attempt
-  `CompensatingUndoBuffer` installed onto every inner
-  ExecutionContext. CREATE write paths register
-  `DeleteNode` / `DeleteRelationship` inverse ops; on a failed
-  batch attempt the operator drains the buffer in reverse order
-  before retrying or applying the `ON ERROR` policy, so a
-  `CALL { … } IN TRANSACTIONS` failure leaves no partial-batch
-  writes behind.
-
-## [1.15.0] — 2026-04-26
-
-Closes [hivellm/nexus#2][issue-2]. Server-side bug fix + JSON wire
-shape rename for the schema endpoints, with every first-party SDK
-realigned to the new shape and version-bumped to match. Also ships
-slice 1 of `phase6_opencypher-quantified-path-patterns`.
-
-### Added
-
-- **Quantified path patterns (Cypher 25 / GQL) — anonymous-body
-  shape**. `MATCH (a)( ()-[:T]->() ){m,n}(b)` now executes
-  end-to-end and produces byte-identical row sets to the legacy
-  `MATCH (a)-[:T*m..n]->(b)` form. The parser collapses the
-  textbook QPP shape (anonymous boundary nodes, single
-  relationship, no inner predicates) to the legacy quantified
-  relationship at parse time, so the existing
-  `VariableLengthPath` operator handles it without a new
-  executor. Direction (`->`, `<-`, `-`), every quantifier
-  (`{m,n}`, `{m,}`, `{,n}`, `{n}`, `+`, `*`, `?`), the inner
-  relationship variable, and the relationship-property map are
-  all preserved by the lowering. `shortestPath((a)( ... ){m,n}(b))`
-  works for the same shape.
-
-  Bodies that carry inner state — named or labelled boundary
-  nodes, multi-hop paths, intermediate predicates — surface a
-  clean `ERR_QPP_NOT_IMPLEMENTED` error pointing at the slice-2
-  follow-up rather than silently producing wrong rows. See
-  `docs/guides/QUANTIFIED_PATH_PATTERNS.md` for the full
-  user-facing surface and migration notes.
-
-### Fixed
-
-- **`GET /data/nodes?id=0` no longer returns `node: None` for nodes
-  that exist.** `crates/nexus-server/src/api/data.rs::validate_node_id`
-  was rejecting `node_id == 0` before the engine was even consulted,
-  but `0` is a legitimate catalog id (the engine assigns it to the
-  first node ever created in a database). The validator is now a
-  no-op stub kept for forward-compat with future API-boundary
-  invariants; existence is the engine's job. The same fix unblocks
-  `update_node(0, ...)` and `delete_node(0, ...)` which were
-  silently short-circuited the same way.
-- **`GET /data/nodes` distinguishes "missing `id` query parameter"
-  from "id=0".** The previous `params.get("id").unwrap_or(0)` made
-  a missing parameter alias as id `0`, which used to fail validation
-  by accident; with the validator gone it would have succeeded
-  silently against the wrong row. The handler now returns explicit
-  errors for both missing and malformed `id` values.
-- **`/health` self-reported version is now byte-equal to
-  `env!("CARGO_PKG_VERSION")` in CI.** A new
-  `api::health::tests::test_health_endpoint_reports_workspace_version`
-  pins the contract so a future release whose docker image is built
-  before the workspace bump fails the test gate instead of leaking
-  the wrong number to users (the issue reporter's `version=1.13.0`
-  on a `:v1.14.0`-tagged image was caused by exactly that).
-
-### Changed (BREAKING)
-
-- **Wire shape for `GET /schema/labels` and `GET /schema/rel_types`.**
-  Each entry was a JSON tuple `["Person", 0]` and is now a JSON
-  object `{"name": "Person", "id": 0}`. The second member is the
-  catalog id allocated by the engine, not a count — naming the
-  fields removes the ambiguity that had the issue reporter and the
-  Rust SDK rustdoc disagreeing on what `u32` meant. The new shape
-  also leaves room for additive fields (e.g. `count`) without
-  another rename.
-
-  Server types: `LabelInfo` and `RelTypeInfo` in
-  `crates/nexus-server/src/api/schema.rs`. Every first-party SDK
-  follows the rename — see the per-language CHANGELOGs for the
-  matching consumer-side migration.
-
-### SDK realignment
-
-- **Rust** (`sdks/rust/` → crates.io `nexus-graph-sdk` 1.15.0):
-  `ListLabelsResponse.labels` and `ListRelTypesResponse.types`
-  retyped to `Vec<LabelInfo>` / `Vec<RelTypeInfo>`. README +
-  example updated.
-- **Python** (`sdks/python/` → PyPI `hivehub-nexus-sdk` 1.15.0):
-  Pydantic `LabelInfo` / `RelTypeInfo` re-exported from package
-  root. README + CHANGELOG updated.
-- **C#** (`sdks/csharp/` → NuGet `Nexus.SDK` 1.15.0): `LabelInfo`
-  / `RelTypeInfo` POCOs, return types of `ListLabelsAsync` /
-  `ListRelationshipTypesAsync` retyped on both `NexusClient` and
-  `RetryableNexusClient`. **Latent route fix**: the SDK was hitting
-  the non-existent `/schema/relationship-types`; corrected to
-  `/schema/rel_types`.
-- **Go** (`sdks/go/` → tag `v1.15.0`): typed structs, route fix,
-  test fixtures rebuilt to emit the new wire shape. Same route fix
-  applied in `RetryableClient`.
-- **PHP** (`sdks/php/` → tag `v1.15.0`): phpdoc retyped to
-  `array<int, array{name: string, id: int}>`, route fix in both
-  `NexusClient` and the `REL_TYPES` HTTP fallback in
-  `Transport\HttpTransport`.
-
-The TypeScript SDK has no `listLabels` / `listRelTypes` API surface,
-so it is unaffected and stays at 1.14.0 on npm.
-
-### Other
-
-- Workspace version bumped from 1.14.0 to 1.15.0 (every crate
-  inherits via `version.workspace = true`), so a fresh
-  `cargo build --release -p nexus-server` produces a binary that
-  self-reports `1.15.0` on `/health`.
-- Docker image rebuilt and pushed as `hivehub/nexus:1.15.0` and
-  `hivehub/nexus:latest` (multi-arch `linux/amd64` + `linux/arm64`,
-  with SBOM + SLSA provenance attestations).
-
-[issue-2]: https://github.com/hivellm/nexus/issues/2
-
-## [1.14.0] — 2026-04-22
-
-### Added — openCypher geospatial predicates + `spatial.*` procedures (slice A)
-
-`phase6_opencypher-geospatial-predicates` slice A closes the
-user-facing Cypher surface around the existing `Point` type.
-Follow-up slices ship the packed R-tree index
-(`phase6_rtree-index-core`), the planner's `SpatialSeek` operator
-(`phase6_spatial-planner-seek`), and auto-populate on CREATE / SET
-(`phase6_spatial-index-autopopulate`).
-
-- **Namespaced function parsing.** The expression parser now
-  accepts `identifier.identifier(args)` as a function call
-  (`crates/nexus-core/src/executor/parser/expressions.rs`) — the
-  lookahead only fires when the `.identifier` is immediately
-  followed by `(`, so ordinary `n.prop` PropertyAccess keeps
-  precedence. Every test under `geospatial_integration_test.rs`
-  that exercises `n.prop` access stays green.
-- **Point predicate functions.** `point.withinBBox(p, bbox)`,
-  `point.withinDistance(a, b, distMeters)`, `point.azimuth(a, b)`,
-  and `point.distance(a, b)` (namespaced alias of the bare
-  `distance()` function) land in the projection evaluator
-  (`crates/nexus-core/src/executor/eval/projection.rs`). CRS or
-  dimensionality mismatches surface as `ERR_CRS_MISMATCH`;
-  malformed `bbox` maps surface as `ERR_BBOX_MALFORMED`; same
-  points to `point.azimuth` return `NULL` because the bearing is
-  undefined.
-- **`spatial.*` procedure dispatcher.** A new
-  `crates/nexus-core/src/spatial/mod.rs` mirrors the APOC
-  dispatch shape: pure-value procedures consume
-  `Vec<serde_json::Value>` and return `(columns, rows)`. Ships:
-  `spatial.bbox(points)`, `spatial.distance(a, b)`,
-  `spatial.interpolate(line, frac)`, `spatial.withinBBox(p, bbox)`,
-  `spatial.withinDistance(a, b, d)`, `spatial.azimuth(a, b)`. The
-  executor's `execute_call_procedure` routes `spatial.*` through
-  this dispatcher before the legacy `GraphProcedure` registry
-  (which can only represent single-arg procedures under the
-  current dispatch).
-- **Engine-aware spatial procedures.** `spatial.nearest(point,
-  label, k)` walks the `{label}.*` entry in the executor's
-  shared spatial-index registry and streams `(node, dist)` rows
-  ordered by distance ascending, ties broken by `node_id`
-  ascending. `spatial.addPoint(label, property, nodeId, point)`
-  is the Cypher-level bulk-loader that indexes a row into the
-  registered spatial index until the auto-populate task lands.
-- **Point helpers** (`crates/nexus-core/src/geospatial/mod.rs`):
-  `Point::same_crs`, `Point::crs_name`, `Point::azimuth_to`,
-  `Point::within_bbox`. Used by both the predicate functions and
-  the dispatcher so the semantics stay in one place.
-- **`dbms.procedures()` introspection** now lists every new
-  `spatial.*` procedure so BI tools that introspect the catalogue
-  see the full geo surface.
-- **RTreeIndex::entries().** Exposes an `(node_id, point)` snapshot
-  of the grid-backed spatial index so `spatial.nearest` can do a
-  bounded full-scan k-NN. The prior implementation walked an
-  `f64::MIN..=f64::MAX` bbox through the grid-cell math, which
-  iterated ≈4 × 10⁹ empty cells before returning. Direct
-  iteration keeps the walk bounded by `total_points`.
-- **Tests.** New integration suite
-  `crates/nexus-core/tests/geospatial_predicates_test.rs` (23
-  tests) covers every predicate + procedure end-to-end through
-  Cypher. Existing `geospatial_integration_test.rs` (55 tests)
-  and the spatial dispatcher unit tests (22 tests) all stay
-  green.
-
-## [1.13.0] — 2026-04-22
-
-### Added — FTS async writer + per-index cadence commits
-
-`phase6_fulltext-async-writer` closes §3 of the
-`phase6_fulltext-wal-integration` original spec and ships the
-crash-recovery integration harness that was deferred under §5.3 of
-that task.
-
-- **Per-index background writer.** `NamedFullTextIndex` now owns an
-  optional `WriterHandle`
-  (`crates/nexus-core/src/index/fulltext_writer.rs`). Each spawned
-  writer runs on a dedicated `std::thread`, owns the single Tantivy
-  `IndexWriter` Tantivy permits per index, and drains a bounded
-  `crossbeam-channel` (default capacity 1024).
-- **Cadence + batch commits.** The writer commits + reloads the
-  reader whenever the buffer reaches `max_batch_size` (default
-  256) or `refresh_ms` (read from `FullTextIndexMeta.refresh_ms`,
-  default 1000 ms) elapses since the last flush — whichever fires
-  first.
-- **Hot-path integration.** `FullTextRegistry::{add_node_document,
-  add_node_documents_bulk, remove_entity}` now route through the
-  writer when one is spawned, and fall back to the original
-  synchronous Tantivy-commit path otherwise. Async writers are
-  opt-in per registry via
-  `FullTextRegistry::enable_async_writers()` — the default
-  remains the synchronous read-your-writes contract every test
-  predating this task relies on.
-- **Graceful shutdown.** Dropping the `WriterHandle` drains the
-  channel, applies the final batch, commits, and joins the thread
-  before `Drop::drop` returns. `FullTextRegistry::flush_all` +
-  `disable_async_writers` expose both best-effort flushes and
-  explicit teardown for shutdown paths and tests.
-- **Crash-recovery harness**
-  (`crates/nexus-core/tests/fulltext_crash_recovery.rs`). Replays a
-  WAL containing committed `FtsCreateIndex` + `FtsAdd` entries
-  against a freshly-opened registry after simulating a kill-9
-  between WAL sync and writer commit. Asserts that every
-  WAL-committed doc surfaces after replay, that docs that never
-  reached the WAL stay absent, and that the registry's cadence
-  tick makes enqueued docs visible without an explicit
-  `flush_blocking`.
-
-### Fixed
-
-- `WriterHandle::enqueue` / `apply_batch` no longer mis-track the
-  `pending` counter. The prior implementation held a write guard
-  while attempting another lock acquisition in the same expression
-  (a deadlock on recursive acquire under `parking_lot::RwLock`),
-  and the drained-buffer decrement used `buffer.capacity() -
-  buffer.len()` — the allocation size rather than the number of
-  commands drained — so `pending_count()` never returned to zero
-  once the buffer had grown past its initial cap.
-
-## [1.12.0] — 2026-04-21
-
-### Added — FTS auto-maintenance on CREATE / SET / REMOVE / DELETE
-
-Slices 2+3 of `phase6_fulltext-wal-integration` close the
-write-path integration. Every mutating Cypher path now keeps the
-FTS view in lockstep with the authoritative node state and emits
-matching WAL entries for crash recovery.
-
-- **CREATE auto-populate** — `Executor::fts_autopopulate_node` is
-  wired into all three CREATE operators (standalone node,
-  relationship-target node, MATCH-combined-pattern node) plus the
-  programmatic `Engine::create_node` path. Match rule: node
-  carries ≥1 of the index's labels AND has a string value for ≥1
-  of the indexed properties; content is the whitespace-joined
-  concatenation of matching string properties in declared order.
-- **SET / REMOVE auto-refresh** — `Engine::persist_node_state`
-  now calls `fts_refresh_node`, which delete-then-conditional-adds
-  against every FTS index currently containing the node. When
-  the refresh clears the last indexed property (e.g. `REMOVE n.p`)
-  the doc stays evicted; when the property changes (e.g. SET
-  n.title = 'New'), the reindex surfaces the new terms and
-  purges the old.
-- **DELETE auto-evict** — `Engine::delete_node` drops the node
-  from every matching FTS index before marking the storage record
-  deleted and emits `FtsDel` WAL entries.
-- **Membership tracking** — `NamedFullTextIndex.members` is a
-  per-index `HashSet<u64>` updated on every add/del so refresh /
-  evict paths can enumerate matching indexes without consulting
-  the engine-side label index (which diverges from the
-  executor's cloned view after `refresh_executor`).
-- **`FullTextIndex::remove_document`** now reloads the reader
-  after commit — fixes an existing bug where replayed `FtsDel`
-  ops were invisible to same-process searchers.
-
-WAL emissions go through the existing `write_wal_async` path so
-recovery replay (slice 1) can reconstruct the full index state
-from the log.
-
-Tests (+3): `fulltext_create_node_auto_populates_matching_index`,
-`fulltext_create_node_skips_non_matching_label`,
-`fulltext_wal_replay_reconstructs_registry_and_content`,
-`fulltext_delete_node_evicts_from_index`,
-`fulltext_set_property_refreshes_doc`,
-`fulltext_remove_property_evicts_doc`. Full lib suite: 2019
-passed / 0 failed / 12 ignored.
-
-**Follow-up task**: `phase6_fulltext-async-writer` covers the
-per-index background writer with `refresh_ms` cadence + the
-crash-during-bulk-ingest integration test. Current sync commit
-path already beats the >5 k docs/sec SLO so the async pipeline
-is purely a concurrency optimisation.
-
-## [1.11.0] — 2026-04-21
-
-### Added — FTS WAL integration (slice 1: op-codes + persistence + replay)
-
-First slice of `phase6_fulltext-wal-integration`. Wires the FTS
-backend into the WAL durability model and the engine's restart
-path; the commit-hook that turns every `CREATE` / `MERGE` / `SET`
-into enqueued WAL entries ships as the next slice of the same
-task.
-
-- **WAL op-codes** — four new entry kinds in `WalEntryType` /
-  `WalEntry`:
-  - `FtsCreateIndex` (`0x40`): name + entity + labels/types +
-    properties + resolved analyzer name.
-  - `FtsDropIndex` (`0x41`): name.
-  - `FtsAdd` (`0x42`): name + entity_id + label_or_type_id +
-    key_id + content.
-  - `FtsDel` (`0x43`): name + entity_id.
-  Round-trip covered by `wal::tests::fts_wal_ops_encode_decode_roundtrip`.
-- **On-disk catalogue** — every create writes a `_meta.json`
-  sidecar into the index directory carrying the registry-level
-  metadata. `FullTextRegistry::load_from_disk` scans the base
-  directory at engine startup and re-opens every catalogued
-  index; parameterised ngram analyzers round-trip through the
-  `ngram(m,n)` display name.
-- **Reopen-aware `FullTextIndex`** — `with_analyzer` now falls
-  back to `Index::open_in_dir` when the Tantivy directory already
-  exists, so restart does not throw `IndexAlreadyExists`.
-- **WAL replay dispatcher** — `FullTextRegistry::apply_wal_entry`
-  consumes a single `WalEntry` and dispatches FTS-shaped ops into
-  the registry. Idempotent: duplicate create = no-op; add/del on
-  a missing index = no-op. Non-FTS ops return `Ok(false)` so the
-  caller can skip them.
-- **Startup hook** — `IndexManager::new` calls `load_from_disk`
-  before returning so the engine boots with the full FTS
-  catalogue already in memory.
-
-Tests: +7 (1 WAL encode/decode + 3 sidecar/load + 3 replay
-dispatcher). Full lib suite: 2013 passed / 0 failed.
-
-Scoped out to the next slice:
-- Per-index async writer + `refresh_ms` cadence (Tantivy's
-  synchronous commit already cleared the >5k docs/sec SLO — see
-  `docs/performance/PERFORMANCE_V1.md` — so async is pure
-  optimisation, not correctness).
-- Commit-hook: `CREATE` / `MERGE` / `SET` paths emit WAL ops that
-  match registered FTS indexes. Today callers drive the
-  programmatic API.
-- Crash-during-bulk-ingest integration test.
-
-## [1.10.0] — 2026-04-21
-
-### Added — FTS benchmarks + bulk-ingest path + ranking regression
-
-phase6_fulltext-benchmarks establishes performance baselines and a
-ranking-regression guard for the full-text search backend:
-
-- **Criterion harness** `crates/nexus-core/benches/fulltext_bench.rs`
-  with three scenarios over a deterministic 100 k × 1 KB corpus:
-  - `fulltext_single_term/corpus_100k_1kb` — BM25 single-term.
-  - `fulltext_phrase/corpus_100k_1kb` — 2-term phrase query.
-  - `fulltext_ingest/bulk_10k_docs` — bulk-ingest throughput.
-- **Measured numbers** (Ryzen 9 7950X3D, all SLOs cleared):
-  - single-term: 150 µs median (target < 5 ms p95) → ≈33× headroom.
-  - phrase query: 4.57 ms median (target < 20 ms p95) → ≈4.4×.
-  - bulk ingest: ≈60 k docs/sec (target > 5 k) → ≈12×.
-- **Bulk-ingest API** — `FullTextIndex::add_documents_bulk` and
-  `FullTextRegistry::add_node_documents_bulk` open one Tantivy
-  writer, push every doc, and commit once. The per-doc path keeps
-  its commit-after-every-write cadence for interactive callers;
-  bulk loaders pick the batched path.
-- **Ranking regression suite** `tests/fulltext_ranking_regression.rs`
-  with 7 golden top-N assertions over a 10-doc hand-curated corpus
-  (graph-family dominance, vector-family dominance, phrase pins,
-  boolean-must narrowing, empty query, limit respected).
-
-Baseline numbers land in
-[docs/performance/PERFORMANCE_V1.md](docs/performance/PERFORMANCE_V1.md).
-Async-writer + WAL-driven enqueue remain scoped for
-phase6_fulltext-wal-integration.
-
-## [1.9.0] — 2026-04-21
-
-### Added — FTS analyzer catalogue
-
-phase6_fulltext-analyzer-catalogue fills in the analyzer surface
-left parked by v1.8. `db.index.fulltext.createNodeIndex /
-createRelationshipIndex` now accepts a full Neo4j-parity config
-map that picks the per-index tokenizer chain:
-
-- **Catalogue**: `standard`, `whitespace`, `simple`, `keyword`,
-  `ngram`, `english`, `spanish`, `portuguese`, `german`, `french`.
-  Every name matches Neo4j's `listAvailableAnalyzers()` output
-  verbatim; rows are alphabetical.
-- **`standard`** — default; lowercase + English stopword removal
-  (Lucene's English stopword list, bundled via Tantivy 0.22).
-- **Language analyzers** — stemmer + lowercase + stopword filter
-  for English / Spanish / Portuguese / German / French. Built on
-  Tantivy's `Stemmer` + `StopWordFilter::new(Language)` with the
-  `stopwords` feature enabled upstream.
-- **`ngram`** — character n-grams with configurable `ngram_min`
-  / `ngram_max` (default `2..3`). Useful for autocomplete and
-  substring match. Rejected when `min > max` or `min == 0`.
-- **`keyword`** — single-token pass-through. Case-sensitive exact
-  match, no tokenisation.
-- **`options.analyzer`** column on every `db.indexes()` FULLTEXT
-  row echoes the resolved analyzer name (including `ngram(m,n)`
-  for parameterised ngram indexes), so driver tooling can render
-  the tokenisation choice without probing the backend.
-
-Config map shape:
-
-```cypher
-CALL db.index.fulltext.createNodeIndex(
-  'movies', ['Movie'], ['title', 'overview'],
-  {analyzer: 'english'}
-)
-
-CALL db.index.fulltext.createNodeIndex(
-  'imgs', ['Image'], ['caption'],
-  {analyzer: 'ngram', ngram_min: 3, ngram_max: 5}
-)
-```
-
-Unknown analyzer names and invalid ngram sizes surface as
-`ERR_FTS_UNKNOWN_ANALYZER`. The `db.indexes()` row shape grew one
-column — `options` — at position 10; non-FTS rows emit an empty
-map so existing consumers that read by column name keep working.
-
-See [docs/guides/FULL_TEXT_SEARCH.md](docs/guides/FULL_TEXT_SEARCH.md).
-
-## [1.8.0] — 2026-04-21
-
-### Added — Full-text search (Tantivy)
-
-phase6_opencypher-fulltext-search ships the Neo4j
-`db.index.fulltext.*` procedure namespace on top of a Tantivy 0.22
-backend. Nexus now maintains named BM25-scored full-text indexes
-over node / relationship property sets and exposes them through the
-same CALL surface Neo4j drivers already use.
-
-- **Named FTS registry** — `FullTextRegistry` keyed by user-supplied
-  name, backed by per-index Tantivy directories under
-  `<data_dir>/indexes/fulltext/<name>/`. Cross-kind name uniqueness
-  is enforced.
-- **Procedures**:
-  - `db.index.fulltext.createNodeIndex(name, labels, properties, config?)`
-  - `db.index.fulltext.createRelationshipIndex(...)`
-  - `db.index.fulltext.queryNodes(name, query, limit?)` → `(node, score)`
-  - `db.index.fulltext.queryRelationships(...)` → `(relationship, score)`
-  - `db.index.fulltext.drop(name)`
-  - `db.index.fulltext.awaitEventuallyConsistentIndexRefresh()`
-  - `db.index.fulltext.listAvailableAnalyzers()`
-- **`db.indexes()` integration** — FTS indexes surface with
-  `type = "FULLTEXT"` and `indexProvider = "tantivy-0.22"`.
-- **BM25 ranking** — Tantivy default scorer, `top_k` default 100,
-  tie-breaks on node id ascending.
-- **Synchronous reader reload** — `FullTextIndex::add_document`
-  now calls `reader.reload()` after every commit so the next query
-  sees the write without waiting for a refresh tick.
-
-Errors surface as `ERR_FTS_INDEX_EXISTS`, `ERR_FTS_INDEX_NOT_FOUND`,
-`ERR_FTS_INDEX_INVALID`, or `ERR_FTS_PARSE`.
-
-See [docs/guides/FULL_TEXT_SEARCH.md](docs/guides/FULL_TEXT_SEARCH.md).
-
-**Parked for follow-up tasks** (outside this release's scope): WAL
-integration for auto-populate on `CREATE`/`MERGE`/`SET`, per-index
-analyzer catalogue (whitespace / simple / keyword / n-gram), bench
-targets (<5 ms p95 single-term / <20 ms p95 phrase / >5k docs/sec
-ingest), and the Neo4j TCK fulltext scenarios. Today, ingest goes
-through the programmatic `FullTextRegistry::add_node_document`
-API; query path is fully wired through Cypher `CALL`.
-
-## [1.7.0] — 2026-04-21
-
-### Added — Constraint enforcement for every advertised kind
-
-phase6_opencypher-constraint-enforcement closes the correctness gap
-where Nexus accepted DDL for NODE KEY / NOT NULL / property-type
-constraints but silently ignored them on writes. Every kind now
-enforces on CREATE / MERGE / SET / REMOVE / SET LABEL:
-
-- **NODE KEY** — composite `(p1, p2, ...)` uniqueness + implicit
-  NOT NULL on each component. Backed by the composite B-tree from
-  phase6_opencypher-advanced-types with the `unique` flag set.
-- **Relationship NOT NULL** — rejects rel CREATE that lacks the
-  required property, rejects SET r.p = NULL / REMOVE r.p.
-- **Property-type** (`IS :: INTEGER / FLOAT / STRING / BOOLEAN /
-  BYTES / LIST / MAP`) — strict Neo4j semantics (INTEGER ≠ FLOAT),
-  node and relationship scope.
-- **NOT NULL alias** — `ASSERT n.p IS NOT NULL` parses as an alias
-  of the legacy `EXISTS(n.p)` form.
-- **Label-add guard** — `SET n:L` that violates any constraint on
-  `L` is rejected before the label lands on the pending state.
-- **Backfill validator** — registering a constraint on an existing
-  dataset runs a one-shot streaming scan; the first 100 offending
-  rows surface in the error payload; abort is atomic (no partial
-  constraint state survives).
-- **Relaxed-enforcement flag** — `Engine::set_relaxed_constraint_
-  enforcement(true)` downgrades violations to `WARN` logs so users
-  can port dirty datasets in stages. Emits a loud server-startup
-  warning. Scheduled for removal at v1.5.
-
-Registration today goes through the programmatic API
-(`Engine::add_node_key_constraint`, `add_rel_not_null_constraint`,
-`add_property_type_constraint`, `add_rel_property_type_constraint`);
-the Cypher 25 `FOR (n:L) REQUIRE (...) IS NODE KEY` surface grammar
-lands in the follow-up DDL-reshape task.
-
-Errors surface as `ERR_CONSTRAINT_VIOLATED: kind=<KIND> ...` where
-`<KIND>` is `UNIQUENESS` / `NODE_PROPERTY_EXISTENCE` / `NODE_KEY` /
-`RELATIONSHIP_PROPERTY_EXISTENCE` / `PROPERTY_TYPE`. HTTP mapping:
-409 for UNIQUENESS + NODE_KEY; 400 for NOT NULL + PROPERTY_TYPE.
-
-See [docs/guides/CONSTRAINTS.md](docs/guides/CONSTRAINTS.md).
-
-**Behaviour change**: workloads that relied on the silent
-acceptance of non-unique constraint violations will start failing.
-Set `relaxed_constraint_enforcement = true` during the migration
-window if that applies.
-
-## [1.6.0] — 2026-04-21
-
-### Added — APOC procedure ecosystem (~100 procedures)
-
-phase6_opencypher-apoc-ecosystem ships an in-tree APOC compatibility
-surface across five namespaces:
-
-- **`apoc.coll.*`** (30) — union, intersection, disjunction, subtract,
-  sort / sortMaps / sortNodes, shuffle, reverse, zip, pairs / pairsMin,
-  combinations, partitions, flatten (deep or shallow), frequencies /
-  frequenciesAsMap, duplicates, toSet, indexOf, contains / containsAll,
-  max / min / sum / avg / stdev, remove, fill, runningTotal.
-- **`apoc.map.*`** (20) — merge / mergeList, fromPairs / fromLists /
-  fromValues / fromEntries, setKey / removeKey / removeKeys, clean,
-  flatten / unflatten, values, groupBy / groupByMulti, updateTree,
-  submap, get / getOrDefault.
-- **`apoc.text.*`** (20) — Levenshtein (distance + similarity), Jaro-
-  Winkler, Sorensen-Dice, Hamming, regex groups / replace / split,
-  phonetic (American Soundex), doubleMetaphone (Philips Metaphone),
-  clean, lpad / rpad, format (`{0}` + `{name}`), base64 encode/decode,
-  camelCase, capitalize, hexValue, byteCount.
-- **`apoc.date.*`** (25) — format / parse / convertFormat (with Java
-  `yyyy-MM-dd HH:mm:ss` tokens), currentMillis, systemTimezone,
-  toYears / toMonths / toDays / toHours / toMinutes / toSeconds,
-  add / subtract, fromISO / toISO, yearQuarter, week (ISO), weekday
-  (Monday=1), dayOfYear, startOfDay / endOfDay, diff / between.
-- **`apoc.schema.*`** (10) — assert (idempotent DDL row-shape),
-  nodes, relationships, properties.distinctCount, node /
-  relationship indexExists / constraintExists, stats, info.
-
-Dispatch routes through the existing
-`executor::operators::procedures::execute_call_procedure`; every
-APOC name surfaces in `dbms.procedures()`. Compatibility matrix:
-[docs/procedures/APOC_COMPATIBILITY.md](docs/procedures/APOC_COMPATIBILITY.md).
-
-82 new unit tests. Full `cargo +nightly test -p nexus-core --lib`
-run reports 1907 passed / 0 failed / 12 ignored.
-
-## [1.5.0] — 2026-04-21
-
-### Added — Advanced types (phase6_opencypher-advanced-types)
-
-Six concurrent openCypher / Cypher 25 surface additions landing
-together so downstream SDKs can consume a single compatibility level:
-
-- **BYTES scalar family** — `bytes(s)`, `bytesFromBase64(s)`,
-  `bytesToBase64(b)`, `bytesToHex(b)`, `bytesLength(b)`,
-  `bytesSlice(b, start, len)`. JSON wire format is
-  `{"_bytes": "<base64>"}`. Parameter binding also accepts a plain
-  base64 STRING for convenience. 64 MiB per-property cap enforced.
-- **Write-side dynamic labels** — `CREATE (n:$label)`,
-  `SET n:$label`, `REMOVE n:$label`. Parameter may resolve to a
-  STRING or a `LIST<STRING>` (multi-label fan-out). Comprehensive
-  `ERR_INVALID_LABEL` surface for null, empty, or malformed inputs.
-- **Composite B-tree indexes** — `CREATE INDEX <name> FOR (n:Label)
-  ON (n.p1, n.p2, ...)`. Exact / prefix / range seeks and a
-  uniqueness flag available through `CompositeBtreeRegistry`.
-- **Typed-collection validation** —
-  `LIST<INTEGER|FLOAT|STRING|BOOLEAN|BYTES|ANY>` parse helper +
-  `validate_list` enforcement for the constraint engine.
-- **Transaction savepoints** — `SAVEPOINT <name>`,
-  `ROLLBACK TO SAVEPOINT <name>`, `RELEASE SAVEPOINT <name>`.
-  Nested savepoints unwind LIFO. See
-  [docs/guides/SAVEPOINTS.md](docs/guides/SAVEPOINTS.md).
-- **Graph scoping** — `GRAPH[<name>]` preamble parsed into
-  `CypherQuery.graph_scope`. The single-engine path surfaces
-  `ERR_GRAPH_NOT_FOUND` when a scope cannot be served in place;
-  multi-database routing happens above the engine.
-
-1799 unit tests passing (1742 pre-task + 57 new). Regression-free
-against the Neo4j 2025.09 diff suite.
-
-## [1.0.0] — 2026-04-20
-
-### Fixed — CREATE with bound-variable edges duplicated nodes (2026-04-20)
-
-`CREATE (a:X {id:1}), (b:X {id:2}), (a)-[:R]->(b)` produced 4
-nodes instead of 2 on Nexus: the edge pattern's `(a)` and `(b)`
-re-created the declared variables as anonymous `:X` duplicates
-instead of binding to the earlier declarations.
-
-Root cause in
-`crates/nexus-core/src/executor/operators/create.rs`'s
-`execute_create_pattern_internal`: the pattern-walker
-unconditionally created a new node every time it saw a
-`PatternElement::Node`, never checking whether that element's
-variable was already populated in the `created_nodes` map the
-same walker had just written to. Same problem on the target
-side of `PatternElement::Relationship`.
-
-Fix: before creating a new node, check if the pattern's variable
-is already in `created_nodes`. If so, rebind `last_node_id` to
-the existing id and continue — no duplicate record, no extra
-catalog update. Applied on both branches.
-
-Verified end-to-end:
-
-- `create_bound_variable_edge_does_not_duplicate_nodes` and
-  `create_bound_variable_chain_reuses_nodes` (new unit tests in
-  `crates/nexus-core/src/engine/tests.rs`) — single edge + chain
-  variant; cover 2-node / 3-node patterns.
-- `nexus-bench::TinyDataset.load_statement` now produces 100
-  nodes + 50 relationships on Nexus (was 200 + 50). Locked in by
-  strengthened assertions in `tests/live_rpc.rs` +
-  `tests/live_compare.rs`.
-- `cargo test --workspace` on `nexus-core`: 1722 passed, 0
-  failed (no regressions).
-
-Source task: `phase6_nexus-create-bound-var-duplication`.
-
-### Fixed — RPC DELETE / DETACH DELETE no-op (2026-04-20)
-
-Queries like `MATCH (n) DETACH DELETE n` issued over the native
-MessagePack RPC protocol parsed and returned `Ok(0 rows)` but left
-the database untouched. Root cause: the RPC CYPHER dispatch in
-`crates/nexus-server/src/protocol/rpc/dispatch/cypher.rs` called
-`executor.execute(&q)` directly for every non-admin query. The
-operator pipeline's `Operator::Delete` / `Operator::DetachDelete`
-handlers are explicit no-ops — they rely on the engine's
-higher-level interception (`execute_cypher_with_context` at
-`crates/nexus-core/src/engine/mod.rs:1427`) to perform the actual
-mutation. REST always went through that path; RPC bypassed it.
-
-The fix adds a `needs_engine_interception(&ast)` router: any AST
-that carries `Match` / `Create` / `Delete` / `Merge` / `Set` /
-`Remove` / `Foreach` now routes through `engine.execute_cypher`,
-preserving parity with the REST transport. Read-only queries
-(no MATCH, no mutation) keep the parallel executor path —
-unchanged throughput, unchanged params handling.
-
-Verified end-to-end against a live Nexus RPC listener + docker
-Neo4j 2025.09.0: `nexus-bench`'s 9 `#[ignore]` integration tests
-now run cleanly as a single `cargo test -p nexus-bench
---features live-bench,neo4j -- --ignored` parallel batch (used to
-require per-test manual wipes). A new engine-level regression
-test (`detach_delete_actually_clears_nodes_via_execute_cypher` in
-`crates/nexus-core/src/engine/tests.rs`) locks the interception
-contract.
-
-Source task: `phase6_nexus-delete-executor-bug`.
-
-### Added — server admission control (2026-04-20)
-
-Third back-pressure layer on top of the existing per-key rate limiter
-and per-connection RPC semaphore. A global `AdmissionQueue`
-(`crates/nexus-server/src/middleware/admission.rs`) gates every
-query-bearing HTTP route (`/cypher`, `/ingest`, `/knn_traverse`,
-`/graphql`, `/umicp`) through a shared tokio semaphore. Callers that
-would push concurrency over `NEXUS_ADMISSION_MAX_CONCURRENT` (default
-CPU-count clamped to `[4, 32]`) wait in a FIFO queue up to
-`NEXUS_ADMISSION_QUEUE_TIMEOUT_MS` (default 5 s); after that they
-are rejected with `503 Service Unavailable + Retry-After`.
-
-Motivation: a single authenticated client can fan out tens of
-thousands of legitimate-looking `CREATE` statements through one
-HTTP keep-alive — enough to saturate the engine's single-writer
-discipline and wedge the process even though every request sat under
-the per-key rate limit. The new layer bounds **global** engine-facing
-concurrency rather than per-key volume.
-
-Light-weight endpoints (`/health`, `/prometheus`, `/auth`,
-`/schema/*`, `/stats`, `/cluster/status`) bypass the queue via a
-`HEAVY_PATH_PREFIXES` matcher so diagnostics stay reachable when
-the engine is saturated. RPC + RESP3 surfaces continue to rely on
-their per-connection semaphore; unified gating is a follow-up.
-
-Config knobs:
-
-- `NEXUS_ADMISSION_ENABLED` (bool, default `true`)
-- `NEXUS_ADMISSION_MAX_CONCURRENT` (u32, default CPU-clamped)
-- `NEXUS_ADMISSION_QUEUE_TIMEOUT_MS` (u64, default 5000)
-
-Prometheus metric names reserved (counters + histogram wiring ships
-in a subsequent patch):
-`nexus_admission_permits_granted_total`,
-`nexus_admission_permits_rejected_total`,
-`nexus_admission_in_flight`,
-`nexus_admission_wait_seconds`.
-
-Docs: [`docs/security/OVERLOAD_PROTECTION.md`](docs/security/OVERLOAD_PROTECTION.md).
-17 tests (unit + axum middleware) covering concurrency cap, timeout,
-FIFO progress under contention, light-path short-circuit, heavy-path
-rejection, counter integrity on drop.
-
-### Added — V2 horizontal scaling (2026-04-20, commit `15715a24`)
-
-Nexus gains horizontal scalability through hash-based sharding, per-shard
-Raft consensus, and a distributed query coordinator. See
-[`docs/guides/DISTRIBUTED_DEPLOYMENT.md`](docs/guides/DISTRIBUTED_DEPLOYMENT.md)
-and [`.rulebook/tasks/phase5_implement-v2-sharding/design.md`](.rulebook/tasks/phase5_implement-v2-sharding/design.md).
-
-- **Sharding** (`crates/nexus-core/src/sharding/`): deterministic xxh3-based
-  shard assignment, generation-tagged cluster metadata, iterative
-  rebalancer, per-shard health model. Standalone deployments are
-  unchanged — sharding is opt-in via `[cluster.sharding]` config.
-- **Raft consensus per shard** (`crates/nexus-core/src/sharding/raft/`):
-  purpose-built Raft (openraft 0.10 is still alpha; its trait surface
-  would require an adapter larger than the Raft itself). Leader
-  election within 3× election timeout, §5.3 truncate-on-conflict,
-  §5.4.2 leader-only current-term commit, snapshot install, bincode
-  wire format with shard-id prefix. 5-node clusters tolerate 2
-  replica failures.
-- **Distributed query coordinator** (`crates/nexus-core/src/coordinator/`):
-  scatter/gather with atomic per-query failure, leader-hint retry
-  (3 attempts), stale-generation refresh, COUNT/SUM/AVG/MIN/MAX/
-  COLLECT aggregation decomposition, ORDER BY + LIMIT top-k merge.
-- **Cross-shard traversal**: TTL + generation-aware LRU cache (10k
-  entries default), per-query fetch budget (1k default) with
-  `ERR_TOO_MANY_REMOTE_FETCHES` for runaway traversals.
-- **Cluster management API** (`crates/nexus-server/src/api/cluster.rs`):
-  `GET /cluster/status`, `POST /cluster/{add_node,remove_node,rebalance}`,
-  `GET /cluster/shards/{id}`. Admin-gated, `307 Temporary Redirect` on
-  follower writes, drain semantics for graceful node removal.
-
-### Changed — workspace layout
-
-The four Rust crates moved from repo-root children into a single
-`crates/` directory, following the standard Rust workspace layout:
-
-```
-Nexus/
-├── crates/
-│   ├── nexus-core/      # was ./nexus-core/
-│   ├── nexus-server/    # was ./nexus-server/
-│   ├── nexus-protocol/  # was ./nexus-protocol/
-│   └── nexus-cli/       # was ./nexus-cli/
-├── docs/                # unchanged
-├── sdks/                # unchanged
-└── scripts/             # unchanged
-```
-
-Follow-up edits:
-
-- `Cargo.toml` root: `workspace.members` + `workspace.dependencies`
-  paths updated to `crates/…`.
-- `crates/nexus-core/Cargo.toml`: `[[example]]` paths `../examples/` →
-  `../../examples/`.
-- `crates/nexus-server/Cargo.toml` + `crates/nexus-cli/Cargo.toml`:
-  `[package.metadata.deb]` asset paths (`../LICENSE`, `../README.md`,
-  `../config.yml`, …) updated to `../../…`.
-- `.github/workflows/rust-lint.yml`, `release-server.yml`,
-  `release-cli.yml`: path filters + `manifest_path` point at `crates/…`.
-- `scripts/ci/check_no_unwrap_in_bin.sh`: `SCOPES` + repo-root detection
-  updated.
-- Inter-crate paths (`../nexus-protocol`) unchanged — both live under
-  `crates/` so the relative form still resolves.
-
-No functional change; no public API moved or renamed.
-
-### Test coverage
-
-**201 V2-dedicated tests** — 143 sharding unit tests, 46 coordinator
-unit tests, 12 E2E integration scenarios
-(`crates/nexus-core/tests/v2_sharding_e2e.rs`) covering every §Scenario
-in the specs:
-
-- Deterministic assignment across restarts
-- Metadata consistency after leader change
-- Single-shard + broadcast query classification
-- AVG / SUM / MIN / MAX / COLLECT aggregation decomposition
-- Shard-failure atomicity (partial rows never leaked)
-- Raft failover within spec bound (≤90 ticks = 900ms)
-- Minority-failure replication continuity
-- Rebalance convergence
-- Leader-redirect on followers
-- Stale-generation refresh round-trip
-
-Full workspace on nightly: **2169 tests passing, 0 failed** (1694
-nexus-core lib + 364 nexus-server lib + 83 nexus-protocol lib + 28
-nexus-cli lib + 12 V2 E2E). Zero warnings on `cargo clippy
---workspace --all-targets -- -D warnings`. Release build (`cargo
-+nightly build --release --workspace`) succeeds in ~3 minutes.
-
-### Breaking changes (when sharding is enabled)
-
-- Record-store files gain a 64-byte V2 header. Standalone deployments
-  use deterministic defaults (`shard_id = 0`, `generation = 0`); a
-  future `nexus migrate --to v2` CLI rewrites headers in place.
-
-### Follow-up
-
-- [`phase5_v2-tcp-transport-bridge`](.rulebook/tasks/phase5_v2-tcp-transport-bridge/)
-  — TCP transport between Raft replicas for multi-host deployments.
-  Current in-process transport covers single-host + all integration
-  scenarios; the TCP bridge is an I/O adapter over the already-stable
-  `RaftTransport` and `ShardClient` traits.
-
-### Added — cluster mode (multi-tenant deployments, 2026-04-19)
-
-Nexus can now run as a shared multi-tenant service. One server
-instance hosts data for many tenants while guaranteeing that a
-tenant's nodes, relationships, property keys, and label names stay
-strictly isolated from every other tenant. See `docs/CLUSTER_MODE.md`
-for the operator guide.
-
-Enable with `NEXUS_CLUSTER_ENABLED=true` (opt-in; standalone mode
-remains the default and is byte-identical to the pre-cluster
-behaviour). Once on:
-
-- **Mandatory authentication on every URI.** Cluster mode removes
-  every public endpoint — `/`, `/health`, `/stats`, `/openapi.json`
-  all require a valid API key. A shared multi-tenant server must
-  identify every caller before exposing any surface.
-- **Per-tenant data isolation.** Labels / relationship types /
-  property keys registered by tenant A get different catalog IDs
-  than the same names registered by tenant B, so every downstream
-  layer (label bitmap index, KNN, record stores) sees tenant-
-  distinct state for free. Data leakage is structurally impossible
-  — not an invariant maintained by discipline. Proven end-to-end
-  by the integration tests in `nexus-core/tests/cluster_isolation_tests.rs`.
-- **Per-tenant rate limiting.** Every request is gated by
-  `LocalQuotaProvider` (per-minute + per-hour windows, configurable
-  via `ClusterConfig::default_quotas`). 429 responses carry
-  `Retry-After` and `X-RateLimit-Remaining` headers so SDK clients
-  can back off cleanly.
-- **Function-level MCP permissions.** API keys gain an optional
-  `allowed_functions` allow-list. Handlers can call
-  `UserContext::require_may_call("tool.name")?` to gate specific
-  MCP / RPC operations per-key, and discovery endpoints can use
-  `filter_callable` to advertise only callable tools.
-
-New public surface: `nexus_core::cluster::{ClusterConfig,
-TenantIsolationMode, UserNamespace, UserContext, QuotaProvider,
-LocalQuotaProvider, FunctionAccessError}`.
-
-New env var: `NEXUS_CLUSTER_ENABLED`. Architecturally documented in
-ADR-7 (catalog-prefix isolation over byte-level or per-database
-alternatives).
-
-### Changed — API key storage migrated from bincode to JSON
-
-`nexus-core/src/auth/storage.rs` switched from `SerdeBincode<ApiKey>`
-to `SerdeJson<ApiKey>` for the `api_keys` LMDB database. Bincode's
-default config is NOT forward-compatible for appended fields —
-adding cluster mode's new `allowed_functions: Option<Vec<String>>`
-field would have panicked on every existing record with
-`unexpected end of file`. JSON + `#[serde(default)]` gives us room
-to grow the schema without a migration script.
-
-**Operational note:** existing auth data is NOT automatically
-migrated on upgrade. Cluster-mode deployments should regenerate API
-keys from scratch; standalone deployments that already persist API
-keys should expect to re-seed on first boot under the new binary.
-The shared test-suite catalog was bumped to a new path
-(`nexus_test_auth_shared_v2`) so stale bincode records from earlier
-runs are orphaned cleanly instead of failing to decode.
-
-### Fixed — parser no longer accepts standalone `WHERE` (Neo4j parity)
-
-Closes the last outlier in the 300-test Neo4j compat suite. Before
-this change, Nexus accepted `UNWIND [1,2,3,4,5] AS x WHERE x > 2
-RETURN x` and returned `[3, 4, 5]`, while Neo4j 2025.09.0 rejects the
-same query with a syntax error (`Invalid input 'WHERE': expected
-'ORDER BY', 'CALL', ...`). Standard Cypher only allows `WHERE`
-attached to `MATCH` / `OPTIONAL MATCH` / `WITH` — never as a
-standalone top-level clause.
-
-The parser now matches Neo4j's grammar exactly: a bare `WHERE` after
-any clause other than those three rejects with the same error
-message shape Neo4j produces, pointing callers at the migration.
-
-**Breaking change — migration.** Any query that glued `WHERE`
-directly onto the output of `UNWIND` / `CREATE` / `DELETE` (or any
-other non-MATCH/WITH producer) must insert a `WITH <vars>`
-pass-through projection before the predicate:
-
-```cypher
--- before
-UNWIND [1, 2, 3, 4, 5] AS x WHERE x > 2 RETURN x
-
--- after
-UNWIND [1, 2, 3, 4, 5] AS x WITH x WHERE x > 2 RETURN x
-```
-
-The new syntax error points at the exact column and lists the
-valid clauses, so stale call sites surface immediately on the next
-request instead of going silent.
-
-**Result.** Neo4j compat suite now reports **300/300 passing**
-(previously 299/300 with 14.05 the one outlier). Every other test
-across all 17 sections — Basic Queries, Pattern Matching,
-Aggregations, Type Conversion, DELETE/SET, etc. — keeps its
-scalar-path parity.
-
-### SDK + workspace version unification
-
-Every first-party crate and SDK bumped to **1.0.0** (previously a
-mix of `0.12.0` for the server workspace and `0.1.0` for some SDKs).
-One version number governs the CLI, server, protocol crate, Rust
-SDK, Python SDK, TypeScript SDK, Go SDK, C# SDK, and PHP SDK.
-
-### Removed ecosystem SDKs
-
-The following integrations were dropped to focus on first-party wire
-clients:
-
-- `sdks/n8n/` — the community n8n node. Users can still invoke the
-  Nexus HTTP endpoint or wrap the TypeScript SDK inline.
-- `sdks/langchain/` and `sdks/langflow/` — Python ecosystem
-  wrappers. The underlying Python SDK covers the same API surface;
-  higher-level orchestration wrappers are better maintained
-  out-of-tree where they can track upstream LangChain / LangFlow
-  releases on their own cadence.
-- `sdks/TestConsoleSimple/` — redundant C# test harness (the
-  canonical tests live in `sdks/csharp/Tests/`).
-
-### Documentation reorganisation
-
-- New `sdks/README.md` — canonical index of shipped SDKs with the
-  shared transport contract referenced up front.
-- `sdks/SDK_TEST_RESULTS.md`, `sdks/SDK_TEST_RESULTS_FINAL.md`, and
-  `sdks/TEST_COVERAGE_REPORT.md` moved to `docs/sdks/` so the `sdks/`
-  root only holds runnable client code + the test-matrix script.
-- Per-SDK `CHANGELOG.md` created for every remaining SDK (Rust,
-  Python, TypeScript, Go, C#, PHP) — the Rust SDK entry has the
-  full 1.0.0 RPC-default details, the others carry a "1.0.0 version
-  alignment, RPC default queued under
-  phase2_sdk-rpc-transport-default" entry.
-
-### Native Binary RPC transport (2026-04-18)
-
-**First-party SDKs now have a MessagePack RPC port.** Length-prefixed
-frames (`[u32 LE][rmp-serde body]`) on port `15475`, multiplexed over
-a single TCP connection via caller-chosen `Request.id`. Enabled by
-default (`[rpc].enabled = true`); RESP3 and HTTP continue to run
-unchanged alongside it.
-
-```
-NEW nexus-protocol/src/rpc/{mod,types,codec}.rs   (shared w/ SDKs)
-NEW nexus-server/src/protocol/rpc/
-    mod.rs, server.rs, metrics.rs,
-    dispatch/{mod, admin, convert, cypher, database, graph, ingest, knn, schema}.rs
-NEW nexus-server/tests/rpc_integration_test.rs
-NEW docs/specs/rpc-wire-format.md
-```
-
-Command set: admin handshake (PING / HELLO / AUTH / QUIT / STATS /
-HEALTH), CYPHER (with optional params map; EXPLAIN inline), graph CRUD
-(CREATE_NODE / CREATE_REL / UPDATE_NODE / DELETE_NODE / MATCH_NODES),
-KNN (KNN_SEARCH accepting embedding as Bytes-of-f32 or Array<Float>
-with optional property filter, KNN_TRAVERSE with seed list + depth),
-bulk ingest (INGEST, single-batch atomic), schema introspection
-(LABELS / REL_TYPES / PROPERTY_KEYS / INDEXES from the catalog
-directly), multi-database (DB_LIST / DB_CREATE / DB_DROP / DB_USE).
-
-64 MiB cap per frame (tunable via `rpc.max_frame_bytes`), per-
-connection in-flight cap (`max_in_flight_per_conn`, default 1024),
-`u32::MAX` reserved as `PUSH_ID` for future streaming, slow-command
-WARN logging at `rpc.slow_threshold_ms` (default 2 ms).
-
-Prometheus: `nexus_rpc_connections` (gauge), `nexus_rpc_commands_total`
-/ `_error_total`, `nexus_rpc_command_duration_microseconds_total`,
-`nexus_rpc_frame_bytes_in_total` / `_out_total`,
-`nexus_rpc_slow_commands_total`. Env overrides:
-`NEXUS_RPC_{ENABLED, ADDR, REQUIRE_AUTH, MAX_FRAME_BYTES,
-MAX_IN_FLIGHT, SLOW_MS}`.
-
-The wire-format layer (RPC types + codec, RESP3 parser + writer) moved
-from `nexus-server::protocol` into `nexus-protocol::{rpc, resp3}` so
-the Rust SDK can depend on it without pulling the whole server crate.
-Command dispatch and the TCP accept loop stay in `nexus-server`.
-
-121 new tests (113 unit + 8 integration) covering every command,
-wrong-arity / wrong-type guards, NOAUTH gating, pipelined multiplexing,
-PUSH_ID rejection, and end-to-end CRUD round-trips over TCP.
-
-### 🔌 RESP3 Transport (2026-04-18)
-
-**Any RESP3 client — `redis-cli`, `iredis`, RedisInsight, Jedis, redis-rb,
-Redix — can now talk to Nexus using a Nexus command vocabulary.** The port
-is additive (HTTP, MCP, UMICP all keep running), disabled by default, and
-loopback-only out of the box so a plaintext debug port never accidentally
-escapes a dev machine.
-
-```
-NEW nexus-server/src/protocol/resp3/
-  mod.rs, parser.rs, writer.rs, server.rs
-  command/{mod, admin, cypher, graph, knn, schema}.rs
-NEW nexus-server/tests/resp3_integration_test.rs
-NEW docs/specs/resp3-nexus-commands.md
-```
-
-**25+ commands** implemented in the Nexus vocabulary:
-
-- Admin: `PING`, `HELLO [2|3] [AUTH user pass]`, `AUTH <api-key|user pass>`,
-  `QUIT`, `HELP`, `COMMAND`.
-- Cypher: `CYPHER`, `CYPHER.WITH`, `CYPHER.EXPLAIN`.
-- Graph CRUD: `NODE.CREATE/GET/UPDATE/DELETE/MATCH`, `REL.CREATE/GET/DELETE`.
-- KNN / ingest: `KNN.SEARCH`, `KNN.TRAVERSE`, `INGEST.NODES`, `INGEST.RELS`.
-- Schema / databases: `INDEX.CREATE/DROP/LIST`, `DB.LIST/CREATE/DROP/USE`,
-  `LABELS`, `REL_TYPES`, `PROPERTY_KEYS`, `STATS`, `HEALTH`.
-
-**Wire format**: all 12 RESP3 type prefixes (`+`, `-`, `:`, `$`, `*`, `_`,
-`,`, `#`, `=`, `~`, `%`, `|`, `(`) supported on both parse and write, with
-automatic RESP2 degradation (Null → `$-1`, Map → flat array, Boolean →
-`:0`/`:1`, Verbatim → BulkString) when the peer negotiates `HELLO 2`.
-`redis-cli`-style inline commands (`PING\r\n`) tokenised with quote and
-escape support, so plain `telnet` sessions work too.
-
-**Explicitly not Redis emulation.** `SET key value` returns
-`-ERR unknown command 'SET' (Nexus is a graph DB, see HELP)`. No KV
-semantics.
-
-**Auth**: `HELLO 3 AUTH <user> <pass>` negotiates protocol + auth in one
-round-trip. Pre-auth commands (`PING`/`HELLO`/`AUTH`/`QUIT`/`HELP`/`COMMAND`)
-always run; everything else bounces with `-NOAUTH Authentication required.`
-when the listener was configured with `require_auth = true` and the
-session hasn't authenticated.
-
-**Concurrency**: every handler that touches `Engine` or `DatabaseManager`
-acquires the `parking_lot::RwLock` inside `tokio::task::spawn_blocking` —
-same policy as the HTTP handlers (see `docs/performance/CONCURRENCY.md`).
-A tokio worker thread is never pinned on a graph-engine lock.
-
-**Metrics** (exported at `GET /prometheus`):
-- `nexus_resp3_connections` (gauge)
-- `nexus_resp3_commands_total` (counter)
-- `nexus_resp3_commands_error_total` (counter)
-- `nexus_resp3_command_duration_microseconds_total` (counter — divide by
-  `commands_total` for an average)
-- `nexus_resp3_bytes_read_total` / `nexus_resp3_bytes_written_total`
-
-**Config**: `[resp3]` section in `config.yml` with `enabled`, `addr`,
-`require_auth`. Env overrides `NEXUS_RESP3_{ENABLED,ADDR,REQUIRE_AUTH}`.
-Default port `15476` (HTTP stays on `15474`).
-
-**Testing**: 77 new tests green (69 in-crate unit + 8 raw-TCP integration).
-
-### 🛡️ Audit-log Failure Propagation (2026-04-18)
-
-**Eight `let _ = audit_logger.log_*(...).await` sites were silently
-swallowing audit-log write failures.** All now go through a new helper
-`nexus_core::auth::record_audit_log_failure(context, err)` that bumps a
-process-global `AtomicU64` counter and emits a
-`tracing::error!(target = "audit_log", context, error)` event.
-
-**Policy: fail-open with metric.** The originating request keeps its
-original HTTP status (401/429/500/200) — we do NOT convert audit-sink
-failures into 500s, because doing so hands an attacker who can cause IO
-pressure (disk fill, permission flap) a lever to mass-reject legitimate
-traffic. Operators alarm on the Prometheus counter instead:
-
-```promql
-increase(nexus_audit_log_failures_total[5m]) > 0
-```
-
-**Call sites patched**:
-- `nexus-core/src/auth/middleware.rs` × 4 (missing/invalid/errored API
-  key, rate-limit exceeded).
-- `nexus-server/src/api/cypher/execute.rs` × 4 (SET-property + SET-label
-  success/failure on the Cypher write path).
-
-**Metric**: `nexus_audit_log_failures_total` exported at `GET /prometheus`
-with HELP text pointing operators at the alert template.
-
-**Docs**: [docs/security/SECURITY_AUDIT.md §5](docs/security/SECURITY_AUDIT.md) documents the
-full policy (behaviour, rationale, alarm template, code-location
-inventory, "not fail-closed" guard). [docs/security/AUTHENTICATION.md](docs/security/AUTHENTICATION.md)
-cross-links from its audit section.
-
-### ⚡ Async Lock Migration — `DatabaseManager` off tokio workers (2026-04-18)
-
-**14 async HTTP handlers acquired `Arc<parking_lot::RwLock<DatabaseManager>>`
-directly inside `async fn`, pinning a tokio worker for the whole lock-held
-window.** Under concurrent load this starved the runtime — observed during
-the `fix/memory-leak-v1` debug session as the container dropping requests
-well before hitting any memory limit.
-
-**Fix**: wrap every async-context lock acquisition in
-`tokio::task::spawn_blocking` so the read/write runs on the blocking
-pool while tokio workers stay free. The lock type stays
-`parking_lot::RwLock` because it is shared with sync Cypher execution in
-`nexus-core/src/executor/shared.rs` — migrating the type would ripple into
-~20 files and force every sync caller onto `.blocking_read()` (which
-panics if ever reached from an async context). The `spawn_blocking`
-approach fixes the starvation at the source with a fraction of the blast
-radius.
-
-**Touched call sites (14 total)**:
-- `nexus-server/src/api/database.rs` — 6 handlers
-  (`create`/`drop`/`list`/`get`/`get_session`/`switch_session`).
-- `nexus-server/src/api/cypher/commands.rs` — 4 admin-Cypher sites
-  (`UseDatabase`/`ShowDatabases`/`CreateDatabase`/`DropDatabase`).
-
-**Enforcement**: `nexus-server/Cargo.toml` sets
-`clippy::await_holding_lock = "deny"` so any future regression fails CI.
-
-**Regression test**:
-`test_concurrent_list_databases_does_not_starve_runtime` fires 32
-concurrent `list_databases` calls on a 2-worker tokio runtime and asserts
-all 32 return `200 OK` inside a 30 s pathological timeout. Runs in 0.15 s
-post-migration.
-
-**Docs**: [docs/performance/CONCURRENCY.md](docs/performance/CONCURRENCY.md)
-documents the lock model end-to-end — primitives, the `DatabaseManager`
-rule, clippy enforcement, migration-vs-wrap tradeoff, and which
-`tokio::sync` locks legitimately stay.
-
-### 🧱 Neo4j Compatibility Test Split (Tier 3.2) (2026-04-18)
-
-**`nexus-core/tests/neo4j_compatibility_test.rs` was 2,103 LOC in a single
-`#[serial]`-gated integration binary. The whole file ran end-to-end on every
-test invocation even though only one section had changed. Split by semantic
-section into three independent binaries.**
-
-```
-neo4j_compatibility_test.rs                 2,103 LOC → removed
-neo4j_compatibility_core_test.rs            NEW →  317 LOC — 7 fixture-driven tests
-                                            (multi-label MATCH, UNION, bidirectional
-                                             relationships, property access). Hosts
-                                             the shared `setup_test_data` fixture.
-neo4j_compatibility_extended_test.rs        NEW → 1,063 LOC — 34 tests covering
-                                             UNION variants, labels()/keys()/type(),
-                                             DISTINCT, ORDER BY with UNION, multi-label
-                                             aggregations + the count(*) suite (8 tests).
-neo4j_compatibility_additional_test.rs      NEW →  825 LOC — 68 numbered
-                                             `neo4j_compat_*` / `neo4j_test_*`
-                                             micro-scenarios (count/labels/keys/id/type
-                                             / LIMIT / DISTINCT / property types).
-```
-
-Pure refactor — every test body is byte-identical to the original, `#[serial]`
-gating preserved, same helper `execute_query` function duplicated in each
-file. `setup_test_data` lives only in `core_test.rs` (the only caller).
-
-All 109 tests pass (7 + 34 + 68) under
-`cargo +nightly test --package nexus-core --test neo4j_compatibility_*_test`;
-clippy warning-clean.
-
-**Benefits**:
-- Granular test targeting — `cargo test --test neo4j_compatibility_core_test`
-  runs only the 7 fixture-driven scenarios (~0.3s).
-- Parallel binary compilation — the three binaries link independently.
-- Each file is under 1,100 LOC, well under the 1,500 LOC target.
-
-### 🧱 Regression Test Split (Tier 3.1) (2026-04-18)
-
-**`nexus-core/tests/regression_extended.rs` was 2,184 LOC covering seven
-feature areas in a single integration-test binary. Split by feature area
-into seven cohesive test binaries — each one now compiles and runs
-independently, and `cargo test --test regression_extended_match`
-(etc.) exercises just the relevant slice.**
-
-```
-regression_extended.rs                 2,184 LOC  → removed
-regression_extended_create.rs          NEW →  423 LOC  — 25 CREATE tests
-regression_extended_match.rs           NEW →  312 LOC  — 17 MATCH/WHERE tests
-regression_extended_relationships.rs   NEW →  583 LOC  — 24 relationship tests
-regression_extended_functions.rs       NEW →  343 LOC  — 20 function tests
-regression_extended_union.rs           NEW →  225 LOC  — 10 UNION tests
-regression_extended_engine.rs          NEW →  172 LOC  — 12 Engine-API tests
-regression_extended_simple.rs          NEW →  140 LOC  — 10 smoke tests
-```
-
-Pure refactor — every test body is byte-identical to the original
-(comments and `setup_test_engine` / `setup_isolated_test_engine` calls
-preserved). Dead `use nexus_core::Engine` import dropped (the type name
-was never referenced at the call sites). All 118 tests pass under
-`cargo +nightly test --package nexus-core --test regression_extended_*`
-and workspace-wide clippy is warning-clean.
-
-**Benefits**:
-- Merge-conflict surface reduced — unrelated test additions no longer
-  collide on a single file.
-- Parallel `cargo test` scheduling — the seven binaries run concurrently
-  (~0.4 s wall-clock for the full suite versus the old serialized run).
-- AI-agent-friendly file sizes — largest file (`relationships`, 583 LOC)
-  is well under the 1,500 LOC target.
-
-### 🧱 Engine Module Split (Tier 1.5) (2026-04-18)
-
-**`nexus-core/src/engine/mod.rs` was 4,636 LOC — the largest remaining
-source file in the tree after the Tier 1 + Tier 2 splits. Carved out
-into five focused submodules in four atomic commits.**
-
-```
-engine/mod.rs         4,636 → 3,624 LOC   (−1012, −21.8%)
-engine/config.rs      NEW → 45 LOC        — GraphStatistics, EngineConfig
-engine/stats.rs       NEW → 39 LOC        — EngineStats, HealthStatus, HealthState
-engine/clustering.rs  NEW → 135 LOC       — cluster_nodes + 5 wrappers + convert_to_simple_graph
-engine/maintenance.rs NEW → 193 LOC       — knn_search, export_to_json, get_graph_statistics,
-                                              clear_all_data, validate_graph, graph_health_check,
-                                              health_check
-engine/crud.rs        NEW → 651 LOC       — create/get/update/delete nodes + relationships +
-                                              index_node_properties + apply_pending_index_updates +
-                                              NodeWriteState (Cypher write-pass staging)
-```
-
-Pure refactor — public API surface unchanged (every method still
-resolves as `Engine::*` via Rust's multi-file `impl` blocks), all
-2,567 nexus-core tests green across every split commit, pre-commit
-hooks (fmt + clippy deny-warnings) enforced on each step.
-
-mod.rs remains the largest file in the tree; the residual ~2,400 LOC
-are the Cypher execution core (33 private helpers with shared state
-needing a deeper reshape than a pure file split). Tracked under
-`phase1_split-oversized-modules` Tier 3 for a follow-up.
-
-### ⚡ SIMD Runtime-Dispatched Kernels + Parser O(N²) Fix (2026-04-18)
-
-**New `nexus-core::simd` module — always compiled, runtime-dispatched,
-no Cargo feature flags. Kernels span distance (f32 dot / l2_sq / cosine
-/ normalize), bitmap popcount, numeric reductions (sum / min / max i64
-/ f64 / f32), compare (eq / ne / lt / le / gt / ge i64 / f64), RLE run
-scanning, CRC32C, and a size-threshold JSON dispatcher.**
-
-Per ADR-003, every kernel ships as scalar reference + SSE4.2 + AVX2 +
-AVX-512F + NEON with proptest parity (>= 40 cases, 256–1024 inputs
-each). Selection is cached in `OnceLock<unsafe fn>` on first call;
-`NEXUS_SIMD_DISABLE=1` env var forces scalar runtime-wide for
-emergency rollback.
-
-**Measured on Ryzen 9 7950X3D (Zen 4, AVX-512F + VPOPCNTQ):**
-
-| Op                  | Scale       | Scalar   | Dispatch  | Speedup  |
-|---------------------|-------------|----------|-----------|----------|
-| `dot_f32`           | dim=768     | 438 ns   | 34.5 ns   | 12.7×    |
-| `dot_f32`           | dim=1024    | 580 ns   | 50.8 ns   | 11.4×    |
-| `dot_f32`           | dim=1536    | 893 ns   | 70.3 ns   | 12.7×    |
-| `l2_sq_f32`         | dim=512     | 285 ns   | 21.0 ns   | 13.5×    |
-| `popcount_u64`      | 4096 words  | 1.52 µs  | 136 ns    | ≈11×     |
-| `sum_f64`           | n=262 144   | 150 µs   | 19 µs     | 7.9×     |
-| `sum_f32`           | n=262 144   | 152 µs   | 9.5 µs    | 15.9×    |
-| `lt_i64`            | n=262 144   | 110 µs   | 25 µs     | 4.4×     |
-| `eq_i64`            | n=262 144   | 69 µs    | 24 µs     | 2.9×     |
-| `find_run_length`   | uniform 16k | 3.2 µs   | 1.0 µs    | 3.2×     |
-| **Cypher parse**    | **31.5 KiB**| **≈1 s** | **3.7 ms**| **≈290×**|
-
-Cypher parse speedup is the non-SIMD O(N²) → O(N) fix uncovered while
-auditing phase-3 §8–9: `self.input.chars().nth(self.pos)` (O(n) per
-call) replaced with `self.input[self.pos..].chars().next()` (O(1)) in
-`peek_char`, `consume_char`, `peek_keyword`, `peek_keyword_at`,
-`skip_whitespace`, `peek_char_at`. Cost-per-byte now flat at
-92–117 ns/byte across three orders of magnitude — linear scaling
-confirmed.
-
-**Production call sites wired to SIMD:**
-
-- `index::KnnIndex` — `DistSimdCosine` / `DistSimdL2` implement
-  `hnsw_rs::dist::Distance<f32>` via `simd::distance::cosine_f32` /
-  `l2_sq_f32`. Every HNSW insert and query distance flows through
-  AVX-512 / AVX2 / NEON on supported hardware.
-- `index::KnnIndex::normalize_vector` — delegates to
-  `simd::distance::normalize_f32`.
-- `graph::algorithms::traversal::{cosine_similarity, jaccard_similarity}`
-  — refactored from full-universe f64 fold to packed `Vec<u64>`
-  bitmaps + `simd::bitmap::{popcount_u64, and_popcount_u64}`.
-- `storage::graph_engine::compression::compress_simd_rle` — inner
-  run-length scan replaced with `simd::rle::find_run_length` (was
-  misnamed "SIMD-accelerated", now actually SIMD).
-- `wal::Wal::append` / `recover` — dual-format (v1/v2) frames with
-  pluggable `ChecksumAlgo` field; reads both, writes default to
-  `Crc32Fast` (benchmark showed 3-way parallel PCLMUL in `crc32fast`
-  beats sequential `_mm_crc32_u64` on modern x86; CRC32C primitive
-  kept available via `append_with_algo(entry, Crc32C)`).
-- `executor::parser::{tokens, expressions}` — O(N²) tokenizer fix.
-
-**New files (all under `nexus-core/src/simd/`):** `mod.rs`, `dispatch.rs`,
-`scalar.rs`, `distance.rs`, `bitmap.rs`, `reduce.rs`, `compare.rs`,
-`rle.rs`, `crc32c.rs`, `json.rs`, `x86.rs`, `aarch64.rs`.
-
-**New benches (under `nexus-core/benches/`):** `simd_distance.rs`,
-`simd_popcount.rs`, `simd_reduce.rs`, `simd_compare.rs`, `simd_rle.rs`,
-`simd_crc.rs`, `simd_json.rs`, `parser_tokenize.rs`.
-
-**New proptest parity suites (under `nexus-core/tests/`):**
-`simd_scalar_properties.rs`, `simd_distance_parity.rs`,
-`simd_bitmap_parity.rs`, `simd_reduce_parity.rs`,
-`simd_compare_parity.rs`, `simd_rle_parity.rs`, `simd_json_parity.rs`.
-
-**New spec:** `docs/specs/simd-dispatch.md` — CpuFeatures probe,
-cascade rules, tolerances, per-kernel tier tables, measured
-benchmark numbers, phase-3 per-item status including honest writeups
-of the three items that did not deliver as the task spec anticipated
-(CRC32C hardware, simd-json on Value-field payloads, record codec
-batch — the last already LLVM-auto-vectorised).
-
-**ADRs:** ADR-001 (RPC wire format), ADR-002 (SDK default transport),
-ADR-003 (SIMD dispatch — runtime detection, no feature flags, tiered
-fallback with proptest parity).
-
-**Rollout safety:**
-
-- `NEXUS_SIMD_DISABLE=1` — scalar fallback for every dispatched op.
-- `NEXUS_SIMD_JSON_DISABLE=1` — forces serde_json in the
-  `simd::json` dispatcher.
-- Single `tracing::info!` on first `cpu()` call reports the
-  selected tier + all flag values.
-
-**Verification across all SIMD commits:**
-
-- `cargo +nightly fmt --all` — clean (pre-commit hook enforces).
-- `cargo +nightly clippy -p nexus-core --tests --benches -- -D warnings`
-  — clean.
-- `cargo +nightly test -p nexus-core` — 2566 passed, 0 failed.
-- 300/300 Neo4j compatibility suite unaffected (no wire format change).
-
-### 🧱 Oversized-Module Split — Tier 1 + Tier 2 (2026-04-18)
-
-**Eight critical files > 1,500 LOC split into focused sub-modules. No
-behaviour change: 1,346 nexus-core unit tests and 2,954 workspace tests
-continue to pass; every public API preserved via `pub use` re-exports.**
-
-17 atomic commits, each quality-gated (`cargo check`, `clippy -D warnings`,
-`cargo fmt`, tests). Aggregate input-vs-output:
-
-| File | Before (LOC) | Façade after (LOC) | Reduction |
-|---|---|---|---|
-| `nexus-core/src/executor/mod.rs` | 15,260 | 1,139 | -92.5% |
-| `nexus-core/src/executor/parser.rs` | 6,882 | 35 + 5 subfiles | -99.5% |
-| `nexus-core/src/lib.rs` | 5,564 | 104 | -98.1% |
-| `nexus-core/src/graph/correlation/mod.rs` | 4,638 | 2,313 | -50.1% |
-| `nexus-core/src/executor/planner.rs` | 4,254 | 393 | -90.8% |
-| `nexus-core/src/graph/correlation/data_flow.rs` | 3,004 | 1,625 | -45.9% |
-| `nexus-server/src/api/cypher.rs` | 2,965 | 518 | -82.5% |
-| `nexus-core/src/graph/algorithms.rs` | 2,560 | 220 | -91.4% |
-
-**New sub-modules created**:
-
-- `executor/{types, shared, context, engine}` + `executor/eval/{arithmetic,
-  helpers, predicate, projection, temporal}` + `executor/operators/{admin,
-  aggregate, create, dispatch, expand, filter, join, path, procedures,
-  project, scan, union, unwind}`.
-- `executor/parser/{ast, clauses, expressions, tokens, tests}`.
-- `executor/planner/{mod, queries, tests}`.
-- `engine/{mod, tests}` (moved out of `lib.rs`).
-- `graph/correlation/{query_executor, vectorizer_extractor, tests}`.
-- `graph/correlation/data_flow/{mod, layout, tests}`.
-- `graph/algorithms/{mod, traversal, tests}`.
-- `nexus-server/src/api/cypher/{mod, execute, commands, tests}`.
-
-**Benefits**:
-- Faster incremental builds — `rustc` re-checks far less code per touch.
-- Parallelisable PRs — feature work on `executor/operators/filter.rs`
-  no longer collides with `executor/operators/join.rs`.
-- Reviewable diffs — each module change is scoped to one responsibility.
-
-### 🛡️ Memory-Leak Hardening (2026-04-18)
-
-**Defensive limits + cleanup paths against unbounded memory growth.**
-
-Input validation and capped allocations across the full request lifecycle,
-plus a Docker-based memtest harness for regression detection.
-
-- **Executor hardcaps** — `MAX_INTERMEDIATE_ROWS` enforced in label
-  scans, all-nodes scans, expand paths, and variable-length path
-  expansion. Exceeding the cap returns `Error::OutOfMemory` deterministically.
-- **HTTP body size limit** — configurable `nexus-server` request body cap
-  prevents memory exhaustion via oversized Cypher payloads.
-- **HNSW `max_elements`** — now configurable per index, avoiding the
-  previous default over-allocation.
-- **GraphQL list resolvers** — relationship-list fields now require a
-  `limit` argument.
-- **Metric collector** — capped unique-key cardinality in `MetricCollector`
-  prevents metric label explosion in long-running servers.
-- **Cache tuning** — tighter defaults for the vectorizer cache and
-  intelligent query cache.
-- **Connection cleanup** — `ConnectionTracker::cleanup_stale_connections`
-  sweeps abandoned connection state periodically.
-- **Page cache observability** — eviction stall events logged before
-  returning errors so memory pressure is diagnosable.
-- **Initial mmap** — shrunk `graph_engine` startup allocation to reduce
-  RSS footprint on idle.
-- **Memtest harness** — `scripts/memtest/` (Dockerfile.memtest,
-  docker-compose.memtest.yml, run-all.sh, profile.sh, measure.sh) with
-  a hard memory cap so leaks surface as `OOMKilled` instead of thrashing
-  the host. `MALLOC_CONF` wired for jemalloc heap profiling via `jeprof`.
-
-Tuning and troubleshooting guidance in `docs/performance/MEMORY_TUNING.md`.
-
-### ✅ Neo4j Compatibility Test Results - 100% Pass Rate (2025-12-01)
-
-**Latest compatibility test run: 299/300 tests passing (0 failed, 1 skipped)**
-
-- **Test Results**:
-  - Total Tests: 300
-  - Passed: 299 ✅
-  - Failed: 0 ❌
-  - Skipped: 1 ⏭️
-  - Pass Rate: **100%**
-
-- **Recent Fixes** (improvement from 293 to 299):
-  - Fixed UNWIND with MATCH query routing - queries like `UNWIND [...] AS x MATCH (n)` now correctly route through Engine instead of dummy Executor
-  - Fixed query detection to recognize MATCH anywhere in query, not just at the start
-  - Removed debug statements from executor and planner
-
-- **Previous Fixes** (improvement from 287 to 293):
-  - Fixed cartesian product bug in MATCH patterns with multiple disconnected nodes
-  - Added `OptionalFilter` operator for proper WHERE clause handling after OPTIONAL MATCH
-  - Fixed OPTIONAL MATCH IS NULL filtering (12.06)
-  - Fixed OPTIONAL MATCH IS NOT NULL filtering (12.07)
-  - Fixed WITH clause operator ordering (WITH now executes after UNWIND)
-  - Fixed `collect(expression)` by ensuring Project executes for aggregation arguments
-  - Fixed UNWIND with collect expression (14.13)
-
-- **Sections with 100% Success** (235 tests):
-  - Section 1: Basic CREATE and RETURN (20/20)
-  - Section 2: MATCH Queries (25/25)
-  - Section 3: Aggregation Functions (25/25)
-  - Section 4: String Functions (20/20)
-  - Section 5: List/Array Operations (20/20)
-  - Section 6: Mathematical Operations (20/20)
-  - Section 7: Relationships (30/30)
-  - Section 8: NULL Handling (15/15)
-  - Section 9: CASE Expressions (10/10)
-  - Section 10: UNION Queries (10/10)
-  - Section 11: Graph Algorithms & Patterns (15/15)
-  - Section 13: WITH Clause (15/15)
-  - Section 16: Type Conversion (15/15)
-
-- **Known Limitations** (1 skipped):
-  - **UNWIND with WHERE** (14.05): WHERE directly after UNWIND requires operator reordering
-
-- **Server Status**:
-  - Server: v0.12.0
-  - Uptime: Stable
-  - Health: All components healthy
-
-### 🧪 Expanded Neo4j Compatibility Test Suite - 300 Tests (2025-12-01)
-
-**Test suite expanded from 210 to 300 tests (+90 new tests)**
-
-- **Section 12: OPTIONAL MATCH** (15 tests)
-  - Left outer join semantics with NULL handling
-  - OPTIONAL MATCH with WHERE, aggregations, coalesce
-  - Multiple OPTIONAL MATCH patterns
-  - OPTIONAL MATCH with CASE expressions
-
-- **Section 13: WITH Clause** (15 tests)
-  - Projection and field renaming
-  - Aggregation with WITH (count, sum, avg, collect)
-  - WITH + WHERE filtering
-  - Chained WITH clauses
-  - WITH DISTINCT and ORDER BY
-
-- **Section 14: UNWIND** (15 tests)
-  - Basic array unwinding
-  - UNWIND with filtering and expressions
-  - Nested UNWIND operations
-  - UNWIND with aggregations
-  - UNWIND + MATCH combinations
-
-- **Section 15: MERGE Operations** (15 tests)
-  - MERGE create new vs match existing
-  - ON CREATE SET / ON MATCH SET
-  - MERGE relationships
-  - Multiple MERGE patterns
-  - MERGE idempotency verification
-
-- **Section 16: Type Conversion** (15 tests)
-  - toInteger(), toFloat(), toString(), toBoolean()
-  - Type conversion with NULL handling
-  - toIntegerOrNull(), toFloatOrNull()
-  - Type coercion in expressions
-
-- **Section 17: DELETE/SET Operations** (15 tests)
-  - SET single and multiple properties
-  - SET with expressions
-  - DELETE relationships and nodes
-  - DETACH DELETE
-  - REMOVE property
-
-- **Files Modified**:
-  - `scripts/compatibility/test-neo4j-nexus-compatibility-200.ps1` - 6 new test sections
-  - `rulebook/tasks/complete-neo4j-compatibility/tasks.md` - Updated documentation
-
-### Temporal Arithmetic Operations 🕐 (2025-11-30)
-
-**Full support for date/time arithmetic operations**
-
-- **Datetime + Duration**:
-  - `datetime('2025-01-15T10:30:00') + duration({days: 5})` - Add days
-  - `datetime('2025-01-15T10:30:00') + duration({months: 2})` - Add months
-  - `datetime('2025-01-15T10:30:00') + duration({years: 1})` - Add years
-
-- **Datetime - Duration**:
-  - `datetime('2025-01-15T10:30:00') - duration({days: 5})` - Subtract days
-  - `datetime('2025-03-15T10:30:00') - duration({months: 2})` - Subtract months
-
-- **Datetime - Datetime**:
-  - `datetime('2025-01-20') - datetime('2025-01-15')` - Returns duration between dates
-
-- **Duration + Duration**:
-  - `duration({days: 3}) + duration({days: 2})` - Combine durations
-
-- **Duration - Duration**:
-  - `duration({days: 5}) - duration({days: 2})` - Duration difference
-
-- **Duration Functions**:
-  - `duration.between(start, end)` - Duration between two datetimes
-  - `duration.inMonths(start, end)` - Difference in months
-  - `duration.inDays(start, end)` - Difference in days
-  - `duration.inSeconds(start, end)` - Difference in seconds
-
-- **Files Modified**:
-  - `nexus-core/src/executor/mod.rs` - Temporal arithmetic implementation
-  - `nexus-core/tests/test_temporal_arithmetic.rs` - New test file (17 tests)
-
-### 🎉 100% Neo4j Compatibility Achieved - 300/300 Tests Passing (2025-11-30)
-
-**Complete Neo4j compatibility test suite passing - Major Milestone!**
-
-- **GDS Procedure Wrappers** (20 built-in procedures):
-  - `gds.centrality.eigenvector` - Eigenvector centrality analysis
-  - `gds.shortestPath.yens` - K shortest paths using Yen's algorithm
-  - `gds.triangleCount` - Triangle counting for graph structure analysis
-  - `gds.localClusteringCoefficient` - Local clustering coefficient per node
-  - `gds.globalClusteringCoefficient` - Global clustering coefficient
-  - `gds.pageRank` - PageRank centrality
-  - `gds.centrality.betweenness` - Betweenness centrality
-  - `gds.centrality.closeness` - Closeness centrality
-  - `gds.centrality.degree` - Degree centrality
-  - `gds.community.louvain` - Louvain community detection
-  - `gds.community.labelPropagation` - Label propagation
-  - `gds.shortestPath.dijkstra` - Dijkstra shortest path
-  - `gds.components.weaklyConnected` - Weakly connected components
-  - `gds.components.stronglyConnected` - Strongly connected components
-  - `gds.allShortestPaths` - All shortest paths
-
-- **Bug Fixes**:
-  - **Bug 11.02**: Fixed NodeByLabel in cyclic patterns - Planner now preserves all starting nodes for triangle queries
-  - **Bug 11.08**: Fixed variable-length paths `*2` - Disabled optimized traversal for exact length constraints
-  - **Bug 11.09**: Fixed variable-length paths `*1..3` - Disabled optimized traversal for range constraints
-  - **Bug 11.14**: Fixed WHERE NOT patterns - Added EXISTS expression handling in `expression_to_string`
-
-- **Files Modified**:
-  - `nexus-core/src/executor/planner.rs` - Added `RelationshipQuantifier` import, fixed `PropertyMap` access, enhanced pattern serialization
-  - `nexus-core/src/executor/mod.rs` - Disabled optimized traversal for variable-length path constraints
-
-- **Test Results**:
-  - 210/210 Neo4j compatibility tests passing (100%)
-  - 1382+ cargo workspace tests passing
-  - All SDKs verified working
-
-### Added - Master-Replica Replication 🔄
-
-**V1 Replication implementation with WAL streaming and full sync support**
-
-- **Master Node** (`nexus-core/src/replication/master.rs`):
-  - WAL streaming to connected replicas
-  - Replica tracking with health monitoring
-  - Async replication (default) - no ACK wait
-  - Sync replication with configurable quorum
-  - Circular replication log (1M operations max)
-  - Heartbeat-based health monitoring
-
-- **Replica Node** (`nexus-core/src/replication/replica.rs`):
-  - TCP connection to master
-  - WAL entry receiving and application
-  - CRC32 validation on all messages
-  - Automatic reconnection with exponential backoff
-  - Replication lag tracking
-  - Promotion to master support
-
-- **Full Sync** (`nexus-core/src/replication/snapshot.rs`):
-  - Snapshot creation (tar + zstd compression)
-  - Chunked transfer with CRC32 validation
-  - Automatic snapshot for new replicas
-  - Incremental sync after snapshot restore
-
-- **Wire Protocol** (`nexus-core/src/replication/protocol.rs`):
-  - Binary format: `[type:1][length:4][payload:N][crc32:4]`
-  - Message types: Hello, Welcome, Ping, Pong, WalEntry, WalAck, Snapshot*
-
-- **REST API Endpoints** (`nexus-server/src/api/replication.rs`):
-  - `GET /replication/status` - Get replication status
-  - `GET /replication/master/stats` - Master statistics
-  - `GET /replication/replica/stats` - Replica statistics
-  - `GET /replication/replicas` - List connected replicas
-  - `POST /replication/promote` - Promote replica to master
-  - `POST /replication/snapshot` - Create snapshot
-  - `GET /replication/snapshot` - Get last snapshot info
-  - `POST /replication/stop` - Stop replication
-
-- **Configuration** (via environment variables):
-  - `NEXUS_REPLICATION_ROLE`: master/replica/standalone
-  - `NEXUS_REPLICATION_BIND_ADDR`: Master bind address
-  - `NEXUS_REPLICATION_MASTER_ADDR`: Master address for replicas
-  - `NEXUS_REPLICATION_MODE`: async/sync
-  - `NEXUS_REPLICATION_SYNC_QUORUM`: Quorum size for sync mode
-
-- **Documentation**:
-  - `docs/operations/REPLICATION.md` - Complete replication guide
-  - OpenAPI specification updated with replication endpoints
-
-- **Testing**: 26 unit tests covering all replication components
-
----
-
-## Previous releases
-
-Full notes for every historical release are split by patch-level decade
-under [docs/patches/](docs/patches/). Each file covers up to ten patch
-versions of the same minor (see filename range):
-
-| Version range | File                                                                |
-| ------------- | ------------------------------------------------------------------- |
-| 0.12.x        | [docs/patches/v0.12.0-0.12.9.md](docs/patches/v0.12.0-0.12.9.md)    |
-| 0.11.x        | [docs/patches/v0.11.0-0.11.9.md](docs/patches/v0.11.0-0.11.9.md)    |
-| 0.10.x        | [docs/patches/v0.10.0-0.10.9.md](docs/patches/v0.10.0-0.10.9.md)    |
-| 0.9.10+       | [docs/patches/v0.9.10-0.9.19.md](docs/patches/v0.9.10-0.9.19.md)    |
-| 0.9.0-0.9.9   | [docs/patches/v0.9.0-0.9.9.md](docs/patches/v0.9.0-0.9.9.md)        |
-| 0.8.x         | [docs/patches/v0.8.0-0.8.9.md](docs/patches/v0.8.0-0.8.9.md)        |
-| 0.7.x         | [docs/patches/v0.7.0-0.7.9.md](docs/patches/v0.7.0-0.7.9.md)        |
-| 0.6.x         | [docs/patches/v0.6.0-0.6.9.md](docs/patches/v0.6.0-0.6.9.md)        |
-| 0.5.x         | [docs/patches/v0.5.0-0.5.9.md](docs/patches/v0.5.0-0.5.9.md)        |
-| 0.4.x         | [docs/patches/v0.4.0-0.4.9.md](docs/patches/v0.4.0-0.4.9.md)        |
-| 0.2.x         | [docs/patches/v0.2.0-0.2.9.md](docs/patches/v0.2.0-0.2.9.md)        |
-| 0.1.x         | [docs/patches/v0.1.0-0.1.9.md](docs/patches/v0.1.0-0.1.9.md)        |
-| 0.0.x         | [docs/patches/v0.0.0-0.0.9.md](docs/patches/v0.0.0-0.0.9.md)        |
-
-> Note: there is no `0.3.x` range — the project jumped from `0.2.0` to
-> `0.4.0` during early development.
+- **Deleting a node no longer leaves index and property-store residue behind — most importantly, re-creating a NODE KEY / composite tuple after deleting the node that held it now succeeds instead of failing with a permanent, false constraint violation.** `Engine::delete_node` freed the node record but never walked the index layer that create populated. (H-1) The composite B-tree keeps a tuple per indexed node, node ids are never recycled, and the NODE KEY existence check (`seek_exact`) does not skip soft-deleted rows — so a deleted node's tuple sat in the tree forever and permanently, falsely rejected any later write of the same tuple. `delete_node` now evicts the node's tuple from every composite index covering its labels (`unindex_composite_tuples`, the exact inverse of `index_composite_tuples`). (M-1) The property-store blob for a deleted node/relationship was never freed — a slow, unbounded storage leak across create/delete cycles — so `delete_node`, `delete_node_relationships`, and the relationship-delete path now call the previously-unwired `delete_node_properties` / `delete_relationship_properties`. (M-3) The typed property B-tree kept a dead entry per deleted node (masked at read time by `is_deleted()` re-checks, but corrupting any consumer that trusts raw index occupancy); `delete_node` now removes those entries (`unindex_node_properties`). Not a breaking change — behavior only becomes more correct. See `docs/specs/cypher-subset.md`.
+
+### Fixed — `phase0_fix-cypher-relationship-delete-noop`
+
+- **Cypher `MATCH (a)-[r]->(b) DELETE r` now actually deletes the relationship instead of silently doing nothing.** It returned `Ok` but the edge stayed live (`relationships_deleted == 0`, the record's `is_deleted()` still false, `count(r)` still 1), corrupting counts, traversals, and the node-delete live-edge guard (a node refused non-`DETACH` delete forever because its "deleted" edge was still live). Root cause: `Engine::execute_match_delete_query` collected and projected only NODE variables into its synthetic RETURN, so a relationship variable `r` never reached the delete loop, which only ever called `delete_node`; `storage::delete_rel` existed but was never invoked from the DELETE path. The DELETE path now also collects relationship variables, projects them, and deletes each via the new authoritative, idempotent `Engine::delete_relationship`; deletion runs in two passes (relationships before nodes) so `DELETE a, r, b` in one clause no longer trips the live-edge guard on `a`. Not a breaking change. See `docs/specs/cypher-subset.md`.
+
+### Improved — query planner index usage and diagnostics
+
+- **WHERE-clause equality on indexed properties now uses index seeks.** `MATCH (n:Person) WHERE n.age = 30` previously full-scanned every `:Person` node and evaluated the predicate afterward; the planner now lifts a `var.prop = <literal>` WHERE conjunct on an indexed property into an index seek, matching the performance of the inline-pattern form `MATCH (n:Person {age: 30})`. The optimization applies only to equality comparisons with plan-time literals; range operators (>, <, >=, <=), IN, STARTS WITH, CONTAINS, and `$parameter` equality remain subject to full-table evaluation (deferred optimization).
+- **Unindexed-access diagnostics now cover all predicate forms.** The performance notification that warns when a WHERE predicate cannot use an available index previously reported only equality misses; it now covers range (>, <, >=, <=), IN, STARTS WITH, and CONTAINS predicates. Equality on an indexed property is now silent (it seeks).
+- **Composite indexes are now used by inline multi-property selectors.** `MATCH (n:L {a:1, b:2})` whose full key set matches a registered composite index (e.g., a NODE KEY constraint on (a, b)) now emits a composite index seek instead of full-scanning the label. A partial selector that covers only some of the composite key set correctly does not mis-seek.
+- Query results are unchanged; these are plan-selection and diagnostics improvements only.
+
+### Performance — `phase0_perf-delete-node-relationship-check-full-scan`
+
+- **Refusing a non-`DETACH` delete of a node that still has outgoing relationships is now O(out-degree) instead of O(total relationships in the store).** `node_has_live_relationship` scanned the entire relationship store on every non-`DETACH` node delete. It now walks the node's own outgoing adjacency chain (`first_rel_ptr` → `next_src_ptr`) as a fast path that short-circuits to `true` on the first live outgoing edge. Correctness is preserved by construction: the fast path can only conclude `true` from an authoritative edge read from storage — every `false` (and incoming-only liveness) is still decided by the unchanged full scan, because the store has no reverse adjacency and the in-memory relationship index is a non-authoritative hint. A follow-up task (`phase0_perf-store-reverse-incoming-adjacency-index`) will make the incoming side O(degree) too.
+
+### Fixed — `phase0_fix-async-wal-flush-durability`
+
+- **`AsyncWalWriter::flush()` is now a real durability barrier — it blocks until the background writer thread has actually fsynced, instead of returning the instant the flush request was enqueued.** The old body only sent a `WalCommand::Flush` down an mpsc channel and returned `Ok(())` immediately; the fsync happened later on the writer thread, so a caller that acknowledged a commit as durable after `flush()` could be acking data still sitting unflushed in the queue (lost on a crash before the writer processed it). `WalCommand::Flush` now carries a single-use completion channel; `flush()` sends it and blocks until the writer thread runs the batch flush and signals the real outcome back — so the return value faithfully reflects success or an exhausted-retries failure. A `flush()` racing `shutdown()` is honored on the drain path (or unblocks with an error if the writer already exited) and can never hang. No public signature change (`flush(&self) -> Result<()>`); `Engine::flush_async_wal`'s guarantee becomes real. This is the barrier the rest of the WAL durability work (torn-tail recovery, a durable commit path) builds on. See `docs/specs/wal-mvcc.md`.
+
+### Fixed — `phase0_fix-delete-node-dangling-relationships`
+
+- **Deleting a node that still has live relationships can no longer leave dangling edges that corrupt traversals — across every protocol (Cypher, REST, RPC, RESP3).** The non-`DETACH` delete guard checked only `first_rel_ptr`, which tracks a node's OUTGOING edges; a node that was only ever a relationship TARGET kept `first_rel_ptr == 0`, so the guard passed and the node was hard-deleted while a live edge still pointed at it. Worse, the guard lived only in the Cypher `MATCH…DELETE` path — `Engine::delete_node` itself had no check, so REST/RPC/RESP3 callers deleted unconditionally. Then `Expand` surfaced the resulting dangling edge as a silent `null` row (and `count(r)` kept counting it) instead of refusing it. Now `Engine::delete_node` performs a real relationship-existence check covering BOTH outgoing and incoming live edges and returns an error unless the relationships were already cleared (as `DETACH` does), so every protocol inherits the guard from one place; the per-path `first_rel_ptr` checks in `MATCH…DELETE` and `FOREACH…DELETE` were reduced to the centralized guard. `Expand` now skips a row whose non-optional endpoint resolves to a deleted node, while `OPTIONAL MATCH` still yields its null row. Deletion stays soft (ids never recycled). Breaking only for callers that relied on the buggy success of deleting a node with live incoming edges — they now correctly get an error and must use `DETACH DELETE`. See `docs/specs/cypher-subset.md`.
+
+### Fixed — `phase0_fix-property-store-shrink-corruption`
+
+- **Shrinking a node's or relationship's stored properties (a shorter `SET`, or `REMOVE`) can no longer silently corrupt an unrelated entity's data after a restart.** Property entries are `[entity_id][entity_type][data_size][JSON]`; the in-place update path handled a shrink by overwriting `data_size` and the leading bytes but left the freed tail of the old, longer payload on disk. On reopen, the index-rebuild scanners strided by the now-smaller `data_size`, landed inside that stale tail, read a garbage entity type, and stopped early — dropping every later entity and leaving the write cursor mid-file, so the next write overwrote a live entity. The store is now **grow-only**: an in-place rewrite happens only when the new payload is exactly the same size; a strictly smaller (or larger) payload allocates fresh space, so a stored entry's `data_size` always equals its physical footprint and the rebuild scan can never mis-stride. The superseded old blob becomes dead space (deduped by entity id on rebuild; reclaimed by a future compaction pass). The two rebuild scanners were unified and hardened to resync forward past a stale tail — recovering later entities instead of dropping them — so a store already damaged by the old code degrades gracefully on reopen. Caveat: an entry whose header was already overwritten by a pre-fix mis-scan is unrecoverable. Not a breaking change; no on-disk header change. See `docs/specs/storage-format.md`.
+
+### Fixed — `phase0_fix-anonymous-node-lost-on-restart`
+
+- **A committed node with no labels, no properties and no relationships is no longer silently lost on the next restart, and its id is no longer reused.** Such an "anonymous" node persisted as a byte-for-byte all-zero 32-byte `NodeRecord`, and the restart recovery scan reconstructed the id high-water mark by advancing past any slot with *any* non-zero byte — so an all-zero live node was indistinguishable from a free slot. It was dropped on the next clean restart (no crash required) and its id handed to a different node, corrupting external references. Live records now carry an explicit allocated bit (`flags` bit 1; bit 0 remains the deleted flag), set on every write, and the recovery scan reconstructs `next_node_id`/`next_rel_id` from that bit. The same scheme is applied to relationship records, closing the analogous degenerate all-zero self-loop gap. Existing stores are handled with a back-compatible scan (a legacy record is any non-zero slot, deleted or not — deletion never releases an id) plus a one-time migration that stamps the allocated bit on reopen. Caveat: an anonymous node already written by the pre-fix format is physically all-zero and cannot be recovered — only future anonymous nodes are protected. Not a breaking change for query semantics; on-disk format gains the bit. See `docs/specs/storage-format.md`.
+
+### Fixed — `phase0_fix-unindexed-correlated-match-drops-rows`
+
+- **`UNWIND … MATCH (a:Label {prop: r.field})` over an UNINDEXED `(Label, prop)` pair no longer silently drops all but the first driving row's matches.** The residual filter deduplicates rows before evaluating its predicate, keyed by each row's identity. Rows carrying an `UNWIND` driving map (e.g. `r = {s: 10}`) have no node `_nexus_id`, and every such map was keyed to the same constant (`"obj:no_id"`), so all driving rows that shared a given scanned node collided and collapsed to the first — leaving only the first driving row's matches (a leading non-matching driving row could shadow every later hit entirely). The dedup key for an `_nexus_id`-less object is now derived from its content, so distinct driving rows stay distinct. The unindexed label-scan + filter path now returns exactly the rows the indexed `NodeIndexSeek` path returns (`phase0_fix-correlated-predicate-index-seek`), just without the index. Not a breaking change — turns silently-truncated results into correct, complete ones. Verified by discriminating tests over duplicate keys, misses, and driving-row ordering.
+
+### Fixed — `phase0_fix-materialize-recrosses-aligned-columns`
+
+- **Comma-separated multi-pattern `MATCH` no longer materialises a cubic intermediate that could exhaust memory and freeze the host.** A query like `UNWIND $rows AS r MATCH (a:P {id: r.s}), (b:P {id: r.d})` aligns its columns once through `apply_cartesian_product` (bounded by the `phase0_fix-cypher-oom-process-abort` budget), but the subsequent materialisation step then RE-crossed those already-aligned columns — turning an `N`-row result into `N^k` for `k` patterns. At a modest 8-node label with 6 driving rows the aligned 384-row product exploded to `384³ ≈ 56.6M` rows (~13 GB), an **unguarded** allocation downstream of the budget check. The executor now zips the aligned columns (`materialize_aligned_rows`) instead of re-crossing them, so peak memory for a `k`-pattern join is `O(N)` rather than `O(N^k)`. **Correctness fix in the same path:** the row deduplication in `update_result_set_from_rows` keyed only on node/relationship `_nexus_id`s, so two rows that matched the same nodes from different `UNWIND` driving rows collapsed to one — dropping every driving row after the first. Dedup now folds non-entity column content (e.g. the `UNWIND` driving map) into the key. Not a breaking change — results are now correct and complete where the old path either froze or silently truncated. Verified by a discriminating unit test (aligned columns zip to `N`, the general materialiser re-crosses to `N^k`) and the end-to-end `UNWIND`+two-pattern regression.
+
+### Performance — `phase0_fix-correlated-predicate-index-seek`
+
+- **Correlated inline property predicates (`UNWIND` row-local values) now use property indexes per driving row.** `MATCH (a:Person {id: r.s})` where `r` comes from an earlier `UNWIND` now seeks the index on `Person(id)` for each row instead of scanning all `:Person` nodes and filtering after a materialized cross product. The execution plan now shifts from O(R·N) (label scan + filter over the driving row set) to O(R·log N) (per-row index seeks), where R is the driving row count and N is the label cardinality. This improvement requires an index on the `(label, property)` pair; without one, queries still fall back to a label scan (no performance regression, unchanged results). The inline property-map form `{prop: expr}` is optimized; the WHERE-clause form `WHERE prop = expr` is tracked as a separate task (`phase0_fix-where-clause-index-seek`). Not a breaking change — same query results, different (faster) plan. Verified by plan-assertion tests; see `docs/specs/cypher-subset.md` § "Index Seek on Property Predicates" for usage and predicate shapes.
+
+### Fixed — `phase14_fix-external-id-write-path`
+
+- **Engine write path now honours `_id` (external-id) in all write forms — issue #29.** The reserved property `_id` was silently dropped by CREATE+SET, MERGE, and UNWIND forms, so `RETURN n._id` projected null and `WHERE n._id = ...` never matched for nodes written through those paths, despite `CREATE (n {_id: '...'})` alone always working. Now: `CREATE (n:L {_id: '...'}) SET ...` in the same statement resolves and persists the external ID; `MERGE (n:L {_id: '...'})` consults the external-id index **before** the property-pattern search (the stronger key, TOCTOU-safe), creating with conflict policy Match if absent; `UNWIND ... CREATE` and `UNWIND ... MERGE` with a constant (literal or `$param`) `_id` honour it across all driving rows. Invalid `_id` values (unknown prefix, non-string, unresolved `$param`) now surface an explicit `invalid _id` error instead of silently succeeding then returning null. See `docs/specs/cypher-subset.md` § "Write Forms Honouring External ID" for accepted prefixes (`blake3:`, `sha256:`, `sha512:`, `uuid:`, `str:`, `bytes:`), limitations, and examples. Not a breaking change — only corrects silent failures to silent successes; no correct query depended on the bug.
+
+### Fixed — `phase0_fix-order-by-on-call-yield`
+
+- **`CALL db.labels() YIELD label RETURN label ORDER BY label` now sorts correctly, and SKIP/LIMIT are applied to procedure YIELD projections instead of being silently dropped.** When a query has no MATCH/MERGE pattern (bare `CALL`, bare `RETURN`, procedure YIELD), ORDER BY, SKIP, and LIMIT clauses are now threaded into the execution plan in standard openCypher order: ORDER BY → SKIP → LIMIT. Previously, only LIMIT was applied; ORDER BY and SKIP were silently ignored on these pattern-less projections, corrupting result order and pagination. Root cause: `QueryPlanner::plan_query` collected `ORDER BY` and `SKIP` clauses into local variables but applied them only in the pattern-driven `plan_execution_strategy` path (when patterns exist); the separate no-pattern branches never consumed them, so no Sort or Skip operators were emitted. Fixed by: (1) adding `Operator::Skip` with a corresponding `execute_skip` operator that materializes and slices the result set; (2) wiring Skip through the exhaustive operator dispatch matches (compiler-enforced); and (3) in both no-pattern branches of the planner, emitting Sort → Skip → Limit in the correct order, ensuring all transports (HTTP, RPC, RESP3, GraphQL) apply these clauses uniformly. Known limitation (pre-existing, tracked separately): SKIP on pattern-driven `MATCH` queries (e.g., `MATCH (n) RETURN n SKIP 1`) is still silently dropped — a separate system-wide gap affecting only queries with patterns. See `docs/specs/cypher-subset.md`.
+
+### Fixed — schema procedures now respect database routing and reflect live catalogs
+
+- **`CALL db.labels()`, `db.relationshipTypes()`, `db.propertyKeys()`, `db.schema()`, `db.indexes()`, and `db.constraints()` now return accurate results over HTTP and RPC on the selected database, and property keys reflect every write.** Previously, bare `CALL` queries (without accompanying `CREATE` / `MATCH` / `DELETE`) bypassed the engine and routed to a detached bootstrap executor with an empty, unused catalog — so the three schema procedures silently returned zero rows over HTTP/RPC regardless of actual data (RESP3 was unaffected). Now: (1) `Clause::CallProcedure` and `Clause::CallSubquery` are treated as engine clauses; bare `CALL` queries route through `is_read_only`'s `READ_ONLY_PROCEDURES` allow-list, running on the resolved engine's executor (which carries the live catalog + registries) instead of the disconnected default; (2) the per-request `database` field is honored — a `CALL` on `database:"alpha"` queries the `alpha` engine's catalog, not the default; (3) procedure calls that previously errored "registry not configured on this executor" (`db.index.fulltext.queryNodes`, `spatial.nearest`, etc.) now work; (4) bare `CALL { subquery }` no longer silently uses a stale or disconnected catalog for the nested query; and (5) `db.propertyKeys()` now reflects every property written (via engine CRUD, executor CREATE, relationship SET/MERGE, bulk loader) because the catalog registers keys at every property write, not only at DDL. Correctness fix — no breaking change; queries that previously returned empty or 0 now return correct results. See `docs/specs/cypher-subset.md` for the full schema procedure list.
+
+### Performance — executor rebuild skipped on no-mutation writes
+
+- **Write queries that demonstrably change nothing (e.g., a `MERGE` that matched an existing node, with no `ON MATCH SET`, or a `DELETE` whose `MATCH` matched no rows) no longer trigger the full executor rebuild.** The engine previously rebuilt the executor — reopening catalog/store references, a fresh query cache, and every index registry — after every write, whether or not the write modified the graph. Now the rebuild is skipped when the write produced no mutation; any structural or property change (including `SET` to the same value) still refreshes as before. Measured: `merge_singleton` @64 workers throughput increased ~33× (1.1k → 37–39k qps) and p99 latency dropped from ~59 ms to ~2 ms; read throughput unaffected. Correctness and semantics unchanged; not a breaking change.
+
+### Fixed — `phase0_fix-merge-relationship-dropped`
+
+- **`MERGE` patterns with anonymous relationship variables and/or anonymous endpoints now create or match the whole pattern, and ON CREATE/ON MATCH SET items targeting endpoint nodes now apply.** Previously, `MERGE (a:Person{name:'Alice'})-[:KNOWS]->(b:Person{name:'Bob'})` (relationship without variable) silently dropped the second node and the edge, creating only the first node and returning success with no error — a silent data loss affecting the most common form of relationship MERGE (the variable-less form with no `r` alias). The same issue affected the fully-anonymous form and patterns with anonymous endpoints only. Root cause: three early-return `Ok(None)` bailouts in `process_merge_relationship` when the relationship or endpoints lacked variables, causing the fallback `process_merge_clause` (a node-only merger) to be invoked, which discarded the relationship and second node without error. Additionally, ON CREATE/ON MATCH SET items targeting the endpoint nodes were silently filtered out for anonymous endpoints, so `MERGE (...)-[:T]->(...) ON CREATE SET (a:L {props}).key = value` would not apply. Fixed by synthesizing internal variable names (never inserted into user-visible contexts) for anonymous endpoints and relationships, allowing the full pattern to be created or matched atomically. Not a breaking change — well-formed queries already used explicit variables; this closes silent data loss. See `docs/specs/cypher-subset.md`.
+
+### Added — relationship-MERGE with per-endpoint external IDs
+
+- **`MERGE` patterns with relationships now allow each endpoint node to carry its own `_id`.** Previously, `_id` was not supported in MERGE patterns at all; now `MERGE (a:Person {_id:'uuid:alice'})-[r:KNOWS]->(b:Person {_id:'uuid:bob'})` creates or matches both endpoints by external ID independently, and the relationship is created or matched by the full endpoint-type tuple. Each endpoint's external-id index is consulted first (no property-pattern search needed for those endpoints); only one endpoint need carry `_id` (the other resolves by label + properties as before), and relationships themselves do not carry external IDs. See `docs/specs/cypher-subset.md` for examples.
+
+### Fixed — test-suite `DatabaseClosing` intermittent flake under parallel runs
+
+- **Eliminated an intermittent `Database(DatabaseClosing)` failure that surfaced under parallel `cargo test --workspace` runs across the `cypher`, `executor`, and `regression` test binaries.** Root cause: all test catalogs share a single per-process LMDB environment (a shared test-catalog pool); a finishing test could close that environment while another test was opening it. The fix pins the shared per-process test-catalog environment open for the lifetime of the test process — it is opened once and never closed mid-run (crates/nexus-core/src/catalog/store.rs). Production and isolated-catalog behavior are unchanged.
+- **Additionally, the 19 modules in the `cypher` test binary were converted to per-test isolated catalogs** (`Engine::with_isolated_catalog` / `setup_isolated_test_engine`) for cleaner test isolation and to eliminate the pool entirely for those tests.
+- Verification: full workspace suite run 3× in parallel with zero `DatabaseClosing` occurrences (5041 tests passing per run). No user-facing API or behavior change.
+
+### Fixed — variable-length paths with multiple relationship types now traverse all specified types
+
+- **`MATCH (a)-[:KNOWS|FOLLOWS*1..3]->(b)` now traverses nodes reachable through ANY of the named relationship types instead of silently traversing only the first type.** Multi-type relationship patterns with variable-length quantifiers (e.g. `[:R1|R2|R3*m..n]`) previously discarded all types after the first at query-plan time, so nodes reachable solely through `R2` or `R3` were silently omitted from the result set with no error — a correctness bug. Root cause: the `VariableLengthPath` operator carried a single relationship-type slot instead of the full list parsed from the pattern, and only the first type reached BFS traversal. Fixed by carrying the complete type list through the planner and operator, so every named type is consulted during graph traversal. Unqualified patterns (`[*m..n]` with no type filter) continue to match all types. Not a breaking change — previously-truncated results now become complete and correct. See `docs/specs/cypher-subset.md` for Type union syntax.
+
+### Fixed — WHERE predicates after variable-length paths no longer silently drop
+
+- **`MATCH (a)-[:R*1..2]->(b) WHERE b.name = 'x'` and similar queries now correctly apply WHERE filters instead of silently returning zero rows.** The query planner's cost-based operator-reordering pass was incorrectly reordering variable-binding operators — variable-length paths (`[:T*1..3]`), quantified path patterns (`((n)-[:T]->(m)){1,2}`), and spatial R-tree seeks — to be evaluated after the WHERE clauses that reference their newly-bound variables. Since unbound variables evaluate to null (falsy) in predicates, the WHERE filters were silently dropped, resulting in empty query results. Fixed by ensuring these binding operators are evaluated before the filters. Not a breaking change — corrects previously-incorrect query results.
+
+### Fixed — Executor and Engine temporary-directory leak
+
+- **Temporary directories created by `Executor::default()`, `Engine::new()`, and ephemeral test engines no longer accumulate on disk — test runs previously filled the filesystem with tens of thousands of leftover `.tmp*` directories consuming tens of gigabytes.** Root cause: these helpers created their temporary record store via `tempfile::tempdir().keep()`, which deliberately disarms the directory's auto-removal on drop. Called repeatedly throughout the test suite, each instantiation leaked a system temp directory containing record-store files (nodes.store, rels.store, etc.), and repeated `cargo test` runs accumulated over 21,000 directories (~100 GB observed). The fix ties each temporary directory to a reference-counted cleanup guard held by the `RecordStore` (dropped when the last store clone is dropped), ensuring directories are removed exactly when no longer needed — cross-platform and with no reliance on process exit or timers. Persistent data directories via `Engine::with_data_dir` are unaffected and continue to preserve their contents. Not a breaking change — behavior only becomes more correct.
+
+### Fixed — Query result materialization can no longer exhaust memory via DoS
+
+- **Five bounded-allocation guards prevent a single Cypher query from starving the server via `range()`, string padding functions, variable-length paths, row materialization, or base64-encoded BYTES literals.** (1) `range(start, end, step)` now rejects a query whose element count exceeds 2,000,000 (e.g. `range(0, 9223372036854775807, 3)`) with a Cypher error instead of allocating gigabytes or looping forever; checked arithmetic prevents wraparound. (2) `lpad(str, len, pad)` and `rpad(str, pad, len)` cap the target length to 1,000,000 characters, rejecting oversized requests with a Cypher error before string allocation. (3) Variable-length paths (`[:KNOWS*m..n]`, `[*]` unbounded, or quantified path patterns with large bounds) clamp BFS depth to a maximum 64 hops, terminating instead of exhausting memory on dense or cyclic graphs — bounded quantifiers like `[*1..5]` are unaffected. (4) Row materialization for cartesian joins (comma-separated patterns like `MATCH (a), (b)`) enforces the same byte budget (`cartesian_product_max_bytes`, default 1 GiB) as the main cartesian-product operator, returning a Cypher error instead of allocating the full result set before projecting. (5) BYTES base64 payloads are validated on their encoded length before decoding, so an oversized literal or `$parameter` is rejected before buffer allocation, with the per-property 64 MiB cap as a secondary guard. All five return a bounded Cypher error; well-formed queries within reasonable bounds are unaffected. See `docs/specs/cypher-subset.md` for specific limits.
+
+### Fixed — OPTIONAL MATCH variable scoping and LEFT OUTER JOIN semantics
+
+- **OPTIONAL MATCH clauses now correctly preserve rows with NULL-bound variables for all pattern shapes, including standalone matches and patterns with reverse-direction relationships.** Two defects violated the LEFT OUTER JOIN contract. (1) When determining which pattern variables should be NULL-bound for non-matching rows, the executor assumed the first node in the pattern was the anchor (a node bound by a prior clause), and nullable-set = remaining variables. On patterns where the anchor appears later (e.g., reverse-direction `(b:Person)-[:KNOWS]->(a)` where `a` was bound first) or patterns with no anchor at all (standalone `MATCH (a) OPTIONAL MATCH (c:Company)`), this position-based check inverted which variables were nullable or incorrectly designated the entire pattern as nullable. (2) Standalone OPTIONAL MATCH queries where no prior clause had bound any variables were silently truncated to zero rows instead of preserved with all pattern variables NULL-bound — rows that matched the pattern were returned (correct), but rows that failed to match were dropped instead of wrapped with NULL (breaking the LEFT OUTER JOIN guarantee). Fixed by identifying the nullable set via binding state: the variables in the OPTIONAL MATCH pattern MINUS the variables already bound by prior clauses (MATCH, UNWIND, WITH, etc.), identified by looking up each pattern variable in the live binding state instead of assuming position. The same mechanism handles all three cases uniformly: correlated OPTIONAL MATCH on bound variables returns rows from both branches (nullable set = pattern variables minus bound variables); reverse-direction patterns return the correct column set as nullable; standalone OPTIONAL MATCH returns one NULL-bound row when the scan produces zero matches. Not a breaking change — queries that previously returned incorrect or truncated results now return complete, correct ones.
+
+
+## Released
+
+Detailed changelogs for released versions live in [`docs/changelog/`](docs/changelog/).
+
+| Version | Date |
+|---------|------|
+| [2.6.0](docs/changelog/2.6.0.md) | 2026-07-20 |
+| [2.5.0](docs/changelog/2.5.0.md) | 2026-07-14 |
+| [2.4.0](docs/changelog/2.4.0.md) | 2026-07-11 |
+| [2.3.4](docs/changelog/2.3.4.md) | 2026-06-20 |
+| [2.3.3](docs/changelog/2.3.3.md) | 2026-06-10 |
+| [2.3.2](docs/changelog/2.3.2.md) | 2026-06-08 |
+| [2.3.1](docs/changelog/2.3.1.md) | 2026-06-07 |
+| [2.3.0](docs/changelog/2.3.0.md) | 2026-06-06 |
+| [2.2.0](docs/changelog/2.2.0.md) | 2026-05-04 |
+| [2.1.0](docs/changelog/2.1.0.md) | 2026-05-02 |
+| [2.0.0](docs/changelog/2.0.0.md) | 2026-04-30 |
+| [1.15.0](docs/changelog/1.15.0.md) | 2026-04-26 |
+| [1.14.0](docs/changelog/1.14.0.md) | 2026-04-22 |
+| [1.13.0](docs/changelog/1.13.0.md) | 2026-04-22 |
+| [1.12.0](docs/changelog/1.12.0.md) | 2026-04-21 |
+| [1.11.0](docs/changelog/1.11.0.md) | 2026-04-21 |
+| [1.10.0](docs/changelog/1.10.0.md) | 2026-04-21 |
+| [1.9.0](docs/changelog/1.9.0.md) | 2026-04-21 |
+| [1.8.0](docs/changelog/1.8.0.md) | 2026-04-21 |
+| [1.7.0](docs/changelog/1.7.0.md) | 2026-04-21 |
+| [1.6.0](docs/changelog/1.6.0.md) | 2026-04-21 |
+| [1.5.0](docs/changelog/1.5.0.md) | 2026-04-21 |
+| [1.0.0](docs/changelog/1.0.0.md) | 2026-04-20 |
+

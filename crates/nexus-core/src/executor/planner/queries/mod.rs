@@ -20,7 +20,7 @@ mod unindexed;
 //    `pub(super)` so each submodule's `use super::*` picks them up.
 // ─────────────────────────────────────────────────────────────────────────────
 pub(super) use super::*;
-pub(super) use crate::executor::types::{NotificationCategory, NotificationSeverity};
+pub(super) use crate::executor::types::{NotificationCategory, NotificationSeverity, RangeSeekOp};
 
 // ── Public re-exports (preserve every path that was previously reachable) ────
 

@@ -1,0 +1,12 @@
+{
+  "id": 13,
+  "slug": "unwind-driven-writes-iterate-rows-in-the-engine-write-path-with-a-per-row-context",
+  "title": "UNWIND-driven writes iterate rows in the engine write path with a per-row context",
+  "status": "proposed",
+  "date": "2026-06-08",
+  "relatedTasks": [
+    "phase6_fix-unwind-write-persists",
+    "phase6_fix-sustained-write-busyloop"
+  ],
+  "supersededBy": null
+}

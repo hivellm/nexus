@@ -49,3 +49,11 @@ export { mapCommand } from './transports/command-map';
 export type { Endpoint } from './transports/endpoint';
 export type { NexusValue, Transport, TransportRequest, TransportResponse } from './transports/types';
 
+// Raw transport surface — for callers driving the wire directly (interop
+// harnesses, diagnostics) rather than through `NexusClient`'s sugar layer.
+// Mirrors the Rust SDK's `pub mod transport` and the Python SDK's
+// `nexus_sdk.transport.rpc` re-export.
+export { RpcTransport } from './transports/rpc';
+export { nx } from './transports/types';
+export type { TransportCredentials } from './transports/types';
+

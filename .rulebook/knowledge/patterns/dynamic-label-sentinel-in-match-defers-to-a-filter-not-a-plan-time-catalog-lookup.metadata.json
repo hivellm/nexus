@@ -1,0 +1,20 @@
+{
+  "id": "dynamic-label-sentinel-in-match-defers-to-a-filter-not-a-plan-time-catalog-lookup",
+  "type": "pattern",
+  "title": "Dynamic-label sentinel in MATCH defers to a Filter, not a plan-time catalog lookup",
+  "category": "architecture",
+  "description": "`MATCH (n:$label)` stores `$label` verbatim as a sentinel string in the node pattern's `labels` list. The planner (`QueryPlanner`) has no access to query parameters — those live only on the execution context, constructed after planning. Calling `self.catalog.get_or_create_label(\"$label\")` at plan time resolves (and even creates) a literal label named `$label` instead of the runtime value, so the scan silently returns zero rows — a silent-wrong-results bug, not a crash. The fix mirrors how `WHERE n:$x` already worked: defer resolution to execution. When the FIRST label of a node pattern starts with `$`, the planner must not call `get_or_create_label` on it; instead emit `AllNodesScan` + `Filter(\"{variable}:{first_label}\")`, the same lowering already used for the second-and-later labels in a multi-label pattern. The Filter operator already resolves a `$`-prefixed label against `context.params` at execution time: a non-empty STRING becomes the label, anything else (missing/NULL/empty/non-STRING) collapses to no rows, never an error.",
+  "example": "// crates/nexus-core/src/executor/planner/queries/strategy.rs\nif !node.labels.is_empty() {\n    let first_label = &node.labels[0];\n    if first_label.starts_with('$') {\n        operators.push(Operator::AllNodesScan { variable: variable.clone() });\n        operators.push(Operator::Filter {\n            predicate: format!(\"{}:{}\", variable, first_label),\n            predicate_ast: None,\n        });\n    } else {\n        let label_id = self.catalog.get_or_create_label(first_label)?;\n        // ...existing seek/scan emission using label_id...\n    }\n}",
+  "whenToUse": "Any time a planner needs to resolve a `$param`-sentinel value only available on the execution context (labels, relationship types, property keys referenced dynamically) and the executor already has a working runtime resolution path for the same sentinel in a different clause. Reuse that existing runtime resolution instead of inventing a second resolution mechanism at plan time.",
+  "whenNotToUse": "Do not resolve a `$`-prefixed sentinel via any catalog get-or-create call at plan time — it treats the literal sentinel string as a real name and pollutes the catalog with a spurious literal label/type, silently producing empty results instead of an error. If no downstream operator already has runtime `$param` resolution for the entity kind in question, build that resolution first — don't half-apply this pattern by routing to a Filter that doesn't understand the sentinel.",
+  "createdAt": "2026-07-25T00:00:00.000Z",
+  "tags": [
+    "cypher",
+    "planner",
+    "dynamic-labels",
+    "executor",
+    "filter",
+    "silent-wrong-results"
+  ],
+  "source": "manual"
+}

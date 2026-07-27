@@ -183,8 +183,15 @@ impl std::fmt::Debug for HubClient {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serial_test::serial;
 
+    // These two tests mutate the same process-wide HIVEHUB_* environment
+    // variables. Rust runs unit tests on parallel threads sharing one
+    // environment, so without serialization a sibling that sets/clears the
+    // same var races them (observed as an intermittent failure). `#[serial]`
+    // forces them to run one at a time.
     #[test]
+    #[serial]
     fn from_env_disabled_when_url_missing() {
         // Save and clear envs the test cares about so this is hermetic
         // even when run after another test that left them set.
@@ -216,6 +223,7 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn from_env_missing_key_is_an_error() {
         let saved = (
             std::env::var("HIVEHUB_CLOUD_BASE_URL").ok(),

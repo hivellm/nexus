@@ -75,10 +75,83 @@ impl DatabaseManager {
             default_db: default_db.clone(),
         };
 
-        // Create default database
-        manager.create_database(&default_db)?;
+        // phase0_fix-multi-database-persistence-and-default G2 — the default
+        // database is NOT registered in `databases`/`states`. It is served
+        // by the primary `Engine` the caller (nexus-server) opens directly
+        // on `base_dir` (`server.engine`), never by a manager-owned Engine.
+        // Registering a second "neo4j" engine here created a phantom store
+        // that was never queried yet still reported (empty) stats via
+        // `GET /databases` — see the G2 task for the full writeup.
+
+        // phase0_fix-multi-database-persistence-and-default G1 — re-adopt any
+        // database directories left under `base_dir` by a prior run, so a
+        // created database survives a restart instead of being orphaned.
+        manager.discover_existing_databases();
 
         Ok(manager)
+    }
+
+    /// Re-adopt every database directory already present under `base_dir` from a
+    /// previous run (G1). A subdirectory is treated as a database when it holds a
+    /// record store (`nodes.store`); the default (already created above) and
+    /// non-database directories (e.g. `auth`, `audit`, logs — none of which carry
+    /// a `nodes.store`) are skipped, as are entries whose name is not a valid
+    /// database name. Best-effort: a directory whose engine fails to open is
+    /// logged and skipped rather than aborting startup.
+    fn discover_existing_databases(&self) {
+        let entries = match std::fs::read_dir(&self.base_dir) {
+            Ok(e) => e,
+            Err(_) => return,
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if !path.is_dir() {
+                continue;
+            }
+            let Some(name) = path
+                .file_name()
+                .and_then(|n| n.to_str())
+                .map(str::to_string)
+            else {
+                continue;
+            };
+            // The default database is implicit — it is served by the
+            // primary engine and must never be adopted as a named,
+            // manager-owned database, even though its directory (`neo4j`)
+            // lives right next to the named ones under `base_dir`.
+            if name == self.default_db {
+                continue;
+            }
+            // Already tracked, or not a valid database name.
+            if self.databases.read().contains_key(&name) {
+                continue;
+            }
+            if name.is_empty()
+                || !name
+                    .chars()
+                    .all(|c| c.is_alphanumeric() || c == '_' || c == '-')
+            {
+                continue;
+            }
+            // Database signature: a record store lives here.
+            if !path.join("nodes.store").exists() {
+                continue;
+            }
+            match Engine::with_data_dir(&path) {
+                Ok(engine) => {
+                    self.databases
+                        .write()
+                        .insert(name.clone(), Arc::new(RwLock::new(engine)));
+                    self.states.write().insert(name, DatabaseState::Online);
+                }
+                Err(e) => {
+                    tracing::warn!(
+                        "database discovery: skipping {:?} — failed to open engine: {e}",
+                        path.display()
+                    );
+                }
+            }
+        }
     }
 
     /// Create a new database
@@ -92,6 +165,15 @@ impl DatabaseManager {
             return Err(Error::InvalidInput(
                 "Database name must be alphanumeric with _ or -".to_string(),
             ));
+        }
+
+        // The default database is implicit (served by the primary engine,
+        // not tracked in `databases`) — it always "already exists".
+        if name == self.default_db {
+            return Err(Error::InvalidInput(format!(
+                "Database '{}' already exists",
+                name
+            )));
         }
 
         let mut dbs = self.databases.write();
@@ -203,15 +285,16 @@ impl DatabaseManager {
 
     /// Get a database by name
     pub fn get_database(&self, name: &str) -> Result<Arc<RwLock<Engine>>> {
+        if name == self.default_db {
+            return Err(Error::InvalidInput(
+                "The default database is served by the primary engine, not the DatabaseManager"
+                    .to_string(),
+            ));
+        }
         let dbs = self.databases.read();
         dbs.get(name)
             .cloned()
             .ok_or_else(|| Error::InvalidInput(format!("Database '{}' does not exist", name)))
-    }
-
-    /// Get the default database
-    pub fn get_default_database(&self) -> Result<Arc<RwLock<Engine>>> {
-        self.get_database(&self.default_db)
     }
 
     /// List all databases
@@ -295,7 +378,7 @@ impl DatabaseManager {
 
     /// Check if a database exists
     pub fn exists(&self, name: &str) -> bool {
-        self.databases.read().contains_key(name)
+        name == self.default_db || self.databases.read().contains_key(name)
     }
 
     /// Get the default database name
@@ -305,6 +388,12 @@ impl DatabaseManager {
 
     /// Get the state of a database
     pub fn get_database_state(&self, name: &str) -> Option<DatabaseState> {
+        // The default database is implicit — it is never tracked in
+        // `states` (it isn't in `databases` either) but it is always
+        // served by the primary engine, so it is always Online.
+        if name == self.default_db {
+            return Some(DatabaseState::Online);
+        }
         self.states.read().get(name).cloned()
     }
 
@@ -437,10 +526,14 @@ mod tests {
         manager.create_database("db2").unwrap();
 
         let databases = manager.list_databases();
-        assert_eq!(databases.len(), 3); // default + 2 new
+        // The default ("neo4j") is served by the primary engine and is not tracked
+        // by the manager (G2), so only the 2 named databases are listed; the
+        // default remains reachable via `exists`.
+        assert_eq!(databases.len(), 2);
 
         let names: Vec<&str> = databases.iter().map(|d| d.name.as_str()).collect();
-        assert!(names.contains(&"neo4j"));
+        assert!(!names.contains(&"neo4j"));
+        assert!(manager.exists("neo4j"));
         assert!(names.contains(&"db1"));
         assert!(names.contains(&"db2"));
     }
@@ -614,8 +707,9 @@ mod tests {
         let databases = manager.list_databases();
         let names: Vec<&str> = databases.iter().map(|d| d.name.as_str()).collect();
 
-        // Should be sorted alphabetically
-        assert_eq!(names, vec!["alpha", "bravo", "neo4j", "zulu"]);
+        // Should be sorted alphabetically. The default ("neo4j") is served by the
+        // primary engine and is not listed by the manager (G2).
+        assert_eq!(names, vec!["alpha", "bravo", "zulu"]);
     }
 
     #[test]

@@ -156,10 +156,8 @@ impl<'a> QueryPlanner<'a> {
                                 // variable-length paths. Default path
                                 // until §9.4 certifies parity.
                                 let path_var = pattern.path_variable.clone().unwrap_or_default();
-                                // For variable-length paths, only use first type for now
-                                let type_id = type_ids.first().copied();
                                 operators.push(Operator::VariableLengthPath {
-                                    type_id,
+                                    type_ids: type_ids.clone(),
                                     direction,
                                     source_var,
                                     target_var,

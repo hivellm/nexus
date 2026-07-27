@@ -1,0 +1,20 @@
+{
+  "id": "legacy-single-hop-vs-variable-length-operators-must-share-the-same-vecu32-type_ids-shape",
+  "type": "pattern",
+  "title": "Legacy single-hop and variable-length relationship operators must share the same Vec<u32> type_ids shape",
+  "category": "correctness",
+  "description": "Operator::Expand always carried type_ids: Vec<u32> (empty = match all, populated = OR'd membership), but the sibling Operator::VariableLengthPath carried type_id: Option<u32>. The planner built the full Vec<u32> from parsed relationship types for both, then narrowed it for VariableLengthPath via type_ids.first().copied(), silently discarding every type but the first. [:KNOWS|FOLLOWS*1..3] traversed only :KNOWS. The bug was invisible to single-type variable-length queries because the Option<u32> round-trip is lossless for n == 1; only n >= 2 named types exposed it. Fix: retype VariableLengthPath's field to type_ids: Vec<u32>, drop the narrowing, and thread the slice straight into find_relationships (which already implements 'empty = match all').",
+  "example": "// BEFORE\nOperator::VariableLengthPath { type_id: Option<u32>, .. }\nlet type_id = type_ids.first().copied(); // drops every type but #0\n\n// AFTER\nOperator::VariableLengthPath { type_ids: Vec<u32>, .. }\noperators.push(Operator::VariableLengthPath { type_ids: type_ids.clone(), .. });\n\npub(in crate::executor) fn execute_variable_length_path(\n    &self,\n    context: &mut ExecutionContext,\n    type_ids: &[u32], // was Option<u32>\n    ..\n) -> Result<()> {\n    let neighbors = self.find_relationships(current_node, type_ids, direction, None)?;",
+  "whenToUse": "When two operators/functions in the same execution layer model the same concept with different representations for the same field (Vec<T> vs Option<T>/single T), treat the divergence itself as a defect to investigate even if all existing tests pass. Grep every construction and consumption site of the narrower type; confirm the narrowing point (.first(), unwrap_or_default(), etc.) isn't silently dropping data the wider sibling keeps. Retype to match the sibling's exact convention (same 'empty = match all' semantics) so tests can assert parity between the two operators directly.",
+  "whenNotToUse": "Don't force a Vec<T> shape onto genuinely single-valued fields without auditing the grammar first. Independent call sites with their own separate, pre-existing single-type limitation (e.g. shortestPath()/allShortestPaths() deriving type_id from rel.types.first().cloned() in fn_graph.rs) are a different, unrelated bug class — don't conflate them with a Vec-typed sibling mismatch or widen the fix's scope to cover them.",
+  "createdAt": "2026-07-22T00:00:00.000Z",
+  "tags": [
+    "cypher",
+    "executor",
+    "planner",
+    "relationship-traversal",
+    "variable-length-path",
+    "quantified-path-pattern"
+  ],
+  "source": "manual"
+}

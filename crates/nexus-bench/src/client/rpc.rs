@@ -23,9 +23,8 @@
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::time::Duration;
 
-use nexus_protocol::rpc::PUSH_ID;
-use nexus_protocol::rpc::codec::{read_response, write_request};
-use nexus_protocol::rpc::types::{NexusValue, Request};
+use thunder::wire::{read_response, write_request};
+use thunder::{PUSH_ID, Request, Value as NexusValue};
 use tokio::io::BufReader;
 use tokio::net::TcpStream;
 use tokio::runtime::Handle;
@@ -207,7 +206,7 @@ async fn send_and_recv(
         write_request(stream.get_mut(), req)
             .await
             .map_err(|e| ClientError::Transport(format!("write: {e}")))?;
-        let resp = read_response(stream)
+        let (resp, _) = read_response(stream)
             .await
             .map_err(|e| ClientError::Transport(format!("read: {e}")))?;
         if req.id != 0 && resp.id != req.id {
@@ -295,7 +294,7 @@ fn nexus_to_json(value: NexusValue) -> Result<serde_json::Value, ClientError> {
                 ClientError::BadResponse("non-finite Float cannot be represented in JSON".into())
             }),
         NexusValue::Str(s) => Ok(serde_json::Value::String(s)),
-        NexusValue::Bytes(b) => String::from_utf8(b)
+        NexusValue::Bytes(b) => String::from_utf8(b.to_vec())
             .map(serde_json::Value::String)
             .map_err(|_| ClientError::BadResponse("Bytes value must be valid UTF-8".into())),
         NexusValue::Array(items) => items

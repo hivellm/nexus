@@ -55,6 +55,18 @@ impl Executor {
         // Example: MATCH (a), (b) -> a has N rows, b has M rows -> Result N*M rows
         if !context.variables.is_empty() {
             self.apply_cartesian_product(context, variable, nodes)?;
+            // `apply_cartesian_product` has ALIGNED every array variable into
+            // columns of the same product length (index `i` = one output row).
+            // Falling through to the shared `materialize_rows_from_variables`
+            // below would hit its `needs_cartesian_product` branch and RE-cross
+            // these already-aligned columns into `N^k` rows (a two-pattern
+            // `MATCH` over an 8-node label with 6 driving rows explodes 384
+            // aligned rows to 384^3 ≈ 56.6M ≈ 13 GB, freezing the host). Zip the
+            // aligned columns directly instead.
+            // (phase0_fix-materialize-recrosses-aligned-columns)
+            handled_cross_product = true;
+            let rows = self.materialize_aligned_rows(context);
+            self.update_result_set_from_rows(context, &rows);
         } else if !context.result_set.rows.is_empty() {
             // CRITICAL FIX for UNWIND...MATCH: Handle case where there are existing
             // rows from UNWIND but no variables yet. We need to cross-product the
@@ -111,7 +123,7 @@ impl Executor {
 
         // Only materialize and update if we didn't already handle cross-product above
         if !handled_cross_product {
-            let rows = self.materialize_rows_from_variables(context);
+            let rows = self.materialize_rows_from_variables(context)?;
             self.update_result_set_from_rows(context, &rows);
         }
         Ok(())
@@ -288,7 +300,7 @@ impl Executor {
                 None
             };
             let policy = operators::create::ast_conflict_policy_to_storage(*conflict_policy);
-            let existing_rows = self.materialize_rows_from_variables(&context);
+            let existing_rows = self.materialize_rows_from_variables(&context)?;
             if existing_rows.is_empty() {
                 // CREATE standalone - create nodes and relationships directly
                 let (mut created_node_ids, mut created_rel_ids) = self
@@ -445,12 +457,13 @@ impl Executor {
             // DEBUG: Print each operator as it executes
             let op_name = match operator {
                 Operator::NodeByLabel { variable, .. } => format!("NodeByLabel({})", variable),
-                Operator::Filter { predicate } => {
+                Operator::Filter { predicate, .. } => {
                     format!("Filter({})", predicate.chars().take(40).collect::<String>())
                 }
                 Operator::OptionalFilter {
                     predicate,
                     optional_vars,
+                    ..
                 } => {
                     format!(
                         "OptionalFilter({}, vars={:?})",
@@ -479,15 +492,80 @@ impl Executor {
                     label_id,
                     key_id,
                     value,
+                    key_expression,
                     variable,
                 } => {
-                    // Read-side index seek: only nodes whose indexed property
-                    // equals `value` seed the scan (O(matches)), instead of a
-                    // full label scan. Residual `Filter` operators still run
-                    // for full correctness. The downstream seeding (cartesian
-                    // product / UNWIND cross-product / materialize) is shared
-                    // with NodeByLabel via `seed_scan_main_loop`.
-                    let nodes = self.execute_node_index_seek(*label_id, *key_id, value)?;
+                    if let Some(expr) = key_expression {
+                        // Correlated seek: the key is row-local (e.g. `r.s`
+                        // from `UNWIND $rows AS r MATCH (a:P {id: r.s})`).
+                        // Seek per driving row instead of scanning the
+                        // label and cross-joining — see
+                        // `phase0_fix-correlated-predicate-index-seek` §3.
+                        self.execute_correlated_index_seek(
+                            &mut context,
+                            *label_id,
+                            *key_id,
+                            expr,
+                            variable,
+                        )?;
+                    } else {
+                        // Read-side index seek: only nodes whose indexed
+                        // property equals `value` seed the scan
+                        // (O(matches)), instead of a full label scan.
+                        // Residual `Filter` operators still run for full
+                        // correctness. The downstream seeding (cartesian
+                        // product / UNWIND cross-product / materialize) is
+                        // shared with NodeByLabel via `seed_scan_main_loop`.
+                        let nodes = self.execute_node_index_seek(*label_id, *key_id, value)?;
+                        self.seed_scan_main_loop(&mut context, variable, nodes)?;
+                    }
+                }
+                Operator::NodeIndexRangeSeek {
+                    label_id,
+                    key_id,
+                    op,
+                    value,
+                    variable,
+                } => {
+                    // Read-side range seek on a single-property B-tree index;
+                    // residual Filter operators still run for full correctness.
+                    let nodes =
+                        self.execute_node_index_range_seek(*label_id, *key_id, *op, value)?;
+                    self.seed_scan_main_loop(&mut context, variable, nodes)?;
+                }
+                Operator::NodeIndexInSeek {
+                    label_id,
+                    key_id,
+                    values,
+                    variable,
+                } => {
+                    // Read-side `IN`-list seek: a union of point lookups on the
+                    // single-property B-tree index, seeded exactly like the
+                    // other scans.
+                    let nodes = self.execute_node_index_in_seek(*label_id, *key_id, values)?;
+                    self.seed_scan_main_loop(&mut context, variable, nodes)?;
+                }
+                Operator::NodeIndexPrefixSeek {
+                    label_id,
+                    key_id,
+                    prefix,
+                    variable,
+                } => {
+                    // Read-side `STARTS WITH` seek: the contiguous prefix run
+                    // of the single-property B-tree index.
+                    let nodes = self.execute_node_index_prefix_seek(*label_id, *key_id, prefix)?;
+                    self.seed_scan_main_loop(&mut context, variable, nodes)?;
+                }
+                Operator::NodeIndexParamSeek {
+                    label_id,
+                    key_id,
+                    parameter,
+                    variable,
+                } => {
+                    // Read-side `$parameter` equality seek: the key comes from
+                    // the query envelope, so no driving rows are required.
+                    let nodes = self
+                        .execute_node_index_param_seek(&context, *label_id, *key_id, parameter)?;
                     self.seed_scan_main_loop(&mut context, variable, nodes)?;
                 }
                 Operator::AllNodesScan { variable } => {
@@ -500,17 +578,26 @@ impl Executor {
                     } else {
                         context.set_variable(variable, Value::Array(nodes));
                     }
-                    let rows = self.materialize_rows_from_variables(&context);
+                    let rows = self.materialize_rows_from_variables(&context)?;
                     self.update_result_set_from_rows(&mut context, &rows);
                 }
-                Operator::Filter { predicate } => {
-                    self.execute_filter(&mut context, predicate)?;
+                Operator::Filter {
+                    predicate,
+                    predicate_ast,
+                } => {
+                    self.execute_filter(&mut context, predicate, predicate_ast.as_deref())?;
                 }
                 Operator::OptionalFilter {
                     predicate,
+                    predicate_ast,
                     optional_vars,
                 } => {
-                    self.execute_optional_filter(&mut context, predicate, optional_vars)?;
+                    self.execute_optional_filter(
+                        &mut context,
+                        predicate,
+                        predicate_ast.as_deref(),
+                        optional_vars,
+                    )?;
                 }
                 Operator::Expand {
                     type_ids,
@@ -561,6 +648,9 @@ impl Executor {
                 }
                 Operator::Limit { count } => {
                     self.execute_limit(&mut context, *count)?;
+                }
+                Operator::Skip { count } => {
+                    self.execute_skip(&mut context, *count)?;
                 }
                 Operator::Sort { columns, ascending } => {
                     self.execute_sort(&mut context, columns, ascending)?;
@@ -641,15 +731,9 @@ impl Executor {
                         );
 
                         // Check if rows contain node variables (not just aggregation results)
-                        let has_node_variables = rows.iter().any(|row| {
-                            row.values().any(|v| {
-                                if let serde_json::Value::Object(obj) = v {
-                                    obj.contains_key("_nexus_id") && !obj.contains_key("type")
-                                } else {
-                                    false
-                                }
-                            })
-                        });
+                        let has_node_variables = rows
+                            .iter()
+                            .any(|row| row.values().any(|v| crate::executor::is_node_value(v)));
 
                         tracing::trace!(
                             "CREATE operator: has_node_variables={}",
@@ -681,14 +765,14 @@ impl Executor {
                             tracing::trace!(
                                 "CREATE operator: result_set.rows has no node variables, materializing from variables"
                             );
-                            self.materialize_rows_from_variables(&context)
+                            self.materialize_rows_from_variables(&context)?
                         }
                     } else {
                         // No rows in result_set - materialize from variables
                         tracing::trace!(
                             "CREATE operator: result_set.rows is empty, materializing from variables"
                         );
-                        let materialized = self.materialize_rows_from_variables(&context);
+                        let materialized = self.materialize_rows_from_variables(&context)?;
                         tracing::trace!(
                             "CREATE operator: materialized {} rows from variables",
                             materialized.len()
@@ -751,7 +835,7 @@ impl Executor {
                     self.execute_unwind(&mut context, expression, variable)?;
                 }
                 Operator::VariableLengthPath {
-                    type_id,
+                    type_ids,
                     direction,
                     source_var,
                     target_var,
@@ -761,7 +845,7 @@ impl Executor {
                 } => {
                     self.execute_variable_length_path(
                         &mut context,
-                        *type_id,
+                        type_ids,
                         *direction,
                         source_var,
                         target_var,
@@ -1301,6 +1385,9 @@ impl Executor {
         if let Some(pi) = self.property_index() {
             planner = planner.with_property_index(pi);
         }
+        if let Some(ci) = self.composite_btree() {
+            planner = planner.with_composite_index(ci);
+        }
 
         let mut operators = planner.plan_query(ast)?;
 
@@ -1341,6 +1428,7 @@ impl Executor {
                     if let Some(where_clause) = &match_clause.where_clause {
                         operators.push(Operator::Filter {
                             predicate: self.expression_to_string(&where_clause.expression)?,
+                            predicate_ast: Some(Box::new(where_clause.expression.clone())),
                         });
                     }
                 }
@@ -1373,6 +1461,7 @@ impl Executor {
                 parser::Clause::Where(where_clause) => {
                     operators.push(Operator::Filter {
                         predicate: self.expression_to_string(&where_clause.expression)?,
+                        predicate_ast: Some(Box::new(where_clause.expression.clone())),
                     });
                 }
                 parser::Clause::Return(return_clause) => {
@@ -1418,28 +1507,22 @@ impl Default for Executor {
     /// Every call allocates its own `RecordStore`, `Catalog`,
     /// `LabelIndex`, and `KnnIndex`, so concurrent tests cannot see
     /// each other's nodes / relationships. The temp directory holding
-    /// the record store is deliberately leaked via
-    /// `TempDir::keep()` — test processes are short-lived and the leak
-    /// is bounded by the number of `default()` calls, but the record
-    /// store file descriptor stays valid for the whole process so
-    /// concurrent readers of the same `Executor` clone still work.
+    /// the record store is created via [`RecordStore::new_temporary`],
+    /// which attaches a reference-counted cleanup guard to the store:
+    /// the directory is removed once the last clone of the store (and
+    /// therefore the last live memory-mapped handle) is dropped, so
+    /// concurrent readers of the same `Executor` clone keep working
+    /// exactly as before, but the directory no longer accumulates on
+    /// disk once every clone goes away.
     ///
-    /// Before `phase3_remove-test-shared-state` this function returned
-    /// a `RecordStore` clone drawn from a process-wide `SHARED_STORE`
-    /// guarded by a `Once`. Every caller observed the same store, so
-    /// any test that created nodes polluted every other test. The
-    /// current implementation gives each caller its own isolated
-    /// state — tests that previously relied (even accidentally) on
-    /// cross-test state will need to be updated.
+    /// Historically this function returned a `RecordStore` clone drawn
+    /// from a single process-wide shared store. Every caller observed
+    /// the same store, so any test that created nodes polluted every
+    /// other test. The current implementation gives each caller its own
+    /// isolated state — tests that previously relied (even
+    /// accidentally) on cross-test state will need to be updated.
     fn default() -> Self {
-        let temp_dir = tempfile::tempdir().expect("Failed to create temp directory");
-        // `keep()` consumes the `TempDir` and returns the PathBuf,
-        // suppressing the destructor that would otherwise remove the
-        // directory when the binding goes out of scope. Equivalent in
-        // effect to the previous `mem::forget(temp_dir)` but uses the
-        // idiomatic API.
-        let path = temp_dir.keep();
-        let store = RecordStore::new(&path).expect("Failed to create record store");
+        let store = RecordStore::new_temporary().expect("Failed to create temporary record store");
         let catalog = Catalog::default();
         let label_index = LabelIndex::default();
         let knn_index = KnnIndex::new_default(crate::index::DEFAULT_VECTORIZER_DIMENSION)

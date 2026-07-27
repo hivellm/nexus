@@ -5,10 +5,84 @@ use axum::extract::{Extension, Path, Query, State};
 use axum::http::StatusCode;
 use axum::response::Json;
 use nexus_core::auth::middleware::AuthContext;
-use nexus_core::auth::{Permission, User, verify_password};
+use nexus_core::auth::{
+    Permission, PermissionSet, User, hash_password, needs_rehash, verify_dummy_password,
+    verify_password,
+};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::Arc;
+
+/// phase0_fix-auth-management-authorization — authorization guards for the
+/// `/auth/*` management surface.
+///
+/// The auth middleware only *authenticates*; none of the management handlers
+/// used to check the CALLER's own permissions, so any authenticated key
+/// (even a Read-only one) could create users, manage keys, or mint an
+/// Admin/Super key. These helpers add the missing authorization.
+///
+/// Semantics: enforcement applies only when a caller identity is present
+/// (`Some(auth_context)` — i.e. authentication is enabled and the request was
+/// authenticated). When authentication is disabled the request carries no
+/// identity (`None`) and there are no keys/permissions to escalate; that
+/// surface is hardened separately by `phase0_fix-server-secure-defaults-and-dos`.
+pub(crate) fn forbidden(message: &str) -> (StatusCode, Json<serde_json::Value>) {
+    (
+        StatusCode::FORBIDDEN,
+        Json(serde_json::json!({ "error": message })),
+    )
+}
+
+/// Whether the caller holds `Admin` (or `Super`, which includes it).
+///
+/// Semantics mirror [`require_admin`]: `None` (auth disabled, no identity)
+/// is treated as allowed — bootstrap must not be blocked here. `Some(ctx)`
+/// is allowed only if the caller's permission set includes `Admin`.
+///
+/// Shared with the Cypher DDL path (`CREATE/DROP DATABASE`), which needs a
+/// boolean rather than the `(StatusCode, Json)` tuple `require_admin`
+/// returns.
+pub(crate) fn caller_is_admin(auth_context: &Option<AuthContext>) -> bool {
+    match auth_context {
+        Some(ctx) => PermissionSet::from_vec(ctx.api_key.permissions.clone())
+            .has_permission(&Permission::Admin),
+        None => true,
+    }
+}
+
+/// Require the calling key to hold `Admin` (or `Super`, which includes it)
+/// before it may manage users, keys, or permissions.
+pub(crate) fn require_admin(
+    auth_context: &Option<AuthContext>,
+) -> Result<(), (StatusCode, Json<serde_json::Value>)> {
+    if !caller_is_admin(auth_context) {
+        return Err(forbidden(
+            "Insufficient permissions: this operation requires Admin or Super",
+        ));
+    }
+    Ok(())
+}
+
+/// Forbid vertical privilege escalation: the calling key may not create or
+/// grant a permission it does not itself hold (its permission set must be a
+/// superset of `requested`). Prevents e.g. an Admin key minting a Super key.
+/// Combined with [`require_admin`] at each call site.
+fn require_permission_superset(
+    auth_context: &Option<AuthContext>,
+    requested: &[Permission],
+) -> Result<(), (StatusCode, Json<serde_json::Value>)> {
+    if let Some(ctx) = auth_context {
+        let caller = PermissionSet::from_vec(ctx.api_key.permissions.clone());
+        for perm in requested {
+            if !caller.has_permission(perm) {
+                return Err(forbidden(&format!(
+                    "Insufficient permissions: the calling key cannot grant '{perm}' — it does not hold that permission"
+                )));
+            }
+        }
+    }
+    Ok(())
+}
 
 /// Request to create a user
 #[derive(Debug, Deserialize)]
@@ -58,9 +132,13 @@ pub struct UsersResponse {
 /// POST /auth/users
 pub async fn create_user(
     State(server): State<Arc<NexusServer>>,
-    Extension(auth_context): Extension<Option<AuthContext>>,
+    auth_context: Option<Extension<Option<AuthContext>>>,
     Json(request): Json<CreateUserRequest>,
 ) -> Result<Json<UserResponse>, (StatusCode, Json<serde_json::Value>)> {
+    let auth_context = auth_context.and_then(|e| e.0);
+    // Authorization: only an Admin/Super caller may create users.
+    require_admin(&auth_context)?;
+
     let mut rbac = server.rbac.write().await;
 
     // Check if user already exists
@@ -76,7 +154,7 @@ pub async fn create_user(
 
     let user_id = uuid::Uuid::new_v4().to_string();
     let user = if let Some(password) = &request.password {
-        // Hash password with SHA512
+        // Hash password with Argon2id (per-user random salt)
         let password_hash = nexus_core::auth::hash_password(password);
 
         let mut user =
@@ -142,7 +220,14 @@ pub async fn create_user(
 
 /// List all users
 /// GET /auth/users
-pub async fn list_users(State(server): State<Arc<NexusServer>>) -> Json<UsersResponse> {
+pub async fn list_users(
+    State(server): State<Arc<NexusServer>>,
+    auth_context: Option<Extension<Option<AuthContext>>>,
+) -> Result<Json<UsersResponse>, (StatusCode, Json<serde_json::Value>)> {
+    let auth_context = auth_context.and_then(|e| e.0);
+    // Authorization: enumerating users is Admin/Super only.
+    require_admin(&auth_context)?;
+
     let rbac = server.rbac.read().await;
     let users = rbac.list_users();
 
@@ -168,17 +253,22 @@ pub async fn list_users(State(server): State<Arc<NexusServer>>) -> Json<UsersRes
         })
         .collect();
 
-    Json(UsersResponse {
+    Ok(Json(UsersResponse {
         users: user_responses,
-    })
+    }))
 }
 
 /// Get a specific user
 /// GET /auth/users/{username}
 pub async fn get_user(
     State(server): State<Arc<NexusServer>>,
+    auth_context: Option<Extension<Option<AuthContext>>>,
     Path(username): Path<String>,
 ) -> Result<Json<UserResponse>, (StatusCode, Json<serde_json::Value>)> {
+    let auth_context = auth_context.and_then(|e| e.0);
+    // Authorization: reading a user record is Admin/Super only.
+    require_admin(&auth_context)?;
+
     let rbac = server.rbac.read().await;
     let users = rbac.list_users();
 
@@ -215,9 +305,13 @@ pub async fn get_user(
 /// DELETE /auth/users/{username}
 pub async fn delete_user(
     State(server): State<Arc<NexusServer>>,
-    Extension(auth_context): Extension<Option<AuthContext>>,
+    auth_context: Option<Extension<Option<AuthContext>>>,
     Path(username): Path<String>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
+    let auth_context = auth_context.and_then(|e| e.0);
+    // Authorization: only an Admin/Super caller may delete users.
+    require_admin(&auth_context)?;
+
     let mut rbac = server.rbac.write().await;
     let users_list = rbac.list_users();
 
@@ -286,10 +380,14 @@ pub async fn delete_user(
 /// POST /auth/users/{username}/permissions
 pub async fn grant_permissions(
     State(server): State<Arc<NexusServer>>,
-    Extension(auth_context): Extension<Option<AuthContext>>,
+    auth_context: Option<Extension<Option<AuthContext>>>,
     Path(username): Path<String>,
     Json(request): Json<UpdatePermissionsRequest>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
+    let auth_context = auth_context.and_then(|e| e.0);
+    // Authorization: only an Admin/Super caller may grant permissions.
+    require_admin(&auth_context)?;
+
     let mut rbac = server.rbac.write().await;
 
     // Parse permissions
@@ -317,6 +415,10 @@ pub async fn grant_permissions(
             ));
         }
     };
+
+    // No vertical escalation: the caller may not grant a permission it does
+    // not itself hold (e.g. an Admin key cannot grant Super).
+    require_permission_superset(&auth_context, &permissions)?;
 
     let users_list = rbac.list_users();
     let target_user = users_list.iter().find(|u| u.username == username);
@@ -391,9 +493,13 @@ pub async fn grant_permissions(
 /// DELETE /auth/users/{username}/permissions/{permission}
 pub async fn revoke_permission(
     State(server): State<Arc<NexusServer>>,
-    Extension(auth_context): Extension<Option<AuthContext>>,
+    auth_context: Option<Extension<Option<AuthContext>>>,
     Path((username, permission_str)): Path<(String, String)>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
+    let auth_context = auth_context.and_then(|e| e.0);
+    // Authorization: only an Admin/Super caller may revoke permissions.
+    require_admin(&auth_context)?;
+
     let mut rbac = server.rbac.write().await;
 
     let permission = match permission_str.to_uppercase().as_str() {
@@ -483,8 +589,13 @@ pub async fn revoke_permission(
 /// GET /auth/users/{username}/permissions
 pub async fn get_user_permissions(
     State(server): State<Arc<NexusServer>>,
+    auth_context: Option<Extension<Option<AuthContext>>>,
     Path(username): Path<String>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
+    let auth_context = auth_context.and_then(|e| e.0);
+    // Authorization: reading a user's permissions is Admin/Super only.
+    require_admin(&auth_context)?;
+
     let rbac = server.rbac.read().await;
     let users = rbac.list_users();
 
@@ -556,119 +667,43 @@ pub struct RefreshTokenResponse {
     pub expires_in: u64,
 }
 
+/// Build the generic "invalid credentials" response shared by every
+/// credential-related login failure (unknown username, wrong password).
+/// Returning identical content for both cases is half of the L2 fix — the
+/// other half is equalizing their timing, see [`login`].
+fn invalid_credentials() -> (StatusCode, Json<serde_json::Value>) {
+    (
+        StatusCode::UNAUTHORIZED,
+        Json(serde_json::json!({
+            "error": "Invalid username or password"
+        })),
+    )
+}
+
 /// Authenticate user and return JWT tokens
 /// POST /auth/login
 pub async fn login(
     State(server): State<Arc<NexusServer>>,
     Json(request): Json<LoginRequest>,
 ) -> Result<Json<LoginResponse>, (StatusCode, Json<serde_json::Value>)> {
-    // Find user by username
-    let rbac = server.rbac.read().await;
-    let users = rbac.list_users();
-    let user = users.iter().find(|u| u.username == request.username);
+    // Find user by username. Snapshot as an owned value: the read lock is
+    // released here so a legacy-hash rehash below (which needs a write
+    // lock) never has to upgrade a held lock.
+    let user: Option<User> = {
+        let rbac = server.rbac.read().await;
+        rbac.list_users()
+            .into_iter()
+            .find(|u| u.username == request.username)
+            .cloned()
+    };
 
-    if let Some(user) = user {
-        // Check if user is active
-        if !user.is_active {
-            // Log authentication failure - user disabled
-            let _ = server
-                .audit_logger
-                .log_authentication_failed(
-                    Some(request.username.clone()),
-                    "User account is disabled".to_string(),
-                    None,
-                )
-                .await;
+    let Some(user) = user else {
+        // L2: equalize timing against the "known username, wrong password"
+        // branch below by paying the same Argon2 cost here — otherwise the
+        // response latency alone would tell a caller whether `username`
+        // exists, without ever needing the right password.
+        verify_dummy_password(&request.password);
 
-            return Err((
-                StatusCode::FORBIDDEN,
-                Json(serde_json::json!({
-                    "error": "User account is disabled"
-                })),
-            ));
-        }
-
-        // Verify password
-        if let Some(ref password_hash) = user.password_hash {
-            if !verify_password(&request.password, password_hash) {
-                // Log authentication failure - invalid password
-                let _ = server
-                    .audit_logger
-                    .log_authentication_failed(
-                        Some(request.username.clone()),
-                        "Invalid password".to_string(),
-                        None,
-                    )
-                    .await;
-
-                return Err((
-                    StatusCode::UNAUTHORIZED,
-                    Json(serde_json::json!({
-                        "error": "Invalid username or password"
-                    })),
-                ));
-            }
-        } else {
-            // User has no password set
-            // Log authentication failure - no password set
-            let _ = server
-                .audit_logger
-                .log_authentication_failed(
-                    Some(request.username.clone()),
-                    "User has no password set".to_string(),
-                    None,
-                )
-                .await;
-
-            return Err((
-                StatusCode::UNAUTHORIZED,
-                Json(serde_json::json!({
-                    "error": "User has no password set"
-                })),
-            ));
-        }
-
-        // Generate JWT tokens
-        match server.jwt_manager.generate_token_pair(user) {
-            Ok(token_pair) => {
-                // Log successful authentication
-                let _ = server
-                    .audit_logger
-                    .log_authentication_success(
-                        user.username.clone(),
-                        user.id.clone(),
-                        "password".to_string(),
-                    )
-                    .await;
-
-                Ok(Json(LoginResponse {
-                    access_token: token_pair.access_token,
-                    refresh_token: token_pair.refresh_token,
-                    token_type: token_pair.token_type,
-                    expires_in: token_pair.expires_in,
-                }))
-            }
-            Err(e) => {
-                // Log authentication failure - token generation error
-                let _ = server
-                    .audit_logger
-                    .log_authentication_failed(
-                        Some(request.username.clone()),
-                        format!("Failed to generate tokens: {}", e),
-                        None,
-                    )
-                    .await;
-
-                Err((
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    Json(serde_json::json!({
-                        "error": format!("Failed to generate tokens: {}", e)
-                    })),
-                ))
-            }
-        }
-    } else {
-        // Log authentication failure - user not found
         let _ = server
             .audit_logger
             .log_authentication_failed(
@@ -678,12 +713,113 @@ pub async fn login(
             )
             .await;
 
-        Err((
+        return Err(invalid_credentials());
+    };
+
+    // Check if user is active
+    if !user.is_active {
+        let _ = server
+            .audit_logger
+            .log_authentication_failed(
+                Some(request.username.clone()),
+                "User account is disabled".to_string(),
+                None,
+            )
+            .await;
+
+        return Err((
+            StatusCode::FORBIDDEN,
+            Json(serde_json::json!({
+                "error": "User account is disabled"
+            })),
+        ));
+    }
+
+    // Verify password
+    let Some(ref password_hash) = user.password_hash else {
+        let _ = server
+            .audit_logger
+            .log_authentication_failed(
+                Some(request.username.clone()),
+                "User has no password set".to_string(),
+                None,
+            )
+            .await;
+
+        return Err((
             StatusCode::UNAUTHORIZED,
             Json(serde_json::json!({
-                "error": "Invalid username or password"
+                "error": "User has no password set"
             })),
-        ))
+        ));
+    };
+
+    if !verify_password(&request.password, password_hash) {
+        let _ = server
+            .audit_logger
+            .log_authentication_failed(
+                Some(request.username.clone()),
+                "Invalid password".to_string(),
+                None,
+            )
+            .await;
+
+        return Err(invalid_credentials());
+    }
+
+    // H3 migration: the plaintext password just verified correctly against
+    // a legacy (pre-Argon2id) hash — now that it is known, transparently
+    // upgrade the stored hash to Argon2id so this account is off the
+    // legacy scheme after this login. New/already-migrated accounts hash
+    // to an Argon2id PHC string and skip this branch entirely.
+    if needs_rehash(password_hash) {
+        let rehashed = hash_password(&request.password);
+        let mut rbac = server.rbac.write().await;
+        if let Some(stored) = rbac.get_user_mut(&user.id) {
+            stored.password_hash = Some(rehashed);
+        }
+    }
+
+    // Generate JWT tokens
+    match server.jwt_manager.generate_token_pair(&user) {
+        Ok(token_pair) => {
+            // Log successful authentication
+            let _ = server
+                .audit_logger
+                .log_authentication_success(
+                    user.username.clone(),
+                    user.id.clone(),
+                    "password".to_string(),
+                )
+                .await;
+
+            Ok(Json(LoginResponse {
+                access_token: token_pair.access_token,
+                refresh_token: token_pair.refresh_token,
+                token_type: token_pair.token_type,
+                expires_in: token_pair.expires_in,
+            }))
+        }
+        Err(e) => {
+            // L2: the real error is logged server-side only (audit log);
+            // the client gets a generic message so JWT-manager internals
+            // are never leaked over the wire.
+            let _ = server
+                .audit_logger
+                .log_authentication_failed(
+                    Some(request.username.clone()),
+                    format!("Failed to generate tokens: {}", e),
+                    None,
+                )
+                .await;
+
+            Err((
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({
+                    "error": "Login failed"
+                })),
+            ))
+        }
     }
 }
 
@@ -867,10 +1003,14 @@ fn parse_duration(duration_str: &str) -> Result<chrono::DateTime<chrono::Utc>, S
 /// POST /auth/keys
 pub async fn create_api_key(
     State(server): State<Arc<NexusServer>>,
-    Extension(auth_context): Extension<Option<AuthContext>>,
+    auth_context: Option<Extension<Option<AuthContext>>>,
     Json(request): Json<CreateApiKeyRequest>,
 ) -> Result<Json<CreateApiKeyResponse>, (StatusCode, Json<serde_json::Value>)> {
     use nexus_core::auth::Permission;
+
+    let auth_context = auth_context.and_then(|e| e.0);
+    // Authorization: only an Admin/Super caller may mint keys.
+    require_admin(&auth_context)?;
 
     // Parse permissions
     let permissions: Result<Vec<Permission>, _> = request
@@ -908,6 +1048,10 @@ pub async fn create_api_key(
             ));
         }
     };
+
+    // No vertical escalation: the caller may not mint a key more privileged
+    // than itself (e.g. an Admin key cannot create a Super key).
+    require_permission_superset(&auth_context, &permissions)?;
 
     // Resolve user_id if username is provided
     let user_id = if let Some(ref username) = request.username {
@@ -1018,8 +1162,13 @@ pub async fn create_api_key(
 /// GET /auth/keys?username=...
 pub async fn list_api_keys(
     State(server): State<Arc<NexusServer>>,
+    auth_context: Option<Extension<Option<AuthContext>>>,
     Query(params): Query<HashMap<String, String>>,
 ) -> Result<Json<ApiKeysResponse>, (StatusCode, Json<serde_json::Value>)> {
+    let auth_context = auth_context.and_then(|e| e.0);
+    // Authorization: enumerating API keys is Admin/Super only.
+    require_admin(&auth_context)?;
+
     let auth_manager = &server.auth_manager;
 
     let api_keys = if let Some(username) = params.get("username") {
@@ -1070,8 +1219,13 @@ pub async fn list_api_keys(
 /// GET /auth/keys/{key_id}
 pub async fn get_api_key(
     State(server): State<Arc<NexusServer>>,
+    auth_context: Option<Extension<Option<AuthContext>>>,
     Path(key_id): Path<String>,
 ) -> Result<Json<ApiKeyResponse>, (StatusCode, Json<serde_json::Value>)> {
+    let auth_context = auth_context.and_then(|e| e.0);
+    // Authorization: reading an API key record is Admin/Super only.
+    require_admin(&auth_context)?;
+
     let auth_manager = &server.auth_manager;
 
     if let Some(api_key) = auth_manager.get_api_key(&key_id) {
@@ -1102,9 +1256,13 @@ pub async fn get_api_key(
 /// DELETE /auth/keys/{key_id}
 pub async fn delete_api_key(
     State(server): State<Arc<NexusServer>>,
-    Extension(auth_context): Extension<Option<AuthContext>>,
+    auth_context: Option<Extension<Option<AuthContext>>>,
     Path(key_id): Path<String>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
+    let auth_context = auth_context.and_then(|e| e.0);
+    // Authorization: only an Admin/Super caller may delete API keys.
+    require_admin(&auth_context)?;
+
     let auth_manager = &server.auth_manager;
 
     if auth_manager.delete_api_key(&key_id) {
@@ -1147,10 +1305,14 @@ pub async fn delete_api_key(
 /// POST /auth/keys/{key_id}/revoke
 pub async fn revoke_api_key(
     State(server): State<Arc<NexusServer>>,
-    Extension(auth_context): Extension<Option<AuthContext>>,
+    auth_context: Option<Extension<Option<AuthContext>>>,
     Path(key_id): Path<String>,
     Json(request): Json<RevokeApiKeyRequest>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
+    let auth_context = auth_context.and_then(|e| e.0);
+    // Authorization: only an Admin/Super caller may revoke API keys.
+    require_admin(&auth_context)?;
+
     let auth_manager = &server.auth_manager;
 
     match auth_manager.revoke_api_key(&key_id, request.reason.clone()) {

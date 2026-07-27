@@ -6,6 +6,13 @@ use crate::{Error, Result};
 use serde_json::Value;
 use std::collections::HashMap;
 
+/// Hard cap on the `length` argument accepted by `lpad`/`rpad`. Bounds
+/// the resulting `String` to a few MB at worst (each `char` is at most
+/// 4 UTF-8 bytes: `1_000_000 * 4 = 4 MB`), well clear of any reasonable
+/// per-value budget, while comfortably covering legitimate padding use
+/// (report columns, fixed-width IDs, etc).
+const MAX_PAD_LEN: usize = 1_000_000;
+
 impl Executor {
     /// Evaluate string, regex, and bytes built-in functions.
     ///
@@ -551,6 +558,12 @@ impl Executor {
                         .max(0) as usize,
                     _ => return Some(Ok(Value::Null)),
                 };
+                if target_len > MAX_PAD_LEN {
+                    return Some(Err(Error::CypherExecution(format!(
+                        "ERR_PAD_TOO_LARGE: {name}(..., {target_len}) exceeds the \
+                         {MAX_PAD_LEN}-character cap; narrow the target length"
+                    ))));
+                }
                 let pad = match pad_val {
                     Value::String(p) if !p.is_empty() => p,
                     Value::String(_) => " ".to_string(),
@@ -561,9 +574,15 @@ impl Executor {
                     return Some(Ok(Value::String(chars[..target_len].iter().collect())));
                 }
                 let need = target_len - chars.len();
+                // Running char-count accumulator instead of re-scanning the
+                // growing `padding` buffer with `.chars().count()` on every
+                // iteration (was O(n^2) in `need`).
+                let pad_char_count = pad.chars().count();
                 let mut padding = String::new();
-                while padding.chars().count() < need {
+                let mut padding_char_count = 0usize;
+                while padding_char_count < need {
                     padding.push_str(&pad);
+                    padding_char_count += pad_char_count;
                 }
                 let padding: String = padding.chars().take(need).collect();
                 let result = if name == "lpad" {
@@ -661,6 +680,9 @@ impl Executor {
                 match arg {
                     Value::Null => Some(Ok(Value::Null)),
                     Value::String(s) => {
+                        if let Err(e) = super::super::bytes::reject_oversize_base64(&s) {
+                            return Some(Err(e));
+                        }
                         use base64::Engine as _;
                         use base64::engine::general_purpose::STANDARD as B64;
                         let raw = match B64.decode(&s) {

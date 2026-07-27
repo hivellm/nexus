@@ -168,3 +168,19 @@ async fn transport_mode_parses_canonical_tokens() {
     assert_eq!(TransportMode::parse(""), None);
     assert_eq!(TransportMode::parse("grpc"), None);
 }
+
+/// Config pin (§2.2): the SDK and server both depend on `thunder-rpc`, so
+/// the wire itself cannot drift — but pin the literals the server's
+/// `nexus_thunder_config()` test also asserts, so a Thunder major bump that
+/// changed the wire would trip this test and the server's together rather
+/// than silently desyncing the two ends.
+#[test]
+fn thunder_wire_config_pins_match_server_literals() {
+    // Reserved PUSH id + 64 MiB frame cap are wire-v1 invariants shared
+    // with the server's RPC listener config.
+    assert_eq!(thunder::PUSH_ID, u32::MAX);
+    assert_eq!(thunder::wire::DEFAULT_MAX_FRAME_BYTES, 64 * 1024 * 1024);
+    // Default RPC port matches the server's DEFAULT_RPC_PORT (15475).
+    let client = NexusClient::new("nexus://127.0.0.1:15475").expect("client");
+    assert!(client.is_rpc());
+}

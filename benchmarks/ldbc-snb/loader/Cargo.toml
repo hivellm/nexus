@@ -1,0 +1,26 @@
+[package]
+name = "ldbc-snb-loader"
+description = "Streams LDBC SNB Interactive CSVs into Nexus via POST /ingest"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lib]
+name = "ldbc_snb_loader"
+path = "src/lib.rs"
+
+[[bin]]
+name = "ldbc-load"
+path = "src/main.rs"
+
+[[bin]]
+name = "neo4j-load"
+path = "src/bin/neo4j_load.rs"
+
+[dependencies]
+anyhow.workspace = true
+csv.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+ureq.workspace = true

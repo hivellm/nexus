@@ -24,7 +24,7 @@ pub fn nexus_to_json(value: NexusValue) -> Result<serde_json::Value, String> {
             Ok(serde_json::Value::Number(n))
         }
         NexusValue::Bytes(b) => {
-            let s = String::from_utf8(b)
+            let s = String::from_utf8(b.to_vec())
                 .map_err(|_| "ERR Bytes value must be valid UTF-8".to_string())?;
             Ok(serde_json::Value::String(s))
         }
@@ -125,7 +125,7 @@ mod tests {
             serde_json::json!("abc")
         );
         assert_eq!(
-            nexus_to_json(NexusValue::Bytes(b"xyz".to_vec())).unwrap(),
+            nexus_to_json(NexusValue::bytes(b"xyz".to_vec())).unwrap(),
             serde_json::json!("xyz")
         );
     }
@@ -140,7 +140,7 @@ mod tests {
 
     #[test]
     fn nexus_to_json_bytes_not_utf8_rejected() {
-        let err = nexus_to_json(NexusValue::Bytes(vec![0xFF, 0xFE])).unwrap_err();
+        let err = nexus_to_json(NexusValue::bytes(vec![0xFF, 0xFE])).unwrap_err();
         assert!(err.contains("UTF-8"));
     }
 

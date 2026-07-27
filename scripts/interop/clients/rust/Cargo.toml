@@ -1,0 +1,17 @@
+[package]
+name = "nexus-interop-rust"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[dependencies]
+nexus-graph-sdk = { path = "../../../../sdks/rust" }
+# Same version the SDK itself pins (see sdks/rust/Cargo.toml) so the two
+# resolve to one shared instance of the wire's `Value` type instead of two
+# incompatible copies.
+thunder-rpc = { version = "0.2.2", default-features = false, features = ["tokio"] }
+tokio = { version = "1", features = ["full"] }
+
+# Detach from the Nexus workspace root — this cell is a standalone crate with
+# its own lockfile, not a member of the main `cargo` build.
+[workspace]

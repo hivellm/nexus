@@ -969,6 +969,67 @@ mod tests {
         }
     }
 
+    // ── phase0_fix-delete-node-dangling-relationships (C-2b) ──────────
+
+    /// `DELETE /data/nodes` calls `Engine::delete_node` directly with no
+    /// DETACH concept of its own — it must refuse to delete a node that
+    /// still has a live INCOMING relationship purely because the engine
+    /// now guards this, not because this handler adds its own check.
+    #[tokio::test]
+    async fn test_delete_node_refuses_incoming_only_node_with_live_relationship() {
+        let server = build_test_server();
+
+        let a = create_node(
+            State(Arc::clone(&server)),
+            Json(CreateNodeRequest {
+                labels: vec!["Person".to_string()],
+                properties: HashMap::new(),
+                external_id: None,
+                conflict_policy: None,
+            }),
+        )
+        .await
+        .node_id;
+        let b = create_node(
+            State(Arc::clone(&server)),
+            Json(CreateNodeRequest {
+                labels: vec!["Person".to_string()],
+                properties: HashMap::new(),
+                external_id: None,
+                conflict_policy: None,
+            }),
+        )
+        .await
+        .node_id;
+
+        // b is only ever a relationship TARGET (incoming-only) — this is
+        // exactly the case `first_rel_ptr` alone cannot see.
+        server
+            .engine
+            .write()
+            .await
+            .create_relationship(a, b, "KNOWS".to_string(), json!({}))
+            .expect("create relationship");
+
+        let response = delete_node(
+            State(Arc::clone(&server)),
+            Json(DeleteNodeRequest { node_id: b }),
+        )
+        .await;
+        assert!(
+            response.error.is_some(),
+            "expected delete of an incoming-only node with a live relationship to be refused"
+        );
+
+        // b must still be readable (not hard-deleted) after the refusal.
+        let mut query = HashMap::new();
+        query.insert("id".to_string(), b.to_string());
+        let got = get_node_by_id(State(server), axum::extract::Query(query))
+            .await
+            .0;
+        assert!(got.node.is_some(), "node must survive a refused delete");
+    }
+
     // ── Real round-trips using the shared engine ──────────────────────
 
     #[tokio::test]

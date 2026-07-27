@@ -12,6 +12,51 @@ Ensures durability via the "write-ahead" principle:
 3. **Then** modify data pages in memory (cached)
 4. Periodically checkpoint (flush pages + truncate WAL)
 
+#### Async WAL flush barrier contract (`phase0_fix-async-wal-flush-durability`)
+
+The async WAL writer (`AsyncWalWriter`) batches appends on a background writer
+thread. Its `flush()` is a **synchronous durability barrier**: it blocks until
+the writer thread has actually fsynced every entry that was `append()`-ed
+*before* `flush()` was called, and returns the real outcome (an error if the
+underlying batch flush failed after exhausting retries) — not merely that the
+flush *request* was enqueued. Mechanism: `WalCommand::Flush` carries a single-use
+completion channel; `flush()` blocks on it until the writer thread signals. mpsc
+FIFO ordering guarantees all prior appends are in the flushed batch. A `flush()`
+racing `shutdown()` is honored on the writer's drain path, and can never hang —
+if the writer thread has already exited, `flush()` returns an error instead of
+blocking forever. `Engine::flush_async_wal` is a pass-through with the same
+(now-real) guarantee.
+
+#### Emergency-save real-frame replay (`phase0_fix-wal-durability-gaps` #4)
+
+When a live batch flush exhausts its retries, the writer persists the batch to
+an **emergency side-WAL** rather than losing it. `Wal::emergency_save` writes a
+`wal-emergency-<ns>.log` file **in the main WAL's own directory** (never a
+CWD-relative `data/` path) using the **real frame format** — it opens a second
+`Wal` at that path, mirroring the main WAL's cipher, and calls `append()`, so
+the frames are byte-identical (and, when the main WAL is encrypted, are **not**
+written in plaintext). On the next boot, `recover_external_ids_from_wal` scans
+the WAL directory for `wal-emergency-*.log` via `Wal::recover_emergency`,
+decodes them with the WAL's cipher, and merges their entries **after** the main
+WAL's; because external-id replay uses idempotent `put_if_absent`, relative
+order is irrelevant. Once the recovered entries are durably applied to the
+catalog, `Wal::clear_emergency` removes the side-files so they are not replayed
+on every subsequent boot. (Replaced the previous fallback, which wrote an
+unparseable `[len][bincode]` frame that `recover()` never read back.)
+
+#### Directory durability on file creation (`phase0_fix-wal-durability-gaps` #5)
+
+POSIX does not guarantee a newly created file's directory entry is durable until
+the **containing directory** is fsynced — an `fsync` on the file covers its data,
+not the directory metadata that makes it discoverable after a crash. After
+creating (and fsyncing) a new file, `Wal::new`, `Wal::with_cipher`, and
+`RecordStore::new` therefore call `storage::fs::sync_parent_dir`, which fsyncs
+the parent directory. It is **best-effort** — a failure is logged, not
+propagated, so a filesystem/platform without directory fsync cannot turn a
+missing-durability-guarantee into a hard startup failure — and a **no-op on
+non-Unix platforms** (e.g. Windows), where std exposes no directory fsync and
+directory-metadata durability is the OS/filesystem's responsibility.
+
 ### MVCC (Multi-Version Concurrency Control)
 
 Provides snapshot isolation without locking readers:
@@ -228,6 +273,30 @@ impl Wal {
 }
 ```
 
+#### Torn-tail recovery contract (`phase0_fix-wal-torn-tail-recovery`)
+
+Appends are un-fsynced until the async batch flush, so a crash mid-append is
+**expected** to leave a partial trailing frame on disk. `recover()` treats such
+crash residue as a normal end-of-log, not corruption:
+
+- **EOF mid-frame** — a body read (`type`/`len`/`payload`/`crc`) hits
+  `UnexpectedEof`, or a frame's declared length would run past EOF: the torn
+  trailing frame is **truncated away** and the successfully-parsed prefix is
+  returned. (The declared-length check also caps the recovery-time allocation,
+  so a torn length field can't request a huge buffer.)
+- **CRC mismatch on the last frame** — indistinguishable from a payload torn
+  mid-write: treated the same way (truncate + return the prefix).
+- **CRC mismatch on a non-trailing frame** — a bad frame *followed by more
+  bytes* is genuine mid-file corruption and remains a **hard error**; only the
+  trailing case is ambiguous with crash residue.
+
+All three frame formats (v1, v2 plaintext, v3 encrypted) now agree on this
+"truncated tail" definition. Because the torn residue is truncated, recovery is
+**idempotent** — a second boot returns the same prefix and does not re-scan or
+re-fail the torn bytes, so a single crash can no longer poison every future
+boot. `recover()`'s signature is unchanged (`Result<Vec<WalEntry>>`); only which
+cases return `Ok(prefix)` vs `Err` changed.
+
 ### Checkpoint
 
 ```rust
@@ -263,6 +332,33 @@ impl Wal {
     }
 }
 ```
+
+#### Production checkpoint / compaction (`phase0_fix-wal-checkpoint-truncate-production`)
+
+`checkpoint`/`truncate` are actually driven in production by the async WAL
+writer thread: after a successful batch flush, if the WAL has grown past
+`AsyncWalConfig::checkpoint_size_bytes` (default 64 MiB, far below
+`health_check`'s 1 GiB hard gate), the thread writes a checkpoint marker and
+**`truncate()`s the log to empty**. This keeps the WAL bounded, keeps every
+boot's recovery scan proportional to recent writes (not lifetime writes), and
+means the 1 GiB availability cliff is never reached under normal operation.
+
+**A full truncate is safe here — the WAL is redundant for recovery.** The only
+production consumer of the WAL, `recover_external_ids_from_wal`, replays only
+`ExternalIdAssigned` entries via idempotent `put_if_absent`, and an external-id
+is committed to the LMDB catalog **before** its WAL entry is appended (write
+order: `catalog.put_if_absent → LMDB commit → WAL append`). So the LMDB catalog
+is always at least as current as the WAL; node/relationship state lives in the
+fsynced record stores, not the WAL. Truncating the WAL therefore loses nothing
+recoverable, which is why no checkpoint *marker offset* or resume-from-checkpoint
+machinery is needed — a truncated WAL is simply a shorter log that recovery
+reads normally (and the LMDB is authoritative for the entries it dropped).
+
+Because the compaction runs on the async writer thread (which owns the live
+`Wal`), it is coordinated with the batch flush by construction — the batch it
+just flushed is durable before the truncate. The rare synchronous fallback path
+(no async writer configured) does not compact; production always runs the async
+writer.
 
 ## MVCC Implementation
 
@@ -301,6 +397,38 @@ impl Drop for Snapshot<'_> {
     }
 }
 ```
+
+### Lock-free read isolation: relationship-insert publish ordering (`phase0_fix-relationship-publish-ordering`)
+
+Record stores have **no per-record version**. The server's read path clones
+the executor under a brief lock, releases it, and runs the query holding **no**
+engine lock (`spawn_blocking`), reading the same shared `nodes_mmap` /
+`rels_mmap` a concurrent writer may be mutating. With no version to fall back
+on, the **order** in which a write publishes its individual record writes *is*
+the isolation contract.
+
+For relationship insert, `RecordStore::create_relationship`
+(`storage/record_store_ops.rs`) MUST publish **record before pointer**:
+
+1. Build the complete `RelationshipRecord`, with `next_src_ptr` / `next_dst_ptr`
+   set to the previously-captured old list heads.
+2. `write_rel(rel_id, &record)` — write the fully-initialized record to
+   `rels_mmap` **first**.
+3. `fence(Release)`.
+4. `write_node(from, &source_node)` — publish the source node's new
+   `first_rel_ptr` (which links the record in) **last**.
+
+The reader side (`executor/operators/path.rs::find_relationships`) issues a
+`fence(Acquire)` before reading a node's `first_rel_ptr`, so the two fences form
+a happens-before edge: a reader that observes the new `first_rel_ptr` is
+guaranteed to observe the fully-initialized record it points to.
+
+Publishing the pointer **before** the record (the historical bug) left a window
+in which a reader could `read_rel` an allocated-but-unwritten (all-zero) slot —
+`is_deleted()` reads `false` on it — and either surface a phantom edge to node 0
+or terminate its adjacency walk on the `next_src_ptr == 0` end-of-chain
+sentinel, silently dropping every older edge in that node's list. Any future
+edit to `create_relationship` must preserve the record-before-pointer order.
 
 ### Version Visibility
 

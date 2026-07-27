@@ -69,8 +69,8 @@ impl Executor {
                         // Property not found - try to reload node if it has _nexus_id
                         if let Some(node_id) = Self::extract_entity_id(entity) {
                             // Check if it's a node (not a relationship) by checking if it doesn't have "type" property
-                            if let Value::Object(obj) = entity {
-                                if !obj.contains_key("type") {
+                            if let Value::Object(_) = entity {
+                                if !crate::executor::is_relationship_value(entity) {
                                     // It's a node - reload it to recover properties via reverse_index
                                     if let Ok(reloaded_node) = self.read_node_as_value(node_id) {
                                         // Use reloaded node for property access

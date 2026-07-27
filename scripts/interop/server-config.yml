@@ -1,0 +1,38 @@
+# Server configuration for the Thunder interop matrix.
+#
+# One build, one config, every SDK measured against it. Checked in rather than
+# generated so a red cell can be reproduced exactly.
+#
+# Ports are deliberately off the defaults (15474/15475/15476) so running the
+# matrix neither uses nor disturbs a developer's own server.
+#
+# Authentication is ON and REQUIRED: the pre-Thunder RPC transports never sent
+# `AUTH` at all, so an open server would have hidden that bug in every SDK
+# instead of surfacing it in the `auth` column.
+#
+# NOTE ON PARSING: nexus-server reads only `server.addr` (+ storage) from a
+# config.yml; the RPC / RESP3 / auth knobs are env-var driven
+# (NEXUS_RPC_ADDR, NEXUS_RESP3_*, NEXUS_ROOT_PASSWORD, ...). run-matrix.py
+# treats THIS file as the single source of truth: it reads the ports and
+# credentials below and boots nexus-server with the matching env vars. Keep
+# the two in sync by editing here only.
+
+server:
+  addr: "127.0.0.1:25474"
+
+rpc:
+  enabled: true
+  addr: "127.0.0.1:25475"
+  require_auth: true
+
+resp3:
+  enabled: true
+  addr: "127.0.0.1:25476"
+  require_auth: true
+
+auth:
+  enabled: true
+  require_auth: true
+  root:
+    username: "root"
+    password: "interop-secret"

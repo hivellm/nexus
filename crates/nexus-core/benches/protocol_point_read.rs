@@ -19,9 +19,9 @@
 //! described in the phase3 task against a live `nexus-server`.
 
 use criterion::{BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
-use nexus_protocol::rpc::codec::{decode_frame, encode_frame};
-use nexus_protocol::rpc::types::{NexusValue, Request, Response};
 use std::hint::black_box;
+use thunder::wire::{decode_frame, encode_frame};
+use thunder::{Request, Response, Value as NexusValue};
 
 /// Build a realistic point-read request frame: `CYPHER "MATCH (n:Person
 /// {id: $id}) RETURN n" {"id": <n>}`.

@@ -69,6 +69,38 @@ fn push_with_row_cap<T>(vec: &mut Vec<T>, row: T, op: &'static str) -> Result<()
     Ok(())
 }
 
+/// Reserved key marking a row value as a RELATIONSHIP.
+///
+/// Written by exactly one place — `read_relationship_as_value_with_store` —
+/// and never derived from user data, which is the whole point. Distinguishing
+/// a relationship from a node by `obj.contains_key("type")` is WRONG: `type`
+/// is an ordinary property name (a node may carry `type: "company"`), so that
+/// heuristic misreads such nodes as relationships and the row-deduplication
+/// key built from the misidentification collapses unrelated rows into one —
+/// silently, and non-deterministically, since the misidentified object is
+/// picked by `HashMap` iteration order.
+pub(crate) const REL_TYPE_MARKER: &str = "_nexus_rel_type";
+
+/// Whether `value` is a relationship row value.
+///
+/// Structural: keyed on [`REL_TYPE_MARKER`], which no property map can
+/// contain by accident. Every "node or relationship?" decision in the
+/// executor must go through this or [`is_node_value`] — a bare
+/// `contains_key("type")` is a bug (see [`REL_TYPE_MARKER`]).
+pub(crate) fn is_relationship_value(value: &serde_json::Value) -> bool {
+    matches!(value, serde_json::Value::Object(obj) if obj.contains_key(REL_TYPE_MARKER))
+}
+
+/// Whether `value` is a node row value: it carries an entity id and is not a
+/// relationship.
+pub(crate) fn is_node_value(value: &serde_json::Value) -> bool {
+    matches!(
+        value,
+        serde_json::Value::Object(obj)
+            if obj.contains_key("_nexus_id") && !obj.contains_key(REL_TYPE_MARKER)
+    )
+}
+
 use crate::{Error, Result};
 
 #[cfg(test)]
@@ -143,7 +175,7 @@ mod tests {
         );
 
         executor
-            .execute_filter(&mut context, "n.age > 25")
+            .execute_filter(&mut context, "n.age > 25", None)
             .expect("filter should succeed");
 
         assert_eq!(context.result_set.rows.len(), 1);

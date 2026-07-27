@@ -13,8 +13,9 @@ use dashmap::DashMap;
 use heed::types::*;
 use heed::{Database, Env, EnvOpenOptions, byteorder};
 use parking_lot::RwLock;
-use std::path::Path;
-use std::sync::Arc;
+use std::collections::HashMap;
+use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex, Weak};
 
 /// Default LMDB `map_size` for a catalog environment — 100 MiB.
 ///
@@ -33,6 +34,97 @@ use std::sync::Arc;
 /// [`Catalog::with_map_size`] / [`Catalog::with_isolated_path`].
 pub const CATALOG_MMAP_INITIAL_SIZE: usize = 100 * 1024 * 1024;
 
+/// Process-global registry of the [`EnvCloser`] guarding each opened LMDB path,
+/// so multiple `Catalog`s opened on the SAME path (the shared per-process test
+/// catalog pool reopens one directory many times) share ONE closer and
+/// `prepare_for_closing` is called exactly once for that path.
+static ENV_CLOSERS: Mutex<Option<HashMap<PathBuf, Weak<EnvCloser>>>> = Mutex::new(None);
+
+/// Forces heed to actually close an LMDB environment when the last `Catalog`
+/// sharing it is dropped.
+///
+/// heed retains a copy of every opened `Env` in its internal global
+/// `OPENED_ENV` registry; a plain `Env`/`Arc<Env>` drop only decrements a
+/// reference the registry keeps alive, so `mdb_env_close` never runs and the
+/// `data.mdb` / `lock.mdb` OS handles stay open for the entire process. On
+/// Windows those open handles block removing the environment's directory, so
+/// every test `TempDir` holding a catalog (~5 MiB each) leaked permanently.
+/// `Env::prepare_for_closing` drops the registry's retained copy so the env
+/// closes once the remaining handles drop — this guard calls it exactly once,
+/// when the final `Arc<EnvCloser>` (shared across all `Catalog` clones of a
+/// path) is dropped. Correct for production shutdown too, not only tests.
+struct EnvCloser {
+    /// One owned `Env` handle kept alive so the registry entry still exists
+    /// when `prepare_for_closing` runs in `drop`.
+    env: Env,
+    /// heed's canonicalised path for this env (registry key).
+    path: PathBuf,
+}
+
+impl Drop for EnvCloser {
+    fn drop(&mut self) {
+        if let Ok(mut guard) = ENV_CLOSERS.lock() {
+            if let Some(map) = guard.as_mut() {
+                map.remove(&self.path);
+            }
+        }
+        // Hand heed an owned `Env` clone so it drops the copy it retains in
+        // `OPENED_ENV`; the real `mdb_env_close` (releasing the file handles)
+        // fires when the last remaining `Env` handle drops right after. Safe to
+        // call once — the registry guarantees a single `EnvCloser` per path, so
+        // the "env not registered" panic branch is unreachable here.
+        let _ = self.env.clone().prepare_for_closing();
+    }
+}
+
+/// Return the shared [`EnvCloser`] for `env`'s path, creating it on first open.
+fn env_closer_for(env: &Env) -> Arc<EnvCloser> {
+    let path = env.path().to_path_buf();
+    let mut guard = ENV_CLOSERS
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let map = guard.get_or_insert_with(HashMap::new);
+    if let Some(existing) = map.get(&path).and_then(Weak::upgrade) {
+        return existing;
+    }
+    let closer = Arc::new(EnvCloser {
+        env: env.clone(),
+        path: path.clone(),
+    });
+    map.insert(path, Arc::downgrade(&closer));
+    closer
+}
+
+/// Process-lived strong references to the shared per-process TEST catalog
+/// env's [`EnvCloser`], keeping it open for the whole test process.
+///
+/// In test mode every `Catalog::new` opens the SINGLE shared directory from
+/// the `TEST_CATALOG_DIR` pool (see [`Catalog::with_map_size`]). The only
+/// long-lived reference to that env's closer is a `Weak` in the global
+/// [`ENV_CLOSERS`] registry — each `Catalog` keeps its own strong
+/// `Arc<EnvCloser>` but drops it when the `Catalog` drops — so the shared
+/// env's strong count can transiently reach zero between two tests: one
+/// test's `Catalog` drop then runs
+/// `prepare_for_closing` while another test is mid-`open`, and the opener sees
+/// `Database(DatabaseClosing)`. That race is the intermittent, load-dependent
+/// flake seen across the `cypher`, `executor` and `regression` test binaries.
+/// Pinning one strong reference here holds the shared env open until process
+/// exit, so it is opened exactly once and never closed mid-run. Isolated
+/// catalogs (`with_isolated_path`) never enter this pool and keep their normal
+/// close-on-drop behaviour, so per-test `TempDir` cleanup is unaffected.
+static PINNED_TEST_ENVS: Mutex<Vec<Arc<EnvCloser>>> = Mutex::new(Vec::new());
+
+/// Pin the shared per-process test catalog env open for the whole process.
+/// Idempotent: there is a single shared env per process, so one strong
+/// reference is enough — further calls are no-ops.
+fn pin_shared_test_env(closer: &Arc<EnvCloser>) {
+    if let Ok(mut pinned) = PINNED_TEST_ENVS.lock() {
+        if pinned.is_empty() {
+            pinned.push(Arc::clone(closer));
+        }
+    }
+}
+
 /// Catalog for managing label/type/key mappings.
 ///
 /// Thread-safe via `RwLock` for concurrent reads.
@@ -46,6 +138,12 @@ pub struct Catalog {
     /// `read_txn` helpers.  No non-test code outside this module should
     /// access this field directly.
     pub(crate) env: Arc<Env>,
+
+    /// Guard that closes the LMDB environment (releasing its OS file handles)
+    /// when the last `Catalog` sharing this path is dropped — see [`EnvCloser`].
+    /// Shared across clones so the close fires exactly once, at the true end of
+    /// the env's lifetime.
+    env_closer: Arc<EnvCloser>,
 
     /// Label name → ID mapping.
     pub(super) label_name_to_id: Database<Str, U32<byteorder::NativeEndian>>,
@@ -83,6 +181,15 @@ pub struct Catalog {
     /// the typed property index so indexes survive a restart (issue #11).
     pub(super) property_index_db: Database<SerdeBincode<(u32, u32)>, SerdeBincode<()>>,
 
+    /// Durable vector (KNN) index definitions: index name → `(label,
+    /// property)`. A dedicated database (not a key-prefixed slice of
+    /// `property_index_db`) so it can never collide with a property-index
+    /// key, which is keyed by `(label_id, key_id)` u32 pairs rather than
+    /// strings. Reloaded at startup to re-register the single active
+    /// vector index and repopulate the HNSW graph so it survives a
+    /// restart (phase20_knn-write-path-wiring §3.2).
+    pub(super) vector_index_db: Database<Str, SerdeBincode<(String, String)>>,
+
     /// Next label ID counter (cached for performance).
     pub(super) next_label_id: Arc<RwLock<u32>>,
     /// Next type ID counter.
@@ -105,6 +212,15 @@ pub struct Catalog {
 
     /// External node id index (forward + reverse LMDB sub-databases).
     pub(super) external_id_index: Arc<ExternalIdIndex>,
+
+    /// Self-cleaning guard for a catalog created via [`Self::default`],
+    /// which roots its LMDB environment in a fresh temp directory. Shared
+    /// across clones (`Arc`) so the directory is removed once the last
+    /// `Catalog` clone sharing it drops — after `env_closer` (declared
+    /// earlier, so it drops first) has run `prepare_for_closing` and
+    /// released the LMDB file handles. `None` for persistent catalogs,
+    /// which must never auto-delete a caller-provided directory.
+    _cleanup: Option<Arc<crate::storage::TempDirGuard>>,
 }
 
 impl Catalog {
@@ -223,7 +339,17 @@ impl Catalog {
             path.as_ref().to_path_buf()
         };
 
-        Self::open_at_path(&actual_path, actual_map_size)
+        let catalog = Self::open_at_path(&actual_path, actual_map_size)?;
+
+        // In test mode `actual_path` is always the single shared per-process
+        // catalog dir. Pin its env open for the whole process so one test's
+        // `Catalog` drop can never close it while another test is mid-open —
+        // the `Database(DatabaseClosing)` flake. See [`PINNED_TEST_ENVS`].
+        if is_test {
+            pin_shared_test_env(&catalog.env_closer);
+        }
+
+        Ok(catalog)
     }
 
     /// Create a catalog with an isolated path (bypasses test sharing).
@@ -240,7 +366,7 @@ impl Catalog {
         // Create directory if it doesn't exist.
         std::fs::create_dir_all(actual_path)?;
 
-        // Open LMDB environment with specified map size, 15 databases.
+        // Open LMDB environment with specified map size, 16 databases.
         // `max_readers` is bumped from LMDB's 126 default because the
         // test binary holds a single shared catalog env across ~2000
         // parallel tests, each opening at least one read txn per
@@ -297,6 +423,11 @@ impl Catalog {
         // Create the durable property-index definition store (issue #11).
         let property_index_db: Database<SerdeBincode<(u32, u32)>, SerdeBincode<()>> =
             env.create_database(&mut wtxn, Some("property_indexes"))?;
+
+        // Create the durable vector-index definition store
+        // (phase20_knn-write-path-wiring §3.2).
+        let vector_index_db: Database<Str, SerdeBincode<(String, String)>> =
+            env.create_database(&mut wtxn, Some("vector_indexes"))?;
 
         // Create external-id index sub-databases (forward + reverse).
         let external_id_index = ExternalIdIndex::open(&env, &mut wtxn)?;
@@ -391,8 +522,11 @@ impl Catalog {
                 constraint_id_to_key,
             )?;
 
+        let env_closer = env_closer_for(&env);
+
         Ok(Self {
             env,
+            env_closer,
             label_name_to_id,
             label_id_to_name,
             type_name_to_id,
@@ -405,6 +539,7 @@ impl Catalog {
             udf_db,
             procedure_db,
             property_index_db,
+            vector_index_db,
             next_label_id: Arc::new(RwLock::new(next_label_id)),
             next_type_id: Arc::new(RwLock::new(next_type_id)),
             next_key_id: Arc::new(RwLock::new(next_key_id)),
@@ -415,6 +550,7 @@ impl Catalog {
             key_name_cache,
             key_id_cache,
             external_id_index: Arc::new(external_id_index),
+            _cleanup: None,
         })
     }
 
@@ -493,8 +629,17 @@ impl Default for Catalog {
     /// [`Catalog::with_isolated_path`] directly instead of going
     /// through `default`.
     fn default() -> Self {
-        let temp_dir = tempfile::tempdir().expect("Failed to create default-catalog temp dir");
+        let temp_dir = tempfile::Builder::new()
+            .prefix("nexus-catalog-")
+            .tempdir()
+            .expect("Failed to create default-catalog temp dir");
+        // `keep()` disarms `TempDir`'s own destructor; ownership of removal
+        // transfers to the `TempDirGuard` attached below, which removes this
+        // SAME directory once the last clone of this catalog drops — instead
+        // of leaking it on disk for the process lifetime (the historical bug).
         let path = temp_dir.keep();
-        Self::new(&path).expect("Failed to create default catalog")
+        let mut catalog = Self::new(&path).expect("Failed to create default catalog");
+        catalog._cleanup = Some(Arc::new(crate::storage::TempDirGuard::new(path)));
+        catalog
     }
 }

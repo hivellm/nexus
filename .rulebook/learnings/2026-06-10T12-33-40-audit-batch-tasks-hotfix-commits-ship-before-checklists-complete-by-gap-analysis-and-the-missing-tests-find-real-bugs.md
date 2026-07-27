@@ -1,0 +1,6 @@
+# Audit-batch tasks: hotfix commits ship before checklists — complete by gap analysis, and the missing tests find real bugs
+**Source**: manual
+**Date**: 2026-06-10
+**Related Task**: phase6_wal-async-backpressure
+**Tags**: audit, testing, tdd, wal, merge, process
+The 2.3.3 audit tasks (#14-#22) had hotfix commits landed before their rulebook checklists were touched. Completing each task = diffing the checklist against the shipped commit. The recurring gaps were: (1) CHANGELOG entries, (2) the specific tests the checklist demanded, (3) one prescribed mechanism deliberately replaced by a simpler/safer one (document the deviation, don't silently skip: #17 sequential-lock-read instead of atomic counter; #19 ordered blocking send instead of sync-append-on-Full which would corrupt WAL ordering). Writing the demanded-but-missing tests was NOT box-ticking — it surfaced three real bugs: the #20 chain-walk off-by-one (duplicate-edge hazard), the #19 async-WAL shutdown drop (1990/2000 entries recovered), and the #14 count(r) returning null (per-variable overwrite kept only the last edge). Lesson: when a fix commit says 'verified by inspection' or a test asserts only the happy path, write the missing assertion first — it is the highest-yield bug finder in an audit batch.

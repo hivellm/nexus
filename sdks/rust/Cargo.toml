@@ -6,7 +6,7 @@
 # module still imports as `nexus_sdk` (see `[lib] name` below)
 # so existing code stays source-compatible.
 name = "nexus-graph-sdk"
-version = "2.5.0"
+version = "3.0.0"
 edition = "2024"
 authors = ["Nexus Contributors"]
 description = "Official Rust SDK for Nexus graph database"
@@ -25,11 +25,12 @@ tokio = { version = "1.40", features = ["full"] }
 
 # Native binary RPC transport (default on `nexus://` endpoints).
 # Both `path` and `version` are required: `cargo publish` picks the
-# version from crates.io and rejects the crate unless every
-# path-dependency also carries a published version specifier. The
-# path is anchored at `../../crates/nexus-protocol` because the
-# workspace crates live under `crates/` since the 2026-04 reshuffle.
-nexus-protocol = { path = "../../crates/nexus-protocol", version = "2.5.0" }
+# phase10 — the RPC wire is now the shared Thunder registry crate, so the
+# SDK depends ONLY on published crates (no path dependency on the internal
+# `nexus-protocol`), which keeps `nexus-graph-sdk` publishable on its own.
+# Explicit registry version (this SDK is a standalone crate, not a member of
+# the Nexus workspace, so it cannot inherit `workspace = true`).
+thunder-rpc = { version = "0.2.2", default-features = false, features = ["tokio"] }
 
 # Async trait for the Transport interface
 async-trait = "0.1"

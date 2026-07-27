@@ -70,7 +70,10 @@ Root user can be configured via:
 ### Default Values
 
 - **Username**: `root`
-- **Password**: `root` (⚠️ **CHANGE IN PRODUCTION**)
+- **Password**: `root` — ⚠️ **rejected at boot when authentication is enabled.** The
+  server refuses to start with the literal default password; set
+  `NEXUS_ROOT_PASSWORD` (or `NEXUS_ROOT_PASSWORD_FILE`) to a strong secret. See
+  [Secure Defaults & Server Hardening](#secure-defaults--server-hardening).
 - **Enabled**: `true`
 - **Disable After Setup**: `false`
 
@@ -85,6 +88,32 @@ When `NEXUS_DISABLE_ROOT_AFTER_SETUP=true`, the root user is automatically disab
 - Grant/revoke all permissions
 - Manage API keys
 - Cannot be deleted (only disabled)
+
+## Secure Defaults & Server Hardening
+
+The server enforces a set of secure-by-default behaviors (`phase0_fix-server-secure-defaults-and-dos`). Three are intentional breaking changes so an accidentally wide-open deployment fails loudly rather than silently serving the internet.
+
+### Boot-time preflight (hard failures)
+
+`Config::security_preflight()` runs at startup and refuses to boot in an unsafe posture:
+
+- **Public bind with auth disabled.** If the bind address is non-loopback (e.g. `NEXUS_ADDR=0.0.0.0:15474`) and `auth.enabled == false`, startup fails. The default bind is `127.0.0.1:15474` (loopback), so local/dev startup is unaffected. To deliberately serve an open instance, set `NEXUS_AUTH_REQUIRED_FOR_PUBLIC=false`.
+- **Default root password.** With auth enabled and the root account active, booting with the literal default `root` password is refused — set `NEXUS_ROOT_PASSWORD` / `NEXUS_ROOT_PASSWORD_FILE`.
+
+### Request-pipeline hardening
+
+| Concern | Default | Override |
+|---|---|---|
+| **Rate limiting** (per client IP) | on | `RateLimitConfig` budgets |
+| **Request timeout** | 30 s (HTTP layer) | `NEXUS_REQUEST_TIMEOUT_SECS` |
+| **`/stats` auth** (when auth enabled) | required | `NEXUS_REQUIRE_STATS_AUTH=false` to keep public |
+| **CORS** | no cross-origin access (empty allow-list) | `NEXUS_CORS_ALLOWED_ORIGINS` (comma-separated origins) |
+
+Notes:
+
+- The request timeout bounds the HTTP/slow-connection vector (a slowloris client or a request that never completes); CPU-bound cancellation of an already-executing Cypher statement is a separate follow-up.
+- `/health`, `/`, and `/openapi.json` remain public by default (`/health` gating is available via `NEXUS_REQUIRE_HEALTH_AUTH`). In cluster mode every path — including `/health` and `/stats` — requires authentication.
+- CORS defaults to granting no cross-origin access; a browser on another origin cannot read API responses unless its origin is on the allow-list.
 
 ## User Management
 
@@ -147,6 +176,30 @@ Authorization: Bearer <token>
 DROP USER alice
 ```
 
+### Password Storage
+
+User passwords are hashed with **Argon2id** and a fresh, random per-password
+salt (the same KDF and default configuration already used for API-key
+hashing). Two users with the same password never produce the same stored
+hash, and verification is constant-time by construction — never a plain
+`==` comparison on hash bytes.
+
+- **Migration from the legacy scheme.** Accounts created before this
+  hardening stored an unsalted, single-round SHA-512 hex digest. Login
+  (`POST /auth/login`) still accepts a legacy hash for verification, then
+  transparently rewrites it to a fresh Argon2id hash the moment the correct
+  password is confirmed ("rehash-on-next-login") — no forced password reset
+  is required, and no account is left unable to log in during the
+  migration window.
+- **Login error contract.** `POST /auth/login` never distinguishes "no such
+  user" from "wrong password" in either the response body or response
+  timing: both return the same generic `401 {"error": "Invalid username or
+  password"}`, and the unknown-username path performs an equivalent-cost
+  dummy password verification so it cannot be used to enumerate valid
+  usernames by timing. JWT-generation failures likewise return a generic
+  `500 {"error": "Login failed"}` to the client; the underlying error is
+  recorded server-side in the audit log only.
+
 ### Granting Permissions
 
 **REST API:**
@@ -185,7 +238,17 @@ REVOKE ADMIN FROM alice
 
 ## API Keys
 
-API keys are long-lived credentials for programmatic access. They are hashed using Argon2 before storage.
+API keys are long-lived credentials for programmatic access. They are hashed using Argon2id before storage.
+
+### Key Format and Verification Cost
+
+An issued key has the form `nx_{key_id}_{secret}`, where `key_id` is the
+key's own UUID. Embedding the ID lets `verify_api_key` look the matching
+stored key up directly (O(1)) and run exactly one Argon2 verification per
+request, instead of verifying against every stored key — so authentication
+throughput no longer degrades, and cannot be driven to exhaust CPU, as the
+number of active keys grows. Keys issued before this change (`nx_{secret}`,
+no embedded ID) keep working unchanged via a linear-scan fallback.
 
 ### Creating API Keys
 
@@ -315,6 +378,11 @@ Content-Type: application/json
 }
 ```
 
+Every credential failure — unknown username, wrong password, or a
+JWT-generation error — returns a generic `401`/`500` with a fixed message
+and equalized timing; see [Password Storage](#password-storage) for the
+full error and timing contract.
+
 ### Using JWT Tokens
 
 **Bearer Token:**
@@ -385,11 +453,33 @@ Permissions are automatically checked by the authentication middleware. If a use
 |----------|-------------------|
 | `GET /cypher` (read queries) | READ |
 | `POST /cypher` (write queries) | WRITE |
-| `POST /auth/users` | ADMIN |
-| `DELETE /auth/users/{username}` | ADMIN |
-| `POST /auth/api-keys` | ADMIN |
-| `DELETE /auth/api-keys/{id}` | ADMIN |
-| `POST /auth/users/{username}/permissions` | SUPER |
+| `GET /auth/users`, `GET /auth/users/{username}` | ADMIN |
+| `POST /auth/users`, `DELETE /auth/users/{username}` | ADMIN |
+| `GET /auth/users/{username}/permissions` | ADMIN |
+| `POST /auth/users/{username}/permissions` (grant) | ADMIN + caller ⊇ granted |
+| `DELETE /auth/users/{username}/permissions/{permission}` | ADMIN |
+| `GET /auth/keys`, `GET /auth/keys/{key_id}` | ADMIN |
+| `POST /auth/keys` (create) | ADMIN + caller ⊇ requested |
+| `DELETE /auth/keys/{key_id}`, `POST /auth/keys/{key_id}/revoke` | ADMIN |
+| `POST /auth/login`, `POST /auth/refresh` | none (authentication flow) |
+
+### Authorization contract for `/auth/*` management
+
+Every `/auth/*` management handler enforces **authorization**, not just
+authentication:
+
+- The calling key must hold `ADMIN` (or `SUPER`, which includes it). A
+  `READ`/`WRITE`/etc. key receives `403 FORBIDDEN`.
+- **No vertical escalation.** For key creation (`POST /auth/keys`) and permission
+  grants (`POST /auth/users/{username}/permissions`), the caller's own permission
+  set must be a *superset* of the permissions in the request body. An `ADMIN` key
+  therefore cannot mint or grant `SUPER` — only a `SUPER` key can.
+- The `login` and `refresh_token` flows are intentionally exempt (a user logging
+  in holds no key yet).
+- Enforcement applies whenever a caller identity is present. When authentication
+  is **disabled**, requests carry no identity and this check is a no-op — run the
+  server with authentication enabled (and bound to a non-public interface) to
+  rely on it.
 
 ### Function-level permissions (cluster mode)
 

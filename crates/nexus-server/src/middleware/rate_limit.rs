@@ -18,20 +18,35 @@ use tokio::sync::RwLock;
 /// Rate limiter configuration
 #[derive(Debug, Clone)]
 pub struct RateLimitConfig {
+    /// Master switch. `false` disables rate limiting entirely — every
+    /// request, from every client, bypasses the limiter untouched.
+    /// Configurable via `NEXUS_RATE_LIMIT_ENABLED`.
+    pub enabled: bool,
     /// Maximum requests per window
     pub max_requests: usize,
     /// Time window duration
     pub window_duration: Duration,
     /// Burst capacity (extra tokens)
     pub burst_capacity: usize,
+    /// When `true`, requests from a loopback client IP (127.0.0.1 /
+    /// ::1) bypass the limiter entirely — no token is consumed and no
+    /// `X-RateLimit-*` headers are attached. Mirrors the project's
+    /// existing "auth disabled for localhost" posture and prevents
+    /// local bulk loads (e.g. LDBC ingest) from tripping the limiter
+    /// and being met with a connection reset instead of a clean 429
+    /// (see the body-draining fix in [`rate_limit_middleware`]).
+    /// Configurable via `NEXUS_RATE_LIMIT_EXEMPT_LOOPBACK`.
+    pub exempt_loopback: bool,
 }
 
 impl Default for RateLimitConfig {
     fn default() -> Self {
         Self {
+            enabled: true,
             max_requests: 100,
             window_duration: Duration::from_secs(60),
             burst_capacity: 20,
+            exempt_loopback: true,
         }
     }
 }
@@ -171,13 +186,38 @@ pub enum RateLimitResult {
     },
 }
 
+/// Cap on the number of body bytes drained when a request is rejected
+/// with 429. Mirrors [`crate::config::Config::default`]'s
+/// `max_body_size_bytes` (16 MiB) — large enough to fully drain any
+/// body accepted by `DefaultBodyLimit`, so hyper always sees the
+/// stream reach EOF and keeps the keep-alive connection alive instead
+/// of issuing a TCP RST. `to_bytes` errors past this cap are ignored
+/// (the connection may still be reset for truly oversized bodies, but
+/// that path already independently rejects via `DefaultBodyLimit`).
+const RATE_LIMIT_BODY_DRAIN_CAP_BYTES: usize = 16 * 1024 * 1024;
+
 /// Rate limiting middleware
+///
+/// Bypasses the limiter entirely (no token consumed, no headers set)
+/// when disabled via config, or when the client is loopback and
+/// `exempt_loopback` is set — see [`RateLimitConfig`]. Otherwise, a
+/// request that exhausts its IP's token bucket is rejected with a
+/// clean `429 Too Many Requests` after fully draining the request
+/// body: returning 429 without consuming the body left hyper unable
+/// to keep the connection alive for a large unread body (e.g. an
+/// `/ingest` bulk payload), so it issued a TCP RST that surfaced to
+/// the client mid-send as a connection-reset error instead of a
+/// readable HTTP response.
 pub async fn rate_limit_middleware(
     ConnectInfo(addr): ConnectInfo<SocketAddr>,
     limiter: axum::extract::State<RateLimiter>,
     request: axum::http::Request<axum::body::Body>,
     next: axum::middleware::Next,
 ) -> Response {
+    if !limiter.config.enabled || (limiter.config.exempt_loopback && addr.ip().is_loopback()) {
+        return next.run(request).await;
+    }
+
     let key = addr.ip().to_string();
 
     match limiter.check_rate_limit(&key).await {
@@ -204,6 +244,17 @@ pub async fn rate_limit_middleware(
             response
         }
         RateLimitResult::RateLimited { retry_after } => {
+            // Drain the unread request body before responding. hyper will
+            // not drain a body it never sees consumed; leaving it unread
+            // here caused it to abort the keep-alive connection with a
+            // TCP RST instead of delivering this 429 to the client (the
+            // client would see e.g. WSAECONNABORTED mid-send on Windows).
+            // Errors (body too large, malformed chunk, etc.) are ignored —
+            // best-effort draining, not a correctness requirement: the
+            // response below is returned either way.
+            let (_parts, req_body) = request.into_parts();
+            let _ = axum::body::to_bytes(req_body, RATE_LIMIT_BODY_DRAIN_CAP_BYTES).await;
+
             let body = serde_json::json!({
                 "error": "Rate limit exceeded",
                 "retry_after_seconds": retry_after.as_secs(),
@@ -264,9 +315,11 @@ mod tests {
     #[tokio::test]
     async fn test_rate_limiter_allows_requests() {
         let config = RateLimitConfig {
+            enabled: true,
             max_requests: 10,
             window_duration: Duration::from_secs(60),
             burst_capacity: 5,
+            exempt_loopback: true,
         };
         let limiter = RateLimiter::with_config(config);
 
@@ -281,9 +334,11 @@ mod tests {
     #[tokio::test]
     async fn test_rate_limiter_blocks_excess() {
         let config = RateLimitConfig {
+            enabled: true,
             max_requests: 2,
             window_duration: Duration::from_secs(60),
             burst_capacity: 0,
+            exempt_loopback: true,
         };
         let limiter = RateLimiter::with_config(config);
 
@@ -318,6 +373,47 @@ mod tests {
         }
     }
 
+    // H2 — exercises the limiter as it is now wired onto the HTTP server:
+    // default config (`RateLimiter::new()`), consumed to exhaustion for one
+    // key, confirming a different key is tracked independently. `oneshot`
+    // cannot supply a real `ConnectInfo<SocketAddr>`, so the middleware
+    // function itself is exercised at the integration level; this unit
+    // test proves the underlying token-bucket accounting the middleware
+    // relies on.
+    #[tokio::test]
+    async fn test_rate_limiter_default_budget_then_independent_key() {
+        let limiter = RateLimiter::new();
+        let config = RateLimitConfig::default();
+        let budget = config.max_requests + config.burst_capacity;
+
+        // Every request within the default budget must be allowed.
+        for _ in 0..budget {
+            match limiter.check_rate_limit("key-a").await {
+                RateLimitResult::Allowed { .. } => {}
+                RateLimitResult::RateLimited { .. } => {
+                    panic!("request within budget must not be rate limited")
+                }
+            }
+        }
+
+        // One more request over budget must be rate limited.
+        match limiter.check_rate_limit("key-a").await {
+            RateLimitResult::RateLimited { .. } => {}
+            RateLimitResult::Allowed { .. } => {
+                panic!("request beyond budget must be rate limited")
+            }
+        }
+
+        // A different key has its own bucket and is unaffected by key-a's
+        // exhaustion.
+        match limiter.check_rate_limit("key-b").await {
+            RateLimitResult::Allowed { .. } => {}
+            RateLimitResult::RateLimited { .. } => {
+                panic!("a different key must not inherit another key's rate limit")
+            }
+        }
+    }
+
     #[tokio::test]
     async fn test_cleanup_removes_old_entries() {
         let limiter = RateLimiter::new();
@@ -336,5 +432,143 @@ mod tests {
             let buckets = limiter.buckets.read().await;
             assert_eq!(buckets.len(), 1);
         }
+    }
+
+    /// Builds a minimal router wired exactly like the production stack:
+    /// `rate_limit_middleware` as a `from_fn_with_state` layer, with the
+    /// per-request client address supplied via axum's `MockConnectInfo`
+    /// (the documented test substitute for
+    /// `into_make_service_with_connect_info`, which only runs over a real
+    /// listener).
+    fn router_with_limiter(limiter: RateLimiter, client_addr: SocketAddr) -> axum::Router {
+        use axum::{Router, extract::connect_info::MockConnectInfo, routing::post};
+
+        Router::new()
+            .route("/", post(|| async { "ok" }))
+            .layer(axum::middleware::from_fn_with_state(
+                limiter,
+                rate_limit_middleware,
+            ))
+            .layer(MockConnectInfo(client_addr))
+    }
+
+    #[tokio::test]
+    async fn loopback_client_is_exempt_from_rate_limit() {
+        use axum::{body::Body, http::Request};
+        use tower::ServiceExt;
+
+        let config = RateLimitConfig {
+            enabled: true,
+            max_requests: 1,
+            window_duration: Duration::from_secs(60),
+            burst_capacity: 0,
+            exempt_loopback: true,
+        };
+        let limiter = RateLimiter::with_config(config);
+        let addr: SocketAddr = "127.0.0.1:44100".parse().unwrap();
+        let app = router_with_limiter(limiter, addr);
+
+        // A one-request budget would 429 on the second call if the
+        // exemption weren't in effect — send well past it.
+        for _ in 0..5 {
+            let response = app
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .method("POST")
+                        .uri("/")
+                        .body(Body::empty())
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::OK);
+        }
+    }
+
+    #[tokio::test]
+    async fn disabled_limiter_bypasses_all_clients() {
+        use axum::{body::Body, http::Request};
+        use tower::ServiceExt;
+
+        let config = RateLimitConfig {
+            enabled: false,
+            max_requests: 1,
+            window_duration: Duration::from_secs(60),
+            burst_capacity: 0,
+            exempt_loopback: false,
+        };
+        let limiter = RateLimiter::with_config(config);
+        // Non-loopback client — only the `enabled` flag should matter here.
+        let addr: SocketAddr = "203.0.113.5:51000".parse().unwrap();
+        let app = router_with_limiter(limiter, addr);
+
+        for _ in 0..5 {
+            let response = app
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .method("POST")
+                        .uri("/")
+                        .body(Body::empty())
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::OK);
+        }
+    }
+
+    #[tokio::test]
+    async fn non_loopback_over_limit_gets_429_with_retry_after() {
+        use axum::{
+            body::Body,
+            http::{Request, header::RETRY_AFTER},
+        };
+        use tower::ServiceExt;
+
+        let config = RateLimitConfig {
+            enabled: true,
+            max_requests: 1,
+            window_duration: Duration::from_secs(60),
+            burst_capacity: 0,
+            exempt_loopback: true,
+        };
+        let limiter = RateLimiter::with_config(config);
+        // Non-loopback, so `exempt_loopback` does not shield this client.
+        let addr: SocketAddr = "203.0.113.9:51555".parse().unwrap();
+        let app = router_with_limiter(limiter, addr);
+
+        // First request consumes the entire one-token budget.
+        let first = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(first.status(), StatusCode::OK);
+
+        // Second request from the same IP is over budget and must be
+        // rejected — with a non-empty body, to exercise the drain-before-429
+        // path instead of the empty-body case above.
+        let second = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/")
+                    .body(Body::from(
+                        "payload that must be drained before the 429 is returned",
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(second.status(), StatusCode::TOO_MANY_REQUESTS);
+        assert!(second.headers().get(RETRY_AFTER).is_some());
     }
 }

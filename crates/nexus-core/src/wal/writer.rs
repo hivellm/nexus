@@ -149,6 +149,10 @@ impl Wal {
         let metadata = file.metadata()?;
         let offset = metadata.len();
 
+        // phase0_fix-wal-durability-gaps #5: make the WAL file's directory entry
+        // durable, not just its data (best-effort; no-op on Windows).
+        crate::storage::fs::sync_parent_dir(&path);
+
         Ok(Self {
             path,
             file: Arc::new(file),
@@ -218,6 +222,11 @@ impl Wal {
         }
 
         let offset = file.metadata()?.len();
+
+        // phase0_fix-wal-durability-gaps #5: make the WAL file's directory entry
+        // durable, not just its data (best-effort; no-op on Windows).
+        crate::storage::fs::sync_parent_dir(&path);
+
         Ok(Self {
             path,
             file: Arc::new(file),
@@ -389,6 +398,109 @@ impl Wal {
         Ok(())
     }
 
+    /// Persist `entries` to a side "emergency" WAL file in this WAL's own
+    /// directory, using the SAME on-disk frame format (and cipher, if any) as
+    /// the main WAL, so they are recoverable by [`Self::recover_emergency`] on
+    /// the next boot. Called by the async writer when a live flush exhausts its
+    /// retries, instead of silently dropping the batch.
+    ///
+    /// phase0_fix-wal-durability-gaps #4: replaces the previous
+    /// `[len][bincode]` framing written to a CWD-relative `data/` path, which
+    /// `recover()` could never parse and which no boot-time scan ever read.
+    /// Returns the emergency file's path.
+    pub(crate) fn emergency_save(&self, entries: &[WalEntry]) -> Result<PathBuf> {
+        let dir = self
+            .path
+            .parent()
+            .filter(|p| !p.as_os_str().is_empty())
+            .map(Path::to_path_buf)
+            .unwrap_or_else(|| PathBuf::from("."));
+        std::fs::create_dir_all(&dir)?;
+
+        // Nanosecond timestamp keeps successive emergency files distinct; a
+        // collision merely appends to the same file (Wal::new opens append).
+        let ts = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0);
+        let emergency_path = dir.join(format!("wal-emergency-{ts}.log"));
+
+        // Mirror the main WAL's encryption mode so entries are written in the
+        // identical frame format — and, when the main WAL is encrypted, are not
+        // leaked in plaintext on disk.
+        let mut ewal = match &self.cipher {
+            Some(cipher) => Wal::with_cipher(&emergency_path, Arc::clone(cipher))?,
+            None => Wal::new(&emergency_path)?,
+        };
+        for entry in entries {
+            ewal.append(entry)?;
+        }
+        ewal.flush()?;
+        Ok(emergency_path)
+    }
+
+    /// List `wal-emergency-*.log` side files in this WAL's directory, sorted by
+    /// name (which is a nanosecond timestamp, so name order is roughly time
+    /// order).
+    fn emergency_files(&self) -> Vec<PathBuf> {
+        let dir = self
+            .path
+            .parent()
+            .filter(|p| !p.as_os_str().is_empty())
+            .map(Path::to_path_buf)
+            .unwrap_or_else(|| PathBuf::from("."));
+        let mut files = Vec::new();
+        if let Ok(rd) = std::fs::read_dir(&dir) {
+            for entry in rd.flatten() {
+                let p = entry.path();
+                if let Some(name) = p.file_name().and_then(|n| n.to_str()) {
+                    if name.starts_with("wal-emergency-") && name.ends_with(".log") {
+                        files.push(p);
+                    }
+                }
+            }
+        }
+        files.sort();
+        files
+    }
+
+    /// Recover entries from any `wal-emergency-*.log` side files in this WAL's
+    /// directory (written by [`Self::emergency_save`]), decoded with this WAL's
+    /// cipher, merged in filename (≈ time) order. An unreadable emergency file
+    /// is logged and skipped rather than aborting the whole recovery. Does NOT
+    /// delete the files — call [`Self::clear_emergency`] only once the recovered
+    /// entries are durably applied.
+    pub(crate) fn recover_emergency(&self) -> Result<Vec<WalEntry>> {
+        let mut out = Vec::new();
+        for path in self.emergency_files() {
+            let mut ewal = match &self.cipher {
+                Some(cipher) => Wal::with_cipher(&path, Arc::clone(cipher))?,
+                None => Wal::new(&path)?,
+            };
+            match ewal.recover() {
+                Ok(entries) => out.extend(entries),
+                Err(e) => {
+                    tracing::warn!(
+                        "emergency WAL recovery: {} is unreadable, skipping: {e}",
+                        path.display()
+                    );
+                }
+            }
+        }
+        Ok(out)
+    }
+
+    /// Delete all `wal-emergency-*.log` side files in this WAL's directory.
+    /// Call only after [`Self::recover_emergency`]'s entries have been durably
+    /// applied. Best-effort: a failure to remove a file is logged, not fatal.
+    pub(crate) fn clear_emergency(&self) {
+        for path in self.emergency_files() {
+            if let Err(e) = std::fs::remove_file(&path) {
+                tracing::warn!("could not remove emergency WAL {}: {e}", path.display());
+            }
+        }
+    }
+
     /// Reopen WAL file (useful for recovery from permission errors)
     ///
     /// This method attempts to reopen the WAL file, which can help recover
@@ -444,6 +556,9 @@ impl Wal {
     pub fn recover(&mut self) -> Result<Vec<WalEntry>> {
         let mut entries = Vec::new();
         let mut file_offset = self.frames_start;
+        // Captured once: the file is only shrunk (via `truncate_to`) on a path
+        // that immediately `break`s, so it does not change while scanning.
+        let file_len = self.file.metadata()?.len();
 
         // Seek past the optional EaR page header. For plaintext
         // WALs `frames_start = 0` and this is a no-op. For encrypted
@@ -500,43 +615,66 @@ impl Wal {
                     }
 
                     let mut type_buf = [0u8; 1];
-                    self.file.read_exact(&mut type_buf)?;
+                    if !self.read_frame_body(&mut type_buf, file_offset)? {
+                        break;
+                    }
 
                     let mut len_buf = [0u8; 4];
-                    self.file.read_exact(&mut len_buf)?;
+                    if !self.read_frame_body(&mut len_buf, file_offset)? {
+                        break;
+                    }
                     let payload_len = u32::from_le_bytes(len_buf) as usize;
 
+                    // magic + algo + type + length + payload + crc
+                    let frame_len = 1 + 1 + 1 + 4 + payload_len as u64 + 4;
+                    // A declared length that would run past EOF marks a torn
+                    // trailing frame (crash residue) — truncate and stop rather
+                    // than allocating a huge buffer or erroring on the tail.
+                    if file_offset + frame_len > file_len {
+                        self.truncate_to(file_offset)?;
+                        break;
+                    }
+
                     let mut payload = vec![0u8; payload_len];
-                    self.file.read_exact(&mut payload)?;
+                    if !self.read_frame_body(&mut payload, file_offset)? {
+                        break;
+                    }
 
                     let mut crc_buf = [0u8; 4];
-                    self.file.read_exact(&mut crc_buf)?;
+                    if !self.read_frame_body(&mut crc_buf, file_offset)? {
+                        break;
+                    }
                     let stored_crc = u32::from_le_bytes(crc_buf);
 
                     (
-                        algo_buf,
-                        type_buf,
-                        len_buf,
-                        payload,
-                        stored_crc,
-                        algo,
-                        // magic + algo + type + length + payload + crc
-                        1 + 1 + 1 + 4 + payload_len as u64 + 4,
-                        true,
+                        algo_buf, type_buf, len_buf, payload, stored_crc, algo, frame_len, true,
                     )
                 } else {
                     // v1 frame: the byte we already read is the type byte.
                     let type_buf = first;
 
                     let mut len_buf = [0u8; 4];
-                    self.file.read_exact(&mut len_buf)?;
+                    if !self.read_frame_body(&mut len_buf, file_offset)? {
+                        break;
+                    }
                     let payload_len = u32::from_le_bytes(len_buf) as usize;
 
+                    // type + length + payload + crc
+                    let frame_len = 1 + 4 + payload_len as u64 + 4;
+                    if file_offset + frame_len > file_len {
+                        self.truncate_to(file_offset)?;
+                        break;
+                    }
+
                     let mut payload = vec![0u8; payload_len];
-                    self.file.read_exact(&mut payload)?;
+                    if !self.read_frame_body(&mut payload, file_offset)? {
+                        break;
+                    }
 
                     let mut crc_buf = [0u8; 4];
-                    self.file.read_exact(&mut crc_buf)?;
+                    if !self.read_frame_body(&mut crc_buf, file_offset)? {
+                        break;
+                    }
                     let stored_crc = u32::from_le_bytes(crc_buf);
 
                     (
@@ -546,8 +684,7 @@ impl Wal {
                         payload,
                         stored_crc,
                         ChecksumAlgo::Crc32Fast,
-                        // type + length + payload + crc
-                        1 + 4 + payload_len as u64 + 4,
+                        frame_len,
                         false,
                     )
                 };
@@ -597,6 +734,17 @@ impl Wal {
             };
 
             if stored_crc != computed_crc {
+                // A CRC mismatch on the LAST frame in the file is
+                // indistinguishable from crash residue — a payload torn
+                // mid-write whose bytes no longer match its CRC. Truncate it
+                // and return the valid prefix, mirroring the v3
+                // `TruncatedTrailing` path. A mismatch on a frame FOLLOWED by
+                // more bytes is genuine mid-file corruption and stays a hard
+                // error.
+                if file_offset + frame_len >= file_len {
+                    self.truncate_to(file_offset)?;
+                    break;
+                }
                 return Err(Error::wal(format!(
                     "CRC mismatch at offset {} (algo={:?}): expected {:x}, got {:x}",
                     file_offset, algo, stored_crc, computed_crc
@@ -667,6 +815,28 @@ impl Wal {
         self.offset = offset;
         self.stats.file_size = offset;
         Ok(())
+    }
+
+    /// Read exactly `buf.len()` bytes of a frame body during recovery. On a
+    /// clean `UnexpectedEof` — crash residue: a partial trailing frame left by
+    /// an un-fsynced append that a crash interrupted — truncate the file to
+    /// `frame_start` (dropping the torn frame) and return `Ok(false)`, so the
+    /// caller `break`s and returns the valid prefix. Returns `Ok(true)` on a
+    /// full read; a non-EOF I/O error propagates.
+    ///
+    /// phase0_fix-wal-torn-tail-recovery: gives the v1/v2 plaintext body reads
+    /// the same torn-tail handling the v3 path already had, instead of the bare
+    /// `?` that turned normal crash residue into a hard error and poisoned every
+    /// subsequent boot.
+    fn read_frame_body(&mut self, buf: &mut [u8], frame_start: u64) -> Result<bool> {
+        match self.file.read_exact(buf) {
+            Ok(_) => Ok(true),
+            Err(e) if e.kind() == io::ErrorKind::UnexpectedEof => {
+                self.truncate_to(frame_start)?;
+                Ok(false)
+            }
+            Err(e) => Err(e.into()),
+        }
     }
 
     /// Decode an encrypted (v3) frame starting at `frame_offset`.

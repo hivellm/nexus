@@ -1,0 +1,13 @@
+{
+  "id": 5,
+  "slug": "native-rpc-over-http-msgpack-tcp-chosen-over-grpc-quic-websocket",
+  "title": "Native RPC over HTTP — msgpack + TCP chosen over gRPC / QUIC / WebSocket",
+  "status": "proposed",
+  "date": "2026-04-19",
+  "relatedTasks": [
+    "phase2_nexus-rpc-binary-protocol",
+    "phase2_sdk-rpc-transport-default",
+    "phase3_rpc-protocol-docs-benchmarks"
+  ],
+  "supersededBy": null
+}

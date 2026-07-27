@@ -1,0 +1,15 @@
+{
+  "id": "2026-04-20T16-38-02-cypher-label-index-silently-ignores-labels-with-label-id-64",
+  "title": "Cypher label_index silently ignores labels with label_id >= 64",
+  "content": "During the phase6 §1 investigation (\"composite :Label {prop} filter ignored\" on bench-scale fixtures), tracing turned up a deeper pre-existing bug that surfaces only when a query's `NodeByLabel` actually touches the index: `crates/nexus-core/src/executor/operators/create.rs:460` (and the companion rebuild at `crates/nexus-core/src/engine/mod.rs:361`) rebuild the `label_index` by iterating `node_record.label_bits` as a `u64`, so any label whose `label_id >= 64` is never added to the index. The catalog can happily allocate label ids well above 64 (saw `:A = 14`, `:P = 148` in a fresh test-dir fixture with only two user labels) — those labels exist in the catalog, nodes store them in `label_ids_for_update`, but `label_index.get_nodes(label_id)` returns an empty bitmap. Any planner rewrite that starts routing anonymous-anchor or source-scoped filters through a `NodeByLabel(label_id)` plan node on a high-id label will therefore return zero rows and regress correctness instead of improving it. Fix shape: replace the u64-bitmap reconstruction with the already-collected `label_ids_for_update` vector (which is what the incremental add_node call at crud.rs:261 already uses), and update the engine-startup rebuild at mod.rs:344 the same way. Once the index is consistent, the narrow planner fixes in §1 (synthesize a variable for anonymous anchors, and split anchor-scoped filters away from post-expand filters in the operator reorderer) become correctness-preserving instead of regressing. Keep both halves in a single successor task — landing only the planner half breaks the two existing composite-filter tests.",
+  "source": "manual",
+  "relatedTask": "phase6_nexus-bench-correctness-gaps",
+  "tags": [
+    "label-index",
+    "catalog",
+    "planner",
+    "u64-cap",
+    "phase6"
+  ],
+  "createdAt": "2026-04-20T16:38:02.929Z"
+}

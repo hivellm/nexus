@@ -127,7 +127,7 @@ pub fn arg_str(args: &[NexusValue], idx: usize) -> Result<String, String> {
 /// bytes so clients can pass either; KNN embeddings go through here.
 pub fn arg_bytes(args: &[NexusValue], idx: usize) -> Result<Vec<u8>, String> {
     match args.get(idx) {
-        Some(NexusValue::Bytes(b)) => Ok(b.clone()),
+        Some(NexusValue::Bytes(b)) => Ok(b.to_vec()),
         Some(NexusValue::Str(s)) => Ok(s.as_bytes().to_vec()),
         Some(_) => Err(format!("ERR argument {idx} must be bytes")),
         None => Err(format!("ERR missing argument {idx}")),
@@ -187,7 +187,7 @@ mod tests {
     fn arg_str_accepts_str_and_utf8_bytes() {
         let a = vec![
             NexusValue::Str("hello".into()),
-            NexusValue::Bytes(b"world".to_vec()),
+            NexusValue::bytes(b"world".to_vec()),
         ];
         assert_eq!(arg_str(&a, 0).unwrap(), "hello");
         assert_eq!(arg_str(&a, 1).unwrap(), "world");
@@ -195,7 +195,7 @@ mod tests {
 
     #[test]
     fn arg_str_rejects_non_utf8_bytes() {
-        let a = vec![NexusValue::Bytes(vec![0xFF, 0xFE])];
+        let a = vec![NexusValue::bytes(vec![0xFF, 0xFE])];
         let err = arg_str(&a, 0).unwrap_err();
         assert!(err.contains("not valid UTF-8"));
     }
@@ -210,7 +210,7 @@ mod tests {
     #[test]
     fn arg_bytes_accepts_bytes_and_string() {
         let a = vec![
-            NexusValue::Bytes(vec![1, 2, 3]),
+            NexusValue::bytes(vec![1, 2, 3]),
             NexusValue::Str("abc".into()),
         ];
         assert_eq!(arg_bytes(&a, 0).unwrap(), vec![1, 2, 3]);

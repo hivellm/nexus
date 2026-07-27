@@ -1,4 +1,9 @@
-# Neo4j vs Nexus Compatibility Test Suite - 300 Tests
+# Neo4j vs Nexus Compatibility Test Suite - 325 Tests
+#
+# This is a DIFFERENTIAL suite: every case is executed against both a live Neo4j
+# (default http://localhost:7474) and Nexus, and the two responses are compared.
+# It is NOT the openCypher TCK and does not measure openCypher conformance --
+# see docs/compatibility/OPENCYPHER_TCK_REPORT.md for that number.
 # Compares query results between Neo4j and Nexus to ensure 100% compatibility
 #
 # Usage: ./test-neo4j-nexus-compatibility-200.ps1
@@ -19,7 +24,7 @@ $global:SkippedTests = 0
 $global:TestResults = @()
 
 Write-Host "+= = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = +" -ForegroundColor Cyan
-Write-Host "|  Neo4j vs Nexus Compatibility Test Suite - 300 Tests       |" -ForegroundColor Cyan
+Write-Host "|  Neo4j vs Nexus Compatibility Test Suite - 325 Tests       |" -ForegroundColor Cyan
 Write-Host "+= = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = +" -ForegroundColor Cyan
 Write-Host ""
 Write-Host "Neo4j:  $Neo4jUri" -ForegroundColor Yellow

@@ -3,11 +3,61 @@
 
 use super::Engine;
 use super::crud::NodeWriteState;
+use crate::storage::external_id::{ConflictPolicy, ExternalId};
 use crate::{Error, Result, executor};
 use serde_json::{Map, Value};
 use std::collections::{HashMap, HashSet};
 
+/// Convert an AST-level conflict policy to the storage-level one used by
+/// [`Engine::create_node_with_external_id`]. Mirrors
+/// `executor::operators::create::ast_conflict_policy_to_storage`; duplicated
+/// here (rather than reused across the module boundary) because the
+/// executor's helper is `pub(in crate::executor)` and the write-query path
+/// lives in `crate::engine`.
+fn ast_conflict_policy_to_storage(p: executor::parser::AstConflictPolicy) -> ConflictPolicy {
+    match p {
+        executor::parser::AstConflictPolicy::Error => ConflictPolicy::Error,
+        executor::parser::AstConflictPolicy::Match => ConflictPolicy::Match,
+        executor::parser::AstConflictPolicy::Replace => ConflictPolicy::Replace,
+    }
+}
+
 impl Engine {
+    /// Resolve a parsed `_id` expression (string-literal or parameter) into
+    /// an [`ExternalId`]. Mirrors `Executor::resolve_external_id`; anything
+    /// other than a string literal or parameter is rejected at parse time,
+    /// so this function only needs to handle those two cases.
+    fn resolve_external_id(&self, expr: &executor::parser::Expression) -> Result<ExternalId> {
+        use std::str::FromStr;
+        let raw: String = match expr {
+            executor::parser::Expression::Literal(executor::parser::Literal::String(s)) => {
+                s.clone()
+            }
+            executor::parser::Expression::Parameter(name) => match self.current_params.get(name) {
+                Some(Value::String(s)) => s.clone(),
+                Some(other) => {
+                    return Err(Error::executor(format!(
+                        "_id parameter `{}` must be a string, got {:?}",
+                        name, other
+                    )));
+                }
+                None => {
+                    return Err(Error::executor(format!(
+                        "_id parameter `{}` not provided",
+                        name
+                    )));
+                }
+            },
+            _ => {
+                return Err(Error::executor(
+                    "_id expression must be a string literal or parameter (parser invariant)",
+                ));
+            }
+        };
+        ExternalId::from_str(&raw)
+            .map_err(|e| Error::executor(format!("invalid _id `{}`: {}", raw, e)))
+    }
+
     pub(super) fn execute_write_query(
         &mut self,
         ast: &executor::parser::CypherQuery,
@@ -41,6 +91,19 @@ impl Engine {
             return self.execute_unwind_write_query(ast, unwind_idx);
         }
 
+        // Accurate "did this query mutate anything" signal for
+        // `finalize_write_result`'s refresh-skip guard. CREATE/MERGE only
+        // ever grow the record store (ids are never reused), so a node- or
+        // relationship-count delta across the whole clause loop reliably
+        // catches every node/relationship creation, including a MERGE that
+        // fell through to its create branch — no per-clause bookkeeping
+        // needed for that half. SET/REMOVE/FOREACH mutate properties or
+        // labels in place (no id-count change), so those clauses set
+        // `other_mutation` explicitly.
+        let pre_node_count = self.storage.node_count();
+        let pre_rel_count = self.storage.relationship_count();
+        let mut other_mutation = false;
+
         for clause in &ast.clauses {
             match clause {
                 executor::parser::Clause::Match(match_clause) => {
@@ -59,8 +122,33 @@ impl Engine {
                 // UNWIND-write loop (`execute_unwind_write_query`),
                 // extended here to also support relationship elements.
                 executor::parser::Clause::Create(create_clause) => {
+                    // `_id` (issue #29): resolved once per CREATE clause and
+                    // consumed by only the FIRST node the pattern creates —
+                    // the parser hoists `_id` out of that node's property
+                    // map into `external_id_expr`, so any other node in the
+                    // pattern (e.g. a relationship's target) must never
+                    // receive it.
+                    let ext_id = create_clause
+                        .external_id_expr
+                        .as_ref()
+                        .map(|expr| self.resolve_external_id(expr))
+                        .transpose()?;
+                    let ext_policy = ast_conflict_policy_to_storage(create_clause.conflict_policy);
+                    let mut ext_id_consumed = false;
                     let mut last_node_id: Option<u64> = None;
+                    // Indices of pattern elements already materialised as a
+                    // node by the `Relationship` arm below (it peeks
+                    // `i + 1` and creates that target node itself to wire
+                    // the edge). Without this, the loop's own `Node` arm
+                    // fires again on the very same index right after,
+                    // creating a second, unconnected copy and clobbering
+                    // the variable binding / `last_node_id` with the
+                    // orphan (the phantom-duplicate-target-node bug).
+                    let mut consumed_node_indices: HashSet<usize> = HashSet::new();
                     for (i, element) in create_clause.pattern.elements.iter().enumerate() {
+                        if consumed_node_indices.contains(&i) {
+                            continue;
+                        }
                         match element {
                             executor::parser::PatternElement::Node(node) => {
                                 let mut props = Map::new();
@@ -69,8 +157,18 @@ impl Engine {
                                         props.insert(k.clone(), self.eval_write_value(expr)?);
                                     }
                                 }
-                                let id =
-                                    self.create_node(node.labels.clone(), Value::Object(props))?;
+                                let node_ext_id = if ext_id_consumed {
+                                    None
+                                } else {
+                                    ext_id_consumed = true;
+                                    ext_id.clone()
+                                };
+                                let id = self.create_node_with_external_id(
+                                    node.labels.clone(),
+                                    Value::Object(props),
+                                    node_ext_id,
+                                    ext_policy,
+                                )?;
                                 if let Some(var) = &node.variable {
                                     context.insert(var.clone(), vec![id]);
                                 }
@@ -101,6 +199,18 @@ impl Engine {
                                             context.insert(var.clone(), vec![tid]);
                                         }
                                         last_node_id = Some(tid);
+                                        // Mark `i + 1` consumed so the loop's
+                                        // own `Node` arm does not re-create
+                                        // this same element on its next
+                                        // iteration. For a chained pattern
+                                        // like `(a)-[:R]->(b)-[:S]->(c)`, `b`
+                                        // (index `i + 1` here) is also the
+                                        // SOURCE of the next relationship —
+                                        // `last_node_id` already points at
+                                        // this connected node, so the next
+                                        // `Relationship` arm picks it up
+                                        // correctly without re-deriving it.
+                                        consumed_node_indices.insert(i + 1);
                                         tid
                                     }
                                     _ => {
@@ -144,14 +254,23 @@ impl Engine {
                     }
                 }
                 executor::parser::Clause::Merge(merge_clause) => {
-                    // Check if this is a relationship MERGE with bound variables
-                    if let Some((rel_var, rel_id, rel_type)) =
+                    // Check if this is a relationship MERGE with bound variables.
+                    // A comma-joined `MATCH (a), (b) MERGE (a)-[:T]->(b)` yields
+                    // one entry per (a, b) driving pair — see 4.10.
+                    if let Some(rels) =
                         self.process_merge_relationship(&merge_clause, &mut context)?
                     {
-                        rel_context
-                            .entry(rel_var)
-                            .or_default()
-                            .push((rel_id, rel_type));
+                        for (rel_var, rel_id, rel_type) in rels {
+                            // Empty `rel_var` is the anonymous-relationship
+                            // sentinel (see `process_merge_relationship`) — it
+                            // must never be bound into `rel_context`.
+                            if !rel_var.is_empty() {
+                                rel_context
+                                    .entry(rel_var)
+                                    .or_default()
+                                    .push((rel_id, rel_type));
+                            }
+                        }
                     } else {
                         // Fall back to node MERGE
                         let (variable, node_ids) = self.process_merge_clause(merge_clause)?;
@@ -160,12 +279,15 @@ impl Engine {
                 }
                 executor::parser::Clause::Set(set_clause) => {
                     self.apply_set_clause(&context, &rel_context, set_clause)?;
+                    other_mutation = true;
                 }
                 executor::parser::Clause::Remove(remove_clause) => {
                     self.apply_remove_clause(&context, remove_clause)?;
+                    other_mutation = true;
                 }
                 executor::parser::Clause::Foreach(foreach_clause) => {
                     self.execute_foreach_clause(&context, foreach_clause)?;
+                    other_mutation = true;
                 }
                 executor::parser::Clause::Return(return_clause) => {
                     result = Some(self.build_return_result_with_rels(
@@ -174,8 +296,18 @@ impl Engine {
                         return_clause,
                     )?);
                 }
-                executor::parser::Clause::Where(_)
-                | executor::parser::Clause::With(_)
+                executor::parser::Clause::Where(where_clause) => {
+                    // A free-standing `WHERE` after a MATCH — e.g.
+                    // `MATCH ()-[r]->() WHERE id(r) = $x SET r.w = 1`.
+                    // Narrows/binds the matched variables by id before the
+                    // following SET/DELETE. Previously this errored outright.
+                    self.apply_write_id_filter(
+                        &where_clause.expression,
+                        &mut context,
+                        &mut rel_context,
+                    )?;
+                }
+                executor::parser::Clause::With(_)
                 | executor::parser::Clause::Unwind(_)
                 | executor::parser::Clause::Union(_)
                 | executor::parser::Clause::OrderBy(_)
@@ -189,17 +321,27 @@ impl Engine {
             }
         }
 
-        self.finalize_write_result(result, ast)
+        let mutated = other_mutation
+            || self.storage.node_count() != pre_node_count
+            || self.storage.relationship_count() != pre_rel_count;
+        self.finalize_write_result(result, ast, mutated)
     }
 
     /// Shared tail for the write-query paths: async-flush, refresh the
     /// executor against the new storage state, and attach the write-path
     /// `Nexus.Performance.UnindexedPropertyAccess` diagnostic. Used by both
     /// the linear `execute_write_query` loop and the UNWIND-write path.
+    ///
+    /// `mutated` is the caller's accurately-computed "did this write
+    /// actually change anything" signal — see
+    /// [`Engine::refresh_executor_if_mutated`] for why it is a plain
+    /// `bool` and not a [`executor::types::SideEffects`]. Passing `true`
+    /// unconditionally reproduces the previous always-refresh behaviour.
     pub(super) fn finalize_write_result(
         &mut self,
         result: Option<executor::ResultSet>,
         ast: &executor::parser::CypherQuery,
+        mutated: bool,
     ) -> Result<executor::ResultSet> {
         // Async flush — matches the CREATE / executor-side write paths,
         // which use `flush_async` as well. The SYNC `flush()` here used
@@ -210,7 +352,7 @@ impl Engine {
         // path. Callers that genuinely need on-disk durability can issue
         // an explicit `flush()` after the write.
         self.storage.flush_async()?;
-        self.refresh_executor()?;
+        self.refresh_executor_if_mutated(mutated)?;
 
         // Diagnostic pre-pass for the write path: MERGE/SET/REMOVE
         // bypass the planner entirely, so the planner-side
@@ -320,6 +462,40 @@ impl Engine {
         };
 
         let post = &ast.clauses[unwind_idx + 1..];
+
+        // `_id` (issue #29): resolved ONCE, before the per-row loop below.
+        // `create_clause.external_id_expr` cannot vary per row — a per-row
+        // `_id` (e.g. `_id: row.id`) is a parse error today (out of scope
+        // here) — so resolving it here is equivalent to resolving it
+        // inside the loop, but avoids a `?`-propagating early return from
+        // inside the loop body that would skip the manual
+        // `self.unwind_bindings.clear()` cleanup every other early-return
+        // arm below performs.
+        let create_ext_id = post
+            .iter()
+            .find_map(|c| match c {
+                Clause::Create(cc) => cc.external_id_expr.as_ref(),
+                _ => None,
+            })
+            .map(|expr| self.resolve_external_id(expr))
+            .transpose()?;
+        let create_ext_policy = post
+            .iter()
+            .find_map(|c| match c {
+                Clause::Create(cc) => Some(cc.conflict_policy),
+                _ => None,
+            })
+            .map(ast_conflict_policy_to_storage)
+            .unwrap_or(ConflictPolicy::Error);
+
+        // Same accurate mutation signal as the linear
+        // `execute_write_query` loop (see its comment): a node/relationship
+        // count delta across every row catches every CREATE/MERGE-created
+        // entity, while SET/REMOVE/FOREACH set `other_mutation` explicitly.
+        let pre_node_count = self.storage.node_count();
+        let pre_rel_count = self.storage.relationship_count();
+        let mut other_mutation = false;
+
         for item in items {
             self.unwind_bindings.insert(unwind.variable.clone(), item);
             // Fresh per-row context seeded from the shared MATCH bindings, so
@@ -328,13 +504,20 @@ impl Engine {
             for clause in post {
                 match clause {
                     Clause::Merge(merge_clause) => {
-                        if let Some((rel_var, rel_id, rel_type)) =
+                        if let Some(rels) =
                             self.process_merge_relationship(merge_clause, &mut row_context)?
                         {
-                            rel_context
-                                .entry(rel_var)
-                                .or_default()
-                                .push((rel_id, rel_type));
+                            for (rel_var, rel_id, rel_type) in rels {
+                                // Empty `rel_var` is the anonymous-relationship
+                                // sentinel (see `process_merge_relationship`) —
+                                // it must never be bound into `rel_context`.
+                                if !rel_var.is_empty() {
+                                    rel_context
+                                        .entry(rel_var)
+                                        .or_default()
+                                        .push((rel_id, rel_type));
+                                }
+                            }
                         } else {
                             let (variable, node_ids) = self.process_merge_clause(merge_clause)?;
                             row_context.insert(variable.clone(), node_ids.clone());
@@ -342,6 +525,10 @@ impl Engine {
                         }
                     }
                     Clause::Create(create_clause) => {
+                        // Consumed by only the FIRST node this pattern
+                        // creates — same "one _id, first node only"
+                        // contract as the linear CREATE arm above.
+                        let mut ext_id_consumed = false;
                         for element in &create_clause.pattern.elements {
                             match element {
                                 executor::parser::PatternElement::Node(node) => {
@@ -351,9 +538,17 @@ impl Engine {
                                             props.insert(k.clone(), self.eval_write_value(expr)?);
                                         }
                                     }
-                                    let id = self.create_node(
+                                    let node_ext_id = if ext_id_consumed {
+                                        None
+                                    } else {
+                                        ext_id_consumed = true;
+                                        create_ext_id.clone()
+                                    };
+                                    let id = self.create_node_with_external_id(
                                         node.labels.clone(),
                                         serde_json::Value::Object(props),
+                                        node_ext_id,
+                                        create_ext_policy,
                                     )?;
                                     if let Some(var) = &node.variable {
                                         row_context.insert(var.clone(), vec![id]);
@@ -372,13 +567,16 @@ impl Engine {
                         }
                     }
                     Clause::Set(set_clause) => {
-                        self.apply_set_clause(&row_context, &rel_context, set_clause)?
+                        self.apply_set_clause(&row_context, &rel_context, set_clause)?;
+                        other_mutation = true;
                     }
                     Clause::Remove(remove_clause) => {
-                        self.apply_remove_clause(&row_context, remove_clause)?
+                        self.apply_remove_clause(&row_context, remove_clause)?;
+                        other_mutation = true;
                     }
                     Clause::Foreach(foreach_clause) => {
-                        self.execute_foreach_clause(&row_context, foreach_clause)?
+                        self.execute_foreach_clause(&row_context, foreach_clause)?;
+                        other_mutation = true;
                     }
                     // #14: per-row MATCH — resolves endpoints like
                     // `MATCH (a {id: row.fk}), (b {id: row.tk})` into the row
@@ -425,10 +623,14 @@ impl Engine {
             ids.dedup();
         }
 
+        let mutated = other_mutation
+            || self.storage.node_count() != pre_node_count
+            || self.storage.relationship_count() != pre_rel_count;
+
         // Build the trailing RETURN (if any) after flush+refresh so the
         // executor-backed projection sees the freshly written rows.
         self.storage.flush_async()?;
-        self.refresh_executor()?;
+        self.refresh_executor_if_mutated(mutated)?;
         let result = post
             .iter()
             .find_map(|c| match c {
@@ -441,7 +643,7 @@ impl Engine {
             .transpose()?;
 
         // Reuse the shared notification tail (flush/refresh are idempotent).
-        self.finalize_write_result(result, ast)
+        self.finalize_write_result(result, ast, mutated)
     }
 
     pub(super) fn process_merge_clause(
@@ -483,9 +685,35 @@ impl Engine {
             }
         }
 
-        let mut node_ids = self.find_nodes_by_node_pattern(&node_pattern)?;
-        node_ids.sort_unstable();
-        node_ids.dedup();
+        // `_id` (issue #29): resolve the magic `_id` property the parser
+        // hoisted out of `node_pattern.properties` into `external_id_expr`.
+        // The external id is a stronger key than the property-based search
+        // below — the search is now `_id`-blind, since the parser already
+        // stripped `_id` out of `node_pattern.properties` — so a hit here
+        // short-circuits that search entirely.
+        let ext_id = merge_clause
+            .external_id_expr
+            .as_ref()
+            .map(|expr| self.resolve_external_id(expr))
+            .transpose()?;
+
+        let existing_by_ext_id = if let Some(ext) = &ext_id {
+            let txn = self.catalog.read_txn()?;
+            let found = self.catalog.external_id_index().get_internal(&txn, ext)?;
+            drop(txn);
+            found
+        } else {
+            None
+        };
+
+        let mut node_ids = if let Some(id) = existing_by_ext_id {
+            vec![id]
+        } else {
+            let mut ids = self.find_nodes_by_node_pattern(&node_pattern)?;
+            ids.sort_unstable();
+            ids.dedup();
+            ids
+        };
 
         if node_ids.is_empty() {
             let labels = node_pattern.labels.clone();
@@ -496,8 +724,19 @@ impl Engine {
                     props.insert(key.clone(), value);
                 }
             }
-            // create_node already checks constraints, so we can call it directly
-            let node_id = self.create_node(labels, Value::Object(props))?;
+            // create_node_with_external_id already checks constraints, so
+            // we can call it directly. `ConflictPolicy::Match` closes the
+            // TOCTOU window between the `existing_by_ext_id` lookup above
+            // and this create: if a concurrent MERGE raced in and won,
+            // this falls back to the now-existing internal id instead of
+            // erroring (`MergeClause` has no `conflict_policy` of its own —
+            // find-or-create is always the semantics here).
+            let node_id = self.create_node_with_external_id(
+                labels,
+                Value::Object(props),
+                ext_id,
+                ConflictPolicy::Match,
+            )?;
             node_ids.push(node_id);
 
             if let Some(on_create) = &merge_clause.on_create {
@@ -522,7 +761,8 @@ impl Engine {
     /// `ON MATCH` on the enclosing `MergeClause` still targets the
     /// relationship only, per the existing `process_merge_relationship`
     /// contract; mirrors the match-or-create logic in
-    /// [`Self::process_merge_clause`] minus that per-clause SET handling.
+    /// [`Self::process_merge_clause`] (including its `_id` external-id
+    /// fast path) minus that per-clause SET handling.
     pub(super) fn merge_single_node(
         &mut self,
         node_pattern: &executor::parser::NodePattern,
@@ -542,6 +782,31 @@ impl Engine {
             }
         }
 
+        // `_id` (relationship-MERGE endpoints): resolve the per-node `_id`
+        // the parser hoisted out of `node_pattern.properties` into
+        // `external_id_expr` (populated per-node for MERGE patterns — see
+        // `extract_underscore_id_from_pattern`). A hit in the external-id
+        // index short-circuits the property-based search below, mirroring
+        // `Self::process_merge_clause`.
+        let ext_id = node_pattern
+            .external_id_expr
+            .as_ref()
+            .map(|expr| self.resolve_external_id(expr))
+            .transpose()?;
+
+        let existing_by_ext_id = if let Some(ext) = &ext_id {
+            let txn = self.catalog.read_txn()?;
+            let found = self.catalog.external_id_index().get_internal(&txn, ext)?;
+            drop(txn);
+            found
+        } else {
+            None
+        };
+
+        if let Some(id) = existing_by_ext_id {
+            return Ok(id);
+        }
+
         let mut node_ids = self.find_nodes_by_node_pattern(node_pattern)?;
         node_ids.sort_unstable();
         node_ids.dedup();
@@ -558,7 +823,17 @@ impl Engine {
                 props.insert(key.clone(), value);
             }
         }
-        self.create_node(labels, Value::Object(props))
+        // `ConflictPolicy::Match` closes the TOCTOU window between the
+        // `existing_by_ext_id` lookup above and this create — mirrors
+        // `Self::process_merge_clause`. When `ext_id` is `None` this
+        // behaves identically to a plain `create_node`: `create_node_inner`
+        // only takes the external-id path when an id is actually supplied.
+        self.create_node_with_external_id(
+            labels,
+            Value::Object(props),
+            ext_id,
+            ConflictPolicy::Match,
+        )
     }
 
     pub(super) fn process_match_clause(
@@ -603,6 +878,105 @@ impl Engine {
     }
 
     /// Process all node patterns in a MATCH clause (for multi-node patterns like (a), (b))
+    /// Apply a write-query `WHERE` predicate to the already-matched
+    /// bindings. Supports the `id(var) = <value>` shape and `AND`-chains of
+    /// it — how a client targets one relationship (or node) by id for a
+    /// following `SET` / `DELETE` (e.g. `MATCH ()-[r]->() WHERE id(r) = $x
+    /// SET r.w = 1`). Binds an as-yet-unbound `var` (the untyped
+    /// `()-[r]->()` case, which the pattern binder skips) to the entity
+    /// with that id, and narrows an already-bound `var` to the matching id.
+    /// Any other predicate shape errors — the write path rejected every
+    /// `WHERE` before this, so it can only ever widen what succeeds.
+    fn apply_write_id_filter(
+        &mut self,
+        predicate: &executor::parser::Expression,
+        context: &mut HashMap<String, Vec<u64>>,
+        rel_context: &mut HashMap<String, Vec<(u64, String)>>,
+    ) -> Result<()> {
+        use executor::parser::{BinaryOperator, Expression};
+        match predicate {
+            Expression::BinaryOp {
+                left,
+                op: BinaryOperator::And,
+                right,
+            } => {
+                self.apply_write_id_filter(left, context, rel_context)?;
+                self.apply_write_id_filter(right, context, rel_context)
+            }
+            Expression::BinaryOp {
+                left,
+                op: BinaryOperator::Equal,
+                right,
+            } => {
+                // Accept `id(var) = expr` or `expr = id(var)`.
+                let (var, value_expr) = match (Self::as_id_var(left), Self::as_id_var(right)) {
+                    (Some(v), _) => (v, right.as_ref()),
+                    (_, Some(v)) => (v, left.as_ref()),
+                    _ => {
+                        return Err(Error::CypherExecution(
+                            "WHERE in a write query only supports `id(var) = <value>`".to_string(),
+                        ));
+                    }
+                };
+                let id = self.eval_write_value(value_expr)?.as_u64().ok_or_else(|| {
+                    Error::CypherExecution(
+                        "id(...) comparison value must be an integer".to_string(),
+                    )
+                })?;
+                self.bind_or_filter_by_id(var, id, context, rel_context)
+            }
+            _ => Err(Error::CypherExecution(
+                "WHERE in a write query only supports `id(var) = <value>` predicates".to_string(),
+            )),
+        }
+    }
+
+    /// Extract `v` from an `id(v)` function-call expression.
+    fn as_id_var(expr: &executor::parser::Expression) -> Option<String> {
+        use executor::parser::Expression;
+        if let Expression::FunctionCall { name, args } = expr {
+            if name.eq_ignore_ascii_case("id") && args.len() == 1 {
+                if let Expression::Variable(v) = &args[0] {
+                    return Some(v.clone());
+                }
+            }
+        }
+        None
+    }
+
+    /// Bind `var` to the entity with `id` — resolving an unbound
+    /// relationship by id — or filter an already-bound `var` to that id.
+    fn bind_or_filter_by_id(
+        &mut self,
+        var: String,
+        id: u64,
+        context: &mut HashMap<String, Vec<u64>>,
+        rel_context: &mut HashMap<String, Vec<(u64, String)>>,
+    ) -> Result<()> {
+        if let Some(rels) = rel_context.get_mut(&var) {
+            rels.retain(|(rid, _)| *rid == id);
+            return Ok(());
+        }
+        if let Some(nodes) = context.get_mut(&var) {
+            nodes.retain(|n| *n == id);
+            return Ok(());
+        }
+        // Unbound — e.g. an untyped `()-[r]->()` whose relationship the
+        // pattern binder skipped (it needs a type). Resolve it by id.
+        if let Some(record) = self.get_relationship(id)? {
+            let type_name = self
+                .catalog
+                .get_type_name(record.type_id)?
+                .unwrap_or_default();
+            rel_context.insert(var, vec![(id, type_name)]);
+        } else {
+            // No such relationship: leave the binding empty so the
+            // downstream SET/DELETE/RETURN is a no-op rather than an error.
+            rel_context.insert(var, Vec::new());
+        }
+        Ok(())
+    }
+
     pub(super) fn process_match_clause_multi(
         &mut self,
         match_clause: &executor::parser::MatchClause,
@@ -612,12 +986,6 @@ impl Engine {
         if match_clause.optional {
             return Err(Error::CypherExecution(
                 "OPTIONAL MATCH not supported in write queries".to_string(),
-            ));
-        }
-
-        if match_clause.where_clause.is_some() {
-            return Err(Error::CypherExecution(
-                "MATCH with WHERE is not supported in write queries".to_string(),
             ));
         }
 
@@ -695,16 +1063,33 @@ impl Engine {
             }
         }
 
+        // Apply a WHERE attached to this MATCH (e.g. `MATCH (n) WHERE
+        // id(n) = $x`) after the pattern bound its variables. The
+        // free-standing `WHERE` form (a separate clause) is handled by the
+        // clause loop; both funnel through the same id-filter.
+        if let Some(where_clause) = &match_clause.where_clause {
+            self.apply_write_id_filter(&where_clause.expression, context, rel_context)?;
+        }
+
         Ok(())
     }
 
     /// Process MERGE with relationship pattern when nodes are already bound
     /// Returns Some((rel_variable, rel_id, rel_type)) if this is a relationship MERGE
+    ///
+    /// `rel_variable` is the empty string when the pattern's relationship has
+    /// no bound variable (e.g. `MERGE (a)-[:T]->(b)`) — callers MUST treat an
+    /// empty string as "do not bind", never insert it into `rel_context`
+    /// under that key. The empty string is a safe sentinel: the parser never
+    /// produces an empty identifier (`is_identifier_start` requires at least
+    /// one letter/underscore), so it can never collide with a real,
+    /// user-typed variable and can never be the `target` of a user `SET`
+    /// item either.
     pub(super) fn process_merge_relationship(
         &mut self,
         merge_clause: &executor::parser::MergeClause,
         context: &mut HashMap<String, Vec<u64>>,
-    ) -> Result<Option<(String, u64, String)>> {
+    ) -> Result<Option<Vec<(String, u64, String)>>> {
         // Check if pattern has: Node, Relationship, Node structure
         let elements = &merge_clause.pattern.elements;
         if elements.len() != 3 {
@@ -725,137 +1110,172 @@ impl Engine {
             _ => return Ok(None),
         };
 
-        // Get source and destination variable names
-        let src_var = match &src_node.variable {
-            Some(v) => v.clone(),
-            None => return Ok(None),
-        };
-        let dst_var = match &dst_node.variable {
-            Some(v) => v.clone(),
-            None => return Ok(None),
-        };
-
-        // Get relationship variable and type
-        let rel_var = match &rel_pattern.variable {
-            Some(v) => v.clone(),
-            None => return Ok(None),
-        };
+        // The relationship type is still mandatory: `MERGE ()-[r]->()` with
+        // no type at all remains rejected here exactly as before — only the
+        // *variable*-presence checks below were relaxed by this fix.
         let rel_type = match rel_pattern.types.first() {
             Some(t) => t.clone(),
             None => return Ok(None),
         };
 
-        // G3 — resolve source/destination node ids. When an enclosing
-        // MATCH/UNWIND already bound the variable (existing contract:
-        // present in `context` with a non-empty id list), reuse it
-        // as-is. When the variable is bound but resolved to ZERO nodes
-        // (e.g. a MATCH that found nothing), preserve the prior
-        // behaviour of bailing out to the node-only MERGE fallback.
-        // When the variable is not in `context` at all, this is a
-        // STANDALONE relationship-MERGE pattern with no preceding MATCH
-        // (`MERGE (a:L1 {..})-[r:T]->(b:L2 {..})`, harness cases 10/11)
-        // — MERGE (find-or-create) the endpoint node inline and bind it,
-        // so the path pattern resolves its own endpoints instead of
-        // silently requiring an upstream MATCH.
-        let src_id = match context.get(&src_var) {
-            Some(ids) if !ids.is_empty() => ids[0],
-            Some(_) => return Ok(None),
-            None => {
-                let id = self.merge_single_node(src_node)?;
-                context.insert(src_var.clone(), vec![id]);
-                id
+        // G3 / anonymous-endpoint support — resolve source/destination node
+        // ids. When an enclosing MATCH/UNWIND already bound the variable
+        // (existing contract: present in `context` with a non-empty id
+        // list), reuse it as-is. When the variable is bound but resolved to
+        // ZERO nodes (e.g. a MATCH that found nothing), preserve the prior
+        // behaviour of bailing out to the node-only MERGE fallback. When the
+        // variable is not in `context` at all — including an ANONYMOUS
+        // endpoint, which has no variable to look up in the first place —
+        // this is a (partially or fully) standalone relationship-MERGE
+        // pattern with no preceding binding for that endpoint (`MERGE
+        // (a:L1 {..})-[r:T]->(b:L2 {..})`, harness cases 10/11, and the
+        // anonymous-endpoint forms `MERGE (:L1{..})-[:T]->(b)` /
+        // `MERGE (a)-[:T]->(:L2{..})` / fully-anonymous both sides) —
+        // MERGE (find-or-create) the endpoint node inline via
+        // `merge_single_node` (which also resolves per-node `_id` for
+        // anonymous endpoints, same as named ones).
+        //
+        // Anonymous endpoints are resolved WITHOUT ever writing into the
+        // shared `context` map: nothing in the query can reference a
+        // variable it never wrote, and some `context` consumers (e.g.
+        // `build_return_result_with_executor`'s `context.keys().next()`)
+        // assume every key is a real, single, user-visible binding — an
+        // extra synthesized key could be picked instead of the real one.
+        // Resolve each endpoint to the FULL set of bound node ids, not just
+        // the first. A preceding `MATCH (c:C), (d:D)` binds `c`/`d` to every
+        // matched node (see `process_match_clause_multi`, which stores an
+        // independent id list per variable), so the MERGE must run once per
+        // (src, dst) pair — the cartesian product of the two lists, exactly
+        // what the read-side relationship binder in `process_match_clause_multi`
+        // already does. Collapsing each list to `ids[0]` silently dropped
+        // every driving row after the first: `MATCH (c:C), (d:D) MERGE
+        // (c)-[:S]->(d)` over 2 C's and 1 D created ONE edge, not two.
+        //
+        // A bound-but-EMPTY endpoint (a MATCH that found nothing) still bails
+        // to the node-only MERGE fallback via `Ok(None)`, unchanged. An
+        // anonymous or standalone endpoint (no prior binding) is find-or-create
+        // through `merge_single_node`, yielding a single-element list — so a
+        // pattern with one created endpoint and one bound-list endpoint fans
+        // out across the list, and the all-single-node cases (inline `MERGE
+        // (a:L{..})-[:T]->(b:L{..})`, and the per-row UNWIND path whose
+        // `row_context` binds one node per endpoint) still produce exactly one
+        // edge each.
+        let resolve = |this: &mut Self,
+                       node: &executor::parser::NodePattern,
+                       context: &mut HashMap<String, Vec<u64>>|
+         -> Result<Option<Vec<u64>>> {
+            match &node.variable {
+                Some(v) => match context.get(v) {
+                    Some(ids) if !ids.is_empty() => Ok(Some(ids.clone())),
+                    Some(_) => Ok(None),
+                    None => {
+                        let id = this.merge_single_node(node)?;
+                        context.insert(v.clone(), vec![id]);
+                        Ok(Some(vec![id]))
+                    }
+                },
+                None => Ok(Some(vec![this.merge_single_node(node)?])),
             }
         };
-        let dst_id = match context.get(&dst_var) {
-            Some(ids) if !ids.is_empty() => ids[0],
-            Some(_) => return Ok(None),
-            None => {
-                let id = self.merge_single_node(dst_node)?;
-                context.insert(dst_var.clone(), vec![id]);
-                id
-            }
+        let Some(src_ids) = resolve(self, src_node, context)? else {
+            return Ok(None);
+        };
+        let Some(dst_ids) = resolve(self, dst_node, context)? else {
+            return Ok(None);
         };
 
-        // Check if relationship already exists
-        let existing_rel = self.find_relationship_between(src_id, dst_id, &rel_type)?;
+        // Relationship variable: the real name when the pattern bound one,
+        // otherwise the empty-string sentinel documented on this function.
+        // Never inserted anywhere the caller could confuse it for a real
+        // binding — see `apply_merge_relationship_set` and both call sites.
+        let rel_var = rel_pattern.variable.clone().unwrap_or_default();
 
-        let rel_id = if let Some(rid) = existing_rel {
-            // Relationship exists — apply ON MATCH SET to its properties (#14).
-            if let Some(on_match) = &merge_clause.on_match {
-                self.apply_merge_rel_set(&rel_var, rid, on_match)?;
-            }
-            rid
-        } else {
-            // Create the relationship with the pattern's inline properties
-            // (#25 — previously dropped: a hardcoded empty map was used, so
-            // `MERGE (a)-[r:T {k:v}]->(b)` created a propless edge), then
-            // layer ON CREATE SET on top (which may override them). Uses
-            // `eval_write_value` so inline props resolve UNWIND `row.*`
-            // bindings on the per-row MERGE path.
-            let mut props_map = Map::new();
-            if let Some(prop_map) = &rel_pattern.properties {
-                for (key, expr) in &prop_map.properties {
-                    props_map.insert(key.clone(), self.eval_write_value(expr)?);
-                }
-            }
-            let new_rel_id = self.create_relationship(
-                src_id,
-                dst_id,
-                rel_type.clone(),
-                Value::Object(props_map),
-            )?;
-            if let Some(on_create) = &merge_clause.on_create {
-                self.apply_merge_rel_set(&rel_var, new_rel_id, on_create)?;
-            }
-            new_rel_id
-        };
+        let mut merged: Vec<(String, u64, String)> = Vec::new();
+        for &raw_src in &src_ids {
+            for &raw_dst in &dst_ids {
+                // Honour the parsed arrow direction per pair. `raw_src`/`raw_dst`
+                // are in pattern/array order (`elements[0]`, `elements[2]`),
+                // correct for `Outgoing` (`->`); `MERGE (a)<-[:T]-(b)` must
+                // write/match b->a, so `Incoming` swaps the pair. `Both`
+                // (`-[:T]-`) keeps Neo4j's documented default of treating the
+                // pattern as outgoing for both the existing-edge lookup and the
+                // create fallback — see openCypher TCK Merge5 scenarios 11/12.
+                let (src_id, dst_id) = match rel_pattern.direction {
+                    executor::parser::RelationshipDirection::Incoming => (raw_dst, raw_src),
+                    _ => (raw_src, raw_dst),
+                };
 
-        Ok(Some((rel_var, rel_id, rel_type)))
+                // Check if the relationship already exists.
+                let rel_id =
+                    if let Some(rid) = self.find_relationship_between(src_id, dst_id, &rel_type)? {
+                        // Exists — apply ON MATCH SET to its properties (#14).
+                        if let Some(on_match) = &merge_clause.on_match {
+                            self.apply_merge_relationship_set(
+                                context, &rel_var, rid, &rel_type, on_match,
+                            )?;
+                        }
+                        rid
+                    } else {
+                        // Create with the pattern's inline properties (#25 —
+                        // previously dropped), then layer ON CREATE SET on top
+                        // (which may override them). `eval_write_value` resolves
+                        // UNWIND `row.*` bindings on the per-row MERGE path.
+                        let mut props_map = Map::new();
+                        if let Some(prop_map) = &rel_pattern.properties {
+                            for (key, expr) in &prop_map.properties {
+                                props_map.insert(key.clone(), self.eval_write_value(expr)?);
+                            }
+                        }
+                        let new_rel_id = self.create_relationship(
+                            src_id,
+                            dst_id,
+                            rel_type.clone(),
+                            Value::Object(props_map),
+                        )?;
+                        if let Some(on_create) = &merge_clause.on_create {
+                            self.apply_merge_relationship_set(
+                                context, &rel_var, new_rel_id, &rel_type, on_create,
+                            )?;
+                        }
+                        new_rel_id
+                    };
+
+                merged.push((rel_var.clone(), rel_id, rel_type.clone()));
+            }
+        }
+
+        Ok(Some(merged))
     }
 
-    /// Apply a MERGE `ON CREATE` / `ON MATCH SET` clause to a relationship's
-    /// properties (#14). Only `SetItem::Property` assignments whose target is
-    /// the relationship variable are applied; the RHS is evaluated with
-    /// `evaluate_set_expression`, which resolves UNWIND row bindings (e.g.
-    /// `SET r.w = row.w`) and `r.<prop>` self-references against the rel's
-    /// current properties. Other SET item kinds are ignored for relationships.
-    pub(super) fn apply_merge_rel_set(
+    /// Apply a MERGE `ON CREATE` / `ON MATCH SET` clause following a
+    /// relationship-MERGE (#14). Delegates to the general
+    /// [`Self::apply_set_clause`] so a `SET` item may target either the
+    /// relationship variable OR any node variable already visible in
+    /// `context` (the pattern's own src/dst node variables when real, or any
+    /// variable bound by an earlier clause in the same query) — e.g. `MERGE
+    /// (a)-[:KNOWS]->(b) ON CREATE SET a.since = date()` now actually
+    /// applies to `a`, which the old relationship-only SET application
+    /// silently dropped.
+    ///
+    /// `rel_var` may be the empty-string sentinel documented on
+    /// [`Self::process_merge_relationship`] for an anonymous relationship —
+    /// in that case it is deliberately left out of the local rel-context
+    /// below, so it can never be the `target` of a user `SET` item (matching
+    /// the fact that an anonymous relationship has no user-referenceable
+    /// name by construction).
+    pub(super) fn apply_merge_relationship_set(
         &mut self,
+        context: &HashMap<String, Vec<u64>>,
         rel_var: &str,
         rel_id: u64,
+        rel_type: &str,
         set_clause: &executor::parser::SetClause,
     ) -> Result<()> {
-        let mut props: Map<String, Value> = self
-            .storage
-            .load_relationship_properties(rel_id)?
-            .and_then(|v| match v {
-                Value::Object(m) => Some(m),
-                _ => None,
-            })
-            .unwrap_or_default();
-
-        let mut changed = false;
-        for item in &set_clause.items {
-            if let executor::parser::SetItem::Property {
-                target,
-                property,
-                value,
-            } = item
-            {
-                if target != rel_var {
-                    continue;
-                }
-                let v = self.evaluate_set_expression(value, rel_var, &props)?;
-                props.insert(property.clone(), v);
-                changed = true;
-            }
+        let mut local_rel_context: HashMap<String, Vec<(u64, String)>> = HashMap::new();
+        if !rel_var.is_empty() {
+            local_rel_context.insert(rel_var.to_string(), vec![(rel_id, rel_type.to_string())]);
         }
-
-        if changed {
-            self.storage
-                .update_relationship_properties(rel_id, Value::Object(props))?;
-        }
-        Ok(())
+        self.apply_set_clause(context, &local_rel_context, set_clause)
     }
 
     /// Apply a single `SET <rel>.<property> = <value>` to one relationship
@@ -884,8 +1304,13 @@ impl Engine {
         } else {
             props.insert(property.to_string(), v);
         }
+        let props_value = Value::Object(props);
+        // Register every property key with the catalog so `db.propertyKeys()`
+        // sees keys written via `SET <rel>.<property> = <value>`. See
+        // `Catalog::register_property_keys`.
+        self.catalog.register_property_keys(&props_value);
         self.storage
-            .update_relationship_properties(rel_id, Value::Object(props))?;
+            .update_relationship_properties(rel_id, props_value)?;
         Ok(())
     }
 
@@ -923,8 +1348,13 @@ impl Engine {
                 )));
             }
         }
+        let props_value = Value::Object(props);
+        // Register every property key with the catalog so `db.propertyKeys()`
+        // sees keys written via `SET <rel> += <mapExpr>`. See
+        // `Catalog::register_property_keys`.
+        self.catalog.register_property_keys(&props_value);
         self.storage
-            .update_relationship_properties(rel_id, Value::Object(props))?;
+            .update_relationship_properties(rel_id, props_value)?;
         Ok(())
     }
 
@@ -966,73 +1396,53 @@ impl Engine {
             }
         }
 
-        // Read source node to get its relationship chain
-        let src_node = self.storage.read_node(src_id)?;
-        let mut rel_ptr = src_node.first_rel_ptr;
-
         // #20: make the fast-path miss itself observable (debug level — entry
         // is common on small graphs; the warn below covers the pathology).
         tracing::debug!(
             src_id,
             rel_type,
-            "exact-edge index miss — falling back to O(degree) chain walk"
+            "exact-edge index miss — falling back to O(out-degree) adjacency walk"
         );
 
-        // Telemetry (issue #12): the chain walk is O(degree). For a hub node
+        // Authoritative fallback: the store's own outgoing adjacency
+        // (`storage::adjacency_index`, maintained in `RecordStore::write_rel`
+        // and rebuilt from the records on open). It replaced a walk of
+        // `first_rel_ptr`/`next_src_ptr`, which was the same O(out-degree) but
+        // depended on chain integrity — the chain is patched up heuristically
+        // by `create_relationship` when the mmap looks stale, and a single
+        // broken link silently ended the walk early, making MERGE re-create an
+        // edge that already existed. Each candidate is still read back and
+        // fully re-checked, so the index only chooses which records to read.
+        // See phase0_perf-store-reverse-incoming-adjacency-index §1.7.
+        let outgoing = self.storage.outgoing_relationships(src_id);
+
+        // Telemetry (issue #12): still O(out-degree). For a hub node
         // accumulating thousands of same-type edges, each edge-MERGE existence
-        // check that misses the exact-edge index degrades to a full-chain
-        // scan, which under a sustained edge-write burst manifests as a
-        // no-query-running CPU climb. Count hops and warn past a threshold so
-        // the pathology is observable (RUST_LOG=nexus_core=warn) instead of an
-        // opaque stall.
-        let mut hops: u64 = 0;
-        while rel_ptr != 0 {
-            // Chain pointers are stored as `rel_id + 1` (0 is the
-            // end-of-chain sentinel — see record_store_ops
-            // `create_relationship` and the matching decode in
-            // executor/operators/path.rs). Reading `rel_ptr` directly was
-            // an off-by-one that silently broke this authoritative
-            // fallback: it walked the wrong records and returned None (or
-            // a wrong id) whenever the exact-edge index missed.
-            let rel_id = rel_ptr - 1;
+        // check that misses the exact-edge index scans them all, which under a
+        // sustained edge-write burst manifests as a no-query-running CPU
+        // climb. Warn past a threshold so the pathology is observable
+        // (RUST_LOG=nexus_core=warn) instead of an opaque stall.
+        if outgoing.len() >= 1000 {
+            tracing::warn!(
+                src_id,
+                rel_type,
+                out_degree = outgoing.len(),
+                "find_relationship_between is scanning a high-degree node's \
+                 outgoing edges (>= 1000) — exact-edge index miss on a hub; \
+                 sustained edge-MERGE here can pin CPU (issue #12)"
+            );
+        }
+
+        for rel_id in outgoing {
             let rel_record = self.storage.read_rel(rel_id)?;
-            hops += 1;
-
-            // #20: warn DURING the walk, the moment it crosses the threshold,
-            // so a hub-degree pathology is surfaced in real time — not only
-            // after a (possibly enormous) scan completes, and even when the
-            // edge is eventually found below (the early return would otherwise
-            // skip a post-loop warning).
-            if hops == 1000 {
-                tracing::warn!(
-                    src_id,
-                    rel_type,
-                    "find_relationship_between is walking a long O(degree) \
-                     relationship chain (>= 1000 hops) — exact-edge index miss \
-                     on a high-degree hub; sustained edge-MERGE here can pin CPU \
-                     (issue #12)"
-                );
-            }
-
-            // Check if this is an outgoing relationship to dst_id with the
-            // right type. Skip deleted records — the fast path above
-            // verifies deletion too, and MERGE must not treat a deleted
-            // edge as existing.
+            // Skip deleted records — the fast path above verifies deletion
+            // too, and MERGE must not treat a deleted edge as existing.
             if !rel_record.is_deleted()
                 && rel_record.src_id == src_id
                 && rel_record.dst_id == dst_id
                 && rel_record.type_id == type_id
             {
                 return Ok(Some(rel_id));
-            }
-
-            // Move to next relationship in chain
-            if rel_record.src_id == src_id {
-                rel_ptr = rel_record.next_src_ptr;
-            } else if rel_record.dst_id == src_id {
-                rel_ptr = rel_record.next_dst_ptr;
-            } else {
-                break;
             }
         }
 
@@ -1186,6 +1596,19 @@ impl Engine {
         }
 
         let mut state_map: HashMap<u64, NodeWriteState> = HashMap::new();
+        // Side-effect count (openCypher TCK `+labels`): only labels that were
+        // not already present on the node are counted, so `SET n:L` on a node
+        // that already carries `L` is the idempotent no-op the TCK expects.
+        // Accumulated locally to avoid borrowing `self` while `state` is held,
+        // then folded into `self.side_effects` once below.
+        let mut labels_added = 0u64;
+        // Side-effect counts for properties (openCypher TCK `+properties` /
+        // `-properties`): every `SET n.k = <non-null>` is a write (counted even
+        // when the value is unchanged, per the TCK); `SET n.k = null` and the
+        // null branch of `SET n += {…}` remove a key (counted only when the key
+        // was present). Same local-accumulator-then-fold pattern as labels.
+        let mut properties_set = 0u64;
+        let mut properties_removed = 0u64;
 
         for item in &set_clause.items {
             match item {
@@ -1264,9 +1687,12 @@ impl Engine {
                         // semantics: a property whose value is NULL is
                         // absent), rather than storing a literal JSON null.
                         if matches!(json_value, serde_json::Value::Null) {
-                            state.properties.remove(property);
+                            if state.properties.remove(property).is_some() {
+                                properties_removed += 1;
+                            }
                         } else {
                             state.properties.insert(property.clone(), json_value);
+                            properties_set += 1;
                         }
                     }
                 }
@@ -1292,7 +1718,9 @@ impl Engine {
                             // must fail before the label lands on the
                             // pending state.
                             self.enforce_add_label_constraints(lbl, &state.properties)?;
-                            state.labels.insert(lbl.clone());
+                            if state.labels.insert(lbl.clone()) {
+                                labels_added += 1;
+                            }
                         }
                     }
                 }
@@ -1322,9 +1750,12 @@ impl Engine {
                             Value::Object(rhs) => {
                                 for (k, v) in rhs.into_iter() {
                                     if matches!(v, Value::Null) {
-                                        state.properties.remove(&k);
+                                        if state.properties.remove(&k).is_some() {
+                                            properties_removed += 1;
+                                        }
                                     } else {
                                         state.properties.insert(k, v);
+                                        properties_set += 1;
                                     }
                                 }
                             }
@@ -1368,6 +1799,9 @@ impl Engine {
         }
         tracing::info!("[apply_set_clause] DONE");
 
+        self.side_effects.labels_added += labels_added;
+        self.side_effects.properties_set += properties_set;
+        self.side_effects.properties_removed += properties_removed;
         Ok(())
     }
 
@@ -1381,6 +1815,14 @@ impl Engine {
         }
 
         let mut state_map: HashMap<u64, NodeWriteState> = HashMap::new();
+        // Side-effect count (openCypher TCK `-labels`): only labels actually
+        // present are counted, so `REMOVE n:L` of an absent label is the
+        // idempotent no-op the TCK expects. Local accumulator, folded into
+        // `self.side_effects` below.
+        let mut labels_removed = 0u64;
+        // `REMOVE n.k` removes a property key — counted (TCK `-properties`)
+        // only when the key was actually present.
+        let mut properties_removed = 0u64;
 
         for item in &remove_clause.items {
             match item {
@@ -1400,7 +1842,9 @@ impl Engine {
                         // property bag.
                         let label_ids = self.label_ids_for_state(state)?;
                         self.enforce_not_null_on_prop_change(&label_ids, property, None)?;
-                        state.properties.remove(property);
+                        if state.properties.remove(property).is_some() {
+                            properties_removed += 1;
+                        }
                     }
                 }
                 executor::parser::RemoveItem::Label { target, label } => {
@@ -1418,7 +1862,9 @@ impl Engine {
                     for node_id in node_ids.clone() {
                         let state = self.ensure_node_state(node_id, &mut state_map)?;
                         for lbl in &resolved {
-                            state.labels.remove(lbl);
+                            if state.labels.remove(lbl) {
+                                labels_removed += 1;
+                            }
                         }
                     }
                 }
@@ -1429,6 +1875,8 @@ impl Engine {
             self.persist_node_state(node_id, state)?;
         }
 
+        self.side_effects.labels_removed += labels_removed;
+        self.side_effects.properties_removed += properties_removed;
         Ok(())
     }
 
@@ -1499,14 +1947,12 @@ impl Engine {
                                 self.delete_node_relationships(node_id)?;
                                 self.delete_node(node_id)?;
                             } else {
-                                // Regular DELETE: check for relationships
-                                let node_record = self.storage.read_node(node_id)?;
-                                if node_record.first_rel_ptr != 0 {
-                                    return Err(Error::CypherExecution(format!(
-                                        "Cannot DELETE node {} with existing relationships; use DETACH DELETE",
-                                        node_id
-                                    )));
-                                }
+                                // Regular DELETE: the relationship-existence
+                                // guard is centralized in `delete_node` (both
+                                // outgoing AND incoming edges — the local
+                                // `first_rel_ptr != 0` check only saw outgoing
+                                // ones and let an incoming-only node slip past;
+                                // phase0_fix-delete-node-dangling-relationships).
                                 self.delete_node(node_id)?;
                             }
                         }

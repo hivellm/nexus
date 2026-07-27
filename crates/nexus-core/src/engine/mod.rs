@@ -24,6 +24,7 @@ pub mod clustering;
 pub mod config;
 pub mod crud;
 pub mod dynamic_labels;
+pub mod dynamic_types;
 pub mod graph_scope;
 pub mod maintenance;
 pub mod stats;
@@ -202,6 +203,13 @@ pub struct Engine {
     /// parameters — in that case a query containing a `:$param` label
     /// is rejected with `ERR_INVALID_LABEL`.
     pub(crate) current_params: HashMap<String, Value>,
+    /// Mutation counters for the currently-executing top-level Cypher
+    /// query. Reset at the same point as `current_params` (query
+    /// entry), incremented by the write-path CRUD helpers (e.g.
+    /// `create_node_inner`), and copied onto the returned
+    /// `ResultSet::side_effects` before the entry-point call returns.
+    /// Mirrors `current_params`'s reset/clear lifecycle.
+    pub(crate) side_effects: executor::types::SideEffects,
     /// Per-iteration UNWIND row bindings for the write path (issue #13).
     /// `UNWIND [...] AS row MERGE/SET ...` runs the downstream write
     /// clauses once per row; this map binds the loop variable (e.g.
@@ -233,8 +241,6 @@ pub struct Engine {
     /// `warn` log instead of rejecting the write (§10). Default
     /// `false`; scheduled for removal at v1.5.
     pub(crate) relaxed_constraint_enforcement: bool,
-    /// Keeps temporary directory alive for Engine::new(). None for persistent storage.
-    _temp_dir: Option<tempfile::TempDir>,
     /// External-id reservations made during the current session write
     /// transaction.  Each entry is `(internal_id, external_id)` as recorded
     /// inside `create_node_inner` when `put_if_absent` succeeded.
@@ -244,6 +250,24 @@ pub struct Engine {
     /// no dangling forward/reverse entries are left behind.  The field is
     /// cleared (drained) by both the commit and abort paths.
     pub(crate) pending_external_ids: Vec<(u64, crate::storage::external_id::ExternalId)>,
+    /// Deferred temporary-directory cleanup guard.
+    ///
+    /// For an engine built on a self-cleaning temporary store
+    /// ([`Self::new`]) this holds an independent clone of the store's
+    /// `Arc<TempDirGuard>`. Declared LAST so the compiler-generated drop
+    /// glue runs it after every other field — `catalog` (LMDB), `wal`,
+    /// `indexes` (Tantivy full-text), `executor` (which holds its own
+    /// store/index clones), and `page_cache` — has dropped and released
+    /// every file handle inside the temp directory. The guard's
+    /// `remove_dir_all` only fires when its last `Arc` clone drops, so
+    /// tying that last clone to Engine's final field guarantees removal
+    /// runs with no open handles left in the tree — required on Windows,
+    /// where a still-open catalog/WAL/index handle blocked removal and left
+    /// a small residual of temp dirs behind (the tail of
+    /// `phase0_fix-tempdir-record-store-leak`). `None` for persistent
+    /// engines ([`Self::with_data_dir`], [`Self::with_isolated_catalog`]),
+    /// which must never auto-delete a caller-provided data directory.
+    _temp_dir_cleanup: Option<Arc<storage::TempDirGuard>>,
 }
 
 impl Engine {
@@ -253,12 +277,17 @@ impl Engine {
     /// The temporary directory will be automatically cleaned up when the Engine is dropped.
     /// For persistent storage, use `Engine::with_data_dir()` instead.
     pub fn new() -> Result<Self> {
-        // Create temporary directory for data
-        let temp_dir = tempfile::tempdir()?;
-        let data_dir = temp_dir.path().to_path_buf();
-        let mut engine = Self::with_data_dir(&data_dir)?;
-        engine._temp_dir = Some(temp_dir);
-        Ok(engine)
+        // Self-cleaning temp directory: `RecordStore::new_temporary()`
+        // attaches a reference-counted cleanup guard to the store (see
+        // its doc comment) that removes the directory once every clone
+        // of the store — including the one held by `self.executor` — has
+        // dropped, i.e. when this `Engine` itself drops. No dedicated
+        // `TempDir` field is needed on `Engine` anymore: removal is tied
+        // to the store's own lifetime, not to a timer, so a long-running
+        // server process is unaffected until shutdown.
+        let storage = storage::RecordStore::new_temporary()?;
+        let data_dir = storage.path().to_path_buf();
+        Self::bootstrap_with_storage(&data_dir, EngineConfig::default(), storage)
     }
 
     /// Create a new engine instance with a specific data directory, using
@@ -280,11 +309,24 @@ impl Engine {
         // Ensure data directory exists
         std::fs::create_dir_all(data_dir)?;
 
+        // Initialize record store (persistent — never auto-deletes `data_dir`)
+        let storage = storage::RecordStore::new(data_dir)?;
+
+        Self::bootstrap_with_storage(data_dir, config, storage)
+    }
+
+    /// Shared bootstrap tail for [`Self::new`] (temp-directory,
+    /// self-cleaning) and [`Self::with_data_dir_and_config`] (persistent):
+    /// builds the catalog, page cache, WAL, transaction/session managers,
+    /// indexes, executor, and cache system given an already-open
+    /// `storage`, so the two entry points cannot drift apart.
+    fn bootstrap_with_storage(
+        data_dir: &std::path::Path,
+        config: EngineConfig,
+        storage: storage::RecordStore,
+    ) -> Result<Self> {
         // Initialize catalog
         let catalog = catalog::Catalog::new(data_dir.join("catalog.mdb"))?;
-
-        // Initialize record stores
-        let storage = storage::RecordStore::new(data_dir)?;
 
         // Initialize page cache
         let page_cache = page_cache::PageCache::new(config.page_cache_capacity)?;
@@ -320,6 +362,11 @@ impl Engine {
         // This prevents performance regression on engine startup
         // Cache will warm up naturally during query execution
 
+        // Capture the store's temp-dir cleanup guard (an `Arc` clone; `None`
+        // for a persistent store) BEFORE `storage` is moved into the struct,
+        // so it can be stashed as Engine's last-dropped field and the
+        // directory removed only after catalog/WAL/index handles close.
+        let temp_dir_cleanup = storage.temp_dir_guard();
         // Engine shares the same TransactionManager Arc with SessionManager
         let mut engine = Engine {
             catalog,
@@ -334,6 +381,7 @@ impl Engine {
             cache,
             quota_provider: None,
             current_params: HashMap::new(),
+            side_effects: executor::types::SideEffects::default(),
             unwind_bindings: HashMap::new(),
             relationship_index_dirty: std::sync::atomic::AtomicBool::new(false),
             typed_list_constraints: HashMap::new(),
@@ -341,8 +389,8 @@ impl Engine {
             rel_not_null_constraints: Vec::new(),
             property_type_constraints: Vec::new(),
             relaxed_constraint_enforcement: false,
-            _temp_dir: None,
             pending_external_ids: Vec::new(),
+            _temp_dir_cleanup: temp_dir_cleanup,
         };
 
         // Configure cache in executor for relationship index access
@@ -366,6 +414,13 @@ impl Engine {
         // registry at construction so spatial DDL and queries work even
         // before the first `refresh_executor` fires.
         engine.executor.install_rtree(engine.indexes.rtree.clone());
+        // phase20_knn-write-path-wiring §1.4 — install the vector-index
+        // registry at construction so `CREATE VECTOR INDEX` and the
+        // write-path autopopulate hooks share the engine's registry even
+        // before the first `refresh_executor` fires.
+        engine
+            .executor
+            .install_knn_registry(engine.indexes.knn_registry.clone());
         // phase6_fix-read-match-index-seek §2 — install the typed property
         // index (Arc-shared) at construction so a `CREATE INDEX` followed by
         // a read `MATCH (n:L {p: v})` uses the index seek even before the
@@ -431,17 +486,17 @@ impl Engine {
     /// lower bound used by reconcilers and admin-level audits to
     /// verify the heuristic hasn't drifted.
     ///
-    /// **Caveat on relationship counts.** The current CREATE
-    /// operator batches node-count catalog updates but does NOT
-    /// increment `catalog.rel_counts` when a relationship is
-    /// created (see `executor::operators::create` —
-    /// `batch_increment_node_counts` is called, the rel-type
-    /// equivalent is not). As a result this function's node total
-    /// is accurate but the relationship total is a lower bound,
-    /// typically zero. Fixing create.rs to also batch
-    /// `increment_rel_count` is a separate follow-up; once that
-    /// lands the calculation here needs no change — it's
-    /// already summing both columns.
+    /// **Relationship counts.** Both write paths now record
+    /// `catalog.rel_counts` through the batched
+    /// `Catalog::batch_increment_rel_counts` (mirroring the
+    /// node-count batching): the executor CREATE operator
+    /// (`executor::operators::create`) accumulates a rel-type column
+    /// alongside its node-count column, and the `/ingest` bulk path
+    /// flushes one rel-count batch per request. As a result both this
+    /// function's node total and its relationship total are accurate
+    /// — neither is a lower bound. (The per-edge `increment_rel_count`
+    /// is still used by the single-edge REST / RPC / RESP3 / MERGE
+    /// callers, which do not batch.)
     ///
     /// Under [`crate::cluster::TenantIsolationMode::None`] (or when
     /// the namespace has no catalog entries yet) this returns 0
@@ -517,6 +572,10 @@ impl Engine {
         let cache_config = cache::CacheConfig::default();
         let cache = cache::MultiLayerCache::new(cache_config)?;
 
+        // Persistent store — this yields `None`; captured before `storage`
+        // is moved so the last-dropped `_temp_dir_cleanup` field is always
+        // populated from the store's actual guard.
+        let temp_dir_cleanup = storage.temp_dir_guard();
         let mut engine = Engine {
             catalog,
             storage,
@@ -530,6 +589,7 @@ impl Engine {
             cache,
             quota_provider: None,
             current_params: HashMap::new(),
+            side_effects: executor::types::SideEffects::default(),
             unwind_bindings: HashMap::new(),
             relationship_index_dirty: std::sync::atomic::AtomicBool::new(false),
             typed_list_constraints: HashMap::new(),
@@ -537,8 +597,8 @@ impl Engine {
             rel_not_null_constraints: Vec::new(),
             property_type_constraints: Vec::new(),
             relaxed_constraint_enforcement: false,
-            _temp_dir: None,
             pending_external_ids: Vec::new(),
+            _temp_dir_cleanup: temp_dir_cleanup,
         };
 
         engine.rebuild_indexes_from_storage()?;
@@ -555,6 +615,11 @@ impl Engine {
             .executor
             .install_fulltext(engine.indexes.fulltext.clone());
         engine.executor.install_rtree(engine.indexes.rtree.clone());
+        // phase20_knn-write-path-wiring §1.4 — install the vector-index
+        // registry at construction, mirroring the R-tree install above.
+        engine
+            .executor
+            .install_knn_registry(engine.indexes.knn_registry.clone());
         // phase6_fix-read-match-index-seek §2 — install the typed property
         // index (Arc-shared) at construction so read-side index seeks work
         // before the first `refresh_executor` fires.
@@ -626,7 +691,99 @@ impl Engine {
             }
         }
 
+        // Rebuild the vector (KNN) index from the durable definition
+        // (phase20_knn-write-path-wiring §3.2). `CREATE VECTOR INDEX`
+        // persists the single active `(name, label, property)` triple via
+        // `Catalog::persist_vector_index`; without this rebuild both the
+        // `VectorIndexRegistry` definition AND the in-memory HNSW graph
+        // would be lost on restart, even though the embeddings themselves
+        // are still durable as node properties in the property store.
+        let vector_defs = self.catalog.list_vector_indexes().unwrap_or_default();
+        for (name, label, property) in &vector_defs {
+            if let Err(e) = self
+                .indexes
+                .knn_registry
+                .register(name, label, property, true)
+            {
+                tracing::warn!("vector-index rebuild: register({name:?}) failed: {e}");
+            }
+        }
+        if !vector_defs.is_empty() {
+            // Repopulate the HNSW graph by calling `KnnIndex::add_vector`
+            // directly instead of the WAL-emitting `Engine::knn_autopopulate_node`
+            // write-path hook. This rebuild runs on every engine open; if it
+            // replayed through the WAL-emitting hook it would append a fresh
+            // `KnnVectorAdd` entry for every already-durable vector on every
+            // restart, growing the WAL unboundedly for a read that produces
+            // no new durable state. The typed property-index rebuild above
+            // makes the same choice (`populate_index` never touches the
+            // WAL) — rebuilding an in-memory index from an already-durable
+            // source is not itself a write.
+            for node_id in 0..total_nodes {
+                let record = match self.storage.read_node(node_id) {
+                    Ok(record) => record,
+                    Err(_) => continue,
+                };
+                if record.is_deleted() {
+                    continue;
+                }
+                let mut label_ids = Vec::new();
+                for bit in 0..64 {
+                    if (record.label_bits & (1u64 << bit)) != 0 {
+                        label_ids.push(bit as u32);
+                    }
+                }
+                if label_ids.is_empty() {
+                    continue;
+                }
+                let props = match self.storage.load_node_properties(node_id) {
+                    Ok(Some(Value::Object(m))) => m,
+                    _ => continue,
+                };
+                for (name, label, property) in &vector_defs {
+                    let label_id = match self.catalog.get_label_id(label) {
+                        Ok(id) => id,
+                        Err(_) => continue,
+                    };
+                    if !label_ids.contains(&label_id) {
+                        continue;
+                    }
+                    let Some(val) = props.get(property) else {
+                        continue;
+                    };
+                    let Some(embedding) = Self::vector_from_json(val) else {
+                        continue;
+                    };
+                    if let Err(e) = self.indexes.knn_index.add_vector(node_id, embedding) {
+                        tracing::warn!(
+                            "vector-index rebuild: add_vector for {name:?} node {node_id} failed: {e}"
+                        );
+                    }
+                }
+            }
+        }
+
         Ok(())
+    }
+
+    /// Parse a JSON value into a `Vec<f32>` embedding for the vector-index
+    /// rebuild, mirroring `Engine::knn_embedding_from_json`
+    /// (`engine/crud/index_maintenance.rs`, not reusable here — it is
+    /// module-private to that file). Only a JSON array of finite numbers is
+    /// a valid embedding; anything else (missing property, non-array,
+    /// non-finite element) yields `None` so the caller skips the node
+    /// rather than treating it as an error.
+    fn vector_from_json(value: &Value) -> Option<Vec<f32>> {
+        let arr = value.as_array()?;
+        let mut out = Vec::with_capacity(arr.len());
+        for item in arr {
+            let n = item.as_f64()?;
+            if !n.is_finite() {
+                return None;
+            }
+            out.push(n as f32);
+        }
+        Some(out)
     }
 
     /// Clear and rebuild the in-memory relationship index (type / node /
@@ -689,13 +846,22 @@ impl Engine {
         // on `self.wal` can be released before we iterate.
         let wal_path = self.wal.path().to_path_buf();
         let mut replay_wal = wal::Wal::new(&wal_path)?;
-        let entries = match replay_wal.recover() {
+        let mut entries = match replay_wal.recover() {
             Ok(e) => e,
             Err(e) => {
                 tracing::warn!("external-id WAL recovery: could not read WAL: {e}");
                 return Ok(());
             }
         };
+
+        // phase0_fix-wal-durability-gaps #4: also replay any emergency side-WAL
+        // files (written when a live flush exhausted its retries), so their
+        // entries are not lost. Merged after the main WAL's entries; the
+        // put_if_absent below is idempotent, so relative order does not affect
+        // correctness.
+        let emergency_entries = replay_wal.recover_emergency().unwrap_or_default();
+        let had_emergency = !emergency_entries.is_empty();
+        entries.extend(emergency_entries);
 
         for entry in &entries {
             if let wal::WalEntry::ExternalIdAssigned {
@@ -743,6 +909,13 @@ impl Engine {
             }
         }
 
+        // The recovered entries (including any emergency ones) are now durably
+        // applied to the catalog; remove the emergency side-files so they are
+        // not replayed on every subsequent boot.
+        if had_emergency {
+            replay_wal.clear_emergency();
+        }
+
         Ok(())
     }
 
@@ -768,11 +941,52 @@ impl Engine {
         // R-tree registry with the executor so spatial CRUD hooks and
         // query operators read and write the same in-memory state.
         self.executor.install_rtree(self.indexes.rtree.clone());
+        // phase20_knn-write-path-wiring §1.4 — share the engine's
+        // vector-index registry so `CREATE VECTOR INDEX` and the
+        // write-path autopopulate hooks read and write the same
+        // in-memory state.
+        self.executor
+            .install_knn_registry(self.indexes.knn_registry.clone());
         // phase6_fix-read-match-index-seek §1 — share the property index
         // so the planner can consult it for USING INDEX seeks.
         self.executor
             .install_property_index(self.indexes.property_index.clone());
         Ok(())
+    }
+
+    /// Skip [`Self::refresh_executor`]'s ~500us executor
+    /// rebuild when a write demonstrably produced no effect (the classic
+    /// case: a `MERGE` that matched an existing node with no `ON MATCH
+    /// SET`). `refresh_executor` runs inside the engine's `&mut self`
+    /// write lock on every write query today, so on the `merge_singleton`
+    /// benchmark it dominates the write ceiling even though a no-op MERGE
+    /// changed nothing the executor's cloned state needs to see.
+    ///
+    /// `mutated` must be a locally, accurately computed "did *this* write
+    /// change anything" signal — see each call site for how it derives
+    /// one (a `deleted_count`/pattern-count diff, an explicit clause-kind
+    /// flag, ...). This deliberately takes a plain `bool` rather than
+    /// [`executor::types::SideEffects`]: today only
+    /// `SideEffects::nodes_created` is ever populated in this crate (it
+    /// is stitched in from [`crate::storage::RecordStore::nodes_created`]
+    /// at the outermost `execute_cypher_*` entry point) — every other
+    /// field (`relationships_created`, `properties_set`, `labels_added`,
+    /// ...) is declared but never written anywhere in the engine or
+    /// executor. Trusting a `SideEffects` snapshot at an inner call site
+    /// would silently treat every SET / REMOVE / relationship-CREATE as a
+    /// no-op and skip a refresh it actually needs.
+    ///
+    /// As a defense-in-depth belt-and-suspenders check, this also
+    /// consults `self.storage.nodes_created()` — the per-top-level-query
+    /// atomic counter reset in `execute_cypher_with_params` /
+    /// `execute_cypher_ast_with_params` — so a node creation that a
+    /// caller's local bookkeeping somehow missed still forces a refresh.
+    pub(crate) fn refresh_executor_if_mutated(&mut self, mutated: bool) -> Result<()> {
+        if mutated || self.storage.nodes_created() != 0 {
+            self.refresh_executor()
+        } else {
+            Ok(())
+        }
     }
 
     /// Create a new engine with default configuration

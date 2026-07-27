@@ -88,6 +88,196 @@ mod tests {
         assert_eq!(wal.stats.entries_written, 10);
     }
 
+    // ---- phase0_fix-wal-durability-gaps #4: emergency batch is recoverable --
+    //
+    // Pre-fix (verified by inspection per the task's §1.1) the emergency
+    // fallback wrote `[len][bincode]` frames to a CWD-relative `data/` path
+    // that `recover()` never parsed and no boot-time scan ever read. These
+    // tests pin the fixed behaviour: real frames, in the WAL's own directory,
+    // recoverable (and cipher-mirrored when the WAL is encrypted).
+
+    #[test]
+    fn emergency_save_writes_real_recoverable_frames_in_wal_dir() {
+        let (wal, ctx) = create_test_wal();
+        let entries = vec![
+            WalEntry::CreateNode {
+                node_id: 42,
+                label_bits: 7,
+            },
+            WalEntry::ExternalIdAssigned {
+                internal_id: 42,
+                external_id_bytes: vec![1, 2, 3],
+            },
+        ];
+
+        let path = wal.emergency_save(&entries).unwrap();
+        // Lands in the WAL's own directory, never a CWD-relative "data/".
+        assert_eq!(path.parent(), Some(ctx.path()));
+        assert!(path.exists());
+
+        // Recoverable through the real frame decoder.
+        let recovered = wal.recover_emergency().unwrap();
+        assert_eq!(recovered.len(), 2);
+        assert!(recovered.iter().any(|e| matches!(
+            e,
+            WalEntry::CreateNode {
+                node_id: 42,
+                label_bits: 7
+            }
+        )));
+        assert!(recovered.iter().any(|e| matches!(
+            e,
+            WalEntry::ExternalIdAssigned {
+                internal_id: 42,
+                ..
+            }
+        )));
+    }
+
+    #[test]
+    fn emergency_save_mirrors_cipher_and_does_not_leak_plaintext() {
+        let (wal, _ctx) = make_encrypted_wal(0x5A);
+        let secret = b"topsecret-external-id".to_vec();
+        let entries = vec![WalEntry::ExternalIdAssigned {
+            internal_id: 7,
+            external_id_bytes: secret.clone(),
+        }];
+
+        let path = wal.emergency_save(&entries).unwrap();
+
+        // Decryptable with the same cipher.
+        let recovered = wal.recover_emergency().unwrap();
+        assert!(
+            recovered
+                .iter()
+                .any(|e| matches!(e, WalEntry::ExternalIdAssigned { internal_id: 7, .. }))
+        );
+
+        // The plaintext secret must NOT be present on disk — the emergency
+        // frames are encrypted, mirroring the main WAL.
+        let raw = std::fs::read(&path).unwrap();
+        assert!(
+            !raw.windows(secret.len()).any(|w| w == secret.as_slice()),
+            "an encrypted WAL's emergency file must not leak plaintext"
+        );
+    }
+
+    #[test]
+    fn clear_emergency_removes_side_files() {
+        let (wal, _ctx) = create_test_wal();
+        wal.emergency_save(&[WalEntry::DeleteNode { node_id: 1 }])
+            .unwrap();
+        assert_eq!(wal.recover_emergency().unwrap().len(), 1);
+
+        wal.clear_emergency();
+        assert!(wal.recover_emergency().unwrap().is_empty());
+    }
+
+    // ---- phase0_fix-wal-torn-tail-recovery ---------------------------------
+    //
+    // A crash mid-append leaves a partial trailing frame (appends are un-fsynced
+    // until the async batch flush). recover()'s v1/v2 paths used bare `?` on
+    // read_exact and treated any CRC mismatch as fatal, so a torn tail discarded
+    // the ENTIRE valid prefix and — since the frame was never truncated —
+    // poisoned every future boot. The fix truncates a torn *trailing* frame and
+    // returns the prefix, while genuine mid-file corruption stays a hard error.
+
+    fn write_five_nodes(path: &std::path::Path) -> u64 {
+        {
+            let mut wal = Wal::new(path).unwrap();
+            for i in 0..5u64 {
+                wal.append(&WalEntry::CreateNode {
+                    node_id: i,
+                    label_bits: i,
+                })
+                .unwrap();
+            }
+            wal.flush().unwrap();
+        }
+        std::fs::metadata(path).unwrap().len()
+    }
+
+    #[test]
+    fn torn_tail_eof_recovers_prefix_and_truncates() {
+        let ctx = TestContext::new();
+        let path = ctx.path().join("wal.log");
+        let full_len = write_five_nodes(&path);
+
+        // Simulate a crash mid-append: chop the last byte so the 5th frame is
+        // missing part of its CRC — read_exact hits EOF partway through it.
+        let f = OpenOptions::new().write(true).open(&path).unwrap();
+        f.set_len(full_len - 1).unwrap();
+        drop(f);
+
+        let mut wal = Wal::new(&path).unwrap();
+        let recovered = wal.recover().unwrap();
+        assert_eq!(recovered.len(), 4, "the torn 5th frame is dropped, 4 kept");
+        let after_len = std::fs::metadata(&path).unwrap().len();
+        assert!(after_len < full_len - 1, "torn tail must be truncated away");
+
+        // The poison is gone for good: a second recovery is a no-op.
+        let mut wal2 = Wal::new(&path).unwrap();
+        assert_eq!(wal2.recover().unwrap().len(), 4);
+        assert_eq!(
+            std::fs::metadata(&path).unwrap().len(),
+            after_len,
+            "second recovery must not change the file"
+        );
+    }
+
+    #[test]
+    fn torn_tail_crc_mismatch_on_last_frame_recovers_prefix_and_truncates() {
+        let ctx = TestContext::new();
+        let path = ctx.path().join("wal.log");
+        let full_len = write_five_nodes(&path);
+
+        // Flip a byte inside the LAST frame's payload (just before its 4-byte
+        // CRC): read_exact succeeds but the CRC check on the trailing frame fails.
+        let mut bytes = std::fs::read(&path).unwrap();
+        let idx = (full_len - 5) as usize;
+        bytes[idx] ^= 0xFF;
+        std::fs::write(&path, &bytes).unwrap();
+
+        let mut wal = Wal::new(&path).unwrap();
+        let recovered = wal.recover().unwrap();
+        assert_eq!(
+            recovered.len(),
+            4,
+            "torn last frame dropped, 4-entry prefix kept"
+        );
+        let after_len = std::fs::metadata(&path).unwrap().len();
+        assert!(
+            after_len < full_len,
+            "trailing CRC-mismatch frame must be truncated"
+        );
+
+        // Idempotent — poison cleared.
+        let mut wal2 = Wal::new(&path).unwrap();
+        assert_eq!(wal2.recover().unwrap().len(), 4);
+        assert_eq!(std::fs::metadata(&path).unwrap().len(), after_len);
+    }
+
+    #[test]
+    fn mid_file_crc_mismatch_is_still_a_hard_error() {
+        let ctx = TestContext::new();
+        let path = ctx.path().join("wal.log");
+        write_five_nodes(&path);
+
+        // Corrupt a byte inside the FIRST frame's payload (offset 8 is past the
+        // 7-byte v2 header). That frame is followed by four more — genuine
+        // mid-file corruption, which must remain a hard error, not a silent
+        // truncate.
+        let mut bytes = std::fs::read(&path).unwrap();
+        bytes[8] ^= 0xFF;
+        std::fs::write(&path, &bytes).unwrap();
+
+        let mut wal = Wal::new(&path).unwrap();
+        assert!(
+            wal.recover().is_err(),
+            "a CRC mismatch on a non-trailing frame must stay a hard error"
+        );
+    }
+
     #[test]
     fn test_flush() {
         let (mut wal, _dir) = create_test_wal();
@@ -302,18 +492,24 @@ mod tests {
         let ctx = TestContext::new();
         let path = ctx.path().join("wal.log");
 
-        // Write valid entry
+        // Write several entries so the corrupted one is NOT the last frame.
+        // (A CRC mismatch on the LAST frame is treated as torn crash residue and
+        // truncated — see phase0_fix-wal-torn-tail-recovery. Genuine mid-file
+        // corruption, a bad frame followed by more frames, must still hard-error.)
         {
             let mut wal = Wal::new(&path).unwrap();
-            wal.append(&WalEntry::CreateNode {
-                node_id: 1,
-                label_bits: 0,
-            })
-            .unwrap();
+            for i in 0..3u64 {
+                wal.append(&WalEntry::CreateNode {
+                    node_id: i,
+                    label_bits: 0,
+                })
+                .unwrap();
+            }
             wal.flush().unwrap();
         }
 
-        // Corrupt the file (change a byte in the middle)
+        // Corrupt a byte inside the FIRST frame's payload (offset 10 is past the
+        // 7-byte v2 header); two more frames follow it -> mid-file corruption.
         {
             let mut file = OpenOptions::new().write(true).open(&path).unwrap();
             file.seek(SeekFrom::Start(10)).unwrap();
@@ -321,7 +517,7 @@ mod tests {
             file.sync_all().unwrap();
         }
 
-        // Recovery should detect corruption
+        // Recovery should detect the mid-file corruption.
         {
             let mut wal = Wal::new(&path).unwrap();
             let result = wal.recover();
@@ -647,6 +843,40 @@ mod tests {
         match &entries[3] {
             WalEntry::FtsDropIndex { name } => assert_eq!(name, "movies"),
             other => panic!("expected FtsDropIndex, got {other:?}"),
+        }
+    }
+
+    // phase20_knn-write-path-wiring §1.1 — KNN op-code round-trip.
+    #[test]
+    fn knn_wal_ops_encode_decode_roundtrip() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let path = temp.path().join("knn.wal");
+        let mut wal = Wal::new(&path).unwrap();
+
+        let add = WalEntry::KnnVectorAdd {
+            node_id: 42,
+            embedding: vec![0.1, 0.2, 0.3],
+        };
+        let del = WalEntry::KnnVectorDelete { node_id: 42 };
+        for e in [&add, &del] {
+            wal.append(e).unwrap();
+        }
+        wal.flush().unwrap();
+        drop_wal(wal);
+
+        let mut wal = Wal::new(&path).unwrap();
+        let entries = wal.recover().unwrap();
+        assert_eq!(entries.len(), 2);
+        match &entries[0] {
+            WalEntry::KnnVectorAdd { node_id, embedding } => {
+                assert_eq!(*node_id, 42);
+                assert_eq!(embedding, &vec![0.1_f32, 0.2, 0.3]);
+            }
+            other => panic!("expected KnnVectorAdd, got {other:?}"),
+        }
+        match &entries[1] {
+            WalEntry::KnnVectorDelete { node_id } => assert_eq!(*node_id, 42),
+            other => panic!("expected KnnVectorDelete, got {other:?}"),
         }
     }
 

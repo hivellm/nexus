@@ -1,23 +1,26 @@
-"""Native binary RPC transport — asyncio implementation.
+"""Native binary RPC transport — a thin wrapper around the Thunder client.
 
-Holds a single TCP stream per client (frames cannot interleave) and
-serialises concurrent ``execute()`` calls behind a single writer lock.
-Mirrors the Rust and TypeScript SDK transports: lazy connect, HELLO
-handshake, optional AUTH, monotonic request ids skipping ``PUSH_ID``.
+Thunder (``hivellm-thunder``) owns the wire (frame + MessagePack codec),
+the single-connection multiplexer, and the handshake / reconnect /
+credential re-send. This module adapts the SDK's value model
+(``NexusValue``, capitalized kinds) to Thunder's (``Value``, lowercase
+kinds) and preserves the ``Transport`` interface the rest of the SDK uses.
+
+Handshake: the Nexus server ignores ``HELLO`` arguments and gates the
+connection on a separate ``AUTH``, so Thunder's ``AUTH_COMMAND`` handshake
+with the ``ARG_LESS`` HELLO style (bare ``HELLO []`` then ``AUTH [...]``)
+matches the wire exactly and re-authenticates on reconnect.
 """
 
 from __future__ import annotations
 
 import asyncio
-import struct
-from typing import Dict, List, Optional
+from typing import Optional
 
-from nexus_sdk.transport.codec import (
-    RpcRequest,
-    RpcResponse,
-    decode_response_body,
-    encode_request_frame,
-)
+from thunder_rpc import AsyncClient, Config, Value
+from thunder_rpc.client_config import ClientConfig, Credentials
+from thunder_rpc.config import Handshake, HelloStyle
+
 from nexus_sdk.transport.endpoint import Endpoint
 from nexus_sdk.transport.types import (
     NexusValue,
@@ -28,18 +31,57 @@ from nexus_sdk.transport.types import (
     nx,
 )
 
-# Reserved id used by the server for PUSH frames — clients must skip it.
-PUSH_ID = 0xFFFFFFFF
+
+def _nexus_to_thunder(v: NexusValue) -> Value:
+    """Translate the SDK's ``NexusValue`` into a Thunder ``Value``."""
+    kind = v.kind
+    if kind == "Null":
+        return Value.null()
+    if kind == "Bool":
+        return Value.bool(v.value)
+    if kind == "Int":
+        return Value.int(v.value)
+    if kind == "Float":
+        return Value.float(v.value)
+    if kind == "Bytes":
+        return Value.bytes(v.value)
+    if kind == "Str":
+        return Value.str(v.value)
+    if kind == "Array":
+        return Value.array([_nexus_to_thunder(x) for x in v.value])
+    if kind == "Map":
+        return Value.map(
+            [(_nexus_to_thunder(a), _nexus_to_thunder(b)) for a, b in v.value]
+        )
+    raise ValueError(f"unknown NexusValue kind: {kind!r}")
+
+
+def _thunder_to_nexus(v: Value) -> NexusValue:
+    """Translate a Thunder ``Value`` back into the SDK's ``NexusValue``."""
+    kind = v.kind
+    if kind == "null":
+        return nx.Null()
+    if kind == "bool":
+        return nx.Bool(v.value)
+    if kind == "int":
+        return nx.Int(v.value)
+    if kind == "float":
+        return nx.Float(v.value)
+    if kind == "bytes":
+        return nx.Bytes(v.value)
+    if kind == "str":
+        return nx.Str(v.value)
+    if kind == "array":
+        return nx.Array([_thunder_to_nexus(x) for x in v.value])
+    if kind == "map":
+        return nx.Map(
+            [(_thunder_to_nexus(a), _thunder_to_nexus(b)) for a, b in v.value]
+        )
+    raise ValueError(f"unknown Thunder Value kind: {kind!r}")
 
 
 class RpcTransport(Transport):
-    """Single-socket RPC client.
-
-    One TCP stream is opened lazily on the first request. Outgoing
-    frames go through ``_write_lock`` so writes never interleave; the
-    reader task multiplexes responses back to pending futures keyed
-    by request id.
-    """
+    """Asyncio RPC transport backed by a single ``AsyncClient``."""
 
     def __init__(
         self,
@@ -50,18 +92,17 @@ class RpcTransport(Transport):
         self._endpoint = endpoint
         self._credentials = credentials
         self._connect_timeout_s = connect_timeout_s
-
-        self._reader: Optional[asyncio.StreamReader] = None
-        self._writer: Optional[asyncio.StreamWriter] = None
-        self._reader_task: Optional[asyncio.Task[None]] = None
-        self._write_lock = asyncio.Lock()
+        self._client: Optional[AsyncClient] = None
         self._connect_lock = asyncio.Lock()
-        self._pending: Dict[int, asyncio.Future[RpcResponse]] = {}
-        self._next_id = 1
 
     async def execute(self, req: TransportRequest) -> TransportResponse:
-        resp = await self.call(req.command, req.args)
-        return TransportResponse(value=resp.unwrap())
+        client = await self._ensure_connected()
+        # ``call`` returns the ``Ok`` payload directly and raises a typed
+        # ``ThunderError`` on ``Err``; the SDK's higher layers surface those.
+        result = await client.call(
+            req.command, [_nexus_to_thunder(a) for a in req.args]
+        )
+        return TransportResponse(value=_thunder_to_nexus(result))
 
     def describe(self) -> str:
         return f"{self._endpoint} (RPC)"
@@ -70,137 +111,44 @@ class RpcTransport(Transport):
         return True
 
     async def close(self) -> None:
-        if self._reader_task and not self._reader_task.done():
-            self._reader_task.cancel()
-            try:
-                await self._reader_task
-            except (asyncio.CancelledError, Exception):
-                pass
-        if self._writer is not None:
-            self._writer.close()
-            try:
-                await self._writer.wait_closed()
-            except Exception:
-                pass
-        self._reader = None
-        self._writer = None
-        self._reader_task = None
-        for fut in self._pending.values():
-            if not fut.done():
-                fut.set_exception(ConnectionError("RPC transport closed"))
-        self._pending.clear()
-
-    async def call(self, command: str, args: List[NexusValue]) -> RpcResponse:
-        """Low-level single request. Lazy-connects on first use."""
-        await self._ensure_connected()
-        return await self._send(
-            RpcRequest(id=self._alloc_id(), command=command, args=args)
-        )
+        client = self._client
+        self._client = None
+        if client is not None:
+            await client.close()
 
     # ── Internals ──────────────────────────────────────────────────────
 
-    def _alloc_id(self) -> int:
-        nid = self._next_id
-        self._next_id += 1
-        if nid == PUSH_ID:
-            nid = self._next_id
-            self._next_id += 1
-        if self._next_id >= 0xFFFFFFFE:
-            self._next_id = 1
-        return nid
+    def _config(self) -> Config:
+        return (
+            Config.standard()
+            .with_scheme("nexus")
+            .with_port(self._endpoint.port)
+            .with_handshake(Handshake.AUTH_COMMAND)
+            .with_hello_style(HelloStyle.ARG_LESS)
+        )
 
-    async def _ensure_connected(self) -> None:
-        if self._writer is not None and not self._writer.is_closing():
-            return
-        async with self._connect_lock:
-            if self._writer is not None and not self._writer.is_closing():
-                return
-            await self._connect()
-
-    async def _connect(self) -> None:
-        authority = self._endpoint.authority()
-        try:
-            reader, writer = await asyncio.wait_for(
-                asyncio.open_connection(self._endpoint.host, self._endpoint.port),
-                timeout=self._connect_timeout_s,
+    def _thunder_credentials(self) -> Optional[Credentials]:
+        if self._credentials.api_key:
+            return Credentials.api_key(self._credentials.api_key)
+        if self._credentials.username and self._credentials.password:
+            return Credentials.user_pass(
+                self._credentials.username, self._credentials.password
             )
-        except (asyncio.TimeoutError, OSError) as e:
-            raise ConnectionError(f"failed to connect to {authority}: {e}") from e
+        return None
 
-        # Disable Nagle so small frames land promptly.
-        try:
-            sock = writer.get_extra_info("socket")
-            if sock is not None:
-                import socket
-
-                sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
-        except Exception:
-            pass
-
-        self._reader = reader
-        self._writer = writer
-        self._reader_task = asyncio.create_task(self._read_loop(reader))
-
-        # HELLO + AUTH handshake.
-        hello = await self._send(RpcRequest(id=0, command="HELLO", args=[nx.Int(1)]))
-        if not hello.ok:
-            raise ConnectionError(f"HELLO rejected by server: {hello.value}")
-
-        if self._credentials.has_any():
-            if self._credentials.api_key:
-                args = [nx.Str(self._credentials.api_key)]
-            else:
-                args = [
-                    nx.Str(self._credentials.username or ""),
-                    nx.Str(self._credentials.password or ""),
-                ]
-            auth = await self._send(RpcRequest(id=0, command="AUTH", args=args))
-            if not auth.ok:
-                raise ConnectionError(f"authentication failed: {auth.value}")
-
-    async def _send(self, req: RpcRequest) -> RpcResponse:
-        writer = self._writer
-        if writer is None or writer.is_closing():
-            raise ConnectionError("RPC transport is not connected")
-        loop = asyncio.get_running_loop()
-        fut: asyncio.Future[RpcResponse] = loop.create_future()
-        self._pending[req.id] = fut
-        frame = encode_request_frame(req)
-        try:
-            async with self._write_lock:
-                writer.write(frame)
-                await writer.drain()
-        except Exception as e:
-            self._pending.pop(req.id, None)
-            raise ConnectionError(f"failed to send RPC frame: {e}") from e
-        return await fut
-
-    async def _read_loop(self, reader: asyncio.StreamReader) -> None:
-        try:
-            while True:
-                prefix = await reader.readexactly(4)
-                (length,) = struct.unpack("<I", prefix)
-                body = await reader.readexactly(length)
-                try:
-                    resp = decode_response_body(body)
-                except Exception as e:
-                    self._fail_all(ConnectionError(f"malformed RPC frame: {e}"))
-                    return
-                fut = self._pending.pop(resp.id, None)
-                if fut is not None and not fut.done():
-                    fut.set_result(resp)
-                # Unknown ids (including PUSH_ID) are dropped — push
-                # subscriptions are not wired up on the SDK side yet.
-        except asyncio.IncompleteReadError:
-            self._fail_all(ConnectionError("RPC connection closed"))
-        except asyncio.CancelledError:
-            # Normal shutdown.
-            pass
-        except Exception as e:
-            self._fail_all(ConnectionError(f"RPC socket error: {e}"))
-
-    def _fail_all(self, exc: BaseException) -> None:
-        for fut in self._pending.values():
-            if not fut.done():
-                fut.set_exception(exc)
-        self._pending.clear()
+    async def _ensure_connected(self) -> AsyncClient:
+        if self._client is not None:
+            return self._client
+        async with self._connect_lock:
+            if self._client is not None:
+                return self._client
+            # Bare ``host:port`` endpoint sidesteps Thunder's scheme matching.
+            self._client = await AsyncClient.connect(
+                f"{self._endpoint.host}:{self._endpoint.port}",
+                self._config(),
+                ClientConfig(
+                    connect_timeout=self._connect_timeout_s,
+                    credentials=self._thunder_credentials(),
+                ),
+            )
+            return self._client

@@ -112,6 +112,50 @@ indexes:
       ef_search: 50
 ```
 
+## Executor Configuration
+
+### Cartesian Product Memory Budget
+
+Bounds memory allocation for multi-pattern Cartesian products in queries like:
+
+```cypher
+UNWIND $rows AS r
+MATCH (a:Label {id: r.s}), (b:Label {id: r.d})
+CREATE (a)-[:KNOWS]->(b)
+```
+
+Without this limit, queries combining `UNWIND` with comma-separated `MATCH` patterns could attempt to allocate multi-terabyte products, causing the process to abort.
+
+**Override via environment variable:**
+
+```bash
+export NEXUS_CARTESIAN_PRODUCT_MAX_BYTES=1073741824
+```
+
+**Default:** 1 GiB (1 073 741 824 bytes)
+
+**Budget calculation:**
+
+The executor estimates Cartesian product memory as:
+
+```
+estimated_bytes = product_rows × columns × sizeof(serde_json::Value)
+```
+
+Where:
+- `product_rows` = `current_row_count × new_pattern_candidate_count`
+- `columns` = number of bound variables after adding the new pattern
+
+**Behavior:**
+
+- Queries exceeding the budget return `Error::OutOfMemory` instead of aborting the process
+- The error is catchable and can be retried or the query adjusted by the application
+
+**When to adjust:**
+
+- **Increase** (e.g. 4 GiB: `export NEXUS_CARTESIAN_PRODUCT_MAX_BYTES=4294967296`) if you have legitimate queries that need large Cartesian products and sufficient available memory
+- **Leave at default** (1 GiB) in most cases — it is decisive enough to reject runaway products while staying generous for realistic working sets
+
 ## Disk I/O Optimization
 
 ### WAL Settings

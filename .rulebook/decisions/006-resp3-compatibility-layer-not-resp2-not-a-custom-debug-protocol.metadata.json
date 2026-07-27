@@ -1,0 +1,12 @@
+{
+  "id": 6,
+  "slug": "resp3-compatibility-layer-not-resp2-not-a-custom-debug-protocol",
+  "title": "RESP3 compatibility layer (not RESP2, not a custom debug protocol)",
+  "status": "proposed",
+  "date": "2026-04-19",
+  "relatedTasks": [
+    "phase1_nexus-resp3-compatibility",
+    "phase3_rpc-protocol-docs-benchmarks"
+  ],
+  "supersededBy": null
+}

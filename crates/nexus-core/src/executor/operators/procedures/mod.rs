@@ -17,10 +17,12 @@
 //! | `dbms.rs`         | `dbms.*` procedures + `current_rfc3339_utc` helper   |
 //! | `fts.rs`          | `db.index.fulltext.*` + `fts_autopopulate_node`       |
 //! | `spatial_procs.rs`| `spatial.addPoint`, `spatial.nearest`, spatial hooks  |
+//! | `knn_procs.rs`    | `knn_autopopulate_node` (vector-index CREATE hook)    |
 
 mod call;
 mod db_indexes;
 mod db_schema;
 mod dbms;
 mod fts;
+mod knn_procs;
 mod spatial_procs;

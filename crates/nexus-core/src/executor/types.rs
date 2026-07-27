@@ -45,6 +45,18 @@ pub struct ExecutorConfig {
     /// `RwLock`. Set to 1 to force serial execution; `0` is rejected.
     /// Default: 4.
     pub cypher_concurrency: usize,
+    /// Byte budget for a single materialised Cartesian product in
+    /// `apply_cartesian_product` (multi-pattern `MATCH (a), (b)` combined
+    /// with an existing row set, e.g. from `UNWIND`). The estimate is
+    /// `product_rows × columns × size_of::<serde_json::Value>()`, where
+    /// `product_rows = current_row_count × new_pattern_candidate_count`
+    /// and `columns` is the number of bound variables after adding the
+    /// new one. Exceeding this budget returns `Error::OutOfMemory`
+    /// instead of asking the allocator for the product size directly,
+    /// which used to abort the whole process (see
+    /// `phase0_fix-cypher-oom-process-abort`). Operators who knowingly
+    /// need a bigger product can raise this value.
+    pub cartesian_product_max_bytes: usize,
 }
 
 impl Default for ExecutorConfig {
@@ -67,6 +79,12 @@ impl Default for ExecutorConfig {
             enable_numa_caching: false,       // Disabled by default (requires NUMA hardware)
             enable_lock_free_structures: true, // Enabled by default (always beneficial)
             cypher_concurrency: 4,
+            // 1 GiB: decisive enough to reject the ~4 TB multi-pattern
+            // UNWIND cross product from `phase0_fix-cypher-oom-process-abort`
+            // (a 5 000-row UNWIND joined against two 5 000-node patterns
+            // reaches ~4e12 bytes, ~4 000x over this ceiling) while staying
+            // generous for legitimate products on realistic working sets.
+            cartesian_product_max_bytes: 1_073_741_824,
         }
     }
 }
@@ -140,6 +158,47 @@ pub struct Notification {
     pub category: NotificationCategory,
 }
 
+/// Counters for the mutations a query performed, in the vocabulary the
+/// openCypher TCK uses (`+nodes`, `-properties`, ...). Every field is a
+/// plain `u64` counter, `Copy`, and defaults to all-zero — read-only
+/// queries surface a zeroed `SideEffects` on their `ResultSet`.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize)]
+pub struct SideEffects {
+    /// Nodes actually inserted. A `MERGE`/`ConflictPolicy::Match` that
+    /// resolves to an existing node must NOT increment this.
+    pub nodes_created: u64,
+    /// Nodes marked deleted.
+    pub nodes_deleted: u64,
+    /// Relationships actually inserted.
+    pub relationships_created: u64,
+    /// Relationships marked deleted.
+    pub relationships_deleted: u64,
+    /// Property key/value writes, including overwriting a property
+    /// with the value it already held (the TCK counts that as a set).
+    pub properties_set: u64,
+    /// Property keys removed (via `REMOVE` or `SET n.k = null`).
+    pub properties_removed: u64,
+    /// Labels applied to nodes — both labels on `CREATE`-d nodes and
+    /// `SET n:Label` on existing ones (the openCypher TCK counts both toward
+    /// `+labels`). `SET n:Label` on a node that already carries the label is
+    /// idempotent and not counted.
+    pub labels_added: u64,
+    /// Labels removed from an existing node (`REMOVE n:Label`). Removing an
+    /// absent label is idempotent and not counted.
+    pub labels_removed: u64,
+}
+
+impl SideEffects {
+    /// True when every counter is zero — i.e. a read-only query performed no
+    /// mutations. Used by the `/cypher` HTTP layer to omit the `stats` object
+    /// on the read hot path, so read responses stay byte-for-byte what they
+    /// were before side-effect reporting was added.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        *self == Self::default()
+    }
+}
+
 /// Query result set
 #[derive(Debug, Clone, Default)]
 pub struct ResultSet {
@@ -153,20 +212,26 @@ pub struct ResultSet {
     /// `(label, property)` selector). The HTTP layer copies these into
     /// the `/cypher` response envelope.
     pub notifications: Vec<Notification>,
+    /// Mutation counters for this query. All-zero for read-only
+    /// queries. Populated by `Engine`'s write paths; the plain
+    /// executor's read-only operators never touch this field, so it
+    /// stays at `SideEffects::default()` for them.
+    pub side_effects: SideEffects,
 }
 
 impl ResultSet {
     /// Build a `ResultSet` from a column header and the row vector,
-    /// leaving `notifications` empty. Use this in the hot path; the
-    /// planner / executor can append notifications afterwards via
-    /// [`ResultSet::with_notifications`] or by mutating the field
-    /// directly.
+    /// leaving `notifications` empty and `side_effects` zeroed. Use
+    /// this in the hot path; the planner / executor can append
+    /// notifications afterwards via [`ResultSet::with_notifications`]
+    /// or by mutating the fields directly.
     #[inline]
     pub fn new(columns: Vec<String>, rows: Vec<Row>) -> Self {
         Self {
             columns,
             rows,
             notifications: Vec::new(),
+            side_effects: SideEffects::default(),
         }
     }
 
@@ -188,6 +253,19 @@ pub struct ExecutionPlan {
     pub operators: Vec<Operator>,
 }
 
+/// Comparison direction (and inclusivity) for [`Operator::NodeIndexRangeSeek`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RangeSeekOp {
+    /// `>` — strictly greater than the threshold (threshold excluded).
+    Gt,
+    /// `>=` — greater than or equal to the threshold.
+    Ge,
+    /// `<` — strictly less than the threshold (threshold excluded).
+    Lt,
+    /// `<=` — less than or equal to the threshold.
+    Le,
+}
+
 /// Physical operator
 #[derive(Debug, Clone)]
 pub enum Operator {
@@ -207,8 +285,83 @@ pub enum Operator {
         label_id: u32,
         /// Property key ID.
         key_id: u32,
-        /// Exact value to look up in the index.
+        /// Constant seek key, used when `key_expression` is `None` (the
+        /// existing `MATCH (a:P {id: 42})` path). Ignored when
+        /// `key_expression` is `Some`.
         value: crate::index::PropertyValue,
+        /// When `Some`, the seek key is a row-local expression evaluated
+        /// per driving row (correlated form `MATCH (a:P {id: r.s})` from an
+        /// UNWIND/WITH binding) rather than a plan-time constant. Set by the
+        /// planner in a follow-up step; execution handling lands with it.
+        /// See `phase0_fix-correlated-predicate-index-seek`.
+        key_expression: Option<parser::Expression>,
+        /// Pattern variable to bind the returned nodes to.
+        variable: String,
+    },
+    /// Range seek on a single-property B-tree index for a WHERE comparison
+    /// (`var.prop > | >= | < | <= <literal>`). Yields the nodes on the
+    /// selected side of the threshold; residual `Filter` operators still run
+    /// for full correctness. See phase0_fix-where-clause-index-seek-extensions.
+    NodeIndexRangeSeek {
+        /// Label ID the index was created on.
+        label_id: u32,
+        /// Property key ID.
+        key_id: u32,
+        /// Comparison direction / inclusivity.
+        op: RangeSeekOp,
+        /// Constant threshold value (plan-time literal).
+        value: crate::index::PropertyValue,
+        /// Pattern variable to bind the returned nodes to.
+        variable: String,
+    },
+    /// Point-seek union on a single-property B-tree index for a WHERE `IN`
+    /// list predicate (`var.prop IN [a, b, c]`): one `find_exact` per list
+    /// element, bitmap-OR'd. Yields the nodes whose indexed property equals
+    /// any listed value. See phase0_fix-where-in-prefix-param-index-seek.
+    NodeIndexInSeek {
+        /// Label ID the index was created on.
+        label_id: u32,
+        /// Property key ID.
+        key_id: u32,
+        /// Plan-time literal list elements to seek. `NULL` elements are
+        /// dropped by the planner (they can never make the comparison true),
+        /// so an empty vec means an empty / all-`NULL` list — which correctly
+        /// matches nothing.
+        values: Vec<crate::index::PropertyValue>,
+        /// Pattern variable to bind the returned nodes to.
+        variable: String,
+    },
+    /// Prefix seek on a single-property B-tree index for a WHERE `STARTS
+    /// WITH` predicate (`var.prop STARTS WITH '<literal>'`): the contiguous
+    /// run of string keys sharing the prefix. See
+    /// phase0_fix-where-in-prefix-param-index-seek §2.
+    NodeIndexPrefixSeek {
+        /// Label ID the index was created on.
+        label_id: u32,
+        /// Property key ID.
+        key_id: u32,
+        /// Plan-time literal string prefix (may be empty — every string
+        /// starts with `''`).
+        prefix: String,
+        /// Pattern variable to bind the returned nodes to.
+        variable: String,
+    },
+    /// Point seek on a single-property B-tree index whose key is a query
+    /// `$parameter` (`var.prop = $x`), resolved from `ExecutionContext::params`
+    /// at execution time — the planner has no bound value to seek with.
+    ///
+    /// Unlike every other seek, the planner KEEPS the predicate as a residual
+    /// `Filter`: a parameter can be bound to a list/map (which the property
+    /// index does not key) or be missing entirely, and in those cases the
+    /// operator falls back to a full label scan that only the retained filter
+    /// can narrow. See phase0_fix-where-in-prefix-param-index-seek §3.
+    NodeIndexParamSeek {
+        /// Label ID the index was created on.
+        label_id: u32,
+        /// Property key ID.
+        key_id: u32,
+        /// Parameter name (without the leading `$`).
+        parameter: String,
         /// Pattern variable to bind the returned nodes to.
         variable: String,
     },
@@ -219,15 +372,25 @@ pub enum Operator {
     },
     /// Filter by property predicate
     Filter {
-        /// Predicate expression
+        /// Predicate expression, serialized for display / cost heuristics /
+        /// the string fast-paths (index seek, label check). Lossy for nodes
+        /// `expression_to_string` cannot render (e.g. `CASE`) — rendered `"?"`.
         predicate: String,
+        /// The parsed predicate AST, carried through for `WHERE` clauses so the
+        /// filter evaluates it directly instead of re-parsing `predicate` (a
+        /// string cannot represent `CASE` / comprehensions). `None` for
+        /// synthetic predicates (label/property checks) that the string path
+        /// handles. See phase0_fix-where-predicate-case-comprehension-lost.
+        predicate_ast: Option<Box<parser::Expression>>,
     },
     /// Optional filter - preserves rows with NULL optional variables
     /// Used for WHERE clauses after OPTIONAL MATCH
     /// If predicate fails but optional_vars are involved, sets them to NULL instead of removing row
     OptionalFilter {
-        /// Predicate expression
+        /// Predicate expression (serialized; see `Filter::predicate`).
         predicate: String,
+        /// Parsed predicate AST (see `Filter::predicate_ast`).
+        predicate_ast: Option<Box<parser::Expression>>,
         /// Variables from OPTIONAL MATCH that should be set to NULL if predicate fails
         optional_vars: Vec<String>,
     },
@@ -262,6 +425,13 @@ pub enum Operator {
     /// Limit results
     Limit {
         /// Maximum rows
+        count: usize,
+    },
+    /// Skip the first `count` rows of the current result set. Standard
+    /// openCypher `SKIP` semantics: applied after `ORDER BY`/projection
+    /// and before `LIMIT` (`ORDER BY, SKIP, LIMIT` order in the pipeline).
+    Skip {
+        /// Number of leading rows to drop.
         count: usize,
     },
     /// Sort results by columns
@@ -404,8 +574,8 @@ pub enum Operator {
     },
     /// Variable-length path expansion
     VariableLengthPath {
-        /// Type ID (None = all types)
-        type_id: Option<u32>,
+        /// Type IDs (empty = all types, multiple types are OR'd together)
+        type_ids: Vec<u32>,
         /// Direction (Outgoing, Incoming, Both)
         direction: Direction,
         /// Source variable

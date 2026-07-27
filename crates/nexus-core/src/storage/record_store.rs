@@ -15,12 +15,14 @@ use tracing;
 
 use crate::error::{Error, Result};
 
+use super::adjacency_index::AdjacencyIndex;
 use super::adjacency_list;
 use super::property_store;
 use super::records::{
     FILE_GROWTH_FACTOR, INITIAL_NODES_FILE_SIZE, INITIAL_RELS_FILE_SIZE, NODE_RECORD_SIZE,
-    REL_RECORD_SIZE, RecordStoreStats,
+    NodeRecord, REL_RECORD_SIZE, RecordStoreStats, RelationshipRecord,
 };
+use super::temp_guard::TempDirGuard;
 
 /// Record store for managing nodes and relationships
 pub struct RecordStore {
@@ -41,14 +43,71 @@ pub struct RecordStore {
     pub property_store: Arc<RwLock<property_store::PropertyStore>>,
     /// Phase 3: Adjacency list store for optimized relationship traversal
     pub(crate) adjacency_store: Option<adjacency_list::AdjacencyListStore>,
+    /// Authoritative live-edge adjacency in BOTH directions, rebuilt from the
+    /// record file on open and maintained by `write_rel` — the store's only
+    /// reverse (incoming) adjacency, since `NodeRecord::first_rel_ptr` heads
+    /// the outgoing chain alone. Shared across clones: clones share the
+    /// records, so they must share the index derived from them.
+    /// See `storage::adjacency_index`.
+    pub(super) adjacency_index: AdjacencyIndex,
     /// Next available node ID (shared across clones)
     pub(super) next_node_id: Arc<AtomicU64>,
     /// Next available relationship ID (shared across clones)
     pub(super) next_rel_id: Arc<AtomicU64>,
+    /// Count of nodes actually created since the last reset.
+    ///
+    /// Shared across clones for the same reason as `next_node_id`: the
+    /// store is cloned on every `refresh_executor`, so the executor's
+    /// creations happen on a different clone than the one the engine
+    /// reads when it builds the `ResultSet`. A non-shared counter would
+    /// silently report zero for every query that routes through the
+    /// executor. Reset per query by the engine; read to populate
+    /// `ResultSet::side_effects`.
+    pub(super) nodes_created: Arc<AtomicU64>,
+    /// Count of relationships actually created since the last reset.
+    ///
+    /// Shared across clones for the same reason as `next_node_id`: the
+    /// store is cloned on every `refresh_executor`, so the executor's
+    /// creations happen on a different clone than the one the engine
+    /// reads when it builds the `ResultSet`. A non-shared counter would
+    /// silently report zero for every query that routes through the
+    /// executor. Reset per query by the engine; read to populate
+    /// `ResultSet::side_effects`.
+    pub(super) relationships_created: Arc<AtomicU64>,
+    /// Total node labels set at creation since the last reset — the
+    /// `count_ones()` of each created node's `label_bits`. Same `Arc`
+    /// sharing rationale as the counters above (executor clones the store).
+    /// The openCypher TCK counts labels on CREATE-d nodes toward `+labels`,
+    /// so this is stitched into `ResultSet::side_effects.labels_added`
+    /// alongside the engine-level `SET n:Label` count. Reset per query.
+    pub(super) labels_created: Arc<AtomicU64>,
+    /// Total inline properties written at creation since the last reset —
+    /// the map-key count of each created node's and relationship's inline
+    /// property map. Same `Arc` sharing rationale as the counters above. The
+    /// openCypher TCK counts properties on CREATE-d entities toward
+    /// `+properties`, so this is stitched into
+    /// `ResultSet::side_effects.properties_set` alongside the engine-level
+    /// `SET` count. Reset per query.
+    pub(super) properties_created: Arc<AtomicU64>,
     /// Current nodes file size
     pub(super) nodes_file_size: usize,
     /// Current relationships file size
     pub(super) rels_file_size: usize,
+    /// Reference-counted cleanup guard for stores created via
+    /// [`Self::new_temporary`]. `None` for every persistent store (the
+    /// common case — a store must never auto-delete a caller-provided
+    /// data directory).
+    ///
+    /// Declared as the LAST field so the compiler-generated `Drop` glue
+    /// runs it after every other field — in particular after
+    /// `nodes_mmap`/`rels_mmap` (and, within the clone that ends up
+    /// holding the last reference, after `property_store` and
+    /// `adjacency_store` too). The guard's directory removal only fires
+    /// once the `Arc`'s strong count reaches zero, i.e. once the last
+    /// `RecordStore` clone sharing it is dropped — so a still-shared
+    /// mmap never races the directory removal, which matters on
+    /// Windows where a mapped file cannot be deleted.
+    pub(super) _cleanup: Option<Arc<TempDirGuard>>,
 }
 
 impl RecordStore {
@@ -101,6 +160,11 @@ impl RecordStore {
             rels_file_size
         };
 
+        // phase0_fix-wal-durability-gaps #5: fsync the directory that now holds
+        // the freshly-created nodes.store/rels.store so their directory entries
+        // are durable, not just the files' data (best-effort; no-op on Windows).
+        super::fs::sync_parent_dir(&nodes_path);
+
         // Create memory mappings
         let nodes_mmap = unsafe { MmapOptions::new().map_mut(&nodes_file)? };
         let rels_mmap = unsafe { MmapOptions::new().map_mut(&rels_file)? };
@@ -108,25 +172,81 @@ impl RecordStore {
         // Phase 3: Initialize adjacency list store (optional, for optimization)
         let adjacency_store = adjacency_list::AdjacencyListStore::new(&path).ok();
 
-        // Calculate next available IDs by scanning existing data
-        // Count non-empty records (records where any field is non-zero)
+        // Calculate next available IDs by scanning existing data.
+        //
+        // phase0_fix-anonymous-node-lost-on-restart: a slot is IN USE
+        // (reserves its id — i.e. advances `next_node_id`/`next_rel_id`
+        // past it) if EITHER of these holds:
+        //   - the FLAG_ALLOCATED bit is set (new-format record, live OR
+        //     soft-deleted — see `RecordStore::write_node` / `write_rel`,
+        //     which OR the bit into every write regardless of the deleted
+        //     bit), OR
+        //   - (back-compat) any byte is non-zero — a pre-fix record with
+        //     `flags == 0`/`flags == FLAG_DELETED` that still carries
+        //     labels/properties/relationships (nodes) or a non-degenerate
+        //     src/dst/type/pointer (relationships).
+        //
+        // This is deliberately independent of `is_deleted()`: the deleted
+        // bit is the QUERY-VISIBILITY gate used by `get_node`/
+        // `get_relationship`, never the id-RESERVATION gate. A legacy
+        // record that was soft-deleted by the pre-fix binary still has
+        // non-zero residual bytes and must keep reserving its id — treating
+        // it as free would let the next `allocate_node_id()`/
+        // `allocate_rel_id()` reuse that id and overwrite the (still
+        // externally-referenced) slot, which is the same class of bug this
+        // task fixes, and a case the ORIGINAL "any non-zero byte" scan
+        // already handled correctly.
+        //
+        // A pre-fix ANONYMOUS node (all-zero, including `flags == 0`) or a
+        // pre-fix degenerate all-zero self-loop relationship is
+        // indistinguishable from a free slot under either arm and is NOT
+        // recovered — the accepted caveat of
+        // phase0_fix-anonymous-node-lost-on-restart: only future anonymous
+        // records are protected, because the pre-fix format never wrote a
+        // marker that could tell them apart from unallocated space.
+        //
+        // Every in-use legacy (non-allocated-bit) slot found here — deleted
+        // or not — is collected for a one-time migration pass below, which
+        // stamps the allocated bit so subsequent writes are new-format.
+        // `write_node`/`write_rel` OR the bit in without touching the
+        // deleted bit, so a migrated legacy-deleted record becomes
+        // `ALLOCATED | DELETED` — still deleted, now reserved.
         let mut next_node_id = 0u64;
+        let mut legacy_nodes: Vec<(u64, NodeRecord)> = Vec::new();
         for i in 0..(nodes_file_size / NODE_RECORD_SIZE) {
             let offset = i * NODE_RECORD_SIZE;
             let slice = &nodes_mmap[offset..offset + NODE_RECORD_SIZE];
-            // Check if record is non-empty (any byte is non-zero)
-            if slice.iter().any(|&b| b != 0) {
+            let record: NodeRecord = *bytemuck::from_bytes(slice);
+            let legacy_in_use = slice.iter().any(|&b| b != 0);
+            if record.is_allocated() || legacy_in_use {
                 next_node_id = (i + 1) as u64;
+                if legacy_in_use && !record.is_allocated() {
+                    legacy_nodes.push((i as u64, record));
+                }
             }
         }
 
+        // The same pass rebuilds the adjacency index: every LIVE record found
+        // here is indexed in both directions, which is what makes the index
+        // authoritative across a restart without any on-disk format change.
+        // Free by construction — this loop already reads every record.
+        // See docs/analysis/store-adjacency-index/02_structure_decision.md.
+        let adjacency_index = AdjacencyIndex::new();
         let mut next_rel_id = 0u64;
+        let mut legacy_rels: Vec<(u64, RelationshipRecord)> = Vec::new();
         for i in 0..(rels_file_size / REL_RECORD_SIZE) {
             let offset = i * REL_RECORD_SIZE;
             let slice = &rels_mmap[offset..offset + REL_RECORD_SIZE];
-            // Check if record is non-empty (any byte is non-zero)
-            if slice.iter().any(|&b| b != 0) {
+            let record: RelationshipRecord = *bytemuck::from_bytes(slice);
+            let legacy_in_use = slice.iter().any(|&b| b != 0);
+            if record.is_allocated() || legacy_in_use {
                 next_rel_id = (i + 1) as u64;
+                if legacy_in_use && !record.is_allocated() {
+                    legacy_rels.push((i as u64, record));
+                }
+                if !record.is_deleted() {
+                    adjacency_index.insert(i as u64, record.src_id, record.dst_id);
+                }
             }
         }
 
@@ -146,11 +266,76 @@ impl RecordStore {
             rels_mmap: Arc::new(RwLock::new(rels_mmap)),
             property_store,
             adjacency_store,
+            adjacency_index,
+            nodes_created: Arc::new(AtomicU64::new(0)),
+            relationships_created: Arc::new(AtomicU64::new(0)),
+            labels_created: Arc::new(AtomicU64::new(0)),
+            properties_created: Arc::new(AtomicU64::new(0)),
             next_node_id: Arc::new(AtomicU64::new(next_node_id)),
             next_rel_id: Arc::new(AtomicU64::new(next_rel_id)),
             nodes_file_size,
             rels_file_size,
+            _cleanup: None,
         };
+
+        // phase0_fix-anonymous-node-lost-on-restart §2.2: one-time migration
+        // — stamp the allocated bit on every legacy (non-allocated-bit)
+        // in-use slot found by the scan above — DELETED OR NOT — so
+        // subsequent writes are new-format. `write_node`/`write_rel`
+        // already OR in FLAG_ALLOCATED on every write without touching the
+        // deleted bit, so re-writing the unchanged record is sufficient and
+        // preserves a legacy-deleted record's deleted status (it becomes
+        // `ALLOCATED | DELETED`). Errors are logged and skipped rather than
+        // propagated — same fail-open-and-continue posture as the prop_ptr
+        // repair below, and idempotent: a record already carrying the
+        // allocated bit is never selected for migration on a later reopen.
+        let migrated_nodes = legacy_nodes.len();
+        for (node_id, record) in legacy_nodes {
+            if let Err(e) = store.write_node(node_id, &record) {
+                tracing::error!(
+                    "RecordStore::new: failed to migrate allocated bit for node {}: {}",
+                    node_id,
+                    e
+                );
+            }
+        }
+        if migrated_nodes > 0 {
+            if let Err(e) = store.nodes_mmap.read().unwrap().flush() {
+                tracing::error!(
+                    "RecordStore::new: failed to flush node allocated-bit migration: {}",
+                    e
+                );
+            } else {
+                tracing::info!(
+                    "migrated {} legacy node record(s) to allocated-bit format",
+                    migrated_nodes
+                );
+            }
+        }
+
+        let migrated_rels = legacy_rels.len();
+        for (rel_id, record) in legacy_rels {
+            if let Err(e) = store.write_rel(rel_id, &record) {
+                tracing::error!(
+                    "RecordStore::new: failed to migrate allocated bit for rel {}: {}",
+                    rel_id,
+                    e
+                );
+            }
+        }
+        if migrated_rels > 0 {
+            if let Err(e) = store.rels_mmap.read().unwrap().flush() {
+                tracing::error!(
+                    "RecordStore::new: failed to flush rel allocated-bit migration: {}",
+                    e
+                );
+            } else {
+                tracing::info!(
+                    "migrated {} legacy relationship record(s) to allocated-bit format",
+                    migrated_rels
+                );
+            }
+        }
 
         // Issue #4: run the durable startup repair so corrupt prop_ptrs are
         // fixed on disk before any query sees them.  On error we log and
@@ -166,6 +351,53 @@ impl RecordStore {
         Ok(store)
     }
 
+    /// Create a new, self-cleaning `RecordStore` rooted at a fresh
+    /// temporary directory.
+    ///
+    /// The returned store owns a [`TempDirGuard`] wrapped in `Arc`. Every
+    /// `.clone()` of this store shares that same `Arc`, so the directory
+    /// is removed exactly when the last live clone (and therefore the
+    /// last live memory-mapped handle onto `nodes.store`/`rels.store`) is
+    /// dropped — never on a timer, never assuming a single owner.
+    ///
+    /// Intended for ephemeral stores (tests, the default test-harness
+    /// executor, an in-memory-only engine) that need an isolated,
+    /// filesystem-backed store but must never accumulate directories on
+    /// disk across repeated calls. Persistent callers must keep using
+    /// [`Self::new`], whose stores never auto-delete their directory.
+    pub fn new_temporary() -> Result<Self> {
+        let temp_dir = tempfile::Builder::new()
+            .prefix("nexus-store-")
+            .tempdir()
+            .map_err(|e| Error::Storage(format!("failed to create temp directory: {}", e)))?;
+
+        // `keep()` disarms `TempDir`'s own destructor — but this is not
+        // a leak: ownership of removal transfers to the `TempDirGuard`
+        // below, which removes this SAME directory once every clone of
+        // the store built on it has dropped (see the `_cleanup` field).
+        let path = temp_dir.keep();
+
+        let mut store = Self::new(&path)?;
+        store._cleanup = Some(Arc::new(TempDirGuard::new(path)));
+        Ok(store)
+    }
+
+    /// Directory this store's files (`nodes.store`, `rels.store`, and the
+    /// sibling property/adjacency stores) live under.
+    pub fn path(&self) -> &Path {
+        &self.path
+    }
+
+    /// Clone of this store's temporary-directory cleanup guard, or `None`
+    /// for a persistent store. Lets an owner (e.g. [`crate::engine::Engine`])
+    /// hold an independent `Arc` clone so the temp directory is removed only
+    /// after every subsystem writing inside it (LMDB catalog, WAL, full-text
+    /// index) has dropped and released its file handles — required on Windows,
+    /// where a still-open handle in the tree blocks `remove_dir_all`.
+    pub(crate) fn temp_dir_guard(&self) -> Option<Arc<TempDirGuard>> {
+        self._cleanup.clone()
+    }
+
     /// Allocate a new node ID
     pub fn allocate_node_id(&mut self) -> u64 {
         self.next_node_id.fetch_add(1, Ordering::SeqCst)
@@ -177,6 +409,61 @@ impl RecordStore {
     /// `create_node_with_label_bits_inner` to write the external-id index
     /// entry before committing the id allocation.  Valid only in the
     /// single-writer model.
+    /// Nodes created since the last [`RecordStore::reset_nodes_created`].
+    ///
+    /// Counts only records actually written: an external-id create that
+    /// resolves to an existing node under `ConflictPolicy::Match` or
+    /// `Replace` created nothing and is not counted.
+    pub fn nodes_created(&self) -> u64 {
+        self.nodes_created.load(Ordering::SeqCst)
+    }
+
+    /// Zero the node-creation counter. Called at query start so the count
+    /// reported on a `ResultSet` covers only that query.
+    pub fn reset_nodes_created(&self) {
+        self.nodes_created.store(0, Ordering::SeqCst);
+    }
+
+    /// Relationships created since the last
+    /// [`RecordStore::reset_relationships_created`].
+    ///
+    /// Counts only records actually written.
+    pub fn relationships_created(&self) -> u64 {
+        self.relationships_created.load(Ordering::SeqCst)
+    }
+
+    /// Zero the relationship-creation counter. Called at query start so the
+    /// count reported on a `ResultSet` covers only that query.
+    pub fn reset_relationships_created(&self) {
+        self.relationships_created.store(0, Ordering::SeqCst);
+    }
+
+    /// Node labels set at creation since the last
+    /// [`RecordStore::reset_labels_created`] — summed `label_bits.count_ones()`
+    /// over created nodes. Stitched into `side_effects.labels_added`.
+    pub fn labels_created(&self) -> u64 {
+        self.labels_created.load(Ordering::SeqCst)
+    }
+
+    /// Zero the create-labels counter. Called at query start so the count
+    /// reported on a `ResultSet` covers only that query.
+    pub fn reset_labels_created(&self) {
+        self.labels_created.store(0, Ordering::SeqCst);
+    }
+
+    /// Inline properties written at entity creation since the last
+    /// [`RecordStore::reset_properties_created`]. Stitched into
+    /// `side_effects.properties_set`.
+    pub fn properties_created(&self) -> u64 {
+        self.properties_created.load(Ordering::SeqCst)
+    }
+
+    /// Zero the create-properties counter. Called at query start so the count
+    /// reported on a `ResultSet` covers only that query.
+    pub fn reset_properties_created(&self) {
+        self.properties_created.store(0, Ordering::SeqCst);
+    }
+
     pub fn peek_next_node_id(&self) -> u64 {
         self.next_node_id.load(Ordering::SeqCst)
     }
@@ -244,12 +531,18 @@ impl RecordStore {
 
     /// Grow the nodes file
     /// Phase 1 Deep Optimization: Pre-allocate larger chunks to reduce growth frequency
-    pub(super) fn grow_nodes_file(&mut self) -> Result<()> {
+    pub(super) fn grow_nodes_file(&mut self, min_required: u64) -> Result<()> {
         // Phase 1 Deep Optimization: Grow by larger factor to reduce frequency
         // Minimum 2MB growth to reduce frequent remapping overhead
         let min_growth = 2 * 1024 * 1024; // 2MB
         let calculated_size = ((self.nodes_file_size as f64) * FILE_GROWTH_FACTOR) as usize;
-        let new_size = calculated_size.max(self.nodes_file_size + min_growth);
+        // #4: size the grow to at least the caller's target byte offset, so a
+        // single sparse write far past EOF cannot slice past the freshly
+        // remapped file. Mirrors property_store::ensure_capacity's
+        // `.max(required_size)`.
+        let new_size = calculated_size
+            .max(self.nodes_file_size + min_growth)
+            .max(min_required as usize);
 
         // Resize the file
         self.nodes_file.set_len(new_size as u64)?;
@@ -266,12 +559,16 @@ impl RecordStore {
 
     /// Grow the relationships file
     /// Phase 1 Deep Optimization: Pre-allocate larger chunks to reduce growth frequency
-    pub(super) fn grow_rels_file(&mut self) -> Result<()> {
+    pub(super) fn grow_rels_file(&mut self, min_required: u64) -> Result<()> {
         // Phase 1 Deep Optimization: Grow by larger factor to reduce frequency
         // Minimum 2MB growth to reduce frequent remapping overhead
         let min_growth = 2 * 1024 * 1024; // 2MB
         let calculated_size = ((self.rels_file_size as f64) * FILE_GROWTH_FACTOR) as usize;
-        let new_size = calculated_size.max(self.rels_file_size + min_growth);
+        // #4: size the grow to at least the caller's target byte offset (see
+        // grow_nodes_file).
+        let new_size = calculated_size
+            .max(self.rels_file_size + min_growth)
+            .max(min_required as usize);
 
         // Resize the file
         self.rels_file.set_len(new_size as u64)?;
@@ -343,10 +640,23 @@ impl Clone for RecordStore {
             rels_mmap: Arc::clone(&self.rels_mmap),
             property_store, // CRITICAL: Shared PropertyStore instance (not a clone)
             adjacency_store,
+            // Shared, like the mappings it is derived from: a write through
+            // one clone must be visible to every other clone, or the guard
+            // reading through the engine's store would miss an edge the
+            // executor's store just created.
+            adjacency_index: self.adjacency_index.clone(),
+            nodes_created: Arc::clone(&self.nodes_created),
+            relationships_created: Arc::clone(&self.relationships_created),
+            labels_created: Arc::clone(&self.labels_created),
+            properties_created: Arc::clone(&self.properties_created),
             next_node_id: Arc::clone(&self.next_node_id),
             next_rel_id: Arc::clone(&self.next_rel_id),
             nodes_file_size: self.nodes_file_size,
             rels_file_size: self.rels_file_size,
+            // Share the same cleanup guard `Arc` — see the field doc on
+            // `_cleanup`: removal fires only once every clone (this one
+            // included) has been dropped.
+            _cleanup: self._cleanup.clone(),
         }
     }
 }

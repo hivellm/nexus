@@ -5,10 +5,50 @@
 
 use super::super::context::ExecutionContext;
 use super::super::engine::Executor;
+use super::super::parser;
 use super::super::types::Row;
 use super::super::{MAX_INTERMEDIATE_ROWS, push_with_row_cap};
 use crate::{Error, Result};
 use serde_json::Value;
+use std::collections::HashMap;
+
+/// Convert a `serde_json::Value` produced by evaluating a correlated seek
+/// key (e.g. `r.s`) into the `PropertyValue` the property index is keyed
+/// on. Mirrors the plan-time literal match in `node_index_seek_for`
+/// (`planner/queries/strategy.rs:1316-1327`): string → `String`, integer
+/// number → `Integer`, float number → `Float`, bool → `Boolean`. `Null`,
+/// arrays, and objects are not indexable scalars — `None` tells the caller
+/// the key matches no node for that driving row (not an error).
+fn json_value_to_property_value(value: &Value) -> Option<crate::index::PropertyValue> {
+    match value {
+        Value::String(s) => Some(crate::index::PropertyValue::String(s.clone())),
+        Value::Number(n) => match n.as_i64() {
+            Some(i) => Some(crate::index::PropertyValue::Integer(i)),
+            None => n.as_f64().map(crate::index::PropertyValue::Float),
+        },
+        Value::Bool(b) => Some(crate::index::PropertyValue::Boolean(*b)),
+        Value::Null | Value::Array(_) | Value::Object(_) => None,
+    }
+}
+
+/// The cross-type twin of a numeric seek key. The property index keys
+/// `Integer(10)` and `Float(10.0)` as DIFFERENT B-tree entries, but Cypher
+/// compares them equal (`10 = 10.0` is true), so a point seek that only probed
+/// the literal's own type would silently miss nodes stored with the other one.
+/// Probing both keeps the seek exactly equivalent to the predicate it replaces
+/// — the planner drops the residual `Filter` when it lifts the conjunct, so a
+/// false negative here would be a wrong answer, not merely a slow one.
+fn numeric_alias(value: &crate::index::PropertyValue) -> Option<crate::index::PropertyValue> {
+    use crate::index::PropertyValue as PV;
+    match value {
+        PV::Integer(i) => Some(PV::Float(*i as f64)),
+        // Only an integral float has an integer twin — `10.5` has none.
+        PV::Float(f) if f.fract() == 0.0 && *f >= i64::MIN as f64 && *f <= i64::MAX as f64 => {
+            Some(PV::Integer(*f as i64))
+        }
+        _ => None,
+    }
+}
 
 impl Executor {
     pub(in crate::executor) fn execute_node_by_label(&self, label_id: u32) -> Result<Vec<Value>> {
@@ -85,29 +125,37 @@ impl Executor {
             return self.execute_node_by_label(label_id);
         };
         let bitmap = prop_idx.find_exact(label_id, key_id, value.clone())?;
+        self.materialize_seek_bitmap(&bitmap, "NodeIndexSeek")
+    }
+
+    /// Materialise a property-index seek's node-id bitmap into row values:
+    /// deduplicate ids, skip deleted nodes (`read_node_as_value_with_store`
+    /// yields `Value::Null` for those), and enforce `MAX_INTERMEDIATE_ROWS`
+    /// with an `operator`-named error. Acquires the store guard ONCE for the
+    /// whole bitmap (phase8_neo4j-concurrency-gaps §2) instead of once per
+    /// matched node. Shared by every seek operator so the row cap and the
+    /// deleted-node filter live in exactly one place.
+    pub(in crate::executor) fn materialize_seek_bitmap(
+        &self,
+        bitmap: &roaring::RoaringBitmap,
+        operator: &str,
+    ) -> Result<Vec<Value>> {
         use std::collections::HashSet;
         let cap_hint = (bitmap.len() as usize).min(MAX_INTERMEDIATE_ROWS);
         let mut seen = HashSet::new();
         let mut results = Vec::with_capacity(cap_hint);
-        // phase8_neo4j-concurrency-gaps §2 — same acquire-once pattern
-        // as `execute_node_by_label` above: one `store()` guard for the
-        // whole seek instead of one per matched node.
         let store = self.store();
         for node_id in bitmap.iter() {
             if results.len() >= MAX_INTERMEDIATE_ROWS {
                 return Err(Error::OutOfMemory(format!(
-                    "NodeIndexSeek would return more than {} rows \
-                     (MAX_INTERMEDIATE_ROWS); add LIMIT or narrow the predicate",
-                    MAX_INTERMEDIATE_ROWS
+                    "{operator} would return more than {MAX_INTERMEDIATE_ROWS} rows \
+                     (MAX_INTERMEDIATE_ROWS); add LIMIT or narrow the predicate"
                 )));
             }
             let node_id_u64 = node_id as u64;
             if !seen.insert(node_id_u64) {
                 continue;
             }
-            // phase8_neo4j-concurrency-gaps §2 — see the identical
-            // removal + rationale in `execute_node_by_label` above:
-            // `read_node_as_value` already filters deleted nodes.
             match self.read_node_as_value_with_store(&store, node_id_u64)? {
                 Value::Null => continue,
                 v => results.push(v),
@@ -115,6 +163,261 @@ impl Executor {
         }
         drop(store);
         Ok(results)
+    }
+
+    /// Execute an `IN`-list seek (`var.prop IN [a, b, c]`): one `find_exact`
+    /// point lookup per listed value, bitmap-OR'd into a single candidate set.
+    /// The union is exactly the predicate's match set — a node satisfies the
+    /// list predicate iff its indexed property equals one of the listed values
+    /// — so the planner is free to drop the residual `Filter`.
+    /// See phase0_fix-where-in-prefix-param-index-seek §1.
+    pub(in crate::executor) fn execute_node_index_in_seek(
+        &self,
+        label_id: u32,
+        key_id: u32,
+        values: &[crate::index::PropertyValue],
+    ) -> Result<Vec<Value>> {
+        let Some(prop_idx) = self.property_index() else {
+            return self.execute_node_by_label(label_id);
+        };
+        let mut bitmap = roaring::RoaringBitmap::new();
+        for value in values {
+            bitmap |= prop_idx.find_exact(label_id, key_id, value.clone())?;
+            if let Some(alias) = numeric_alias(value) {
+                bitmap |= prop_idx.find_exact(label_id, key_id, alias)?;
+            }
+        }
+        self.materialize_seek_bitmap(&bitmap, "NodeIndexInSeek")
+    }
+
+    /// Execute a `STARTS WITH` prefix seek (`var.prop STARTS WITH 'x'`): the
+    /// contiguous run of string keys sharing the prefix, straight off the
+    /// B-tree. Exactly the predicate's match set — `STARTS WITH` is false for
+    /// every non-string property value, which `find_prefix` never returns — so
+    /// the planner drops the consumed conjunct.
+    /// See phase0_fix-where-in-prefix-param-index-seek §2.
+    pub(in crate::executor) fn execute_node_index_prefix_seek(
+        &self,
+        label_id: u32,
+        key_id: u32,
+        prefix: &str,
+    ) -> Result<Vec<Value>> {
+        let Some(prop_idx) = self.property_index() else {
+            return self.execute_node_by_label(label_id);
+        };
+        let bitmap = prop_idx.find_prefix(label_id, key_id, prefix)?;
+        self.materialize_seek_bitmap(&bitmap, "NodeIndexPrefixSeek")
+    }
+
+    /// Execute a `$parameter` equality seek (`var.prop = $x`): resolve the
+    /// parameter from `context.params` and point-seek the index with it. No
+    /// driving rows are needed — the value comes from the query envelope, not
+    /// from an upstream binding — so this works as the FIRST scan of a query,
+    /// which is exactly where `WHERE n.prop = $x` lands.
+    ///
+    /// Three cases the seek cannot serve, all of them safe because the planner
+    /// keeps the predicate as a residual `Filter` for this operator:
+    ///   - parameter bound to a list/map: not a value the property index keys,
+    ///     so fall back to a full label scan and let the filter decide;
+    ///   - parameter missing from the envelope: same fallback, which keeps the
+    ///     pre-seek behaviour (label scan + filter) byte for byte;
+    ///   - parameter bound to `null`: `n.prop = null` is `null` for every node,
+    ///     so no node can match — an empty result, no scan needed.
+    /// See phase0_fix-where-in-prefix-param-index-seek §3.
+    pub(in crate::executor) fn execute_node_index_param_seek(
+        &self,
+        context: &ExecutionContext,
+        label_id: u32,
+        key_id: u32,
+        parameter: &str,
+    ) -> Result<Vec<Value>> {
+        let Some(prop_idx) = self.property_index() else {
+            return self.execute_node_by_label(label_id);
+        };
+        let Some(bound) = context.params.get(parameter) else {
+            return self.execute_node_by_label(label_id);
+        };
+        if bound.is_null() {
+            return Ok(Vec::new());
+        }
+        let Some(value) = json_value_to_property_value(bound) else {
+            // List / map parameter — the index cannot key it.
+            return self.execute_node_by_label(label_id);
+        };
+        let mut bitmap = prop_idx.find_exact(label_id, key_id, value.clone())?;
+        if let Some(alias) = numeric_alias(&value) {
+            bitmap |= prop_idx.find_exact(label_id, key_id, alias)?;
+        }
+        self.materialize_seek_bitmap(&bitmap, "NodeIndexParamSeek")
+    }
+
+    /// Execute a range seek (`var.prop > | >= | < | <= <literal>`) on a
+    /// single-property B-tree index. The index's range is inclusive on both
+    /// ends, so an exclusive `>` / `<` subtracts the exact-match bitmap for the
+    /// threshold. See phase0_fix-where-clause-index-seek-extensions.
+    pub(in crate::executor) fn execute_node_index_range_seek(
+        &self,
+        label_id: u32,
+        key_id: u32,
+        op: crate::executor::types::RangeSeekOp,
+        value: &crate::index::PropertyValue,
+    ) -> Result<Vec<Value>> {
+        use crate::executor::types::RangeSeekOp;
+        let Some(prop_idx) = self.property_index() else {
+            return self.execute_node_by_label(label_id);
+        };
+        let mut bitmap = match op {
+            RangeSeekOp::Gt | RangeSeekOp::Ge => {
+                prop_idx.find_range(label_id, key_id, Some(value.clone()), None)?
+            }
+            RangeSeekOp::Lt | RangeSeekOp::Le => {
+                prop_idx.find_range(label_id, key_id, None, Some(value.clone()))?
+            }
+        };
+        if matches!(op, RangeSeekOp::Gt | RangeSeekOp::Lt) {
+            let exact = prop_idx.find_exact(label_id, key_id, value.clone())?;
+            bitmap -= &exact;
+        }
+
+        self.materialize_seek_bitmap(&bitmap, "NodeIndexRangeSeek")
+    }
+
+    /// Execute a correlated `NodeIndexSeek` whose seek key is evaluated per
+    /// driving row (`key_expression: Some(expr)`, e.g. `r.s` from
+    /// `UNWIND $rows AS r MATCH (a:P {id: r.s})`) instead of a single
+    /// plan-time constant. For each driving row: evaluate `expr` against
+    /// that row's bindings, convert the result to a `PropertyValue`, and
+    /// seek the property index directly for that row only — the full
+    /// label × driving-row cross product is never materialised.
+    ///
+    /// A key that evaluates to `Null`/a non-scalar, or one that matches no
+    /// node, drops only that driving row's output (the query keeps going,
+    /// never errors); a key matching K nodes duplicates the driving row K
+    /// times. See `phase0_fix-correlated-predicate-index-seek` §3.
+    pub(in crate::executor) fn execute_correlated_index_seek(
+        &self,
+        context: &mut ExecutionContext,
+        label_id: u32,
+        key_id: u32,
+        key_expression: &parser::Expression,
+        variable: &str,
+    ) -> Result<()> {
+        // Determine the driving rows in whichever representation the
+        // pipeline currently holds them — mirrors the two cases
+        // `seed_scan_main_loop` branches on for the constant-key path.
+        let driving_rows: Vec<HashMap<String, Value>> = if !context.variables.is_empty() {
+            // Case A: columnar variables (e.g. after a prior MATCH/WITH).
+            context.variables.remove(variable);
+            self.materialize_rows_from_variables(context)?
+        } else if !context.result_set.rows.is_empty() {
+            // Case B: fresh UNWIND — rows live in `result_set`, variables
+            // are still empty.
+            let columns = context.result_set.columns.clone();
+            context
+                .result_set
+                .rows
+                .iter()
+                .map(|row| self.row_to_map(row, &columns))
+                .collect()
+        } else {
+            Vec::new()
+        };
+
+        if driving_rows.is_empty() {
+            // No driving binding to evaluate the row-local key against —
+            // there is no row context for `key_expression`, so there is
+            // nothing to join. Emit an empty result rather than falling
+            // back to a full scan.
+            context.variables.remove(variable);
+            context.set_variable(variable, Value::Array(Vec::new()));
+            context.result_set.columns = vec![variable.to_string()];
+            context.result_set.rows.clear();
+            return Ok(());
+        }
+
+        // The planner only emits `key_expression: Some(_)` when a
+        // PropertyIndex handle already backs `(label_id, key_id)` (§2.3).
+        // A missing handle here means a test harness built an executor
+        // without installing one — fail loudly rather than silently
+        // degrading to an unindexed scan under an operator name that
+        // promises a seek.
+        let Some(prop_idx) = self.property_index() else {
+            return Err(Error::internal(
+                "NodeIndexSeek with a correlated key_expression requires a PropertyIndex \
+                 handle, but none is installed on this executor",
+            ));
+        };
+
+        // Columns the joined output rows carry: every driving-row column
+        // plus the seek's own target variable. Computed up front so a
+        // fully-unmatched driving set still clears stale bindings instead
+        // of leaving old data behind in `context.variables`.
+        let mut columns: std::collections::HashSet<String> = std::collections::HashSet::new();
+        for row in &driving_rows {
+            columns.extend(row.keys().cloned());
+        }
+        columns.insert(variable.to_string());
+
+        // phase8_neo4j-concurrency-gaps §2 pattern: acquire the store
+        // guard once for the whole per-row seek instead of once per
+        // matched node.
+        let store = self.store();
+        let mut output_rows: Vec<HashMap<String, Value>> = Vec::new();
+        for driving_row in &driving_rows {
+            let key_value =
+                self.evaluate_projection_expression(driving_row, context, key_expression)?;
+            let Some(pv) = json_value_to_property_value(&key_value) else {
+                // Null / non-scalar key: matches nothing — no row for
+                // this driving row, but the query keeps going.
+                continue;
+            };
+            let bitmap = match prop_idx.find_exact(label_id, key_id, pv) {
+                Ok(bitmap) => bitmap,
+                Err(e) => {
+                    drop(store);
+                    return Err(e);
+                }
+            };
+            for node_id in bitmap.iter() {
+                if output_rows.len() >= MAX_INTERMEDIATE_ROWS {
+                    drop(store);
+                    return Err(Error::out_of_memory(format!(
+                        "Correlated NodeIndexSeek would return more than {} rows \
+                         (MAX_INTERMEDIATE_ROWS); add LIMIT or narrow the query",
+                        MAX_INTERMEDIATE_ROWS
+                    )));
+                }
+                let node_value = match self.read_node_as_value_with_store(&store, node_id as u64) {
+                    Ok(v) => v,
+                    Err(e) => {
+                        drop(store);
+                        return Err(e);
+                    }
+                };
+                if matches!(node_value, Value::Null) {
+                    continue;
+                }
+                let mut joined = driving_row.clone();
+                joined.insert(variable.to_string(), node_value);
+                output_rows.push(joined);
+            }
+        }
+        drop(store);
+
+        // Write the joined rows back in both representations downstream
+        // operators read: columnar per-variable arrays (the same shape
+        // `apply_cartesian_product` leaves behind) and the row-oriented
+        // `result_set`, via the same `update_result_set_from_rows` helper
+        // the constant-key path shares with every other scan operator.
+        for column in &columns {
+            let values: Vec<Value> = output_rows
+                .iter()
+                .map(|row| row.get(column).cloned().unwrap_or(Value::Null))
+                .collect();
+            context.set_variable(column, Value::Array(values));
+        }
+        self.update_result_set_from_rows(context, &output_rows);
+        Ok(())
     }
 
     /// Execute AllNodesScan operator (scan all nodes regardless of label)

@@ -86,7 +86,7 @@ impl Executor {
 
             if has_non_empty_array {
                 // If no rows but we have variables with data, materialize from variables
-                let row_maps = self.materialize_rows_from_variables(&left_context);
+                let row_maps = self.materialize_rows_from_variables(&left_context)?;
                 if !row_maps.is_empty() {
                     // Ensure columns are set from variables if not already set
                     if left_context.result_set.columns.is_empty() {
@@ -111,7 +111,7 @@ impl Executor {
 
             if has_non_empty_array {
                 // If no rows but we have variables with data, materialize from variables
-                let row_maps = self.materialize_rows_from_variables(&right_context);
+                let row_maps = self.materialize_rows_from_variables(&right_context)?;
                 if !row_maps.is_empty() {
                     // Ensure columns are set from variables if not already set
                     if right_context.result_set.columns.is_empty() {
@@ -164,8 +164,8 @@ impl Executor {
         } else {
             // If both sides are empty, try to get columns from variables or result set rows
             // First try to get from left side variables
-            let left_row_maps = self.materialize_rows_from_variables(&left_context);
-            let right_row_maps = self.materialize_rows_from_variables(&right_context);
+            let left_row_maps = self.materialize_rows_from_variables(&left_context)?;
+            let right_row_maps = self.materialize_rows_from_variables(&right_context)?;
 
             // Get columns from row maps if available
             let mut all_columns = std::collections::HashSet::new();

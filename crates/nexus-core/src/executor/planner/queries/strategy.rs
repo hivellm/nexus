@@ -4,6 +4,25 @@
 
 use super::*;
 
+/// Convert a plan-time expression into the `PropertyValue` the property
+/// index is keyed on, or `None` when it is not a scalar literal the planner
+/// can seek with. `$parameter`s, `null`, points, and computed expressions all
+/// return `None` — the seek-operand helpers treat that as "cannot lift, keep
+/// the scan". Single source of truth for every literal-keyed seek so the
+/// equality, range, and `IN` lifts can never drift apart on which literal
+/// types are indexable.
+fn literal_property_value(expr: &Expression) -> Option<crate::index::PropertyValue> {
+    match expr {
+        Expression::Literal(Literal::String(s)) => {
+            Some(crate::index::PropertyValue::String(s.clone()))
+        }
+        Expression::Literal(Literal::Integer(i)) => Some(crate::index::PropertyValue::Integer(*i)),
+        Expression::Literal(Literal::Float(f)) => Some(crate::index::PropertyValue::Float(*f)),
+        Expression::Literal(Literal::Boolean(b)) => Some(crate::index::PropertyValue::Boolean(*b)),
+        _ => None,
+    }
+}
+
 impl<'a> QueryPlanner<'a> {
     /// Plan execution strategy based on patterns and constraints
     #[allow(clippy::too_many_arguments)]
@@ -13,12 +32,21 @@ impl<'a> QueryPlanner<'a> {
         where_clauses: &[(Expression, Vec<String>)], // (expression, optional_vars)
         return_items: &[ReturnItem],
         limit_count: Option<usize>,
+        skip_count: Option<usize>,
         distinct: bool,
         unwind_operators: &[Operator],
         unwind_before_match: bool,
         hints: &[QueryHint],
         order_by_clause: &Option<(Vec<String>, Vec<bool>)>,
         with_aggregation_where: &Option<Expression>, // WHERE from WITH with aggregation
+        // Variables already bound by a prior query segment (the clauses
+        // before a `WITH` in a segmented plan — see `plan_segmented`). Such
+        // a variable is already materialised in the execution context, so
+        // its node must NOT be re-scanned here (that would clobber the
+        // carried binding); it is treated as an Expand anchor instead. Empty
+        // for every single-segment (non-`WITH`-crossing) query, so existing
+        // plans are unaffected.
+        already_bound: &std::collections::HashSet<String>,
         operators: &mut Vec<Operator>,
     ) -> Result<()> {
         // CRITICAL: Insert UNWIND operators FIRST when they precede MATCH in the query
@@ -45,6 +73,34 @@ impl<'a> QueryPlanner<'a> {
         for (pattern, _) in patterns_local.iter_mut() {
             Self::synthesise_anonymous_source_anchors(pattern, &mut anchor_counter);
         }
+
+        // WHERE-form equality index-seek lift: a plan-time-constant
+        // equality on a just-matched node variable (`MATCH (n:Person)
+        // WHERE n.age = 30`) should seek the same way the inline-property
+        // form does (`MATCH (n:Person {age: 30})`) instead of always
+        // falling back to `NodeByLabel` + `Filter`. Each WHERE-clause
+        // entry is decomposed into its top-level AND-conjuncts here so a
+        // qualifying conjunct can be lifted out (by
+        // `where_equality_index_seek_for`, called from the node loops
+        // below, at the exact site that would otherwise emit
+        // `NodeByLabel`) while any OTHER conjunct on the same WHERE
+        // clause survives as a residual `Filter`. Rebuilt back into
+        // `Expression` form (via `rebuild_and_conjunction`) after both
+        // node loops have had a chance to consume conjuncts, then used
+        // in place of `where_clauses` for the Filter/OptionalFilter
+        // lowering pass below. Scope: EQUALITY ONLY on a single-property
+        // index — range/IN/STARTS WITH/CONTAINS predicates are never
+        // lifted here (see `where_equality_seek_operand`'s doc comment);
+        // they stay full scans, made observable via the
+        // `Nexus.Performance.UnindexedPropertyAccess` notification.
+        let mut residual_where: Vec<(Vec<Expression>, Vec<String>)> = where_clauses
+            .iter()
+            .map(|(expr, opt_vars)| {
+                let mut conjuncts = Vec::new();
+                Self::flatten_and_conjuncts(expr, &mut conjuncts);
+                (conjuncts, opt_vars.clone())
+            })
+            .collect();
 
         // Process ALL patterns, not just the first one
         // Multiple patterns need Cartesian product (Join)
@@ -90,6 +146,16 @@ impl<'a> QueryPlanner<'a> {
         for (idx, element) in start_pattern.elements.iter().enumerate() {
             if let PatternElement::Node(node) = element {
                 if let Some(variable) = &node.variable {
+                    // A variable carried in from a prior `WITH` segment is
+                    // already materialised in the context. Never re-scan it —
+                    // that clobbers the carried binding. Skip even when it is
+                    // the pattern's first node (the `is_first_node` forcing
+                    // below must not override this); the Expand emitted by
+                    // `add_relationship_operators` uses it as the source
+                    // anchor and reads it from the live row instead.
+                    if already_bound.contains(variable) {
+                        continue;
+                    }
                     // CRITICAL: Check if this is the first node in the pattern
                     let is_first_node = Some(variable.clone()) == first_node_var;
 
@@ -125,68 +191,116 @@ impl<'a> QueryPlanner<'a> {
                     if !node.labels.is_empty() {
                         // Use first label for initial scan
                         let first_label = &node.labels[0];
-                        let label_id = self.catalog.get_or_create_label(first_label)?;
 
-                        // Apply USING INDEX hint if present.
-                        //
-                        // phase7_planner-using-index-hints §1.5: when a
-                        // `PropertyIndex` handle is installed
-                        // (`with_property_index`), the planner verifies
-                        // that the hinted `(label, property)` pair has a
-                        // registered index and raises a structured
-                        // `ERR_USING_INDEX_NOT_FOUND` when it doesn't.
-                        // Without a handle the hint is accepted silently
-                        // — that's the legacy behaviour of unit-test
-                        // callers that don't construct an
-                        // `IndexManager`.
-                        if let Some(QueryHint::UsingIndex {
-                            label: hint_label,
-                            property: hint_property,
-                            ..
-                        }) = use_index_hint
-                        {
-                            if let Some(prop_idx) = self.property_index {
-                                // Verify the (label, property) pair has
-                                // a registered single-property index.
-                                let label_id_for_check = self.catalog.get_label_id(hint_label).map_err(|_| {
-                                    Error::CypherSyntax(format!(
-                                        "ERR_USING_INDEX_NOT_FOUND: label `:{hint_label}` referenced by USING INDEX hint is not registered"
-                                    ))
-                                })?;
-                                let key_id_for_check = self.catalog.get_key_id(hint_property).map_err(|_| {
-                                    Error::CypherSyntax(format!(
-                                        "ERR_USING_INDEX_NOT_FOUND: property `{hint_property}` referenced by USING INDEX hint on `:{hint_label}` is not registered"
-                                    ))
-                                })?;
-                                if !prop_idx.has_index(label_id_for_check, key_id_for_check) {
-                                    return Err(Error::CypherSyntax(format!(
-                                        "ERR_USING_INDEX_NOT_FOUND: no property index registered for `:{hint_label}({hint_property})` (USING INDEX hint requires a matching CREATE INDEX)"
-                                    )));
-                                }
-                            }
-                            // Force index usage for this property
-                            // The executor will use property index lookup instead of label scan
-                            operators.push(Operator::NodeByLabel {
-                                label_id,
+                        if first_label.starts_with('$') {
+                            // Dynamic-label sentinel (`$param`): the planner
+                            // has no params (they live on the execution
+                            // context), so it cannot resolve the label id
+                            // here. Drive the scan with AllNodesScan and
+                            // lower the sentinel to a label-check Filter —
+                            // the same lowering used for additional labels
+                            // below — which resolves `$param` against the
+                            // runtime params in operators/filter.rs (a
+                            // non-empty STRING becomes the label;
+                            // NULL/empty/non-STRING yields no rows, to
+                            // mirror `WHERE n:$x`).
+                            operators.push(Operator::AllNodesScan {
                                 variable: variable.clone(),
                             });
-                            // Add filter to use index (executor will detect property filter and use index)
-                        } else if use_scan_hint.is_some() {
-                            // USING SCAN hint - force label scan (already using NodeByLabel)
-                            operators.push(Operator::NodeByLabel {
-                                label_id,
-                                variable: variable.clone(),
+                            operators.push(Operator::Filter {
+                                predicate: format!("{}:{}", variable, first_label),
+                                predicate_ast: None,
                             });
                         } else {
-                            // Normal planning — prefer an index seek when a
-                            // covering property index exists, else label scan.
-                            if let Some(seek) = self.node_index_seek_for(node, label_id, variable) {
-                                operators.push(seek);
-                            } else {
+                            let label_id = self.catalog.get_or_create_label(first_label)?;
+
+                            // Apply USING INDEX hint if present.
+                            //
+                            // phase7_planner-using-index-hints §1.5: when a
+                            // `PropertyIndex` handle is installed
+                            // (`with_property_index`), the planner verifies
+                            // that the hinted `(label, property)` pair has a
+                            // registered index and raises a structured
+                            // `ERR_USING_INDEX_NOT_FOUND` when it doesn't.
+                            // Without a handle the hint is accepted silently
+                            // — that's the legacy behaviour of unit-test
+                            // callers that don't construct an
+                            // `IndexManager`.
+                            if let Some(QueryHint::UsingIndex {
+                                label: hint_label,
+                                property: hint_property,
+                                ..
+                            }) = use_index_hint
+                            {
+                                if let Some(prop_idx) = self.property_index {
+                                    // Verify the (label, property) pair has
+                                    // a registered single-property index.
+                                    let label_id_for_check = self.catalog.get_label_id(hint_label).map_err(|_| {
+                                        Error::CypherSyntax(format!(
+                                            "ERR_USING_INDEX_NOT_FOUND: label `:{hint_label}` referenced by USING INDEX hint is not registered"
+                                        ))
+                                    })?;
+                                    let key_id_for_check = self.catalog.get_key_id(hint_property).map_err(|_| {
+                                        Error::CypherSyntax(format!(
+                                            "ERR_USING_INDEX_NOT_FOUND: property `{hint_property}` referenced by USING INDEX hint on `:{hint_label}` is not registered"
+                                        ))
+                                    })?;
+                                    if !prop_idx.has_index(label_id_for_check, key_id_for_check) {
+                                        return Err(Error::CypherSyntax(format!(
+                                            "ERR_USING_INDEX_NOT_FOUND: no property index registered for `:{hint_label}({hint_property})` (USING INDEX hint requires a matching CREATE INDEX)"
+                                        )));
+                                    }
+                                }
+                                // Force index usage for this property
+                                // The executor will use property index lookup instead of label scan
                                 operators.push(Operator::NodeByLabel {
                                     label_id,
                                     variable: variable.clone(),
                                 });
+                                // Add filter to use index (executor will detect property filter and use index)
+                            } else if use_scan_hint.is_some() {
+                                // USING SCAN hint - force label scan (already using NodeByLabel)
+                                operators.push(Operator::NodeByLabel {
+                                    label_id,
+                                    variable: variable.clone(),
+                                });
+                            } else {
+                                // Normal planning — prefer an index seek when a
+                                // covering property index exists, else label scan.
+                                // A composite index covering the FULL inline
+                                // property-map key set takes precedence over a
+                                // single-property seek (one seek narrows to the
+                                // exact tuple instead of leaving a residual
+                                // Filter on the other predicate(s)); inline
+                                // property equality (`{prop: value}`) on a
+                                // single-property index is tried next; a
+                                // WHERE-form equality conjunct (`WHERE n.prop =
+                                // value`) on an indexed property is lifted into
+                                // the same seek shape when neither inline seek
+                                // applies.
+                                if let Some(seek) = self.composite_index_seek_for(
+                                    node,
+                                    label_id,
+                                    first_label,
+                                    variable,
+                                ) {
+                                    operators.push(seek);
+                                } else if let Some(seek) =
+                                    self.node_index_seek_for(node, label_id, variable)
+                                {
+                                    operators.push(seek);
+                                } else if let Some(seek) = self.where_equality_index_seek_for(
+                                    variable,
+                                    label_id,
+                                    &mut residual_where,
+                                ) {
+                                    operators.push(seek);
+                                } else {
+                                    operators.push(Operator::NodeByLabel {
+                                        label_id,
+                                        variable: variable.clone(),
+                                    });
+                                }
                             }
                         }
 
@@ -197,6 +311,7 @@ impl<'a> QueryPlanner<'a> {
                                 let filter_expr = format!("{}:{}", variable, additional_label);
                                 operators.push(Operator::Filter {
                                     predicate: filter_expr,
+                                    predicate_ast: None,
                                 });
                             }
                         }
@@ -227,6 +342,7 @@ impl<'a> QueryPlanner<'a> {
                             let filter_expr = format!("{}.{} = {}", variable, prop_name, value_str);
                             operators.push(Operator::Filter {
                                 predicate: filter_expr,
+                                predicate_ast: None,
                             });
                         }
                     }
@@ -304,12 +420,13 @@ impl<'a> QueryPlanner<'a> {
             std::slice::from_ref(start_pattern),
             first_is_optional,
             operators,
-            &std::collections::HashSet::new(), // No previously bound vars for first pattern
+            already_bound, // vars carried in from a prior WITH segment anchor the first Expand
         )?;
 
-        // Track variables bound by the first pattern (for OPTIONAL MATCH handling)
-        let mut previously_bound_vars: std::collections::HashSet<String> =
-            std::collections::HashSet::new();
+        // Track variables bound by the first pattern (for OPTIONAL MATCH
+        // handling). Seed it with the segment's carried-in bindings so
+        // additional comma-separated patterns also treat them as anchors.
+        let mut previously_bound_vars: std::collections::HashSet<String> = already_bound.clone();
         for element in &start_pattern.elements {
             if let PatternElement::Node(node) = element {
                 if let Some(var) = &node.variable {
@@ -360,14 +477,52 @@ impl<'a> QueryPlanner<'a> {
 
                         if !node.labels.is_empty() {
                             let first_label = &node.labels[0];
-                            let label_id = self.catalog.get_or_create_label(first_label)?;
-                            if let Some(seek) = self.node_index_seek_for(node, label_id, variable) {
-                                operators.push(seek);
-                            } else {
-                                operators.push(Operator::NodeByLabel {
-                                    label_id,
+
+                            if first_label.starts_with('$') {
+                                // Dynamic-label sentinel (`$param`): the
+                                // planner has no params (they live on the
+                                // execution context), so it cannot resolve
+                                // the label id here. Drive the scan with
+                                // AllNodesScan and lower the sentinel to a
+                                // label-check Filter — the same lowering
+                                // used for additional labels below — which
+                                // resolves `$param` against the runtime
+                                // params in operators/filter.rs (a
+                                // non-empty STRING becomes the label;
+                                // NULL/empty/non-STRING yields no rows, to
+                                // mirror `WHERE n:$x`).
+                                operators.push(Operator::AllNodesScan {
                                     variable: variable.clone(),
                                 });
+                                operators.push(Operator::Filter {
+                                    predicate: format!("{}:{}", variable, first_label),
+                                    predicate_ast: None,
+                                });
+                            } else {
+                                let label_id = self.catalog.get_or_create_label(first_label)?;
+                                if let Some(seek) = self.composite_index_seek_for(
+                                    node,
+                                    label_id,
+                                    first_label,
+                                    variable,
+                                ) {
+                                    operators.push(seek);
+                                } else if let Some(seek) =
+                                    self.node_index_seek_for(node, label_id, variable)
+                                {
+                                    operators.push(seek);
+                                } else if let Some(seek) = self.where_equality_index_seek_for(
+                                    variable,
+                                    label_id,
+                                    &mut residual_where,
+                                ) {
+                                    operators.push(seek);
+                                } else {
+                                    operators.push(Operator::NodeByLabel {
+                                        label_id,
+                                        variable: variable.clone(),
+                                    });
+                                }
                             }
 
                             // Add filters for additional labels
@@ -376,6 +531,7 @@ impl<'a> QueryPlanner<'a> {
                                     let filter_expr = format!("{}:{}", variable, additional_label);
                                     operators.push(Operator::Filter {
                                         predicate: filter_expr,
+                                        predicate_ast: None,
                                     });
                                 }
                             }
@@ -400,6 +556,7 @@ impl<'a> QueryPlanner<'a> {
                                     format!("{}.{} = {}", variable, prop_name, value_str);
                                 operators.push(Operator::Filter {
                                     predicate: filter_expr,
+                                    predicate_ast: None,
                                 });
                             }
                         }
@@ -416,16 +573,30 @@ impl<'a> QueryPlanner<'a> {
             )?;
         }
 
-        // Add filter operators for WHERE clauses
+        // Add filter operators for WHERE clauses. Rebuild each entry's
+        // surviving conjuncts (some may have been lifted into a
+        // `NodeIndexSeek` by the node loops above, via
+        // `where_equality_index_seek_for`) back into `Expression` form;
+        // an entry that lost every conjunct to a seek is dropped
+        // entirely rather than emitting an empty/always-true Filter.
+        let residual_where_clauses: Vec<(Expression, Vec<String>)> = residual_where
+            .into_iter()
+            .filter_map(|(conjuncts, opt_vars)| {
+                Self::rebuild_and_conjunction(conjuncts).map(|expr| (expr, opt_vars))
+            })
+            .collect();
         tracing::debug!(
             "PLANNER: Adding {} WHERE clauses as Filter/OptionalFilter operators",
-            where_clauses.len()
+            residual_where_clauses.len()
         );
-        for (idx, (where_clause, optional_vars)) in where_clauses.iter().enumerate() {
-            let predicate = self.expression_to_string(where_clause)?;
+        for (idx, (where_clause, optional_vars)) in residual_where_clauses.iter().enumerate() {
+            let predicate = self.predicate_to_string(where_clause)?;
             if optional_vars.is_empty() {
                 tracing::debug!("  WHERE clause #{}: {} (regular Filter)", idx, predicate);
-                operators.push(Operator::Filter { predicate });
+                operators.push(Operator::Filter {
+                    predicate,
+                    predicate_ast: Some(Box::new(where_clause.clone())),
+                });
             } else {
                 tracing::debug!(
                     "  WHERE clause #{}: {} (OptionalFilter, vars={:?})",
@@ -435,6 +606,7 @@ impl<'a> QueryPlanner<'a> {
                 );
                 operators.push(Operator::OptionalFilter {
                     predicate,
+                    predicate_ast: Some(Box::new(where_clause.clone())),
                     optional_vars: optional_vars.clone(),
                 });
             }
@@ -1048,13 +1220,14 @@ impl<'a> QueryPlanner<'a> {
 
                 // If WITH had a WHERE clause with aggregation, add Filter after Aggregate
                 if let Some(where_expression) = with_aggregation_where {
-                    let filter_str = self.expression_to_string(where_expression)?;
+                    let filter_str = self.predicate_to_string(where_expression)?;
                     tracing::debug!(
                         "WITH aggregation WHERE (pattern branch): Adding Filter '{}' after Aggregate",
                         filter_str
                     );
                     operators.push(Operator::Filter {
                         predicate: filter_str,
+                        predicate_ast: Some(Box::new(where_expression.clone())),
                     });
                 }
 
@@ -1230,6 +1403,14 @@ impl<'a> QueryPlanner<'a> {
             }
         }
 
+        // Add SKIP after ORDER BY and before LIMIT — the standard openCypher
+        // ORDER BY -> SKIP -> LIMIT pipeline order. Sort was appended above and
+        // Limit is appended below, so pushing here keeps that ordering. Mirrors
+        // the pattern-less branches in planner_core.rs.
+        if let Some(count) = skip_count {
+            operators.push(Operator::Skip { count });
+        }
+
         // Add limit operator if specified
         if let Some(count) = limit_count {
             operators.push(Operator::Limit { count });
@@ -1299,11 +1480,91 @@ impl<'a> QueryPlanner<'a> {
         Ok(&patterns[0])
     }
 
+    /// Build a `CompositeBtreeSeek` when a registered composite index
+    /// (or NODE KEY constraint, which registers a UNIQUE composite
+    /// index under the hood) on `label_id` has its FULL declared key
+    /// set covered by `node`'s inline property-map equalities
+    /// (`MATCH (n:L {a: 1, b: 2})` against an index on `(a, b)`).
+    ///
+    /// Called BEFORE [`Self::node_index_seek_for`] at both node-loop
+    /// call sites so a composite index wins over a single-property
+    /// index when both could apply: a composite seek narrows straight
+    /// to the exact tuple, where a single-property seek would still
+    /// need a residual `Filter` for the other predicate(s).
+    ///
+    /// Returns `None` (caller falls through to `node_index_seek_for` /
+    /// `where_equality_index_seek_for` / `NodeByLabel`) when no
+    /// composite-index handle is installed, the property map is empty
+    /// or all-non-literal, or — critically — only a SUBSET of a
+    /// registered index's key set is present. A partial match is
+    /// deliberately never turned into a prefix seek here: the planner
+    /// has no residual-filter wiring for the un-seeked trailing
+    /// columns on this path, so seeking on an incomplete key would
+    /// silently return every node sharing the seeked prefix instead of
+    /// the caller's intended (narrower) match.
+    fn composite_index_seek_for(
+        &self,
+        node: &NodePattern,
+        label_id: u32,
+        label_name: &str,
+        variable: &str,
+    ) -> Option<Operator> {
+        let registry = self.composite_index?;
+        let property_map = node.properties.as_ref()?;
+
+        let mut literal_values: HashMap<&str, serde_json::Value> = HashMap::new();
+        for (prop_name, expr) in &property_map.properties {
+            let value = match expr {
+                Expression::Literal(Literal::String(s)) => serde_json::Value::String(s.clone()),
+                Expression::Literal(Literal::Integer(i)) => serde_json::Value::from(*i),
+                Expression::Literal(Literal::Float(f)) => match serde_json::Number::from_f64(*f) {
+                    Some(n) => serde_json::Value::Number(n),
+                    None => continue,
+                },
+                Expression::Literal(Literal::Boolean(b)) => serde_json::Value::Bool(*b),
+                // null / point / parameter / non-literal / correlated:
+                // not indexable at plan time for a composite seek.
+                _ => continue,
+            };
+            literal_values.insert(prop_name.as_str(), value);
+        }
+        if literal_values.is_empty() {
+            return None;
+        }
+
+        for (lbl, keys, _unique, _name) in registry.list() {
+            if lbl != label_id || keys.is_empty() {
+                continue;
+            }
+            if !keys.iter().all(|k| literal_values.contains_key(k.as_str())) {
+                continue;
+            }
+            let prefix: Vec<(String, serde_json::Value)> = keys
+                .iter()
+                .filter_map(|k| {
+                    literal_values
+                        .get(k.as_str())
+                        .cloned()
+                        .map(|v| (k.clone(), v))
+                })
+                .collect();
+            return Some(Operator::CompositeBtreeSeek {
+                label: label_name.to_string(),
+                variable: variable.to_string(),
+                prefix,
+            });
+        }
+        None
+    }
+
     /// Build a `NodeIndexSeek` for the first inline equality property of
     /// `node` whose `(label_id, key_id)` has a registered property index
-    /// and whose value is an indexable literal. Returns `None` (caller
-    /// falls back to `NodeByLabel`) when no PropertyIndex handle is
-    /// installed, no property qualifies, or the value is null/point/non-literal.
+    /// and whose value is either an indexable literal (constant seek) or a
+    /// row-local expression (`a.prop` / bare variable — per-row correlated
+    /// seek, evaluated at execution time by `execute_correlated_index_seek`).
+    /// Returns `None` (caller falls back to `NodeByLabel`) when no
+    /// PropertyIndex handle is installed, no property qualifies, or the
+    /// value is null/point/parameter/non-literal and non-correlated.
     fn node_index_seek_for(
         &self,
         node: &NodePattern,
@@ -1313,31 +1574,473 @@ impl<'a> QueryPlanner<'a> {
         let prop_idx = self.property_index?;
         let property_map = node.properties.as_ref()?;
         for (prop_name, expr) in &property_map.properties {
-            let pv = match expr {
-                Expression::Literal(Literal::String(s)) => {
-                    crate::index::PropertyValue::String(s.clone())
-                }
-                Expression::Literal(Literal::Integer(i)) => {
-                    crate::index::PropertyValue::Integer(*i)
-                }
-                Expression::Literal(Literal::Float(f)) => crate::index::PropertyValue::Float(*f),
-                Expression::Literal(Literal::Boolean(b)) => {
-                    crate::index::PropertyValue::Boolean(*b)
-                }
-                _ => continue, // null / point / param / non-literal: not indexable
-            };
             let Ok(key_id) = self.catalog.get_key_id(prop_name) else {
                 continue;
             };
-            if prop_idx.has_index(label_id, key_id) {
-                return Some(Operator::NodeIndexSeek {
-                    label_id,
-                    key_id,
-                    value: pv,
-                    variable: variable.to_string(),
-                });
+            if !prop_idx.has_index(label_id, key_id) {
+                continue;
+            }
+            match expr {
+                // Constant: value baked into the plan at plan time.
+                Expression::Literal(Literal::String(s)) => {
+                    return Some(Operator::NodeIndexSeek {
+                        label_id,
+                        key_id,
+                        value: crate::index::PropertyValue::String(s.clone()),
+                        key_expression: None,
+                        variable: variable.to_string(),
+                    });
+                }
+                Expression::Literal(Literal::Integer(i)) => {
+                    return Some(Operator::NodeIndexSeek {
+                        label_id,
+                        key_id,
+                        value: crate::index::PropertyValue::Integer(*i),
+                        key_expression: None,
+                        variable: variable.to_string(),
+                    });
+                }
+                Expression::Literal(Literal::Float(f)) => {
+                    return Some(Operator::NodeIndexSeek {
+                        label_id,
+                        key_id,
+                        value: crate::index::PropertyValue::Float(*f),
+                        key_expression: None,
+                        variable: variable.to_string(),
+                    });
+                }
+                Expression::Literal(Literal::Boolean(b)) => {
+                    return Some(Operator::NodeIndexSeek {
+                        label_id,
+                        key_id,
+                        value: crate::index::PropertyValue::Boolean(*b),
+                        key_expression: None,
+                        variable: variable.to_string(),
+                    });
+                }
+                // Row-local / correlated: e.g. `r.s` from
+                // `UNWIND $rows AS r MATCH (a:P {id: r.s})`. The key is
+                // evaluated per driving row at execution time, so the
+                // plan-time `value` is a documented no-op placeholder —
+                // `execute_correlated_index_seek` ignores it whenever
+                // `key_expression` is `Some(_)`.
+                Expression::PropertyAccess { .. } | Expression::Variable(_) => {
+                    return Some(Operator::NodeIndexSeek {
+                        label_id,
+                        key_id,
+                        value: crate::index::PropertyValue::Null,
+                        key_expression: Some(expr.clone()),
+                        variable: variable.to_string(),
+                    });
+                }
+                // null / point / param / other non-literal: not indexable.
+                _ => continue,
             }
         }
         None
+    }
+
+    /// Flatten a WHERE-clause expression into its top-level AND-conjuncts,
+    /// recursing through nested `AND`s (`a AND b AND c` yields `[a, b,
+    /// c]`). A non-`AND` expression (including one rooted in `OR`, since
+    /// splitting an `OR`'s branches would change its meaning) yields
+    /// itself as the sole conjunct.
+    fn flatten_and_conjuncts(expr: &Expression, out: &mut Vec<Expression>) {
+        if let Expression::BinaryOp {
+            left,
+            op: BinaryOperator::And,
+            right,
+        } = expr
+        {
+            Self::flatten_and_conjuncts(left, out);
+            Self::flatten_and_conjuncts(right, out);
+        } else {
+            out.push(expr.clone());
+        }
+    }
+
+    /// Rebuild an AND-conjunction `Expression` from its conjuncts — the
+    /// inverse of [`Self::flatten_and_conjuncts`]. Returns `None` for an
+    /// empty list (every conjunct on that WHERE-clause entry was lifted
+    /// into a seek by [`Self::where_equality_index_seek_for`], so the
+    /// caller should drop the entry rather than emit an empty/always-true
+    /// Filter).
+    fn rebuild_and_conjunction(conjuncts: Vec<Expression>) -> Option<Expression> {
+        let mut iter = conjuncts.into_iter();
+        let first = iter.next()?;
+        Some(iter.fold(first, |acc, next| Expression::BinaryOp {
+            left: Box::new(acc),
+            op: BinaryOperator::And,
+            right: Box::new(next),
+        }))
+    }
+
+    /// WHERE-form counterpart to [`Self::node_index_seek_for`]: looks for
+    /// a top-level `variable.prop = <constant>` conjunct across
+    /// `residual` — the AND-conjunct-decomposed working copy of the
+    /// query's WHERE clauses, built once in [`Self::plan_execution_strategy`]
+    /// — whose `(label_id, prop)` pair has a registered single-property
+    /// index. On a match, removes the consumed conjunct from `residual`
+    /// (dropping the whole entry once it has no conjuncts left) and
+    /// returns the `NodeIndexSeek` operator to emit in place of
+    /// `NodeByLabel`. Returns `None` when no such conjunct exists, mirroring
+    /// `node_index_seek_for`'s "caller falls back to `NodeByLabel`" contract.
+    ///
+    /// Only inspects entries with an EMPTY `optional_vars` — lifting a
+    /// conjunct out of what would become an `OptionalFilter` would change
+    /// OPTIONAL MATCH semantics (a failed predicate there nulls the
+    /// optional variables rather than dropping the row), so OPTIONAL
+    /// MATCH WHERE clauses are left untouched and keep going through the
+    /// existing `OptionalFilter` path.
+    fn where_equality_index_seek_for(
+        &self,
+        variable: &str,
+        label_id: u32,
+        residual: &mut [(Vec<Expression>, Vec<String>)],
+    ) -> Option<Operator> {
+        self.property_index?;
+        for (conjuncts, optional_vars) in residual.iter_mut() {
+            if !optional_vars.is_empty() {
+                continue;
+            }
+            for i in 0..conjuncts.len() {
+                if let Some(seek) = self
+                    .where_equality_seek_operand(&conjuncts[i], variable, label_id)
+                    .or_else(|| self.where_range_seek_operand(&conjuncts[i], variable, label_id))
+                    .or_else(|| self.where_in_seek_operand(&conjuncts[i], variable, label_id))
+                    .or_else(|| self.where_prefix_seek_operand(&conjuncts[i], variable, label_id))
+                {
+                    conjuncts.remove(i);
+                    return Some(seek);
+                }
+            }
+        }
+        // Second pass, and only once no plan-time-literal conjunct anywhere in
+        // `residual` could be lifted: a `$parameter` equality seek. It ranks
+        // last because its key is unknown until execution, so it may still
+        // fall back to a scan — a literal seek is always the better plan.
+        // NOTE: the conjunct is deliberately NOT removed. `NodeIndexParamSeek`
+        // degrades to a full label scan for a list/map or missing parameter,
+        // and the retained `Filter` is what keeps that fallback correct.
+        for (conjuncts, optional_vars) in residual.iter() {
+            if !optional_vars.is_empty() {
+                continue;
+            }
+            for conjunct in conjuncts.iter() {
+                if let Some(seek) = self.where_param_seek_operand(conjunct, variable, label_id) {
+                    return Some(seek);
+                }
+            }
+        }
+        None
+    }
+
+    /// If `conjunct` is a top-level range comparison `variable.prop > | >= | <
+    /// | <= <literal>` (or the mirrored `<literal> <op> variable.prop`) and
+    /// `(label_id, prop)` has a single-property index, return the
+    /// `NodeIndexRangeSeek` to emit in its place. The B-tree supports range and
+    /// prefix scans natively, so this only lifts the plan; results are
+    /// unchanged. `CONTAINS` (an unanchored substring match, which no ordered
+    /// index can seek) still falls back to a full scan.
+    fn where_range_seek_operand(
+        &self,
+        conjunct: &Expression,
+        variable: &str,
+        label_id: u32,
+    ) -> Option<Operator> {
+        let prop_idx = self.property_index?;
+        let Expression::BinaryOp { left, op, right } = conjunct else {
+            return None;
+        };
+        let base = match op {
+            BinaryOperator::GreaterThan => RangeSeekOp::Gt,
+            BinaryOperator::GreaterThanOrEqual => RangeSeekOp::Ge,
+            BinaryOperator::LessThan => RangeSeekOp::Lt,
+            BinaryOperator::LessThanOrEqual => RangeSeekOp::Le,
+            _ => return None,
+        };
+        // `prop <op> literal` keeps `op`; `literal <op> prop` mirrors it.
+        let mirror = |o: RangeSeekOp| match o {
+            RangeSeekOp::Gt => RangeSeekOp::Lt,
+            RangeSeekOp::Ge => RangeSeekOp::Le,
+            RangeSeekOp::Lt => RangeSeekOp::Gt,
+            RangeSeekOp::Le => RangeSeekOp::Ge,
+        };
+        let (property, value_expr, seek_op) = match (left.as_ref(), right.as_ref()) {
+            (
+                Expression::PropertyAccess {
+                    variable: v,
+                    property,
+                },
+                other,
+            ) if v == variable => (property, other, base),
+            (
+                other,
+                Expression::PropertyAccess {
+                    variable: v,
+                    property,
+                },
+            ) if v == variable => (property, other, mirror(base)),
+            _ => return None,
+        };
+        let key_id = self.catalog.get_key_id(property).ok()?;
+        if !prop_idx.has_index(label_id, key_id) {
+            return None;
+        }
+        let value = literal_property_value(value_expr)?;
+        Some(Operator::NodeIndexRangeSeek {
+            label_id,
+            key_id,
+            op: seek_op,
+            value,
+            variable: variable.to_string(),
+        })
+    }
+
+    /// If `conjunct` is a top-level `variable.prop IN [<literals>]` and
+    /// `(label_id, prop)` has a single-property index, return the
+    /// `NodeIndexInSeek` to emit in its place — one point seek per element,
+    /// bitmap-OR'd at execution time. The union is exactly the predicate's
+    /// match set (a node satisfies `prop IN list` iff its property equals one
+    /// of the listed values), so the caller drops the consumed conjunct.
+    ///
+    /// Bails out — leaving the full scan — when ANY element is not a plan-time
+    /// scalar literal: a `$parameter` or a computed element would make the
+    /// seek an UNDER-approximation, and the lifted conjunct is no longer
+    /// around to correct it. `NULL` elements are the one exception: a null
+    /// element can only ever make the comparison `null`, never `true`
+    /// (`1 IN [1, null]` is true only because of the `1`), so dropping them
+    /// preserves the match set exactly. A list that is empty — or all nulls —
+    /// lifts to a seek with no values, which correctly matches nothing.
+    fn where_in_seek_operand(
+        &self,
+        conjunct: &Expression,
+        variable: &str,
+        label_id: u32,
+    ) -> Option<Operator> {
+        let prop_idx = self.property_index?;
+        let Expression::BinaryOp {
+            left,
+            op: BinaryOperator::In,
+            right,
+        } = conjunct
+        else {
+            return None;
+        };
+        // Only `prop IN list` seeks — the mirrored `list IN prop` is a
+        // containment test on a list-valued property, a different predicate.
+        let Expression::PropertyAccess {
+            variable: v,
+            property,
+        } = left.as_ref()
+        else {
+            return None;
+        };
+        if v != variable {
+            return None;
+        }
+        let Expression::List(elements) = right.as_ref() else {
+            return None;
+        };
+        let key_id = self.catalog.get_key_id(property).ok()?;
+        if !prop_idx.has_index(label_id, key_id) {
+            return None;
+        }
+        let mut values = Vec::with_capacity(elements.len());
+        for element in elements {
+            if matches!(element, Expression::Literal(Literal::Null)) {
+                continue;
+            }
+            values.push(literal_property_value(element)?);
+        }
+        Some(Operator::NodeIndexInSeek {
+            label_id,
+            key_id,
+            values,
+            variable: variable.to_string(),
+        })
+    }
+
+    /// If `conjunct` is a top-level `variable.prop STARTS WITH '<literal>'`
+    /// and `(label_id, prop)` has a single-property index, return the
+    /// `NodeIndexPrefixSeek` to emit in its place — the contiguous run of
+    /// string keys sharing the prefix. `STARTS WITH` is false for every
+    /// non-string value, and `find_prefix` only ever returns string keys, so
+    /// the seek is exactly the predicate's match set and the caller drops the
+    /// consumed conjunct.
+    ///
+    /// Not mirrored: `'literal' STARTS WITH n.prop` asks whether the LITERAL
+    /// starts with the property, which no prefix run on `prop` can answer.
+    /// A `$parameter` prefix has no plan-time value and keeps the scan.
+    fn where_prefix_seek_operand(
+        &self,
+        conjunct: &Expression,
+        variable: &str,
+        label_id: u32,
+    ) -> Option<Operator> {
+        let prop_idx = self.property_index?;
+        let Expression::BinaryOp {
+            left,
+            op: BinaryOperator::StartsWith,
+            right,
+        } = conjunct
+        else {
+            return None;
+        };
+        let Expression::PropertyAccess {
+            variable: v,
+            property,
+        } = left.as_ref()
+        else {
+            return None;
+        };
+        if v != variable {
+            return None;
+        }
+        let Expression::Literal(Literal::String(prefix)) = right.as_ref() else {
+            return None;
+        };
+        let key_id = self.catalog.get_key_id(property).ok()?;
+        if !prop_idx.has_index(label_id, key_id) {
+            return None;
+        }
+        Some(Operator::NodeIndexPrefixSeek {
+            label_id,
+            key_id,
+            prefix: prefix.clone(),
+            variable: variable.to_string(),
+        })
+    }
+
+    /// If `conjunct` is a top-level equality between `variable.prop` and a
+    /// `$parameter` (either operand order) and `(label_id, prop)` has a
+    /// single-property index, return the `NodeIndexParamSeek` to emit in place
+    /// of the label scan. The seek key is resolved from the query envelope at
+    /// execution time, so — unlike `NodeIndexSeek`'s correlated
+    /// `key_expression` path — it needs no driving rows and works as the first
+    /// scan of the query, which is where `WHERE n.prop = $x` lands.
+    ///
+    /// The caller must KEEP the conjunct as a residual `Filter`: a parameter
+    /// bound to a list/map, or absent from the envelope, makes the operator
+    /// fall back to a full label scan, and only the retained predicate can
+    /// narrow that back down to the right rows.
+    fn where_param_seek_operand(
+        &self,
+        conjunct: &Expression,
+        variable: &str,
+        label_id: u32,
+    ) -> Option<Operator> {
+        let prop_idx = self.property_index?;
+        let Expression::BinaryOp {
+            left,
+            op: BinaryOperator::Equal,
+            right,
+        } = conjunct
+        else {
+            return None;
+        };
+        let (property, parameter) = match (left.as_ref(), right.as_ref()) {
+            (
+                Expression::PropertyAccess {
+                    variable: v,
+                    property,
+                },
+                Expression::Parameter(parameter),
+            )
+            | (
+                Expression::Parameter(parameter),
+                Expression::PropertyAccess {
+                    variable: v,
+                    property,
+                },
+            ) if v == variable => (property, parameter),
+            _ => return None,
+        };
+        let key_id = self.catalog.get_key_id(property).ok()?;
+        if !prop_idx.has_index(label_id, key_id) {
+            return None;
+        }
+        Some(Operator::NodeIndexParamSeek {
+            label_id,
+            key_id,
+            parameter: parameter.clone(),
+            variable: variable.to_string(),
+        })
+    }
+
+    /// If `conjunct` is a top-level equality `variable.prop = <constant>`
+    /// (or the mirrored `<constant> = variable.prop`), and `(label_id,
+    /// prop)` has a registered single-property index, return the
+    /// `NodeIndexSeek` operator to emit in its place.
+    ///
+    /// "Constant" here means a plan-time LITERAL only — `$parameter`
+    /// values are deliberately excluded. The planner has no access to
+    /// bound parameter values (they are supplied at execution time), and
+    /// `NodeIndexSeek`'s `key_expression`-driven correlated-seek path
+    /// (`execute_correlated_index_seek`) requires driving rows to
+    /// already exist in the pipeline — the common case a bare `WHERE
+    /// n.prop = $x` lowers to is the FIRST scan of the query, where no
+    /// driving rows exist yet, so routing a parameter through that path
+    /// would silently return zero rows instead of seeking. Parameter
+    /// equality is lifted by `where_param_seek_operand` instead, into a
+    /// `NodeIndexParamSeek` that resolves the key from the query envelope.
+    ///
+    /// SCOPE: LITERAL EQUALITY ONLY. The other lifted predicate shapes live
+    /// in sibling helpers — range in `where_range_seek_operand`, `IN` in
+    /// `where_in_seek_operand`, `STARTS WITH` in `where_prefix_seek_operand`,
+    /// `$parameter` equality in `where_param_seek_operand`. `CONTAINS` is
+    /// lifted by none of them (no ordered index can seek an unanchored
+    /// substring) and stays a full scan, made observable via the
+    /// `Nexus.Performance.UnindexedPropertyAccess` notification
+    /// (`unindexed.rs`).
+    fn where_equality_seek_operand(
+        &self,
+        conjunct: &Expression,
+        variable: &str,
+        label_id: u32,
+    ) -> Option<Operator> {
+        let prop_idx = self.property_index?;
+        let Expression::BinaryOp {
+            left,
+            op: BinaryOperator::Equal,
+            right,
+        } = conjunct
+        else {
+            return None;
+        };
+        // Resolve which side is the `var.prop` operand and which is the
+        // candidate constant. Left is preferred when both sides are
+        // property accesses, matching `unindexed.rs`'s resolution order.
+        let (property, value_expr) = match (left.as_ref(), right.as_ref()) {
+            (
+                Expression::PropertyAccess {
+                    variable: v,
+                    property,
+                },
+                other,
+            ) if v == variable => (property, other),
+            (
+                other,
+                Expression::PropertyAccess {
+                    variable: v,
+                    property,
+                },
+            ) if v == variable => (property, other),
+            _ => return None,
+        };
+        let key_id = self.catalog.get_key_id(property).ok()?;
+        if !prop_idx.has_index(label_id, key_id) {
+            return None;
+        }
+        // null / point / parameter / non-literal: not indexable at plan
+        // time — see the doc comment above.
+        let value = literal_property_value(value_expr)?;
+        Some(Operator::NodeIndexSeek {
+            label_id,
+            key_id,
+            value,
+            key_expression: None,
+            variable: variable.to_string(),
+        })
     }
 }

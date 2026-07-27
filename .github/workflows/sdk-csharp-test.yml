@@ -6,14 +6,12 @@ on:
     paths:
       - 'sdks/csharp/**'
       - 'crates/nexus-server/**'
-      - 'crates/nexus-protocol/**'
       - '.github/workflows/sdk-csharp-test.yml'
   pull_request:
     branches: ['**']
     paths:
       - 'sdks/csharp/**'
       - 'crates/nexus-server/**'
-      - 'crates/nexus-protocol/**'
       - '.github/workflows/sdk-csharp-test.yml'
 
 jobs:

@@ -1,0 +1,8 @@
+[submodule "sdks/go"]
+	path = sdks/go
+	url = git@github.com:hivellm/nexus-go.git
+	branch = main
+[submodule "sdks/php"]
+	path = sdks/php
+	url = git@github.com:hivellm/nexus-php.git
+	branch = main

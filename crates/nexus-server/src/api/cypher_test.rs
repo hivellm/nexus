@@ -71,7 +71,7 @@ mod tests {
         let mut parser = CypherParser::new("SHOW DATABASES".to_string());
         let ast = parser.parse().unwrap();
 
-        let response = execute_database_commands(server, &ast, start_time).await;
+        let response = execute_database_commands(server, &ast, start_time, &None).await;
         let response = response.0;
 
         assert!(response.error.is_none(), "Error: {:?}", response.error);
@@ -100,7 +100,7 @@ mod tests {
         let mut parser = CypherParser::new("CREATE DATABASE testdb_unit".to_string());
         let ast = parser.parse().unwrap();
 
-        let response = execute_database_commands(server.clone(), &ast, start_time).await;
+        let response = execute_database_commands(server.clone(), &ast, start_time, &None).await;
         let response = response.0;
 
         assert!(response.error.is_none());
@@ -111,7 +111,7 @@ mod tests {
         let mut parser2 = CypherParser::new("SHOW DATABASES".to_string());
         let ast2 = parser2.parse().unwrap();
         let start_time2 = std::time::Instant::now();
-        let response2 = execute_database_commands(server, &ast2, start_time2).await;
+        let response2 = execute_database_commands(server, &ast2, start_time2, &None).await;
         let response2 = response2.0;
 
         let has_testdb = response2.rows.iter().any(|row| {
@@ -132,13 +132,13 @@ mod tests {
         // Create database first
         let mut parser1 = CypherParser::new("CREATE DATABASE testdb_dup".to_string());
         let ast1 = parser1.parse().unwrap();
-        let _ = execute_database_commands(server.clone(), &ast1, start_time).await;
+        let _ = execute_database_commands(server.clone(), &ast1, start_time, &None).await;
 
         // Try to create again
         let start_time2 = std::time::Instant::now();
         let mut parser2 = CypherParser::new("CREATE DATABASE testdb_dup".to_string());
         let ast2 = parser2.parse().unwrap();
-        let response = execute_database_commands(server, &ast2, start_time2).await;
+        let response = execute_database_commands(server, &ast2, start_time2, &None).await;
         let response = response.0;
 
         assert!(response.error.is_some());
@@ -153,13 +153,13 @@ mod tests {
         // Create database first
         let mut parser1 = CypherParser::new("CREATE DATABASE testdb_drop".to_string());
         let ast1 = parser1.parse().unwrap();
-        let _ = execute_database_commands(server.clone(), &ast1, start_time).await;
+        let _ = execute_database_commands(server.clone(), &ast1, start_time, &None).await;
 
         // Drop it
         let start_time2 = std::time::Instant::now();
         let mut parser2 = CypherParser::new("DROP DATABASE testdb_drop".to_string());
         let ast2 = parser2.parse().unwrap();
-        let response = execute_database_commands(server, &ast2, start_time2).await;
+        let response = execute_database_commands(server, &ast2, start_time2, &None).await;
         let response = response.0;
 
         assert!(response.error.is_none());
@@ -175,7 +175,7 @@ mod tests {
         let mut parser = CypherParser::new("DROP DATABASE nonexistent_db_12345".to_string());
         let ast = parser.parse().unwrap();
 
-        let response = execute_database_commands(server, &ast, start_time).await;
+        let response = execute_database_commands(server, &ast, start_time, &None).await;
         let response = response.0;
 
         assert!(response.error.is_some());
@@ -190,13 +190,13 @@ mod tests {
         // Create a database first
         let mut parser1 = CypherParser::new("CREATE DATABASE testdb_use".to_string());
         let ast1 = parser1.parse().unwrap();
-        let _ = execute_database_commands(server.clone(), &ast1, start_time).await;
+        let _ = execute_database_commands(server.clone(), &ast1, start_time, &None).await;
 
         // Use the database
         let start_time2 = std::time::Instant::now();
         let mut parser2 = CypherParser::new("USE DATABASE testdb_use".to_string());
         let ast2 = parser2.parse().unwrap();
-        let response = execute_database_commands(server, &ast2, start_time2).await;
+        let response = execute_database_commands(server, &ast2, start_time2, &None).await;
         let response = response.0;
 
         assert!(response.error.is_none());
@@ -220,7 +220,7 @@ mod tests {
         let mut parser = CypherParser::new("USE DATABASE nonexistent_db_use_12345".to_string());
         let ast = parser.parse().unwrap();
 
-        let response = execute_database_commands(server, &ast, start_time).await;
+        let response = execute_database_commands(server, &ast, start_time, &None).await;
         let response = response.0;
 
         assert!(response.error.is_some());
@@ -236,7 +236,7 @@ mod tests {
         // Use the default database (neo4j)
         let mut parser = CypherParser::new("USE DATABASE neo4j".to_string());
         let ast = parser.parse().unwrap();
-        let response = execute_database_commands(server, &ast, start_time).await;
+        let response = execute_database_commands(server, &ast, start_time, &None).await;
         let response = response.0;
 
         assert!(response.error.is_none());

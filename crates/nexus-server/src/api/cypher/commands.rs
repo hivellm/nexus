@@ -4,16 +4,44 @@
 //! lifecycle (`CREATE/SHOW/REVOKE/DELETE API KEY`).
 
 use super::*;
+use nexus_core::auth::middleware::AuthContext;
 
+/// phase0_fix-multi-database-persistence-and-default §G3 — `CREATE DATABASE`
+/// / `DROP DATABASE` mutate server-wide state, so (mirroring the REST
+/// `create_database`/`drop_database` handlers) they require the calling key
+/// to hold `Admin`/`Super`. `USE DATABASE` and `SHOW DATABASES` are read-only
+/// / navigational and stay open to any authenticated (or unauthenticated,
+/// when auth is disabled) caller.
 pub(crate) async fn execute_database_commands(
     server: Arc<NexusServer>,
     ast: &nexus_core::executor::parser::CypherQuery,
     start_time: std::time::Instant,
+    auth_context: &Option<AuthContext>,
 ) -> Json<CypherResponse> {
     let mut columns = Vec::new();
     let mut rows = Vec::new();
 
     for clause in &ast.clauses {
+        if matches!(
+            clause,
+            nexus_core::executor::parser::Clause::CreateDatabase(_)
+                | nexus_core::executor::parser::Clause::DropDatabase(_)
+        ) && !crate::api::auth::caller_is_admin(auth_context)
+        {
+            let execution_time = start_time.elapsed().as_millis() as u64;
+            return Json(CypherResponse {
+                columns: vec![],
+                rows: vec![],
+                execution_time_ms: execution_time,
+                error: Some(
+                    "Insufficient permissions: database management requires Admin or Super"
+                        .to_string(),
+                ),
+                notifications: vec![],
+                stats: Default::default(),
+            });
+        }
+
         match clause {
             nexus_core::executor::parser::Clause::UseDatabase(use_db) => {
                 // Set columns if not already set
@@ -43,6 +71,7 @@ pub(crate) async fn execute_database_commands(
                         execution_time_ms: execution_time,
                         error: Some(format!("Database '{}' does not exist", use_db.name)),
                         notifications: Vec::new(),
+                        stats: Default::default(),
                     });
                 }
             }
@@ -60,6 +89,11 @@ pub(crate) async fn execute_database_commands(
                 .await
                 .expect("spawn_blocking panicked");
 
+                // phase0_fix-multi-database-persistence-and-default G2 — the
+                // default database is implicit and no longer present in
+                // `list_databases()` (served by the primary engine, not a
+                // manager-owned one). Inject its row first.
+                rows.push(serde_json::json!([default_db.clone(), true]));
                 for db in databases {
                     rows.push(serde_json::json!([db.name.clone(), db.name == default_db]));
                 }
@@ -91,6 +125,7 @@ pub(crate) async fn execute_database_commands(
                             execution_time_ms: execution_time,
                             error: Some(format!("Failed to create database: {}", e)),
                             notifications: Vec::new(),
+                            stats: Default::default(),
                         });
                     }
                 }
@@ -123,6 +158,7 @@ pub(crate) async fn execute_database_commands(
                             execution_time_ms: execution_time,
                             error: Some(format!("Failed to drop database: {}", e)),
                             notifications: Vec::new(),
+                            stats: Default::default(),
                         });
                     }
                 }
@@ -138,6 +174,7 @@ pub(crate) async fn execute_database_commands(
         execution_time_ms: execution_time,
         error: None,
         notifications: Vec::new(),
+        stats: Default::default(),
     })
 }
 
@@ -209,6 +246,7 @@ pub(crate) async fn execute_user_commands(
                         execution_time_ms: execution_time,
                         error: Some(format!("User '{}' not found", show_user.username)),
                         notifications: Vec::new(),
+                        stats: Default::default(),
                     });
                 }
             }
@@ -233,6 +271,7 @@ pub(crate) async fn execute_user_commands(
                                 "Cannot delete root user. Use DISABLE instead.".to_string(),
                             ),
                             notifications: Vec::new(),
+                            stats: Default::default(),
                         });
                     }
 
@@ -249,6 +288,7 @@ pub(crate) async fn execute_user_commands(
                             execution_time_ms: execution_time,
                             error: Some(format!("Failed to delete user '{}'", drop_user.username)),
                             notifications: Vec::new(),
+                            stats: Default::default(),
                         });
                     }
                 } else if drop_user.if_exists {
@@ -264,6 +304,7 @@ pub(crate) async fn execute_user_commands(
                         execution_time_ms: execution_time,
                         error: Some(format!("User '{}' not found", drop_user.username)),
                         notifications: Vec::new(),
+                        stats: Default::default(),
                     });
                 }
             }
@@ -284,13 +325,14 @@ pub(crate) async fn execute_user_commands(
                         execution_time_ms: execution_time,
                         error: Some(format!("User '{}' already exists", create_user.username)),
                         notifications: Vec::new(),
+                        stats: Default::default(),
                     });
                 }
 
                 if existing_user.is_none() {
                     let user_id = uuid::Uuid::new_v4().to_string();
                     let user = if let Some(password) = &create_user.password {
-                        // Hash password with SHA512
+                        // Hash password with Argon2id (per-user random salt)
                         let password_hash = nexus_core::auth::hash_password(password);
                         nexus_core::auth::User::with_password_hash(
                             user_id.clone(),
@@ -346,6 +388,7 @@ pub(crate) async fn execute_user_commands(
                             execution_time_ms: execution_time,
                             error: Some(e),
                             notifications: Vec::new(),
+                            stats: Default::default(),
                         });
                     }
                 };
@@ -366,6 +409,7 @@ pub(crate) async fn execute_user_commands(
                             execution_time_ms: execution_time,
                             error: Some("Cannot modify root user permissions. Only root users can modify root users.".to_string()),
                             notifications: Vec::new(),
+                            stats: Default::default(),
                         });
                     }
                 }
@@ -411,6 +455,7 @@ pub(crate) async fn execute_user_commands(
                         execution_time_ms: execution_time,
                         error: Some(format!("User or role '{}' not found", grant.target)),
                         notifications: Vec::new(),
+                        stats: Default::default(),
                     });
                 }
             }
@@ -447,6 +492,7 @@ pub(crate) async fn execute_user_commands(
                             execution_time_ms: execution_time,
                             error: Some(e),
                             notifications: Vec::new(),
+                            stats: Default::default(),
                         });
                     }
                 };
@@ -467,6 +513,7 @@ pub(crate) async fn execute_user_commands(
                             execution_time_ms: execution_time,
                             error: Some("Cannot modify root user permissions. Only root users can modify root users.".to_string()),
                             notifications: Vec::new(),
+                            stats: Default::default(),
                         });
                     }
                 }
@@ -503,6 +550,7 @@ pub(crate) async fn execute_user_commands(
                         execution_time_ms: execution_time,
                         error: Some(format!("User or role '{}' not found", revoke.target)),
                         notifications: Vec::new(),
+                        stats: Default::default(),
                     });
                 }
             }
@@ -517,6 +565,7 @@ pub(crate) async fn execute_user_commands(
         execution_time_ms: execution_time,
         error: None,
         notifications: Vec::new(),
+        stats: Default::default(),
     })
 }
 
@@ -595,6 +644,7 @@ pub(crate) async fn execute_query_management_commands(
                             terminate_clause.query_id
                         )),
                         notifications: Vec::new(),
+                        stats: Default::default(),
                     });
                 }
             }
@@ -609,6 +659,7 @@ pub(crate) async fn execute_query_management_commands(
         execution_time_ms: execution_time,
         error: None,
         notifications: Vec::new(),
+        stats: Default::default(),
     })
 }
 
@@ -706,6 +757,7 @@ pub(crate) async fn execute_api_key_commands(
                             execution_time_ms: execution_time,
                             error: Some(e),
                             notifications: Vec::new(),
+                            stats: Default::default(),
                         });
                     }
                 };
@@ -724,6 +776,7 @@ pub(crate) async fn execute_api_key_commands(
                                 execution_time_ms: execution_time,
                                 error: Some(format!("User '{}' not found", username)),
                                 notifications: Vec::new(),
+                                stats: Default::default(),
                             });
                         }
                     }
@@ -743,6 +796,7 @@ pub(crate) async fn execute_api_key_commands(
                                 execution_time_ms: execution_time,
                                 error: Some(e),
                                 notifications: Vec::new(),
+                                stats: Default::default(),
                             });
                         }
                     }
@@ -797,6 +851,7 @@ pub(crate) async fn execute_api_key_commands(
                             execution_time_ms: execution_time,
                             error: Some(format!("Failed to create API key: {}", e)),
                             notifications: Vec::new(),
+                            stats: Default::default(),
                         });
                     }
                 }
@@ -827,6 +882,7 @@ pub(crate) async fn execute_api_key_commands(
                             execution_time_ms: execution_time,
                             error: Some(format!("User '{}' not found", username)),
                             notifications: Vec::new(),
+                            stats: Default::default(),
                         });
                     }
                 } else {
@@ -870,6 +926,7 @@ pub(crate) async fn execute_api_key_commands(
                             execution_time_ms: execution_time,
                             error: Some(format!("Failed to revoke API key: {}", e)),
                             notifications: Vec::new(),
+                            stats: Default::default(),
                         });
                     }
                 }
@@ -890,6 +947,7 @@ pub(crate) async fn execute_api_key_commands(
                         execution_time_ms: execution_time,
                         error: Some(format!("API key '{}' not found", delete_key.key_id)),
                         notifications: Vec::new(),
+                        stats: Default::default(),
                     });
                 }
             }
@@ -904,5 +962,6 @@ pub(crate) async fn execute_api_key_commands(
         execution_time_ms: execution_time,
         error: None,
         notifications: Vec::new(),
+        stats: Default::default(),
     })
 }

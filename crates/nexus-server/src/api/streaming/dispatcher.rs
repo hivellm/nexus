@@ -3,7 +3,7 @@
 use std::sync::Arc;
 use std::time::Instant;
 
-use rmcp::model::{CallToolRequestParam, CallToolResult, Content, ErrorData};
+use rmcp::model::{CallToolRequestParams, CallToolResult, ContentBlock, ErrorData};
 use serde_json::Value;
 
 use crate::NexusServer;
@@ -16,7 +16,7 @@ use super::handlers::{
 
 /// Handle MCP tool calls for Nexus with performance monitoring and caching
 pub async fn handle_nexus_mcp_tool(
-    request: CallToolRequestParam,
+    request: CallToolRequestParams,
     server: Arc<NexusServer>,
 ) -> Result<CallToolResult, ErrorData> {
     let tool_name = request.name.clone();
@@ -54,7 +54,7 @@ pub async fn handle_nexus_mcp_tool(
                     Some(true), // Cache hit
                 );
 
-                return Ok(CallToolResult::success(vec![Content::text(
+                return Ok(CallToolResult::success(vec![ContentBlock::text(
                     cached_result.to_string(),
                 )]));
             }

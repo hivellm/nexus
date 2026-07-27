@@ -92,6 +92,16 @@ focus on first-party wire clients:
 - **TestConsoleSimple** — redundant C# test harness; the canonical
   C# tests live in `sdks/csharp/Tests/`.
 
+## Releasing
+
+The Rust, TypeScript, Python, and C# SDKs ship as one release train via OIDC
+**Trusted Publishing** — no publishing tokens are stored in this repo. Bump the
+four manifests to one version and publish a GitHub Release; the
+`.github/workflows/sdk-release.yml` train gates on lint+tests, publishes to
+crates.io / npm / PyPI / NuGet, and verifies every registry landed the version.
+Full runbook and one-time registry setup: [`docs/releases/SDK_RELEASE.md`](../docs/releases/SDK_RELEASE.md).
+(PHP and Go release from their own repositories and are not part of this train.)
+
 ## License
 
 See each SDK directory for its own license file. All first-party

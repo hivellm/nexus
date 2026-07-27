@@ -90,7 +90,7 @@ async fn auth(state: &RpcSession, args: &[NexusValue]) -> Result<NexusValue, Str
     match args.len() {
         1 => {
             let api_key = arg_str(args, 0)?;
-            if verify_api_key(state, &api_key) {
+            if verify_api_key(&state.server, &api_key) {
                 state.mark_authenticated();
                 Ok(NexusValue::Str("OK".into()))
             } else {
@@ -100,7 +100,7 @@ async fn auth(state: &RpcSession, args: &[NexusValue]) -> Result<NexusValue, Str
         2 => {
             let username = arg_str(args, 0)?;
             let password = arg_str(args, 1)?;
-            if verify_user_password(state, &username, &password).await {
+            if verify_user_password(&state.server, &username, &password).await {
                 state.mark_authenticated();
                 Ok(NexusValue::Str("OK".into()))
             } else {
@@ -111,24 +111,28 @@ async fn auth(state: &RpcSession, args: &[NexusValue]) -> Result<NexusValue, Str
     }
 }
 
-fn verify_api_key(state: &RpcSession, api_key: &str) -> bool {
-    matches!(
-        state.server.auth_manager.verify_api_key(api_key),
-        Ok(Some(_))
-    )
+// `pub(crate)` and taking `&NexusServer` (not `&RpcSession`) so the Thunder
+// `Dispatch::authenticate` bridge can reuse the exact same credential checks
+// the `AUTH` command handler uses — no second copy of the auth logic.
+pub(crate) fn verify_api_key(server: &crate::NexusServer, api_key: &str) -> bool {
+    matches!(server.auth_manager.verify_api_key(api_key), Ok(Some(_)))
 }
 
-async fn verify_user_password(state: &RpcSession, username: &str, password: &str) -> bool {
+pub(crate) async fn verify_user_password(
+    server: &crate::NexusServer,
+    username: &str,
+    password: &str,
+) -> bool {
     // Root fast-path: if the configured root account is enabled, accept it
     // against the plaintext credentials from `RootUserConfig`. Mirrors how
     // the REST `/login` endpoint treats root so a freshly-booted server
     // lets the operator in over RPC before any RBAC user exists.
-    let root = &state.server.root_user_config;
+    let root = &server.root_user_config;
     if root.enabled && username == root.username && password == root.password {
         return true;
     }
 
-    let rbac = state.server.rbac.read().await;
+    let rbac = server.rbac.read().await;
     let Some(user) = rbac
         .list_users()
         .into_iter()
@@ -339,10 +343,10 @@ mod tests {
     #[tokio::test]
     async fn ping_echoes_bytes_payload() {
         let s = session(false);
-        let out = run(&s, "PING", &[NexusValue::Bytes(vec![1, 2, 3])])
+        let out = run(&s, "PING", &[NexusValue::bytes(vec![1, 2, 3])])
             .await
             .unwrap();
-        assert_eq!(out, NexusValue::Bytes(vec![1, 2, 3]));
+        assert_eq!(out, NexusValue::bytes(vec![1, 2, 3]));
     }
 
     #[tokio::test]

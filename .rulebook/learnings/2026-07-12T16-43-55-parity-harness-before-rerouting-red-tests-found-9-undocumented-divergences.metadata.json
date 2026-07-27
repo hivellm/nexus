@@ -1,0 +1,8 @@
+{
+  "id": "2026-07-12T16-43-55-parity-harness-before-rerouting-red-tests-found-9-undocumented-divergences",
+  "title": "Parity harness before rerouting: red tests found 9 undocumented divergences",
+  "content": "The write-path unification (2.5.0 phase1) planned around 3 known bugs (B1-B3). Building a 23-case parity harness through the PUBLIC handler BEFORE any rerouting found 6 more (B4/B6/B7/B8/B9 + 17b-risk), and the reroute itself surfaced 4 more (G1-G4) that the fork had been masking — including G4 (aggregation output ignored the written RETURN column order, positionally swapping columns for every SDK), which nothing else would have caught. Two of the engine gaps (B4, G1) would have REGRESSED currently-working behavior had the reroute shipped first. Pattern: when replacing a fork with a canonical path, write the full behavioral battery through the public interface FIRST, assert the CORRECT semantics (red where broken), fix the canonical path until green, only then swap and delete. Cost: harness ~1k lines; payoff: 13 bugs closed, zero regressions (server 478/0, core 2408/0). Key files: crates/nexus-server/src/api/cypher/write_path_parity.rs, api/cypher/routing.rs, docs/nexus/04-write-path-unification.md.",
+  "source": "manual",
+  "tags": [],
+  "createdAt": "2026-07-12T16:43:55.996Z"
+}

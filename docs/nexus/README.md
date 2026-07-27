@@ -20,8 +20,12 @@
 ## Executive summary
 
 **Where Nexus actually stands** (better than the docs claim): ~85% openCypher
-/Neo4j feature parity, 75+ functions, all index families (bitmap, B-tree,
-spatial, full-text, HNSW), MVCC + savepoints, 30+ GDS procedures, real SIMD.
+/Neo4j *feature* parity (a code-verified feature-inventory estimate — distinct
+from the measured openCypher TCK conformance, first baseline ~13% strict, see
+[../compatibility/OPENCYPHER_TCK_REPORT.md](../compatibility/OPENCYPHER_TCK_REPORT.md),
+and from the 300/300 Neo4j differential suite), 75+ functions, all index
+families (bitmap, B-tree, spatial, full-text, HNSW), MVCC + savepoints, 30+ GDS
+procedures, real SIMD.
 
 **The three things holding it back:**
 

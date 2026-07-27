@@ -45,6 +45,12 @@ export interface NexusConfig {
   retries?: number;
   /** Enable debug logging (default: false). */
   debug?: boolean;
+  /**
+   * Initial session database. The server is stateless, so this is a
+   * client-side default that `switchDatabase` updates and every
+   * `executeCypher` stamps onto the request. Defaults to `neo4j`.
+   */
+  database?: string;
 }
 
 /**
@@ -211,8 +217,8 @@ export interface DatabaseInfo {
  * Response for listing databases
  */
 export interface ListDatabasesResponse {
-  /** List of databases */
-  databases: DatabaseInfo[];
+  /** Database names */
+  databases: string[];
   /** Default database name */
   defaultDatabase: string;
 }

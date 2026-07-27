@@ -69,7 +69,9 @@ pub struct User {
     pub username: String,
     /// Email address
     pub email: Option<String>,
-    /// Password hash (SHA512)
+    /// Password hash (Argon2id PHC string; legacy SHA-512 hex digests are
+    /// still accepted by `auth::verify_password` for pre-migration
+    /// accounts — see `auth::password`)
     pub password_hash: Option<String>,
     /// Roles assigned to this user
     pub roles: Vec<String>,

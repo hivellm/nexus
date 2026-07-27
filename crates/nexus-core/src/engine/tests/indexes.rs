@@ -542,3 +542,85 @@ fn cypher_create_maintains_typed_index_immediately() {
         res.notifications
     );
 }
+
+// ─── phase20_knn-write-path-wiring §1.5 ────────────────────────────────────
+//
+// `CREATE VECTOR INDEX` / `DROP INDEX` must dispatch through the full
+// engine/Cypher path (`Engine::execute_index_commands`) to register and
+// deregister a definition in the shared `VectorIndexRegistry`
+// (`engine.indexes.knn_registry`), the same Arc the KNN write-path
+// autopopulate/refresh/evict hooks consult (§1.4).
+//
+// Deviation from the brief: `Executor::execute_create_index` has no
+// index-name parameter — `CreateIndexClause::name` (the Cypher 25
+// `CREATE VECTOR INDEX <name> FOR ...` name, e.g. `docEmb`) is parsed but
+// not threaded down to it. The vector arm instead mirrors the spatial
+// arm's own registry key, `"{label}.{property}"`, as the vector index's
+// registered name — the assertions below check the label/property tuple
+// `VectorIndexRegistry::definitions()` exposes, not the literal `docEmb`
+// name string.
+#[test]
+#[serial_test::serial]
+fn engine_create_vector_index_registers_and_drop_deregisters() {
+    let ctx = crate::testing::TestContext::new();
+    let mut engine = Engine::with_isolated_catalog(ctx.path()).unwrap();
+
+    engine
+        .execute_cypher("CREATE VECTOR INDEX docEmb FOR (d:Doc) ON (d.embedding)")
+        .expect("CREATE VECTOR INDEX must succeed");
+
+    let defs = engine.indexes.knn_registry.definitions();
+    assert_eq!(
+        defs.len(),
+        1,
+        "CREATE VECTOR INDEX must register a definition, got {defs:?}"
+    );
+    assert_eq!(defs[0].1, "Doc");
+    assert_eq!(defs[0].2, "embedding");
+
+    // IF NOT EXISTS on the identical definition is idempotent, not an error.
+    engine
+        .execute_cypher("CREATE VECTOR INDEX docEmb IF NOT EXISTS FOR (d:Doc) ON (d.embedding)")
+        .expect("repeat CREATE VECTOR INDEX IF NOT EXISTS must be idempotent");
+    assert_eq!(
+        engine.indexes.knn_registry.definitions().len(),
+        1,
+        "IF NOT EXISTS repeat must not create a second definition"
+    );
+
+    // A second, DISTINCT vector index without OR REPLACE must error — only
+    // one active vector index is allowed at a time (single global HNSW graph).
+    let distinct = engine.execute_cypher("CREATE VECTOR INDEX other FOR (c:Chunk) ON (c.vec)");
+    assert!(
+        distinct.is_err(),
+        "a second distinct vector index without OR REPLACE must error"
+    );
+    assert_eq!(
+        engine.indexes.knn_registry.definitions().len(),
+        1,
+        "a rejected distinct CREATE must not disturb the existing definition"
+    );
+
+    // CREATE OR REPLACE swaps the active definition.
+    engine
+        .execute_cypher("CREATE OR REPLACE VECTOR INDEX other FOR (c:Chunk) ON (c.vec)")
+        .expect("CREATE OR REPLACE VECTOR INDEX must succeed");
+    let swapped = engine.indexes.knn_registry.definitions();
+    assert_eq!(
+        swapped.len(),
+        1,
+        "OR REPLACE must keep exactly one definition"
+    );
+    assert_eq!(swapped[0].1, "Chunk");
+    assert_eq!(swapped[0].2, "vec");
+
+    // DROP INDEX deregisters the vector index and clears the shared HNSW
+    // graph (`Executor::execute_drop_index`).
+    engine
+        .execute_cypher("DROP INDEX ON :Chunk(vec)")
+        .expect("DROP INDEX on the vector index must succeed");
+    assert!(
+        engine.indexes.knn_registry.definitions().is_empty(),
+        "DROP INDEX must deregister the vector index"
+    );
+}
