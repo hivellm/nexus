@@ -106,6 +106,84 @@ fn detach_delete_actually_clears_nodes_via_execute_cypher() {
     );
 }
 
+/// phase21_tck-delete-empty-result: a RETURN-less DELETE must yield an
+/// EMPTY result set (no columns, no rows) — matching Neo4j/openCypher —
+/// while STILL reporting the deletion in `side_effects` (the `/cypher`
+/// `stats` block). Previously it returned a 1-row `{count: N}` result,
+/// which uniformly failed the TCK `clauses/delete` scenarios.
+#[test]
+fn return_less_delete_is_empty_with_side_effects() {
+    let ctx = crate::testing::TestContext::new();
+    let mut engine = Engine::with_data_dir(ctx.path()).unwrap();
+
+    for _ in 0..3 {
+        engine
+            .create_node(
+                vec!["X".to_string()],
+                serde_json::Value::Object(serde_json::Map::new()),
+            )
+            .unwrap();
+    }
+
+    // RETURN-less DELETE -> empty rows/columns, but nodes_deleted == 3.
+    let del = engine
+        .execute_cypher("MATCH (n:X) DELETE n")
+        .expect("RETURN-less DELETE must succeed");
+    assert!(
+        del.rows.is_empty() && del.columns.is_empty(),
+        "RETURN-less DELETE must return an empty result set, got columns={:?} rows={:?}",
+        del.columns,
+        del.rows
+    );
+    assert_eq!(
+        del.side_effects.nodes_deleted, 3,
+        "stats must still report nodes_deleted, got {:?}",
+        del.side_effects
+    );
+
+    // Guard: DELETE WITH a RETURN still returns rows.
+    engine
+        .execute_cypher("CREATE (:Y), (:Y)")
+        .expect("seed must succeed");
+    let with_ret = engine
+        .execute_cypher("MATCH (n:Y) DELETE n RETURN count(*) AS c")
+        .expect("DELETE ... RETURN must succeed");
+    assert!(
+        !with_ret.rows.is_empty(),
+        "DELETE ... RETURN count(*) must still return its row"
+    );
+}
+
+/// phase21_tck-delete-empty-result: DETACH DELETE of a connected node
+/// reports `relationships_deleted` in the side effects of its empty result.
+#[test]
+fn return_less_detach_delete_reports_relationships_deleted() {
+    let ctx = crate::testing::TestContext::new();
+    let mut engine = Engine::with_data_dir(ctx.path()).unwrap();
+
+    engine
+        .execute_cypher("CREATE (a:X)-[:R]->(b:X)")
+        .expect("seed must succeed");
+
+    let del = engine
+        .execute_cypher("MATCH (n:X) DETACH DELETE n")
+        .expect("DETACH DELETE must succeed");
+    assert!(
+        del.rows.is_empty() && del.columns.is_empty(),
+        "RETURN-less DETACH DELETE must return an empty result set"
+    );
+    assert_eq!(
+        del.side_effects.nodes_deleted, 2,
+        "expected 2 nodes deleted, got {:?}",
+        del.side_effects
+    );
+    assert_eq!(
+        del.side_effects.relationships_deleted, 1,
+        "expected 1 relationship deleted, got {:?}",
+        del.side_effects
+    );
+}
+
 // phase6_opencypher-advanced-types §4.3 — typed-list constraint
 // registration is covered by the unit tests in
 // `crate::engine::typed_collections::tests` (exercises the

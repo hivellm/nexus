@@ -692,13 +692,22 @@ impl Engine {
                     return self.executor.execute(&query_obj);
                 }
             } else {
-                // No RETURN clause - return count of deleted nodes
-                return Ok(executor::ResultSet::new(
-                    vec!["count".to_string()],
-                    vec![executor::Row {
-                        values: vec![serde_json::Value::Number(deleted_count.into())],
-                    }],
-                ));
+                // phase21_tck-delete-empty-result — a RETURN-less DELETE
+                // must yield an EMPTY result set (no columns, no rows),
+                // matching Neo4j/openCypher TCK semantics (`Delete1[1][2][3]`
+                // assert `the result should be empty`). Side-effect
+                // reporting is untouched by this: `nodes_deleted` /
+                // `relationships_deleted` were already accumulated onto
+                // `self.side_effects` by `Engine::delete_node` /
+                // `delete_relationship` / `delete_node_relationships`
+                // (`engine/crud/nodes.rs`) during `execute_match_delete_query`
+                // above, and the top-level wrapper
+                // (`execute_cypher_with_params` /
+                // `execute_cypher_ast_with_params`) unconditionally takes
+                // `self.side_effects` and stamps it onto whatever
+                // `ResultSet` we return here — so the `/cypher` `stats`
+                // block stays accurate independent of the row shape.
+                return Ok(executor::ResultSet::new(vec![], vec![]));
             }
         }
 
