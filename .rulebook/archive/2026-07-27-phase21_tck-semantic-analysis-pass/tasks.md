@@ -21,6 +21,6 @@ increment (final 4389/0).
 - [x] 1.5 OpenCypherErrorKind + detail tokens emitted — every check emits `Error::CypherSyntax("<Token>: …")`, classified as `SyntaxError`, carrying the CamelCase token the TCK runner substring-matches. DEFERRED: reviving the dead `SemanticError` kind for the MERGE read-own-writes case (Merge1/Merge5, token `MergeReadOwnWrites`), a runtime check.
 
 ## 2. Tail (docs + tests — check or waive with tailWaiver)
-- [x] 2.1 Documentation — CHANGELOG [3.0.0] check list (commit def7016f) + `docs/specs/cypher-subset.md` § Semantic Validation token table + deferred list (commit dd9e0655).
-- [x] 2.2 Tests — 19 in-module unit tests (positive + negative per check).
-- [x] 2.3 Run tests — full nexus-core suite green after each increment (final 4389/0).
+- [x] 2.1 Update or create documentation covering the implementation — CHANGELOG [3.0.0] check list (commit def7016f) + `docs/specs/cypher-subset.md` § Semantic Validation token table + deferred list (commit dd9e0655).
+- [x] 2.2 Write tests covering the new behavior — 19 in-module unit tests (positive + negative per check).
+- [x] 2.3 Run tests and confirm they pass — full nexus-core suite green after each increment (final 4389/0).
