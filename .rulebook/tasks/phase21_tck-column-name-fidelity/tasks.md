@@ -1,8 +1,8 @@
 ## 1. Implementation
-- [ ] 1.1 verbatim column-name rendering
-- [ ] 1.2 aggregate name canonicalisation from source
+- [x] 1.1 verbatim column-name rendering — non-aggregate RETURN items already rendered verbatim via `expression_to_string` (`n.age + 1`, `1 + 2`); fixed the one residual gap: an integral float literal (`1.0`) rendered as `1` because Rust's `f64::to_string` drops the fractional part. `expressions.rs` Literal::Float arm now keeps the `.0` (also prevents a re-parsed WHERE float from silently becoming an integer). NOTE: `<>` vs `!=` cannot be rendered verbatim — the parser maps both to `BinaryOperator::NotEqual`, so the distinction is lost at parse time; true operator-verbatim would need source-span tracking (out of scope, S-band).
+- [x] 1.2 aggregate name canonicalisation from source — unaliased aggregates rendered as the BARE function name (`count`, `sum`) instead of the verbatim call (`count(*)`, `count(n)`, `count(DISTINCT n)`, `sum(n.age)`). Added `QueryPlanner::aggregate_display_name` (expressions.rs) that decodes the `count(*)` empty-arg form and the `__DISTINCT__` sentinel and renders the whole call with original casing. Wired as the default alias across BOTH aggregate planning paths — `planner_core.rs` (standalone RETURN) and `strategy.rs` (MATCH path) — replacing the 10 bare `unwrap_or_else(|| "count")`-style defaults in each. Matches openCypher TCK AND Neo4j (both name the column after the whole call).
 
 ## 2. Tail (docs + tests — check or waive with tailWaiver)
-- [ ] 2.1 Update or create documentation covering the implementation
-- [ ] 2.2 Write tests covering the new behavior
-- [ ] 2.3 Run tests and confirm they pass
+- [x] 2.1 Update or create documentation covering the implementation (doc comments on `aggregate_display_name` and the Float arm; rationale captured here)
+- [x] 2.2 Write tests covering the new behavior (tests/cypher/column_name_fidelity_test.rs — 7 tests: count(*) standalone, count/sum/avg over MATCH, DISTINCT keyword, grouped two-column, explicit-alias-wins, non-aggregate verbatim, integral-float `.0`)
+- [x] 2.3 Run tests and confirm they pass (cypher column_name_fidelity 7/0; full cypher 417/0; nexus-core lib 2540/0; clippy/fmt clean; full workspace gate running)

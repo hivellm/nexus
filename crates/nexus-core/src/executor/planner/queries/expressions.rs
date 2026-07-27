@@ -13,6 +13,46 @@ impl<'a> QueryPlanner<'a> {
         self.expr_to_string_impl(expr, false)
     }
 
+    /// Render an aggregate function call as its verbatim-style column
+    /// name for openCypher/Neo4j fidelity, e.g. `count(*)`, `count(n)`,
+    /// `count(DISTINCT n.age)`, `sum(n.age)`, `percentileCont(n.x, 0.5)`.
+    ///
+    /// Unaliased aggregate columns previously rendered as the bare
+    /// function name (`count`), which mismatched both the openCypher TCK
+    /// (verbatim source) and Neo4j (which names the column after the whole
+    /// call). The AST encodes `count(*)` as an empty argument list and
+    /// `DISTINCT` as a leading synthetic `__DISTINCT__` variable argument,
+    /// both of which are decoded here so they render as written. The
+    /// original `name` casing is preserved (the dispatcher lowercases a
+    /// separate copy for matching, never the AST node).
+    pub(in crate::executor::planner) fn aggregate_display_name(
+        &self,
+        name: &str,
+        args: &[Expression],
+    ) -> String {
+        let (distinct, real_args) = match args.first() {
+            Some(Expression::Variable(v)) if v == "__DISTINCT__" => (true, &args[1..]),
+            _ => (false, args),
+        };
+        let inner = if real_args.is_empty() {
+            "*".to_string()
+        } else {
+            real_args
+                .iter()
+                .map(|a| {
+                    self.expression_to_string(a)
+                        .unwrap_or_else(|_| "?".to_string())
+                })
+                .collect::<Vec<_>>()
+                .join(", ")
+        };
+        if distinct {
+            format!("{}(DISTINCT {})", name, inner)
+        } else {
+            format!("{}({})", name, inner)
+        }
+    }
+
     /// Convert a WHERE predicate expression to its Cypher string
     /// representation, faithfully preserving grouping.
     ///
@@ -74,7 +114,19 @@ impl<'a> QueryPlanner<'a> {
                 // This is critical for filter predicates to work correctly
                 Literal::String(s) => Ok(format!("'{}'", s)),
                 Literal::Integer(i) => Ok(i.to_string()),
-                Literal::Float(f) => Ok(f.to_string()),
+                Literal::Float(f) => {
+                    // Rust renders an integral float without a fractional part
+                    // (`1.0` → "1"), which loses column-name fidelity and, in a
+                    // re-parsed WHERE predicate, would silently turn a float
+                    // literal into an integer. Keep the `.0` so it stays a
+                    // float and the column header matches the source.
+                    let s = f.to_string();
+                    if f.is_finite() && !s.contains(['.', 'e', 'E']) {
+                        Ok(format!("{}.0", s))
+                    } else {
+                        Ok(s)
+                    }
+                }
                 Literal::Boolean(b) => Ok(b.to_string()),
                 Literal::Null => Ok("NULL".to_string()),
                 Literal::Point(p) => Ok(p.to_string()),

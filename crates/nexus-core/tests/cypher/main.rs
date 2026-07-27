@@ -3,6 +3,7 @@
 //! former top-level `tests/*.rs` integration file.
 
 mod builtin_functions_test;
+mod column_name_fidelity_test;
 mod count_distinct_tests;
 mod cypher_external_id;
 mod cypher_external_id_rel_merge;

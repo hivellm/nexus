@@ -912,6 +912,14 @@ impl<'a> QueryPlanner<'a> {
                     match &item.expression {
                         Expression::FunctionCall { name, args } => {
                             let func_name = name.to_lowercase();
+                            // Verbatim-style default column name for an
+                            // unaliased aggregate (e.g. `count(*)`,
+                            // `count(DISTINCT n)`, `sum(n.age)`) — matches the
+                            // openCypher TCK and Neo4j, which name the column
+                            // after the whole call rather than the bare
+                            // function name. Non-aggregate calls fall through
+                            // to the `_` arm and keep using expression_to_string.
+                            let agg_default_alias = self.aggregate_display_name(name, args);
                             match func_name.as_str() {
                                 "count" => {
                                     has_aggregation = true;
@@ -943,7 +951,7 @@ impl<'a> QueryPlanner<'a> {
                                         alias: item
                                             .alias
                                             .clone()
-                                            .unwrap_or_else(|| "count".to_string()),
+                                            .unwrap_or_else(|| agg_default_alias.clone()),
                                         distinct,
                                     });
                                 }
@@ -971,7 +979,7 @@ impl<'a> QueryPlanner<'a> {
                                             alias: item
                                                 .alias
                                                 .clone()
-                                                .unwrap_or_else(|| "sum".to_string()),
+                                                .unwrap_or_else(|| agg_default_alias.clone()),
                                         });
                                     }
                                 }
@@ -999,7 +1007,7 @@ impl<'a> QueryPlanner<'a> {
                                             alias: item
                                                 .alias
                                                 .clone()
-                                                .unwrap_or_else(|| "avg".to_string()),
+                                                .unwrap_or_else(|| agg_default_alias.clone()),
                                         });
                                     }
                                 }
@@ -1027,7 +1035,7 @@ impl<'a> QueryPlanner<'a> {
                                             alias: item
                                                 .alias
                                                 .clone()
-                                                .unwrap_or_else(|| "min".to_string()),
+                                                .unwrap_or_else(|| agg_default_alias.clone()),
                                         });
                                     }
                                 }
@@ -1055,7 +1063,7 @@ impl<'a> QueryPlanner<'a> {
                                             alias: item
                                                 .alias
                                                 .clone()
-                                                .unwrap_or_else(|| "max".to_string()),
+                                                .unwrap_or_else(|| agg_default_alias.clone()),
                                         });
                                     }
                                 }
@@ -1080,7 +1088,7 @@ impl<'a> QueryPlanner<'a> {
                                             alias: item
                                                 .alias
                                                 .clone()
-                                                .unwrap_or_else(|| "stdev".to_string()),
+                                                .unwrap_or_else(|| agg_default_alias.clone()),
                                         });
                                     }
                                 }
@@ -1099,7 +1107,7 @@ impl<'a> QueryPlanner<'a> {
                                             alias: item
                                                 .alias
                                                 .clone()
-                                                .unwrap_or_else(|| "stdevp".to_string()),
+                                                .unwrap_or_else(|| agg_default_alias.clone()),
                                         });
                                     }
                                 }
@@ -1123,7 +1131,7 @@ impl<'a> QueryPlanner<'a> {
                                             alias: item
                                                 .alias
                                                 .clone()
-                                                .unwrap_or_else(|| "percentileCont".to_string()),
+                                                .unwrap_or_else(|| agg_default_alias.clone()),
                                             percentile,
                                         });
                                     }
@@ -1148,7 +1156,7 @@ impl<'a> QueryPlanner<'a> {
                                             alias: item
                                                 .alias
                                                 .clone()
-                                                .unwrap_or_else(|| "percentileDisc".to_string()),
+                                                .unwrap_or_else(|| agg_default_alias.clone()),
                                             percentile,
                                         });
                                     }
@@ -1196,7 +1204,7 @@ impl<'a> QueryPlanner<'a> {
                                             alias: item
                                                 .alias
                                                 .clone()
-                                                .unwrap_or_else(|| "collect".to_string()),
+                                                .unwrap_or_else(|| agg_default_alias.clone()),
                                             distinct,
                                         });
                                     }
