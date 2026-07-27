@@ -44,6 +44,7 @@ pub fn validate(query: &CypherQuery) -> crate::Result<()> {
 
     check_variable_type_conflicts(query)?;
     check_variable_already_bound(query)?;
+    check_aggregation_placement(query)?;
 
     let mut binders = HashSet::new();
     collect_query_binders(query, &mut binders);
@@ -258,6 +259,171 @@ fn add_element_vars(element: &PatternElement, bound: &mut HashSet<String>) {
                 add_element_vars(inner, bound);
             }
         }
+    }
+}
+
+// ── Aggregation placement ──────────────────────────────────────────────
+
+/// The aggregate function names the planner recognises (lower-cased match).
+const AGGREGATE_FNS: &[&str] = &[
+    "count",
+    "sum",
+    "avg",
+    "min",
+    "max",
+    "collect",
+    "stdev",
+    "stdevp",
+    "variance",
+    "variancep",
+    "percentilecont",
+    "percentiledisc",
+];
+
+fn is_aggregate_name(name: &str) -> bool {
+    AGGREGATE_FNS.contains(&name.to_lowercase().as_str())
+}
+
+/// Reject two aggregation misplacements that are always illegal in openCypher:
+/// an aggregate directly nested inside another aggregate (`count(count(*))` →
+/// `NestedAggregation`) and any aggregate used inside a `WHERE`
+/// (`WHERE count(a) > 1` → `InvalidAggregation`; aggregating filters go through
+/// `WITH … WHERE`). Neither can false-positive: an aggregate in a `WHERE`
+/// predicate or in another aggregate's argument is never valid.
+fn check_aggregation_placement(query: &CypherQuery) -> crate::Result<()> {
+    for clause in &query.clauses {
+        match clause {
+            Clause::Where(w) => reject_aggregate_in_where(&w.expression)?,
+            Clause::Match(m) => {
+                if let Some(wc) = &m.where_clause {
+                    reject_aggregate_in_where(&wc.expression)?;
+                }
+            }
+            Clause::With(w) => {
+                if let Some(wc) = &w.where_clause {
+                    reject_aggregate_in_where(&wc.expression)?;
+                }
+                for item in &w.items {
+                    check_nested_aggregation(&item.expression)?;
+                }
+            }
+            Clause::Return(r) => {
+                for item in &r.items {
+                    check_nested_aggregation(&item.expression)?;
+                }
+            }
+            _ => {}
+        }
+    }
+    Ok(())
+}
+
+fn reject_aggregate_in_where(expr: &Expression) -> crate::Result<()> {
+    if expr_contains_aggregate(expr) {
+        return Err(invalid_aggregation_in_where());
+    }
+    Ok(())
+}
+
+/// Walk an expression; an aggregate whose argument subtree contains another
+/// aggregate is a nested aggregation.
+fn check_nested_aggregation(expr: &Expression) -> crate::Result<()> {
+    if let Expression::FunctionCall { name, args } = expr {
+        if is_aggregate_name(name) && args.iter().any(expr_contains_aggregate) {
+            return Err(nested_aggregation());
+        }
+    }
+    for child in child_exprs(expr) {
+        check_nested_aggregation(child)?;
+    }
+    Ok(())
+}
+
+/// True when any function call in the subtree is an aggregate.
+fn expr_contains_aggregate(expr: &Expression) -> bool {
+    if let Expression::FunctionCall { name, .. } = expr {
+        if is_aggregate_name(name) {
+            return true;
+        }
+    }
+    child_exprs(expr).into_iter().any(expr_contains_aggregate)
+}
+
+/// Direct sub-expressions of `expr`. Does not descend into `EXISTS`/`COLLECT`
+/// subqueries — their aggregations belong to their own inner scope.
+fn child_exprs(expr: &Expression) -> Vec<&Expression> {
+    match expr {
+        Expression::BinaryOp { left, right, .. } => vec![left, right],
+        Expression::UnaryOp { operand, .. } => vec![operand],
+        Expression::FunctionCall { args, .. } => args.iter().collect(),
+        Expression::ArrayIndex { base, index } => vec![base, index],
+        Expression::ArraySlice { base, start, end } => {
+            let mut v = vec![base.as_ref()];
+            if let Some(s) = start {
+                v.push(s);
+            }
+            if let Some(e) = end {
+                v.push(e);
+            }
+            v
+        }
+        Expression::IsNull { expr, .. } => vec![expr],
+        Expression::Case {
+            input,
+            when_clauses,
+            else_clause,
+        } => {
+            let mut v = Vec::new();
+            if let Some(i) = input {
+                v.push(i.as_ref());
+            }
+            for w in when_clauses {
+                v.push(&w.condition);
+                v.push(&w.result);
+            }
+            if let Some(e) = else_clause {
+                v.push(e.as_ref());
+            }
+            v
+        }
+        Expression::List(items) => items.iter().collect(),
+        Expression::Map(entries) => entries.values().collect(),
+        Expression::MapProjection { source, .. } => vec![source.as_ref()],
+        Expression::ListComprehension {
+            list_expression,
+            where_clause,
+            transform_expression,
+            ..
+        } => {
+            let mut v = vec![list_expression.as_ref()];
+            if let Some(w) = where_clause {
+                v.push(w);
+            }
+            if let Some(t) = transform_expression {
+                v.push(t);
+            }
+            v
+        }
+        Expression::PatternComprehension {
+            where_clause,
+            transform_expression,
+            ..
+        } => {
+            let mut v = Vec::new();
+            if let Some(w) = where_clause {
+                v.push(w.as_ref());
+            }
+            if let Some(t) = transform_expression {
+                v.push(t.as_ref());
+            }
+            v
+        }
+        Expression::Literal(_)
+        | Expression::Variable(_)
+        | Expression::PropertyAccess { .. }
+        | Expression::Parameter(_)
+        | Expression::Exists { .. }
+        | Expression::CollectSubquery { .. } => vec![],
     }
 }
 
@@ -694,6 +860,20 @@ fn variable_already_bound(name: &str) -> crate::Error {
     ))
 }
 
+fn nested_aggregation() -> crate::Error {
+    crate::Error::CypherSyntax(
+        "NestedAggregation: an aggregate function may not be nested inside another aggregate"
+            .to_string(),
+    )
+}
+
+fn invalid_aggregation_in_where() -> crate::Error {
+    crate::Error::CypherSyntax(
+        "InvalidAggregation: aggregate functions are not allowed in WHERE (use WITH … WHERE)"
+            .to_string(),
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -822,6 +1002,44 @@ mod tests {
         assert_ok("MATCH (a), (b) CREATE (a)-[:KNOWS]->(b)");
         // Fresh variables with labels are not re-declarations.
         assert_ok("CREATE (a:X)-[:R]->(b:Y)");
+    }
+
+    fn assert_token(query: &str, token: &str) {
+        let err = run(query).expect_err(&format!("expected {token} for: {query}"));
+        assert_eq!(
+            format!("{:?}", err.opencypher_kind()),
+            "SyntaxError",
+            "{query} must classify as SyntaxError"
+        );
+        assert!(
+            err.to_string().contains(token),
+            "{query}: message must contain {token}, got: {err}"
+        );
+    }
+
+    #[test]
+    fn aggregate_in_where_is_rejected() {
+        assert_token(
+            "MATCH (a) WHERE count(a) > 10 RETURN a",
+            "InvalidAggregation",
+        );
+    }
+
+    #[test]
+    fn nested_aggregate_is_rejected() {
+        assert_token("MATCH (a) RETURN count(count(*))", "NestedAggregation");
+    }
+
+    #[test]
+    fn valid_aggregation_placement_passes() {
+        // Aggregates in RETURN/WITH projections are fine.
+        assert_ok("MATCH (a) RETURN count(a), collect(a)");
+        assert_ok("MATCH (a) RETURN count(a) AS c, sum(a.age) AS s");
+        // Post-aggregation filtering via WITH … WHERE references an alias, not
+        // an aggregate — legal.
+        assert_ok("MATCH (a) WITH count(a) AS c WHERE c > 10 RETURN c");
+        // A non-aggregate call wrapping an aggregate is not nested aggregation.
+        assert_ok("MATCH (a) RETURN size(collect(a)) AS n");
     }
 
     #[test]
