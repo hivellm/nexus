@@ -42,6 +42,8 @@ pub fn validate(query: &CypherQuery) -> crate::Result<()> {
         return Ok(());
     }
 
+    check_variable_type_conflicts(query)?;
+
     let mut binders = HashSet::new();
     collect_query_binders(query, &mut binders);
 
@@ -72,6 +74,77 @@ fn is_fully_modeled(query: &CypherQuery) -> bool {
                 | Clause::Foreach(_)
         )
     })
+}
+
+// ── Variable type conflicts ────────────────────────────────────────────
+
+/// Reject a variable bound as a node in one place and as a relationship in
+/// another (`MATCH (a) MATCH ()-[a]-()`). A Cypher variable has exactly one
+/// entity type, so a name appearing in both the node-var and relationship-var
+/// sets of a query's top-level patterns is always a genuine conflict — this
+/// cannot false-positive on any valid query (`(a)-[r]->(a)` reuses `a` as the
+/// same node, never as a relationship). Only top-level `MATCH`/`CREATE`/`MERGE`
+/// patterns are inspected; expression-embedded patterns (`EXISTS { … }`,
+/// pattern comprehensions) introduce inner scopes and are left to a later
+/// refinement.
+fn check_variable_type_conflicts(query: &CypherQuery) -> crate::Result<()> {
+    let mut node_vars = HashSet::new();
+    let mut rel_vars = HashSet::new();
+    for clause in &query.clauses {
+        match clause {
+            Clause::Match(m) => {
+                collect_typed_pattern_vars(&m.pattern, &mut node_vars, &mut rel_vars)
+            }
+            Clause::Create(c) => {
+                collect_typed_pattern_vars(&c.pattern, &mut node_vars, &mut rel_vars)
+            }
+            Clause::Merge(m) => {
+                collect_typed_pattern_vars(&m.pattern, &mut node_vars, &mut rel_vars)
+            }
+            _ => {}
+        }
+    }
+    for name in &node_vars {
+        if rel_vars.contains(name) {
+            return Err(variable_type_conflict(name));
+        }
+    }
+    Ok(())
+}
+
+/// Sort a pattern's variables into node names and relationship names.
+fn collect_typed_pattern_vars(
+    pattern: &Pattern,
+    node_vars: &mut HashSet<String>,
+    rel_vars: &mut HashSet<String>,
+) {
+    for element in &pattern.elements {
+        collect_typed_element_vars(element, node_vars, rel_vars);
+    }
+}
+
+fn collect_typed_element_vars(
+    element: &PatternElement,
+    node_vars: &mut HashSet<String>,
+    rel_vars: &mut HashSet<String>,
+) {
+    match element {
+        PatternElement::Node(n) => {
+            if let Some(v) = &n.variable {
+                node_vars.insert(v.clone());
+            }
+        }
+        PatternElement::Relationship(r) => {
+            if let Some(v) = &r.variable {
+                rel_vars.insert(v.clone());
+            }
+        }
+        PatternElement::QuantifiedGroup(g) => {
+            for inner in &g.inner {
+                collect_typed_element_vars(inner, node_vars, rel_vars);
+            }
+        }
+    }
 }
 
 // ── Binder collection ──────────────────────────────────────────────────
@@ -494,6 +567,12 @@ fn undefined_variable(name: &str) -> crate::Error {
     ))
 }
 
+fn variable_type_conflict(name: &str) -> crate::Error {
+    crate::Error::CypherSyntax(format!(
+        "VariableTypeConflict: variable `{name}` is used as both a node and a relationship"
+    ))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -564,6 +643,33 @@ mod tests {
         // List comprehension and list-predicate variables are bound locally.
         assert_ok("MATCH (a) RETURN [x IN [1, 2] | x] AS l");
         assert_ok("MATCH (a)-[r]->(b) RETURN any(x IN [1, 2] WHERE x > 0) AS y");
+    }
+
+    /// A SyntaxError carrying the `VariableTypeConflict` token.
+    fn assert_type_conflict(query: &str) {
+        let err = run(query).expect_err(&format!("expected VariableTypeConflict for: {query}"));
+        assert_eq!(
+            format!("{:?}", err.opencypher_kind()),
+            "SyntaxError",
+            "{query} must classify as SyntaxError"
+        );
+        assert!(
+            err.to_string().contains("VariableTypeConflict"),
+            "{query}: message must contain VariableTypeConflict, got: {err}"
+        );
+    }
+
+    #[test]
+    fn node_variable_reused_as_relationship_is_rejected() {
+        assert_type_conflict("MATCH (a) MATCH ()-[a]-() RETURN a");
+    }
+
+    #[test]
+    fn reusing_a_variable_as_the_same_type_passes() {
+        // `a` is the same node at both ends — legal, not a type conflict.
+        assert_ok("MATCH (a)-[r]->(a) RETURN a");
+        // `a` bound as a node in two separate patterns — legal.
+        assert_ok("MATCH (a) MATCH (a)-[r]->(b) RETURN a, b");
     }
 
     #[test]
