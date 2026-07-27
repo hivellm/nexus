@@ -17,6 +17,7 @@ mod merge_relationship_anonymous_variable_test;
 mod merge_relationship_arrow_direction_test;
 mod new_functions_test;
 mod null_comparison_tests;
+mod parser_literals_test;
 mod phase4_cypher_parity_quick_wins_test;
 mod return_where_tests;
 mod side_effect_counting_test;

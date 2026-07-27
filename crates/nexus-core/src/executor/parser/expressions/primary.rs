@@ -16,6 +16,10 @@ impl CypherParser {
             Some('$') => self.parse_parameter(),
             Some('"') | Some('\'') => self.parse_string_literal(),
             Some(c) if c.is_ascii_digit() => self.parse_numeric_literal(),
+            // Leading-dot float such as `.5` (only when a digit follows the dot).
+            Some('.') if self.peek_char_at(1).is_some_and(|c| c.is_ascii_digit()) => {
+                self.parse_numeric_literal()
+            }
             Some(_c) if self.is_identifier_start() => {
                 // Check if it's a keyword first
                 if self.peek_keyword("CASE") {
@@ -89,6 +93,10 @@ impl CypherParser {
             Some('$') => self.parse_parameter(),
             Some('"') | Some('\'') => self.parse_string_literal(),
             Some(c) if c.is_ascii_digit() => self.parse_numeric_literal(),
+            // Leading-dot float such as `.5` (only when a digit follows the dot).
+            Some('.') if self.peek_char_at(1).is_some_and(|c| c.is_ascii_digit()) => {
+                self.parse_numeric_literal()
+            }
             Some(_c) if self.is_identifier_start() => {
                 // Check if it's a keyword first
                 if self.peek_keyword("CASE") {
@@ -133,7 +141,29 @@ impl CypherParser {
                     'n' => value.push('\n'),
                     't' => value.push('\t'),
                     'r' => value.push('\r'),
+                    'b' => value.push('\u{0008}'), // backspace
+                    'f' => value.push('\u{000C}'), // form feed
+                    '0' => value.push('\u{0000}'), // null
                     '\\' => value.push('\\'),
+                    // `\uXXXX` — a Unicode code point as exactly four hex digits.
+                    'u' => {
+                        let mut hex = String::with_capacity(4);
+                        for _ in 0..4 {
+                            match self.consume_char() {
+                                Some(c) if c.is_ascii_hexdigit() => hex.push(c),
+                                _ => {
+                                    return Err(
+                                        self.error("Invalid \\u escape: expected 4 hex digits")
+                                    );
+                                }
+                            }
+                        }
+                        let cp = u32::from_str_radix(&hex, 16)
+                            .map_err(|_| self.error("Invalid \\u escape"))?;
+                        let decoded = char::from_u32(cp)
+                            .ok_or_else(|| self.error("Invalid \\u code point"))?;
+                        value.push(decoded);
+                    }
                     _ => value.push(next),
                 }
             } else {
@@ -144,34 +174,124 @@ impl CypherParser {
         Ok(Expression::Literal(Literal::String(value)))
     }
 
-    /// Parse numeric literal
+    /// Parse a numeric literal.
+    ///
+    /// Supports openCypher's full numeric grammar: decimal integers, radix
+    /// prefixes (`0x1F` hex, `0o17` octal), floats with a fractional part
+    /// (`1.5`, `.5`), scientific notation (`1e10`, `1.5E-3`), and `_`
+    /// digit-group separators (`1_000`, `0x_FF`). The fractional `.` is only
+    /// consumed when a digit follows it, so a range such as `1..5` and slice
+    /// bounds are never misconsumed as a float.
     pub(super) fn parse_numeric_literal(&mut self) -> Result<Expression> {
         let start = self.pos;
 
-        // Parse integer part
-        while self.pos < self.input.len() && self.is_digit() {
+        // Radix-prefixed integers: 0x.. (hex), 0o.. (octal).
+        if self.peek_char() == Some('0') {
+            match self.peek_char_at(1) {
+                Some('x') | Some('X') => {
+                    self.consume_char(); // 0
+                    self.consume_char(); // x
+                    let digits_start = self.pos;
+                    while self
+                        .peek_char()
+                        .is_some_and(|c| c.is_ascii_hexdigit() || c == '_')
+                    {
+                        self.consume_char();
+                    }
+                    return self.finish_radix_int(digits_start, 16, "hexadecimal");
+                }
+                Some('o') | Some('O') => {
+                    self.consume_char(); // 0
+                    self.consume_char(); // o
+                    let digits_start = self.pos;
+                    while self
+                        .peek_char()
+                        .is_some_and(|c| ('0'..='7').contains(&c) || c == '_')
+                    {
+                        self.consume_char();
+                    }
+                    return self.finish_radix_int(digits_start, 8, "octal");
+                }
+                _ => {}
+            }
+        }
+
+        // Decimal integer part (underscores allowed as separators).
+        while self
+            .peek_char()
+            .is_some_and(|c| c.is_ascii_digit() || c == '_')
+        {
             self.consume_char();
         }
 
-        // Check for decimal point
-        if self.peek_char() == Some('.') {
-            self.consume_char();
-            while self.pos < self.input.len() && self.is_digit() {
+        let mut is_float = false;
+
+        // Fractional part — only when a digit follows the '.', so `1..5`
+        // (range) is not misconsumed as `1.` then `.5`.
+        if self.peek_char() == Some('.') && self.peek_char_at(1).is_some_and(|c| c.is_ascii_digit())
+        {
+            is_float = true;
+            self.consume_char(); // .
+            while self
+                .peek_char()
+                .is_some_and(|c| c.is_ascii_digit() || c == '_')
+            {
                 self.consume_char();
             }
+        }
 
-            // Parse as float
-            let value = self.input[start..self.pos]
+        // Exponent part: e / E with an optional sign.
+        if matches!(self.peek_char(), Some('e') | Some('E')) {
+            is_float = true;
+            self.consume_char();
+            if matches!(self.peek_char(), Some('+') | Some('-')) {
+                self.consume_char();
+            }
+            while self
+                .peek_char()
+                .is_some_and(|c| c.is_ascii_digit() || c == '_')
+            {
+                self.consume_char();
+            }
+        }
+
+        let raw: String = self.input[start..self.pos]
+            .chars()
+            .filter(|c| *c != '_')
+            .collect();
+
+        if is_float {
+            let value = raw
                 .parse::<f64>()
                 .map_err(|_| self.error("Invalid float literal"))?;
             Ok(Expression::Literal(Literal::Float(value)))
         } else {
-            // Parse as integer
-            let value = self.input[start..self.pos]
+            let value = raw
                 .parse::<i64>()
                 .map_err(|_| self.error("Invalid integer literal"))?;
             Ok(Expression::Literal(Literal::Integer(value)))
         }
+    }
+
+    /// Finish parsing a radix-prefixed integer (`0x..`/`0o..`): strip `_`
+    /// separators from `self.input[digits_start..self.pos]` and parse in the
+    /// given `radix`. Errors on an empty or out-of-range digit run.
+    fn finish_radix_int(
+        &mut self,
+        digits_start: usize,
+        radix: u32,
+        name: &str,
+    ) -> Result<Expression> {
+        let raw: String = self.input[digits_start..self.pos]
+            .chars()
+            .filter(|c| *c != '_')
+            .collect();
+        if raw.is_empty() {
+            return Err(self.error(&format!("Invalid {name} literal: no digits")));
+        }
+        let value = i64::from_str_radix(&raw, radix)
+            .map_err(|_| self.error(&format!("Invalid {name} literal")))?;
+        Ok(Expression::Literal(Literal::Integer(value)))
     }
 
     /// Parse boolean literal
