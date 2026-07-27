@@ -181,6 +181,15 @@ pub struct Catalog {
     /// the typed property index so indexes survive a restart (issue #11).
     pub(super) property_index_db: Database<SerdeBincode<(u32, u32)>, SerdeBincode<()>>,
 
+    /// Durable vector (KNN) index definitions: index name → `(label,
+    /// property)`. A dedicated database (not a key-prefixed slice of
+    /// `property_index_db`) so it can never collide with a property-index
+    /// key, which is keyed by `(label_id, key_id)` u32 pairs rather than
+    /// strings. Reloaded at startup to re-register the single active
+    /// vector index and repopulate the HNSW graph so it survives a
+    /// restart (phase20_knn-write-path-wiring §3.2).
+    pub(super) vector_index_db: Database<Str, SerdeBincode<(String, String)>>,
+
     /// Next label ID counter (cached for performance).
     pub(super) next_label_id: Arc<RwLock<u32>>,
     /// Next type ID counter.
@@ -357,7 +366,7 @@ impl Catalog {
         // Create directory if it doesn't exist.
         std::fs::create_dir_all(actual_path)?;
 
-        // Open LMDB environment with specified map size, 15 databases.
+        // Open LMDB environment with specified map size, 16 databases.
         // `max_readers` is bumped from LMDB's 126 default because the
         // test binary holds a single shared catalog env across ~2000
         // parallel tests, each opening at least one read txn per
@@ -414,6 +423,11 @@ impl Catalog {
         // Create the durable property-index definition store (issue #11).
         let property_index_db: Database<SerdeBincode<(u32, u32)>, SerdeBincode<()>> =
             env.create_database(&mut wtxn, Some("property_indexes"))?;
+
+        // Create the durable vector-index definition store
+        // (phase20_knn-write-path-wiring §3.2).
+        let vector_index_db: Database<Str, SerdeBincode<(String, String)>> =
+            env.create_database(&mut wtxn, Some("vector_indexes"))?;
 
         // Create external-id index sub-databases (forward + reverse).
         let external_id_index = ExternalIdIndex::open(&env, &mut wtxn)?;
@@ -525,6 +539,7 @@ impl Catalog {
             udf_db,
             procedure_db,
             property_index_db,
+            vector_index_db,
             next_label_id: Arc::new(RwLock::new(next_label_id)),
             next_type_id: Arc::new(RwLock::new(next_type_id)),
             next_key_id: Arc::new(RwLock::new(next_key_id)),

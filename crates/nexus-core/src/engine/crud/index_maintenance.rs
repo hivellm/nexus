@@ -428,6 +428,115 @@ impl Engine {
         }
     }
 
+    /// Extract an embedding for the KNN write-path hooks from a raw
+    /// property value. Returns `None` (a silent skip, not an error)
+    /// unless `val` is a JSON array of finite numbers — mirrors how
+    /// `Point::from_json_value` rejects a malformed Point for
+    /// `spatial_autopopulate_node` without aborting the containing
+    /// write. Dimension is deliberately NOT checked here: an
+    /// out-of-dimension vector is passed through to `KnnIndex::add_vector`,
+    /// whose own dimension check produces the `Err` the caller logs and
+    /// skips on — see `knn_autopopulate_node`.
+    fn knn_embedding_from_json(val: &serde_json::Value) -> Option<Vec<f32>> {
+        let arr = val.as_array()?;
+        let mut out = Vec::with_capacity(arr.len());
+        for item in arr {
+            let n = item.as_f64()?;
+            if !n.is_finite() {
+                return None;
+            }
+            out.push(n as f32);
+        }
+        Some(out)
+    }
+
+    /// Walk the single active vector-index definition (see the
+    /// `VectorIndexRegistry` module docs — one active index at a time,
+    /// backed by a single global HNSW graph) and, if it matches the
+    /// node's labels and the node carries a well-formed numeric-array
+    /// embedding on the indexed property, insert the vector into
+    /// `IndexManager::knn_index` and emit a matching
+    /// `WalEntry::KnnVectorAdd` so crash recovery replays the write.
+    ///
+    /// Match rule (mirrors `spatial_autopopulate_node`):
+    /// - The node carries the index's label, AND
+    /// - the indexed property holds a JSON array of finite numbers.
+    ///
+    /// A property that is missing, not an array, or holds a non-finite
+    /// element is silently skipped (not an error) — the node simply
+    /// isn't indexed by that vector index, mirroring how
+    /// `spatial_autopopulate_node` skips a malformed Point. A dimension
+    /// mismatch or any other `add_vector` failure is logged via
+    /// `tracing::warn!` and swallowed — the KNN index is never the
+    /// source of truth.
+    pub(super) fn knn_autopopulate_node(
+        &mut self,
+        node_id: u64,
+        label_ids: &[u32],
+        properties: &serde_json::Value,
+    ) -> Result<()> {
+        let props_obj = match properties.as_object() {
+            Some(o) => o,
+            None => return Ok(()),
+        };
+        let registry = self.indexes.knn_registry.clone();
+        for (name, label_name, property_key) in registry.definitions() {
+            // Resolve the label name to an id; skip if unknown.
+            let label_id = match self.catalog.get_label_id(&label_name) {
+                Ok(id) => id,
+                Err(_) => continue,
+            };
+            if !label_ids.contains(&label_id) {
+                continue;
+            }
+            let Some(val) = props_obj.get(&property_key) else {
+                continue;
+            };
+            let Some(embedding) = Self::knn_embedding_from_json(val) else {
+                continue;
+            };
+            if let Err(e) = self
+                .indexes
+                .knn_index
+                .add_vector(node_id, embedding.clone())
+            {
+                tracing::warn!("KNN: add_vector on index {name:?} for node {node_id} failed: {e}");
+                continue;
+            }
+            let wal_entry = wal::WalEntry::KnnVectorAdd { node_id, embedding };
+            if let Err(e) = self.write_wal_async(wal_entry) {
+                tracing::warn!(
+                    "KNN: WAL KnnVectorAdd on autopopulate for {name:?} / {node_id} failed: {e}"
+                );
+            }
+        }
+        Ok(())
+    }
+
+    /// Evict-then-conditionally-re-add `node_id`'s vector after a SET /
+    /// REMOVE / SET-label write, mirroring `spatial_refresh_node`. The
+    /// KNN registry has no per-node membership tracking to drive a
+    /// targeted "evict only the indexes this node currently belongs to"
+    /// phase 1 (see `VectorIndexRegistry` module docs — a single global
+    /// HNSW graph, not a per-label registry) so the mirror collapses to
+    /// calling the two existing primitives: [`Engine::knn_evict_node`]
+    /// (a no-op, not an error, when the node has no vector) followed by
+    /// [`Engine::knn_autopopulate_node`] against the NEW properties.
+    ///
+    /// Best-effort: any error re-adding is logged and swallowed — the
+    /// KNN index is never the source of truth.
+    pub(super) fn knn_refresh_node(
+        &mut self,
+        node_id: u64,
+        label_ids: &[u32],
+        new_props: &serde_json::Value,
+    ) {
+        self.knn_evict_node(node_id);
+        if let Err(e) = self.knn_autopopulate_node(node_id, label_ids, new_props) {
+            tracing::warn!("KNN: refresh autopopulate failed for node {node_id}: {e}");
+        }
+    }
+
     /// phase0_fix-knn-index-divergence §4.2 — evict `node_id`'s vector
     /// from the KNN (HNSW) index, mirroring `fts_evict_node` /
     /// `spatial_evict_node`. Unlike those two, the KNN index is not a
@@ -436,22 +545,28 @@ impl Engine {
     /// `indexes_containing` lookup: `KnnIndex::remove_vector` is already
     /// a no-op, not an error, for a node id with no vector.
     ///
-    /// **Standalone per the §1.1(b) scope decision**: `add_vector` /
-    /// `remove_vector` have no production caller yet (no CREATE/SET path
-    /// maintains the KNN index), so this is not wired into `delete_node`
-    /// — wiring full KNN write-path maintenance (`add_vector` on
-    /// CREATE/SET plus this call from `delete_node`) is an explicit
-    /// follow-up task; see `proposal.md` "Related". This function exists
-    /// so that follow-up has a correct, already-tested eviction primitive
-    /// to call.
+    /// phase20_knn-write-path-wiring §2.1: extended to emit
+    /// `WalEntry::KnnVectorDelete` — but ONLY when the node actually had
+    /// a vector — so crash recovery replays exactly the evictions that
+    /// happened, and a no-op eviction (delete of a node with no vector,
+    /// or a refresh of a node the registry never matched) never appends
+    /// a spurious WAL entry.
     ///
     /// Best-effort like its FTS/spatial siblings: `remove_vector`'s
     /// `Result` can only carry a dimension-mismatch style error, which
     /// eviction (no embedding argument) cannot trigger; a failure is
     /// logged via `tracing::warn!`, never escalated.
     pub(super) fn knn_evict_node(&mut self, node_id: u64) {
+        let had_vector = self.indexes.knn_index.has_vector(node_id);
         if let Err(e) = self.indexes.knn_index.remove_vector(node_id) {
             tracing::warn!("KNN: remove_vector for node {node_id} failed: {e}");
+            return;
+        }
+        if had_vector {
+            let wal_entry = wal::WalEntry::KnnVectorDelete { node_id };
+            if let Err(e) = self.write_wal_async(wal_entry) {
+                tracing::warn!("KNN: WAL KnnVectorDelete for node {node_id} failed: {e}");
+            }
         }
     }
 
@@ -943,5 +1058,192 @@ mod knn_evict_node_tests {
         // Must not panic / error when the node never had a vector.
         engine.knn_evict_node(999);
         assert!(!engine.indexes.knn_index.has_vector(999));
+    }
+
+    // ── phase20_knn-write-path-wiring §2.1 ────────────────────────────
+
+    #[test]
+    fn knn_evict_node_emits_wal_delete_only_when_a_vector_was_removed() {
+        let ctx = TestContext::new();
+        let mut engine = Engine::with_isolated_catalog(ctx.path()).unwrap();
+
+        // `write_wal_async` routes to the async WAL writer (enabled by
+        // `with_isolated_catalog`), so the KnnVectorDelete lands in the
+        // async writer's submitted-count, NOT `self.wal`. `entries_submitted`
+        // is bumped synchronously inside `AsyncWalWriter::append`, so it is
+        // the deterministic counter to observe here.
+        let submitted = |e: &Engine| {
+            e.async_wal_stats()
+                .map(|s| s.entries_submitted)
+                .unwrap_or(0)
+        };
+
+        let embedding = vec![1.0_f32; DEFAULT_VECTORIZER_DIMENSION];
+        engine.indexes.knn_index.add_vector(42, embedding).unwrap();
+
+        let before = submitted(&engine);
+        engine.knn_evict_node(42);
+        assert_eq!(
+            submitted(&engine),
+            before + 1,
+            "evicting a node that had a vector must submit exactly one WAL entry"
+        );
+
+        let before_noop = submitted(&engine);
+        engine.knn_evict_node(42); // already evicted — no-op this time.
+        assert_eq!(
+            submitted(&engine),
+            before_noop,
+            "re-evicting a node with no vector must not submit a WAL entry"
+        );
+    }
+}
+
+#[cfg(test)]
+mod knn_write_path_tests {
+    use super::super::super::Engine;
+    use crate::index::DEFAULT_VECTORIZER_DIMENSION;
+    use crate::testing::TestContext;
+    use serde_json::json;
+
+    /// A one-hot embedding: all zeros except `1.0` at `hot_index`. Two
+    /// distinct `hot_index` values point in orthogonal directions, so
+    /// cosine search can distinguish an "old" from a "new" embedding
+    /// unambiguously — a pair of same-signed constant vectors would not,
+    /// since they'd share the same direction.
+    fn hot_embedding_json(hot_index: usize) -> serde_json::Value {
+        let mut v = vec![0.0_f64; DEFAULT_VECTORIZER_DIMENSION];
+        v[hot_index] = 1.0;
+        serde_json::Value::Array(v.into_iter().map(serde_json::Value::from).collect())
+    }
+
+    fn hot_query(hot_index: usize) -> Vec<f32> {
+        let mut v = vec![0.0_f32; DEFAULT_VECTORIZER_DIMENSION];
+        v[hot_index] = 1.0;
+        v
+    }
+
+    #[test]
+    fn knn_autopopulate_node_adds_vector_when_index_and_property_match() {
+        let ctx = TestContext::new();
+        let mut engine = Engine::with_isolated_catalog(ctx.path()).unwrap();
+        let doc_id = engine.catalog.get_or_create_label("Doc").unwrap();
+        engine
+            .indexes
+            .knn_registry
+            .register("Doc.embedding", "Doc", "embedding", false)
+            .unwrap();
+
+        let props = json!({ "embedding": hot_embedding_json(0) });
+        engine.knn_autopopulate_node(7, &[doc_id], &props).unwrap();
+
+        assert!(engine.indexes.knn_index.has_vector(7));
+        assert_eq!(engine.indexes.knn_index.get_stats().total_vectors, 1);
+        let results = engine
+            .indexes
+            .knn_index
+            .search_knn_with_ef(&hot_query(0), 1, 200)
+            .unwrap();
+        assert_eq!(results[0].0, 7);
+    }
+
+    #[test]
+    fn knn_autopopulate_node_is_noop_without_registered_index() {
+        let ctx = TestContext::new();
+        let mut engine = Engine::with_isolated_catalog(ctx.path()).unwrap();
+        let doc_id = engine.catalog.get_or_create_label("Doc").unwrap();
+
+        let props = json!({ "embedding": hot_embedding_json(0) });
+        engine.knn_autopopulate_node(7, &[doc_id], &props).unwrap();
+
+        assert!(!engine.indexes.knn_index.has_vector(7));
+    }
+
+    #[test]
+    fn knn_autopopulate_node_is_noop_when_property_missing_not_array_or_label_mismatch() {
+        let ctx = TestContext::new();
+        let mut engine = Engine::with_isolated_catalog(ctx.path()).unwrap();
+        let doc_id = engine.catalog.get_or_create_label("Doc").unwrap();
+        engine
+            .indexes
+            .knn_registry
+            .register("Doc.embedding", "Doc", "embedding", false)
+            .unwrap();
+
+        // Property absent entirely.
+        engine
+            .knn_autopopulate_node(1, &[doc_id], &json!({ "title": "x" }))
+            .unwrap();
+        assert!(!engine.indexes.knn_index.has_vector(1));
+
+        // Property present but not an array.
+        engine
+            .knn_autopopulate_node(2, &[doc_id], &json!({ "embedding": "not-an-array" }))
+            .unwrap();
+        assert!(!engine.indexes.knn_index.has_vector(2));
+
+        // Property present, array-typed, but the node doesn't carry the
+        // index's label.
+        engine
+            .knn_autopopulate_node(3, &[999], &json!({ "embedding": hot_embedding_json(0) }))
+            .unwrap();
+        assert!(!engine.indexes.knn_index.has_vector(3));
+    }
+
+    #[test]
+    fn knn_refresh_node_replaces_old_vector_with_new() {
+        let ctx = TestContext::new();
+        let mut engine = Engine::with_isolated_catalog(ctx.path()).unwrap();
+        let doc_id = engine.catalog.get_or_create_label("Doc").unwrap();
+        engine
+            .indexes
+            .knn_registry
+            .register("Doc.embedding", "Doc", "embedding", false)
+            .unwrap();
+
+        engine
+            .knn_autopopulate_node(9, &[doc_id], &json!({ "embedding": hot_embedding_json(0) }))
+            .unwrap();
+        assert!(engine.indexes.knn_index.has_vector(9));
+
+        engine.knn_refresh_node(9, &[doc_id], &json!({ "embedding": hot_embedding_json(1) }));
+
+        assert!(engine.indexes.knn_index.has_vector(9));
+        assert_eq!(engine.indexes.knn_index.get_stats().total_vectors, 1);
+
+        let results = engine
+            .indexes
+            .knn_index
+            .search_knn_with_ef(&hot_query(1), 1, 200)
+            .unwrap();
+        assert_eq!(
+            results[0].0, 9,
+            "refresh must replace the old embedding with the new one"
+        );
+    }
+
+    #[test]
+    fn knn_refresh_node_evicts_when_new_props_no_longer_match() {
+        let ctx = TestContext::new();
+        let mut engine = Engine::with_isolated_catalog(ctx.path()).unwrap();
+        let doc_id = engine.catalog.get_or_create_label("Doc").unwrap();
+        engine
+            .indexes
+            .knn_registry
+            .register("Doc.embedding", "Doc", "embedding", false)
+            .unwrap();
+
+        engine
+            .knn_autopopulate_node(
+                11,
+                &[doc_id],
+                &json!({ "embedding": hot_embedding_json(0) }),
+            )
+            .unwrap();
+        assert!(engine.indexes.knn_index.has_vector(11));
+
+        engine.knn_refresh_node(11, &[doc_id], &json!({ "title": "no-embedding-anymore" }));
+
+        assert!(!engine.indexes.knn_index.has_vector(11));
     }
 }

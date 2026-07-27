@@ -309,6 +309,9 @@ impl Executor {
                     // phase6_spatial-index-autopopulate §2 — same
                     // pattern for R-tree indexes.
                     self.spatial_autopopulate_node(node_id, &label_ids_for_update, &properties);
+                    // phase20_knn-write-path-wiring §2.4 — same
+                    // pattern for the active vector (HNSW) index.
+                    self.knn_autopopulate_node(node_id, &label_ids_for_update, &properties);
 
                     // Phase 1 Optimization: Batch catalog metadata updates (defer to end)
                     for label_id in &label_ids_for_update {
@@ -429,6 +432,11 @@ impl Executor {
                                     &target_properties,
                                 );
                                 self.spatial_autopopulate_node(
+                                    tid,
+                                    &target_label_ids_for_update,
+                                    &target_properties,
+                                );
+                                self.knn_autopopulate_node(
                                     tid,
                                     &target_label_ids_for_update,
                                     &target_properties,
@@ -846,6 +854,7 @@ impl Executor {
 
         self.fts_autopopulate_node(node_id, &label_ids, &properties);
         self.spatial_autopopulate_node(node_id, &label_ids, &properties);
+        self.knn_autopopulate_node(node_id, &label_ids, &properties);
         if !label_ids.is_empty() {
             created_nodes_with_labels.push((node_id, label_ids));
         }

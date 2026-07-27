@@ -414,6 +414,13 @@ impl Engine {
         // registry at construction so spatial DDL and queries work even
         // before the first `refresh_executor` fires.
         engine.executor.install_rtree(engine.indexes.rtree.clone());
+        // phase20_knn-write-path-wiring §1.4 — install the vector-index
+        // registry at construction so `CREATE VECTOR INDEX` and the
+        // write-path autopopulate hooks share the engine's registry even
+        // before the first `refresh_executor` fires.
+        engine
+            .executor
+            .install_knn_registry(engine.indexes.knn_registry.clone());
         // phase6_fix-read-match-index-seek §2 — install the typed property
         // index (Arc-shared) at construction so a `CREATE INDEX` followed by
         // a read `MATCH (n:L {p: v})` uses the index seek even before the
@@ -608,6 +615,11 @@ impl Engine {
             .executor
             .install_fulltext(engine.indexes.fulltext.clone());
         engine.executor.install_rtree(engine.indexes.rtree.clone());
+        // phase20_knn-write-path-wiring §1.4 — install the vector-index
+        // registry at construction, mirroring the R-tree install above.
+        engine
+            .executor
+            .install_knn_registry(engine.indexes.knn_registry.clone());
         // phase6_fix-read-match-index-seek §2 — install the typed property
         // index (Arc-shared) at construction so read-side index seeks work
         // before the first `refresh_executor` fires.
@@ -679,7 +691,99 @@ impl Engine {
             }
         }
 
+        // Rebuild the vector (KNN) index from the durable definition
+        // (phase20_knn-write-path-wiring §3.2). `CREATE VECTOR INDEX`
+        // persists the single active `(name, label, property)` triple via
+        // `Catalog::persist_vector_index`; without this rebuild both the
+        // `VectorIndexRegistry` definition AND the in-memory HNSW graph
+        // would be lost on restart, even though the embeddings themselves
+        // are still durable as node properties in the property store.
+        let vector_defs = self.catalog.list_vector_indexes().unwrap_or_default();
+        for (name, label, property) in &vector_defs {
+            if let Err(e) = self
+                .indexes
+                .knn_registry
+                .register(name, label, property, true)
+            {
+                tracing::warn!("vector-index rebuild: register({name:?}) failed: {e}");
+            }
+        }
+        if !vector_defs.is_empty() {
+            // Repopulate the HNSW graph by calling `KnnIndex::add_vector`
+            // directly instead of the WAL-emitting `Engine::knn_autopopulate_node`
+            // write-path hook. This rebuild runs on every engine open; if it
+            // replayed through the WAL-emitting hook it would append a fresh
+            // `KnnVectorAdd` entry for every already-durable vector on every
+            // restart, growing the WAL unboundedly for a read that produces
+            // no new durable state. The typed property-index rebuild above
+            // makes the same choice (`populate_index` never touches the
+            // WAL) — rebuilding an in-memory index from an already-durable
+            // source is not itself a write.
+            for node_id in 0..total_nodes {
+                let record = match self.storage.read_node(node_id) {
+                    Ok(record) => record,
+                    Err(_) => continue,
+                };
+                if record.is_deleted() {
+                    continue;
+                }
+                let mut label_ids = Vec::new();
+                for bit in 0..64 {
+                    if (record.label_bits & (1u64 << bit)) != 0 {
+                        label_ids.push(bit as u32);
+                    }
+                }
+                if label_ids.is_empty() {
+                    continue;
+                }
+                let props = match self.storage.load_node_properties(node_id) {
+                    Ok(Some(Value::Object(m))) => m,
+                    _ => continue,
+                };
+                for (name, label, property) in &vector_defs {
+                    let label_id = match self.catalog.get_label_id(label) {
+                        Ok(id) => id,
+                        Err(_) => continue,
+                    };
+                    if !label_ids.contains(&label_id) {
+                        continue;
+                    }
+                    let Some(val) = props.get(property) else {
+                        continue;
+                    };
+                    let Some(embedding) = Self::vector_from_json(val) else {
+                        continue;
+                    };
+                    if let Err(e) = self.indexes.knn_index.add_vector(node_id, embedding) {
+                        tracing::warn!(
+                            "vector-index rebuild: add_vector for {name:?} node {node_id} failed: {e}"
+                        );
+                    }
+                }
+            }
+        }
+
         Ok(())
+    }
+
+    /// Parse a JSON value into a `Vec<f32>` embedding for the vector-index
+    /// rebuild, mirroring `Engine::knn_embedding_from_json`
+    /// (`engine/crud/index_maintenance.rs`, not reusable here — it is
+    /// module-private to that file). Only a JSON array of finite numbers is
+    /// a valid embedding; anything else (missing property, non-array,
+    /// non-finite element) yields `None` so the caller skips the node
+    /// rather than treating it as an error.
+    fn vector_from_json(value: &Value) -> Option<Vec<f32>> {
+        let arr = value.as_array()?;
+        let mut out = Vec::with_capacity(arr.len());
+        for item in arr {
+            let n = item.as_f64()?;
+            if !n.is_finite() {
+                return None;
+            }
+            out.push(n as f32);
+        }
+        Some(out)
     }
 
     /// Clear and rebuild the in-memory relationship index (type / node /
@@ -837,6 +941,12 @@ impl Engine {
         // R-tree registry with the executor so spatial CRUD hooks and
         // query operators read and write the same in-memory state.
         self.executor.install_rtree(self.indexes.rtree.clone());
+        // phase20_knn-write-path-wiring §1.4 — share the engine's
+        // vector-index registry so `CREATE VECTOR INDEX` and the
+        // write-path autopopulate hooks read and write the same
+        // in-memory state.
+        self.executor
+            .install_knn_registry(self.indexes.knn_registry.clone());
         // phase6_fix-read-match-index-seek §1 — share the property index
         // so the planner can consult it for USING INDEX seeks.
         self.executor

@@ -42,6 +42,16 @@ pub struct ExecutorShared {
     /// all read and write this registry exclusively — the legacy
     /// `spatial_indexes: HashMap<String, SpatialIndex>` has been removed.
     pub(super) rtree_registry: Arc<crate::index::rtree::RTreeRegistry>,
+    /// Single-active-index vector (HNSW/KNN) registry
+    /// (phase20_knn-write-path-wiring §1.4).
+    ///
+    /// Owned by `IndexManager::knn_registry` on the engine side and
+    /// shared here via `install_knn_registry` (called from
+    /// `Engine::refresh_executor`), mirroring `rtree_registry` above.
+    /// `CREATE VECTOR INDEX` and the engine's write-path autopopulate
+    /// hooks read and write this registry so both sides observe the
+    /// same active vector index definition.
+    pub(super) knn_registry: Arc<crate::index::knn_registry::VectorIndexRegistry>,
     /// Multi-layer cache system for performance optimization
     pub(super) cache: Option<Arc<parking_lot::RwLock<crate::cache::MultiLayerCache>>>,
     /// Intelligent query cache for Cypher query results
@@ -123,6 +133,7 @@ impl ExecutorShared {
             knn_index: Arc::new(RwLock::new(knn_index.clone())),
             udf_registry: Arc::new(UdfRegistry::new()),
             rtree_registry: Arc::new(crate::index::rtree::RTreeRegistry::new()),
+            knn_registry: Arc::new(crate::index::knn_registry::VectorIndexRegistry::new()),
             cache: None,
             query_cache: None,
             row_lock_manager: Arc::new(RowLockManager::default()),
@@ -247,6 +258,7 @@ impl ExecutorShared {
             knn_index: Arc::new(RwLock::new(knn_index.clone())),
             udf_registry: Arc::new(udf_registry),
             rtree_registry: Arc::new(crate::index::rtree::RTreeRegistry::new()),
+            knn_registry: Arc::new(crate::index::knn_registry::VectorIndexRegistry::new()),
             cache: None,
             query_cache: None,
             row_lock_manager: Arc::new(RowLockManager::default()),

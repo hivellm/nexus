@@ -48,6 +48,33 @@ impl Executor {
                 }
                 registry.register_empty(&index_key);
             }
+            Some("vector") => {
+                // phase20_knn-write-path-wiring §1.5 — register the
+                // definition in the shared `VectorIndexRegistry` so the
+                // KNN write-path hooks (autopopulate/refresh/evict) can
+                // find it. There is no dedicated index-name parameter on
+                // this executor entry point (unlike the parser's
+                // `CreateIndexClause::name`, which is not threaded down
+                // here — see the doc comment on `execute_create_index`);
+                // mirror the `index_key` (`"{label}.{property}"`) the
+                // spatial arm above already uses as ITS registry key, so
+                // the vector index is addressed identically.
+                //
+                // `VectorIndexRegistry::register` is already idempotent
+                // for an exact `(name, label, property)` repeat and
+                // already returns `ERR_VECTOR_INDEX_EXISTS` for a
+                // *distinct* index without `replace` (only one active
+                // vector index is allowed — single global HNSW graph).
+                // `IF NOT EXISTS` only needs to short-circuit when THIS
+                // specific index is already the active one, matching the
+                // per-index-identity semantics the spatial/property arms
+                // use above.
+                if if_not_exists && self.knn_registry().contains(&index_key) {
+                    return Ok(());
+                }
+                self.knn_registry()
+                    .register(&index_key, label, property, or_replace)?;
+            }
             None | Some("property") => {
                 // Property index — register in the catalog AND in the typed
                 // `property_index` that `has_index` / `find_exact` consult,
@@ -211,6 +238,36 @@ impl Executor {
         }
 
         Ok(())
+    }
+
+    /// Execute `DROP INDEX <name>` for the single shared vector index
+    /// (phase20_knn-write-path-wiring §1.5).
+    ///
+    /// Unlike the property/spatial `DROP INDEX ON :Label(property)` shape
+    /// (dispatched separately by `Engine::execute_index_commands`, keyed
+    /// on `label`+`property` — there is no name-only DROP INDEX grammar
+    /// for those today), a vector index is identified purely by its
+    /// registry name: `VectorIndexRegistry` only ever holds a single
+    /// active definition, so a name match against it is unambiguous.
+    ///
+    /// Drops the registry definition AND clears the global HNSW graph
+    /// (`KnnIndex::clear`) together — the two must stay in lockstep since
+    /// every vector index shares the one graph. Returns `Ok(())` (no-op)
+    /// when `name` is not the active index and `if_exists` is set;
+    /// otherwise returns a `CypherExecution` error naming the missing
+    /// index.
+    pub fn execute_drop_index(&self, name: &str, if_exists: bool) -> Result<()> {
+        if self.knn_registry().drop_index(name) {
+            self.knn_index_mut().clear()?;
+            return Ok(());
+        }
+        if if_exists {
+            return Ok(());
+        }
+        Err(Error::CypherExecution(format!(
+            "Vector index '{}' does not exist",
+            name
+        )))
     }
 
     /// Execute SHOW DATABASES command

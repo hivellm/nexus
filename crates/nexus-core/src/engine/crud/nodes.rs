@@ -259,6 +259,11 @@ impl Engine {
         // registered spatial index whose label/property matches.
         self.spatial_autopopulate_node(node_id, &label_ids, &properties)?;
 
+        // phase20_knn-write-path-wiring §2.2 — auto-populate every
+        // registered KNN (vector) index whose label/property matches,
+        // mirroring the spatial hook immediately above.
+        self.knn_autopopulate_node(node_id, &label_ids, &properties)?;
+
         Ok(node_id)
     }
 
@@ -475,6 +480,10 @@ impl Engine {
             // phase6_spatial-index-autopopulate §4 — evict from every
             // spatial index that contains the node.
             self.spatial_evict_node(id);
+            // phase20_knn-write-path-wiring §2.2 — evict the node's
+            // vector from the KNN index, mirroring the spatial evict
+            // immediately above.
+            self.knn_evict_node(id);
 
             // phase0_fix-delete-path-index-cleanup M-1 — free the node's
             // property-store blob. Without this the property store only ever

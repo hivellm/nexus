@@ -846,6 +846,40 @@ mod tests {
         }
     }
 
+    // phase20_knn-write-path-wiring §1.1 — KNN op-code round-trip.
+    #[test]
+    fn knn_wal_ops_encode_decode_roundtrip() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let path = temp.path().join("knn.wal");
+        let mut wal = Wal::new(&path).unwrap();
+
+        let add = WalEntry::KnnVectorAdd {
+            node_id: 42,
+            embedding: vec![0.1, 0.2, 0.3],
+        };
+        let del = WalEntry::KnnVectorDelete { node_id: 42 };
+        for e in [&add, &del] {
+            wal.append(e).unwrap();
+        }
+        wal.flush().unwrap();
+        drop_wal(wal);
+
+        let mut wal = Wal::new(&path).unwrap();
+        let entries = wal.recover().unwrap();
+        assert_eq!(entries.len(), 2);
+        match &entries[0] {
+            WalEntry::KnnVectorAdd { node_id, embedding } => {
+                assert_eq!(*node_id, 42);
+                assert_eq!(embedding, &vec![0.1_f32, 0.2, 0.3]);
+            }
+            other => panic!("expected KnnVectorAdd, got {other:?}"),
+        }
+        match &entries[1] {
+            WalEntry::KnnVectorDelete { node_id } => assert_eq!(*node_id, 42),
+            other => panic!("expected KnnVectorDelete, got {other:?}"),
+        }
+    }
+
     fn drop_wal(_w: Wal) {
         // Explicit drop helper — required because `Wal` holds a file
         // handle that we need closed before reopening for recovery.

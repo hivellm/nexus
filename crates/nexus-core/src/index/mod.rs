@@ -16,6 +16,7 @@ pub mod fulltext_analyzer;
 pub mod fulltext_registry;
 pub mod fulltext_writer;
 pub mod knn_index;
+pub mod knn_registry;
 pub mod label_index;
 pub mod pending_updates;
 pub mod property_index;
@@ -51,6 +52,12 @@ pub struct IndexManager {
     /// `USING RTREE` alias from §7.5); WAL replay routes through
     /// `RTreeRegistry::apply_wal_entry`.
     pub rtree: std::sync::Arc<rtree::RTreeRegistry>,
+    /// Vector (HNSW/KNN) index registry
+    /// (phase20_knn-write-path-wiring §1.2). Tracks the single active
+    /// `(name, label, property)` definition backing the global
+    /// `knn_index` graph so write-path hooks can decide whether a
+    /// created/updated node needs to feed the vector index.
+    pub knn_registry: std::sync::Arc<knn_registry::VectorIndexRegistry>,
 }
 
 impl IndexManager {
@@ -82,6 +89,7 @@ impl IndexManager {
             composite_btree: composite_btree::CompositeBtreeRegistry::new(),
             fulltext,
             rtree: std::sync::Arc::new(rtree::RTreeRegistry::new()),
+            knn_registry: std::sync::Arc::new(knn_registry::VectorIndexRegistry::new()),
         })
     }
 

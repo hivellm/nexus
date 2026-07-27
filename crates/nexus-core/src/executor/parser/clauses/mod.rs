@@ -244,9 +244,11 @@ impl CypherParser {
                     Ok(Clause::CreateDatabase(create_db_clause))
                 } else if self.peek_keyword("INDEX")
                     || self.peek_keyword("SPATIAL")
+                    || self.peek_keyword("VECTOR")
                     || self.peek_keyword("OR")
                 {
-                    // Check for CREATE INDEX (including CREATE SPATIAL INDEX and CREATE OR REPLACE INDEX)
+                    // Check for CREATE INDEX (including CREATE SPATIAL INDEX,
+                    // CREATE VECTOR INDEX, and CREATE OR REPLACE INDEX)
                     let create_index_clause = self.parse_create_index_clause()?;
                     Ok(Clause::CreateIndex(create_index_clause))
                 } else if self.peek_keyword("CONSTRAINT") {

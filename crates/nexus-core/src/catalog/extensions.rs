@@ -114,6 +114,47 @@ impl Catalog {
         Ok(iter.filter_map(|r| r.ok()).map(|(k, _)| k).collect())
     }
 
+    // ── Vector-index persistence ─────────────────────────────────────────────
+
+    /// Durably record that a vector index `name` exists over `(label,
+    /// property)` so it can be re-registered and the HNSW graph
+    /// repopulated after a restart (phase20_knn-write-path-wiring §3.2).
+    /// Mirrors [`Self::persist_property_index`] but stores the raw
+    /// `label`/`property` strings — a vector index is registered by name
+    /// in the in-memory `VectorIndexRegistry`, not by catalog id. Uses a
+    /// dedicated `vector_index_db` (not `property_index_db`) so its
+    /// string-keyed entries can never collide with the `(label_id,
+    /// key_id)` u32 keys the property index stores. Idempotent — a
+    /// repeat `persist_vector_index` for the same `name` overwrites the
+    /// same entry.
+    pub fn persist_vector_index(&self, name: &str, label: &str, property: &str) -> Result<()> {
+        let mut wtxn = self.env.write_txn()?;
+        self.vector_index_db
+            .put(&mut wtxn, name, &(label.to_string(), property.to_string()))?;
+        wtxn.commit()?;
+        Ok(())
+    }
+
+    /// Remove a durable vector-index definition (on `DROP INDEX`).
+    pub fn remove_vector_index(&self, name: &str) -> Result<()> {
+        let mut wtxn = self.env.write_txn()?;
+        self.vector_index_db.delete(&mut wtxn, name)?;
+        wtxn.commit()?;
+        Ok(())
+    }
+
+    /// List every persisted vector-index definition as `(name, label,
+    /// property)`. Used at startup to re-register the active vector
+    /// index and repopulate the HNSW graph.
+    pub fn list_vector_indexes(&self) -> Result<Vec<(String, String, String)>> {
+        let rtxn = self.env.read_txn()?;
+        let iter = self.vector_index_db.iter(&rtxn)?;
+        Ok(iter
+            .filter_map(|r| r.ok())
+            .map(|(name, (label, property))| (name.to_string(), label, property))
+            .collect())
+    }
+
     // ── External-id index ────────────────────────────────────────────────────
 
     /// Return a reference to the external-id index.

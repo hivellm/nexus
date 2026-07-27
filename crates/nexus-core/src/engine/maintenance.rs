@@ -16,10 +16,62 @@ use std::sync::Arc;
 use super::config::GraphStatistics;
 use super::stats::{HealthState, HealthStatus};
 
+/// Multiplier applied to the caller's `k` before querying the (single,
+/// global) HNSW graph, so that post-filtering by label still has enough
+/// raw candidates to return `k` label-matching hits.
+///
+/// The vector index backing `knn_search` is one global HNSW graph shared
+/// across every label (phase20_knn-write-path-wiring §1.2 —
+/// `VectorIndexRegistry` tracks only which `(label, property)` feeds it,
+/// not a separate graph per label). Asking the HNSW for the top-`k`
+/// nearest neighbours and then dropping hits that don't carry the
+/// requested label can leave fewer than `k` results even when `k+`
+/// label-matching nodes exist in the graph — the dropped hits "use up"
+/// slots that a label-aware index would never have spent. Over-fetching
+/// trades extra HNSW work (larger `ef`/candidate list) for correctness:
+/// a 10x oversample keeps the common case (label is a sizeable fraction
+/// of the graph) recall-correct without an unbounded raw scan. The
+/// long-term fix is a per-label vector index; this is the v1 mitigation
+/// documented in phase20_knn-write-path-wiring §2.6.
+const KNN_LABEL_FILTER_OVERSAMPLE: usize = 10;
+
+/// Hard ceiling on the oversampled `k` passed to the HNSW so a large
+/// caller-supplied `k` can't force an unbounded raw candidate scan.
+const KNN_LABEL_FILTER_MAX_RAW_K: usize = 10_000;
+
 impl Engine {
-    /// Perform KNN search over the vector index registered for `label`.
+    /// Perform KNN search over the vector index registered for `label`,
+    /// post-filtered to nodes that carry `label`.
+    ///
+    /// The HNSW graph underneath `self.indexes.knn_search` is a single
+    /// global index shared by every label (see
+    /// [`KNN_LABEL_FILTER_OVERSAMPLE`] for why); this method resolves
+    /// `label` to its catalog id, fetches the label's node-id bitmap, and
+    /// filters the raw ranked HNSW hits down to that set — preserving
+    /// rank order and scores. An unknown `label` (no catalog entry) or a
+    /// label with no nodes yields an empty result, never an error.
     pub fn knn_search(&self, label: &str, vector: &[f32], k: usize) -> Result<Vec<(u64, f32)>> {
-        self.indexes.knn_search(label, vector, k)
+        let label_id = match self.catalog.get_label_id(label) {
+            Ok(id) => id,
+            Err(_) => return Ok(Vec::new()),
+        };
+        let label_nodes = self.indexes.label_index.get_nodes(label_id)?;
+        if label_nodes.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let raw_k = k
+            .saturating_mul(KNN_LABEL_FILTER_OVERSAMPLE)
+            .min(KNN_LABEL_FILTER_MAX_RAW_K)
+            .max(k);
+        let raw_hits = self.indexes.knn_search(label, vector, raw_k)?;
+
+        let mut filtered: Vec<(u64, f32)> = raw_hits
+            .into_iter()
+            .filter(|(node_id, _)| label_nodes.contains(*node_id as u32))
+            .collect();
+        filtered.truncate(k);
+        Ok(filtered)
     }
 
     /// Export graph data to JSON format (nodes + relationships with
@@ -198,5 +250,83 @@ impl Engine {
         }
 
         Ok(status)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::index::DEFAULT_VECTORIZER_DIMENSION;
+    use crate::testing::TestContext;
+
+    /// `knn_search` must post-filter the global HNSW graph's raw hits down
+    /// to nodes carrying the requested label — a :Doc query must never
+    /// surface an equally (or more) similar :Other node.
+    #[test]
+    fn knn_search_filters_out_other_labels() {
+        let ctx = TestContext::new();
+        let mut engine = Engine::with_isolated_catalog(ctx.path()).expect("engine init");
+
+        let doc_id = engine
+            .create_node(vec!["Doc".to_string()], serde_json::json!({}))
+            .expect("create :Doc node");
+        let other_id = engine
+            .create_node(vec!["Other".to_string()], serde_json::json!({}))
+            .expect("create :Other node");
+
+        let query = vec![1.0_f32; DEFAULT_VECTORIZER_DIMENSION];
+        // The :Other node gets the exact query vector (perfect match);
+        // the :Doc node gets a merely close vector — without label
+        // filtering the :Other node would rank first and dominate the
+        // top-1 result.
+        let mut doc_vector = vec![1.0_f32; DEFAULT_VECTORIZER_DIMENSION];
+        doc_vector[0] = 0.9;
+        engine
+            .indexes
+            .knn_index
+            .add_vector(doc_id, doc_vector)
+            .expect("add :Doc vector");
+        engine
+            .indexes
+            .knn_index
+            .add_vector(other_id, query.clone())
+            .expect("add :Other vector");
+
+        let results = engine
+            .knn_search("Doc", &query, 5)
+            .expect("knn_search must succeed");
+
+        assert_eq!(
+            results.len(),
+            1,
+            "only the single :Doc node must be returned, got {results:?}"
+        );
+        assert_eq!(
+            results[0].0, doc_id,
+            "the returned hit must be the :Doc node, not the :Other node"
+        );
+        assert!(
+            results.iter().all(|(id, _)| *id != other_id),
+            "the :Other node must never appear in a :Doc knn_search, got {results:?}"
+        );
+    }
+
+    /// An unregistered / nonexistent label must yield an empty result,
+    /// never an error — mirrors the "label doesn't exist" convention used
+    /// elsewhere in the engine (e.g. `catalog.get_label_id` callers that
+    /// treat `Err` as "no matches").
+    #[test]
+    fn knn_search_unknown_label_returns_empty() {
+        let ctx = TestContext::new();
+        let engine = Engine::with_isolated_catalog(ctx.path()).expect("engine init");
+
+        let query = vec![1.0_f32; DEFAULT_VECTORIZER_DIMENSION];
+        let results = engine
+            .knn_search("NoSuchLabel", &query, 5)
+            .expect("unknown label must not error");
+        assert!(
+            results.is_empty(),
+            "unknown label must yield an empty result, got {results:?}"
+        );
     }
 }

@@ -140,6 +140,72 @@ fn property_index_survives_restart() {
     );
 }
 
+/// phase20_knn-write-path-wiring §3.2: a `CREATE VECTOR INDEX` and the
+/// vectors it holds must survive a restart. The definition is persisted in
+/// the catalog (like a property index) and the HNSW graph is repopulated
+/// from the property store on reopen — so a KNN search that matched before
+/// the restart still matches after it.
+#[test]
+#[serial_test::serial]
+fn vector_index_survives_restart() {
+    use crate::index::DEFAULT_VECTORIZER_DIMENSION;
+
+    let ctx = crate::testing::TestContext::new();
+    let path = ctx.path().to_path_buf();
+
+    // A one-hot embedding — a well-separated direction the cosine search
+    // can score unambiguously. Stored as a JSON array property so it lands
+    // in the property store (survives restart) AND triggers autopopulate.
+    let mut emb = vec![0.0_f64; DEFAULT_VECTORIZER_DIMENSION];
+    emb[0] = 1.0;
+    let emb_json: Vec<serde_json::Value> = emb.iter().map(|f| serde_json::json!(f)).collect();
+    let mut query = vec![0.0_f32; DEFAULT_VECTORIZER_DIMENSION];
+    query[0] = 1.0;
+
+    // First engine: register the vector index, create a :Doc carrying the
+    // embedding (create_node persists the property AND autopopulates the
+    // HNSW), confirm the search finds it, then flush + drop (= restart).
+    {
+        let mut engine = Engine::with_data_dir(&path).expect("open engine");
+        engine
+            .execute_cypher("CREATE VECTOR INDEX docEmb FOR (d:Doc) ON (d.embedding)")
+            .expect("CREATE VECTOR INDEX");
+        engine
+            .create_node(
+                vec!["Doc".to_string()],
+                serde_json::json!({ "embedding": emb_json }),
+            )
+            .expect("create :Doc with embedding");
+
+        let hits = engine
+            .knn_search("Doc", &query, 5)
+            .expect("pre-restart knn_search");
+        assert!(!hits.is_empty(), "pre-restart KNN search must find the doc");
+        engine.flush().expect("flush");
+    }
+
+    // Reopen on the same directory — simulates a server restart.
+    let mut engine = Engine::with_data_dir(&path).expect("reopen engine");
+
+    let defs = engine.indexes.knn_registry.definitions();
+    assert_eq!(
+        defs.len(),
+        1,
+        "vector index definition must persist across restart, got {defs:?}"
+    );
+    assert_eq!(defs[0].1, "Doc");
+    assert_eq!(defs[0].2, "embedding");
+
+    let hits = engine
+        .knn_search("Doc", &query, 5)
+        .expect("post-restart knn_search");
+    assert!(
+        !hits.is_empty(),
+        "vector index must be repopulated from the property store after \
+         restart — the KNN search must still find the doc"
+    );
+}
+
 /// ISSUE #12: `CALL { ... } IN TRANSACTIONS OF n ROWS` must terminate. The
 /// previous batching loop re-ran the whole subquery every iteration and only
 /// stopped when it returned zero rows or fewer than `n`; a subquery returning

@@ -507,3 +507,42 @@ fn create_spatial_index_legacy_form_still_parses() {
     let ix = first_create_index(&q);
     assert_eq!(ix.index_type.as_deref(), Some("spatial"));
 }
+
+// phase20_knn-write-path-wiring §1.3 — `CREATE VECTOR INDEX` parser
+// recognition, mirroring the SPATIAL/USING RTREE tests above.
+
+#[test]
+fn create_vector_index_marks_index_type_as_vector() {
+    let mut p =
+        CypherParser::new("CREATE VECTOR INDEX docEmb FOR (d:Doc) ON (d.embedding)".to_string());
+    let q = p.parse().unwrap();
+    let ix = first_create_index(&q);
+    assert_eq!(ix.index_type.as_deref(), Some("vector"));
+    assert_eq!(ix.label, "Doc");
+    assert_eq!(ix.properties, vec!["embedding".to_string()]);
+    assert_eq!(ix.name.as_deref(), Some("docEmb"));
+}
+
+#[test]
+fn create_vector_index_if_not_exists_parses() {
+    let mut p = CypherParser::new(
+        "CREATE VECTOR INDEX docEmb IF NOT EXISTS FOR (d:Doc) ON (d.embedding)".to_string(),
+    );
+    let q = p.parse().unwrap();
+    let ix = first_create_index(&q);
+    assert_eq!(ix.index_type.as_deref(), Some("vector"));
+    assert!(ix.if_not_exists);
+}
+
+#[test]
+fn create_index_using_vector_marks_index_type_as_vector() {
+    let mut p = CypherParser::new(
+        "CREATE INDEX docEmb FOR (d:Doc) ON (d.embedding) USING VECTOR".to_string(),
+    );
+    let q = p.parse().unwrap();
+    let ix = first_create_index(&q);
+    assert_eq!(ix.index_type.as_deref(), Some("vector"));
+    assert_eq!(ix.label, "Doc");
+    assert_eq!(ix.properties, vec!["embedding".to_string()]);
+    assert_eq!(ix.name.as_deref(), Some("docEmb"));
+}

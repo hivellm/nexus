@@ -96,6 +96,10 @@ impl Engine {
         // phase6_spatial-index-autopopulate §3 — refresh spatial indexes
         // after SET / REMOVE so the tree stays in sync with node state.
         self.spatial_refresh_node(node_id, &effective_label_ids, &props_value);
+        // phase20_knn-write-path-wiring §2.3 — refresh the KNN (vector)
+        // index after SET / REMOVE, mirroring the spatial refresh
+        // immediately above.
+        self.knn_refresh_node(node_id, &effective_label_ids, &props_value);
         // Typed property B-tree refresh: evict old (label, key, value)
         // entries, add the new ones (registered indexes only) — a SET on
         // an indexed property previously left the index stale, producing

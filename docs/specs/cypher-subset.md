@@ -996,11 +996,23 @@ CREATE OR REPLACE INDEX ON :Person(age)
 -- Create spatial index
 CREATE SPATIAL INDEX ON :Location(coords)
 
+-- Create vector index (native KNN search, dimension fixed at 128)
+CREATE VECTOR INDEX ON :Person(embedding)
+
+-- Create vector index if not exists
+CREATE VECTOR INDEX IF NOT EXISTS ON :Person(embedding)
+
+-- Create or replace vector index (resets the index)
+CREATE OR REPLACE VECTOR INDEX ON :Person(embedding)
+
 -- Drop index
 DROP INDEX ON :Person(email)
 
 -- Drop index if exists
 DROP INDEX IF EXISTS ON :Person(name)
+
+-- Drop vector index
+DROP INDEX ON :Person(embedding)
 
 -- Show all indexes
 SHOW INDEXES
@@ -1010,6 +1022,11 @@ SHOW INDEXES
 SHOW INDEXES
 -- Can be followed by a WHERE clause if needed in application code
 ```
+
+**Vector Index Constraints (V1):**
+- **Single global index**: Only one active vector index per database. Creating a second distinct index without `CREATE OR REPLACE` returns an error.
+- **Fixed dimension**: Vector dimension is fixed at 128 floats per vector. All embeddings must have exactly 128 components.
+- **Embedding supply**: Embeddings are supplied via query parameters or the data API — inline array literals in the CREATE DDL are NOT supported.
 
 ### Constraint Management
 
