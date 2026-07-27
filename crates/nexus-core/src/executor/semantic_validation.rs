@@ -46,6 +46,7 @@ pub fn validate(query: &CypherQuery) -> crate::Result<()> {
     check_variable_already_bound(query)?;
     check_aggregation_placement(query)?;
     check_skip_limit_arguments(query)?;
+    check_column_name_conflicts(query)?;
 
     let mut binders = HashSet::new();
     collect_query_binders(query, &mut binders);
@@ -479,6 +480,32 @@ fn expr_references_variable(expr: &Expression) -> bool {
         Expression::Variable(_) | Expression::PropertyAccess { .. } => true,
         _ => child_exprs(expr).into_iter().any(expr_references_variable),
     }
+}
+
+// ── Column-name conflicts ──────────────────────────────────────────────
+
+/// Reject a `RETURN`/`WITH` that projects the same output name twice via
+/// explicit aliases (`RETURN 1 AS a, 2 AS a`, `WITH 1 AS a, 2 AS a`) →
+/// `ColumnNameConflict`. Two explicit aliases with the same name are always
+/// illegal, so this cannot false-positive. Implicit collisions between
+/// unaliased items are not flagged here.
+fn check_column_name_conflicts(query: &CypherQuery) -> crate::Result<()> {
+    for clause in &query.clauses {
+        let items = match clause {
+            Clause::Return(r) => &r.items,
+            Clause::With(w) => &w.items,
+            _ => continue,
+        };
+        let mut seen: HashSet<&str> = HashSet::new();
+        for item in items {
+            if let Some(alias) = &item.alias {
+                if !seen.insert(alias.as_str()) {
+                    return Err(column_name_conflict(alias));
+                }
+            }
+        }
+    }
+    Ok(())
 }
 
 // ── Binder collection ──────────────────────────────────────────────────
@@ -941,6 +968,12 @@ fn non_constant_expression() -> crate::Error {
     )
 }
 
+fn column_name_conflict(name: &str) -> crate::Error {
+    crate::Error::CypherSyntax(format!(
+        "ColumnNameConflict: column name `{name}` is projected more than once"
+    ))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1127,6 +1160,18 @@ mod tests {
         assert_ok("MATCH (n) RETURN n SKIP 0");
         // Parameters are constant at runtime — not statically rejectable.
         assert_ok("MATCH (n) RETURN n SKIP $s LIMIT $l");
+    }
+
+    #[test]
+    fn duplicate_projection_alias_is_rejected() {
+        assert_token("RETURN 1 AS a, 2 AS a", "ColumnNameConflict");
+        assert_token("WITH 1 AS a, 2 AS a RETURN a", "ColumnNameConflict");
+    }
+
+    #[test]
+    fn distinct_projection_aliases_pass() {
+        assert_ok("RETURN 1 AS a, 2 AS b");
+        assert_ok("MATCH (a)-[r]->(b) RETURN a, r, b");
     }
 
     #[test]

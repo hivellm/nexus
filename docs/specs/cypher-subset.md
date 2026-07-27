@@ -2028,6 +2028,34 @@ WHERE n.age = 'thirty'
 -- Error: Type mismatch: expected Integer, got String
 ```
 
+### Semantic Validation
+
+A static semantic-analysis pass runs after parsing and before planning. It
+rejects queries that parse cleanly but violate openCypher semantic rules
+(which would otherwise execute and silently return wrong or empty rows),
+raising a `SyntaxError` that carries the openCypher detail token. The pass is
+conservative — it never rejects a currently-valid query — and skips queries
+containing constructs whose scoping it does not yet fully model (`UNION`,
+`CALL {…}` subqueries, `CALL` procedures, `LOAD CSV`).
+
+| Rejected query | Detail token |
+|---|---|
+| `MATCH (a) RETURN b` (variable bound nowhere) | `UndefinedVariable` |
+| `MATCH (a) MATCH ()-[a]-()` (node reused as relationship) | `VariableTypeConflict` |
+| `MATCH (a) CREATE (a {x: 1})` (re-declare a bound node with structure) | `VariableAlreadyBound` |
+| `RETURN count(count(*))` (aggregate inside aggregate) | `NestedAggregation` |
+| `MATCH (a) WHERE count(a) > 1 RETURN a` (aggregate in WHERE) | `InvalidAggregation` |
+| `RETURN n SKIP -1` (negative integer literal) | `NegativeIntegerArgument` |
+| `RETURN n SKIP n.count` (SKIP/LIMIT depends on a variable) | `NonConstantExpression` |
+| `RETURN 1 AS a, 2 AS a` (duplicate projection alias) | `ColumnNameConflict` |
+
+Not yet detected (deferred refinements): `AmbiguousAggregationExpression`
+(implicit-grouping analysis), `UNION` column-structure checks
+(`DifferentColumnsInUnion`, `InvalidClauseComposition`), the bare
+`CREATE (a)` re-declaration and `MATCH`/`MERGE` re-binding forms, and
+`NoVariablesInScope` (unreachable while the parser rejects `RETURN *`/`WITH *`
+outright).
+
 ### Runtime Errors
 
 ```cypher
