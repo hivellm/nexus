@@ -26,6 +26,9 @@ pub mod optimizer;
 pub mod parser;
 /// Query planner for optimizing Cypher execution
 pub mod planner;
+/// Static semantic-analysis pass (variable scoping/rebinding checks) run
+/// after parsing and before planning.
+pub mod semantic_validation;
 /// Process-wide counters for `serde_json` fallback events. Read by
 /// nexus-server's Prometheus exporter as
 /// `nexus_executor_serde_fallback_total{site=…}`.

@@ -15,6 +15,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > carry these fixes. The remediation is tracked across 27 `phase0_fix-*`
 > tasks and will land incrementally under this release.
 
+### Added — openCypher semantic-analysis pass (undefined-variable rejection)
+
+- **A static semantic-analysis stage now runs after parsing and before planning.** Its first check rejects references to variables that are bound nowhere in the query — `MATCH (a) RETURN b` or `MATCH (a) WHERE c.x > 1 RETURN a` now raise a `SyntaxError` (openCypher `UndefinedVariable`) instead of silently returning wrong or empty rows. The pass is deliberately conservative: it over-collects binders (so it can only ever miss an error, never invent one) and skips queries containing constructs whose scoping it does not yet model (`UNION`, `CALL {…}` subqueries, `CALL` procedures, `LOAD CSV`). Additional scope, aggregation-placement, and argument checks will land incrementally under this stage.
+
 ### Added — openCypher SET conformance (whole-entity property replace)
 
 - **`SET n = {map}` now performs a whole-entity property replace**: every existing property on the target node that is not a key of the RHS map is removed, then the map's keys are applied (an explicit `null` value in the map also removes that key). The RHS may be a map literal, a bound node/map variable (`SET n = m` copies `m`'s current properties onto `n`), or a map parameter (`SET n = $props`). Distinct from the existing `SET n += {map}` merge form, which keeps keys not mentioned by the map.

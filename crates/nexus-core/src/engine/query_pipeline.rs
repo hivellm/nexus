@@ -183,6 +183,7 @@ impl Engine {
         // Parse query to check if it contains CREATE or DELETE clauses
         let mut parser = executor::parser::CypherParser::new(query.to_string());
         let ast = parser.parse()?;
+        crate::executor::semantic_validation::validate(&ast)?;
         self.execute_cypher_ast_with_context(&ast, query, ctx, mode)
     }
 
