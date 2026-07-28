@@ -18,7 +18,7 @@ exercise) or the scenario was skip-listed. Skips are counted, never hidden.
 
 ## Totals
 
-**3868 scenarios — 1119 passed (28.9%), 2659 failed, 90 skipped.**
+**3868 scenarios — 1125 passed (29.1%), 2672 failed, 71 skipped.**
 
 ## Per-category
 
@@ -29,7 +29,7 @@ exercise) or the scenario was skip-listed. Skips are counted, never hidden.
 | `clauses/delete` | 7 | 34 | 0 | 41 | 17.1% |
 | `clauses/match` | 134 | 217 | 1 | 352 | 38.1% |
 | `clauses/match-where` | 28 | 6 | 0 | 34 | 82.4% |
-| `clauses/merge` | 24 | 48 | 3 | 75 | 32.0% |
+| `clauses/merge` | 23 | 49 | 3 | 75 | 30.7% |
 | `clauses/remove` | 6 | 27 | 0 | 33 | 18.2% |
 | `clauses/return` | 23 | 39 | 1 | 63 | 36.5% |
 | `clauses/return-orderby` | 19 | 15 | 1 | 35 | 54.3% |
@@ -57,11 +57,11 @@ exercise) or the scenario was skip-listed. Skips are counted, never hidden.
 | `expressions/precedence` | 39 | 82 | 0 | 121 | 32.2% |
 | `expressions/quantifier` | 45 | 559 | 0 | 604 | 7.5% |
 | `expressions/string` | 26 | 6 | 0 | 32 | 81.2% |
-| `expressions/temporal` | 51 | 953 | 0 | 1004 | 5.1% |
+| `expressions/temporal` | 56 | 948 | 0 | 1004 | 5.6% |
 | `expressions/typeConversion` | 20 | 27 | 0 | 47 | 42.6% |
 | `useCases/countingSubgraphMatches` | 9 | 2 | 0 | 11 | 81.8% |
-| `useCases/triadicSelection` | 0 | 0 | 19 | 19 | 0.0% |
-| **total** | **1119** | **2659** | **90** | **3868** | **28.9%** |
+| `useCases/triadicSelection` | 2 | 17 | 0 | 19 | 10.5% |
+| **total** | **1125** | **2672** | **71** | **3868** | **29.1%** |
 
 ## Skip-list (deliberately un-evaluated)
 
@@ -71,9 +71,8 @@ wrong (e.g. temporal semantics) are NOT here — those remain real fails above.
 
 | Reason | Scenarios |
 |---|---:|
-| named fixture graph (binary-tree-N) not supported | 19 |
 | procedure registration not supported by the harness | 50 |
-| **total deliberate skips** | **69** |
+| **total deliberate skips** | **50** |
 
 The remaining skips in the per-category table are scenarios that use a Gherkin
 step the runner does not define yet (they skip at the unmatched step).

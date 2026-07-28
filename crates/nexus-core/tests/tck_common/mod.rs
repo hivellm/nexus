@@ -723,6 +723,110 @@ impl<'a> TckParser<'a> {
     }
 }
 
+// ─────────────── Named fixture graphs (binary-tree-N) ───────────────
+//
+// The vendored corpus (`tests/tck/opencypher/VENDOR.md`) copies only
+// upstream's `tck/features/` tree, not `tck/graphs/`. `useCases/
+// triadicSelection/TriadicSelection1.feature` opens 19 scenarios with
+// `Given the binary-tree-1 graph` / `binary-tree-2 graph`, a named
+// fixture the corpus itself never defines. The two CREATE scripts below
+// are reproduced byte-for-byte from upstream's
+// `tck/graphs/binary-tree-1/binary-tree-1.cypher` and
+// `tck/graphs/binary-tree-2/binary-tree-2.cypher` at the pinned commit
+// (`677cbafabb8c3c5eed458fd3b1ec0daec8d67d23`, same as `VENDOR.md`) —
+// not hand-written, so a refresh of the pinned commit should re-pull
+// these two files alongside `tck/features/`.
+
+/// Upstream `tck/graphs/binary-tree-1/binary-tree-1.cypher`: 13 nodes
+/// (1 `:A` + 12 `:X`) and 16 relationships (2 `KNOWS`, 2 `FOLLOWS`, 12
+/// `FRIEND`), per the upstream `binary-tree-1.json` fixture manifest.
+// `tck_common` is compiled once per including binary (`mod tck_common;`);
+// `tck_runner` (the spatial-corpus runner) never needs the openCypher
+// binary-tree fixtures, so this item is dead code in that binary only —
+// same rationale as the `tck_cells.rs` inclusion-site allow.
+#[allow(dead_code)]
+pub const BINARY_TREE_1_CYPHER: &str = "CREATE (a:A {name: 'a'}),
+       (b1:X {name: 'b1'}),
+       (b2:X {name: 'b2'}),
+       (b3:X {name: 'b3'}),
+       (b4:X {name: 'b4'}),
+       (c11:X {name: 'c11'}),
+       (c12:X {name: 'c12'}),
+       (c21:X {name: 'c21'}),
+       (c22:X {name: 'c22'}),
+       (c31:X {name: 'c31'}),
+       (c32:X {name: 'c32'}),
+       (c41:X {name: 'c41'}),
+       (c42:X {name: 'c42'})
+CREATE (a)-[:KNOWS]->(b1),
+       (a)-[:KNOWS]->(b2),
+       (a)-[:FOLLOWS]->(b3),
+       (a)-[:FOLLOWS]->(b4)
+CREATE (b1)-[:FRIEND]->(c11),
+       (b1)-[:FRIEND]->(c12),
+       (b2)-[:FRIEND]->(c21),
+       (b2)-[:FRIEND]->(c22),
+       (b3)-[:FRIEND]->(c31),
+       (b3)-[:FRIEND]->(c32),
+       (b4)-[:FRIEND]->(c41),
+       (b4)-[:FRIEND]->(c42)
+CREATE (b1)-[:FRIEND]->(b2),
+       (b2)-[:FRIEND]->(b3),
+       (b3)-[:FRIEND]->(b4),
+       (b4)-[:FRIEND]->(b1);";
+
+/// Upstream `tck/graphs/binary-tree-2/binary-tree-2.cypher`: 13 nodes
+/// (1 `:A` + 8 `:X` + 4 `:Y`) and 16 relationships (2 `KNOWS`, 2
+/// `FOLLOWS`, 12 `FRIEND`), per the upstream `binary-tree-2.json`
+/// fixture manifest. Same topology as `binary-tree-1`, but the `c*2`
+/// leaves carry `:Y` instead of `:X` — used by the label-discriminating
+/// triadic-selection scenarios.
+#[allow(dead_code)]
+pub const BINARY_TREE_2_CYPHER: &str = "CREATE (a:A {name: 'a'}),
+       (b1:X {name: 'b1'}),
+       (b2:X {name: 'b2'}),
+       (b3:X {name: 'b3'}),
+       (b4:X {name: 'b4'}),
+       (c11:X {name: 'c11'}),
+       (c12:Y {name: 'c12'}),
+       (c21:X {name: 'c21'}),
+       (c22:Y {name: 'c22'}),
+       (c31:X {name: 'c31'}),
+       (c32:Y {name: 'c32'}),
+       (c41:X {name: 'c41'}),
+       (c42:Y {name: 'c42'})
+CREATE (a)-[:KNOWS]->(b1),
+       (a)-[:KNOWS]->(b2),
+       (a)-[:FOLLOWS]->(b3),
+       (a)-[:FOLLOWS]->(b4)
+CREATE (b1)-[:FRIEND]->(c11),
+       (b1)-[:FRIEND]->(c12),
+       (b2)-[:FRIEND]->(c21),
+       (b2)-[:FRIEND]->(c22),
+       (b3)-[:FRIEND]->(c31),
+       (b3)-[:FRIEND]->(c32),
+       (b4)-[:FRIEND]->(c41),
+       (b4)-[:FRIEND]->(c42)
+CREATE (b1)-[:FRIEND]->(b2),
+       (b2)-[:FRIEND]->(b3),
+       (b3)-[:FRIEND]->(b4),
+       (b4)-[:FRIEND]->(b1);";
+
+/// Resolves a `binary-tree-N` fixture number (as captured from `Given the
+/// binary-tree-N graph`) to its CREATE script. `None` for any number the
+/// upstream TCK does not define — the caller should treat that as a hard
+/// error rather than silently skipping, since an unrecognised fixture
+/// number means the corpus grew a scenario this runner does not know
+/// about yet.
+#[allow(dead_code)]
+pub fn binary_tree_cypher(n: &str) -> Option<&'static str> {
+    match n {
+        "1" => Some(BINARY_TREE_1_CYPHER),
+        "2" => Some(BINARY_TREE_2_CYPHER),
+        _ => None,
+    }
+}
+
 // Unit tests for this module live in the harness=true target
 // `tests/tck_cells.rs`: a `#[cfg(test)] mod` here would never run,
 // because `tck_common` is only included by the `harness = false`

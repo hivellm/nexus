@@ -143,6 +143,22 @@ fn any_graph(world: &mut TckWorld) {
     empty_graph(world);
 }
 
+/// `Given the binary-tree-1 graph` / `Given the binary-tree-2 graph` — the
+/// openCypher TCK's named fixture graphs, used by `useCases/
+/// triadicSelection/TriadicSelection1.feature`. Not shipped by the vendored
+/// corpus (only `tck/features/` was vendored, see `VENDOR.md`); the CREATE
+/// script is reproduced verbatim from upstream's `tck/graphs/binary-tree-N/`
+/// at the pinned commit in `tck_common::binary_tree_cypher`. Sets up a fresh
+/// isolated engine (same as `an empty graph`) and loads the fixture into it,
+/// matching how `having executed:` seeds a scenario.
+#[given(regex = r"^the binary-tree-(1|2) graph$")]
+fn binary_tree_graph(world: &mut TckWorld, n: String) {
+    empty_graph(world);
+    let cypher = tck_common::binary_tree_cypher(&n)
+        .unwrap_or_else(|| panic!("no fixture defined for binary-tree-{n}"));
+    let _ = world.run_cypher(cypher);
+}
+
 #[given(regex = r"^having executed:$")]
 fn having_executed(world: &mut TckWorld, step: &gherkin::Step) {
     let docstring = step
@@ -369,9 +385,6 @@ fn skip_reason(scenario: &gherkin::Scenario) -> Option<&'static str> {
         let t = step.value.as_str();
         if t.starts_with("there exists a procedure") {
             return Some("procedure registration not supported by the harness");
-        }
-        if t.contains("binary-tree-") {
-            return Some("named fixture graph (binary-tree-N) not supported");
         }
     }
     None
