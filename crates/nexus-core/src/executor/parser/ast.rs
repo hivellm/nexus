@@ -1215,6 +1215,11 @@ pub enum Expression {
         where_clause: Option<Box<Expression>>,
         /// Optional transformation expression (after |)
         transform_expression: Option<Box<Expression>>,
+        /// Optional path-binding variable from `p = pattern` (e.g.
+        /// `[p = (n)-->() | p]`); bound to a path value (`{nodes: [...],
+        /// relationships: [...]}`) for each traversed match, in scope for
+        /// `where_clause` and `transform_expression`.
+        binding_variable: Option<String>,
     },
 }
 

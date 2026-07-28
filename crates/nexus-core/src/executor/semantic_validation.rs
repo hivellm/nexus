@@ -675,8 +675,12 @@ fn collect_expr_binders(expr: &Expression, binders: &mut HashSet<String>) {
             pattern,
             where_clause,
             transform_expression,
+            binding_variable,
         } => {
             collect_pattern_binders(pattern, binders);
+            if let Some(var) = binding_variable {
+                binders.insert(var.clone());
+            }
             if let Some(w) = where_clause {
                 collect_expr_binders(w, binders);
             }

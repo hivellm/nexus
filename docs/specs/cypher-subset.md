@@ -1044,12 +1044,40 @@ expressions in a `WHERE` evaluate identically to their projected form.
 -- List comprehension
 RETURN [x IN range(1,10) WHERE x % 2 = 0 | x * 2] AS evens
 
--- Pattern comprehension
+-- Pattern comprehension: enumerate matching paths from outer bindings via graph traversal
 RETURN [(n)-[:KNOWS]->(f) | f.name] AS friends
 
--- Map projection
+-- Pattern comprehension with WHERE filter
+RETURN [(n)-[:KNOWS]->(f) WHERE f.age > 30 | f.name] AS adult_friends
+
+-- Path-shaped output via path binding (requires at least one relationship and | expr)
+MATCH (start:Person {name: 'Alice'})
+RETURN [p = (start)-[:KNOWS*1..3]->(person) | p] AS paths_to_others
+
+-- Multi-hop enumeration with newly-bound variables
+MATCH (n:Person)
+RETURN [(n)-[:MANAGES]->(report)-[:MANAGES]->(sub) | {manager: n.name, report: report.name, subordinate: sub.name}] AS chains
+
+-- Map projection (including nested pattern comprehensions)
 RETURN n {.name, .age, friends: [(n)-[:KNOWS]->(f) | f.name]}
 ```
+
+**Pattern comprehension semantics** (graph-traversing forms):
+
+- **Enumeration:** a pattern comprehension `[(node-pattern) | expr]` enumerates all matching candidate paths from the anchored outer bindings via depth-first traversal. Each candidate is projected via the `| expr` transformation into the result list.
+- **Newly-bound variables:** pattern variables bound inside the comprehension (e.g., `(f)` in `[(n)-[:KNOWS]->(f) | f.name]`) are available for projection and yield their matched values.
+- **Path binding output:** when a path is bound via `[p = (n)-->() | expr]`, the `p` variable receives a path object `{nodes: [...], relationships: [...]}` in traversal order, and may be returned directly (`[p = ... | p]`) or transformed (`[p = ... | p.nodes]`). A path binding **requires** at least one relationship and a `| expr` projection (bare `[a = (b)]` parses as a normal list comprehension).
+- **WHERE filtering:** an inner `WHERE` clause `[pattern WHERE filter | expr]` filters per candidate; `NULL` result excludes that candidate (subquery semantics, like EXISTS).
+- **Correlated outer variables:** outer bindings are respected in pattern constraints, e.g. `[(n)-[:KNOWS]->(f {city: n.city}) | f.name]` filters matches by correlated city.
+- **Anonymous nodes and mixed directions:** anonymous nodes (no variable), all relationship directions (→, ←, -), and variable-length segments are supported.
+- **Variable-length segments and isomorphism:** variable-length relationships follow the same bounded-depth semantics as EXISTS: maximum 64 hops, relationship isomorphism (no relationship can satisfy two hops in the same path), per-hop type/directionality filtering, zero-length matching when min bound is 0. Each distinct trail through the segment produces one list element.
+- **NULL outer variable:** a comprehension over a NULL outer anchor yields `[]` (mirrors `[x IN NULL | ...]`).
+- **Result cap:** result materialization is guarded by the engine's intermediate-row capacity (explicit `OutOfMemory` error instead of unbounded growth).
+
+**Unsupported and explicit errors:**
+- **Multi-part patterns with path binding** (e.g., `[p = (a)--(), (b)--() | ...]`) raise an explicit error; path bindings require a single pattern anchor.
+- **Quantified path patterns inside comprehensions** (e.g., `[(a)((b)-[:R]->(c)){1,3}(d) | ...]`) raise an explicit "not implemented" error.
+- **Named relationship variables on variable-length segments** (e.g., `[p = (a)-[r:T*]->(b) | ...]`) raise an explicit "not implemented" error (same constraint as EXISTS — would require `LIST<RELATIONSHIP>` binding).
 
 ## Schema Management ✅ IMPLEMENTED
 

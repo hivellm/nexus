@@ -191,6 +191,7 @@ impl CypherParser {
                                     pattern,
                                     where_clause: None,
                                     transform_expression: None,
+                                    binding_variable: None,
                                 }
                             }
                             Err(_) => {

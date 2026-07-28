@@ -11,10 +11,15 @@
 //! |--------------|---------------------------------------------------------------------------|
 //! | `core.rs`    | Cartesian-product application, row materialisation/update, entity id and relationship-value extraction, and the context expression evaluator |
 //! | `exists.rs`  | The `EXISTS { … }` pattern-probe machinery: anchor resolution, candidate acceptance, and the (possibly variable-length) depth-first witness search |
-//! | `tests`      | Unit coverage for both, gated to test builds only |
+//! | `pattern_comprehension.rs` | Full-enumeration variant of `exists.rs`'s walk for pattern comprehensions — every complete binding is streamed through a caller-supplied projection closure instead of short-circuiting on the first witness |
+//! | `tests`      | Unit coverage for `core.rs` / `exists.rs`, gated to test builds only |
+//! | `pattern_comprehension_tests.rs` | Unit coverage for `pattern_comprehension.rs` and its parser lookahead, split out of `tests.rs` to stay under the 1500-line cap |
 
 mod core;
 mod exists;
+mod pattern_comprehension;
 
+#[cfg(test)]
+mod pattern_comprehension_tests;
 #[cfg(test)]
 mod tests;

@@ -12,56 +12,80 @@ impl CypherParser {
         self.skip_whitespace();
 
         // Check if this is a pattern comprehension: [(pattern) WHERE ... | ...]
-        // Pattern comprehensions start with '(' or an identifier followed by ':' or '-'
+        // or a path-bound one: [p = (pattern) WHERE ... | ...]. Pattern
+        // comprehensions start with '(', an identifier followed by ':'
+        // (label) or '-' (relationship), or an identifier followed by
+        // '=' and then '(' (path-variable binding). The lookahead below
+        // only decides whether to ATTEMPT a comprehension parse; the
+        // attempt itself (`try_parse_pattern_comprehension_tail`) is
+        // fully tentative — on any failure (a genuine syntax error, OR
+        // the parsed shape failing the path-binding constraints, e.g.
+        // `[a = (1 + 2)]`, a one-element list holding a parenthesized-
+        // expression equality) position is restored to right after `[`
+        // and control falls through to list-comprehension / list-literal
+        // parsing below. This mirrors the shortestPath()/allShortestPaths()
+        // tentative-pattern parse in `identifier.rs`.
         let saved_pos = self.pos;
+        let saved_line = self.line;
+        let saved_column = self.column;
+        let mut comprehension_binding_variable: Option<String> = None;
         let is_pattern_comprehension = if self.peek_char() == Some('(') {
             // Starts with '(', likely a pattern
             true
         } else if self.is_identifier_start() {
-            // Check if identifier is followed by ':' (label) or '-' (relationship)
-            let _identifier = self.parse_identifier()?;
+            let identifier = self.parse_identifier()?;
             self.skip_whitespace();
             let next_char = self.peek_char();
-            let is_pattern = next_char == Some(':') || next_char == Some('-');
-            // Reset position
-            self.pos = saved_pos;
-            is_pattern
+            if next_char == Some('=') {
+                // Tentative path-variable binding: `ident = (pattern) ...`.
+                // Only treated as one when '=' is followed by the start of
+                // a pattern; otherwise this identifier is not a pattern
+                // comprehension at all and position is fully restored so
+                // the list-comprehension / list-literal parsers below get
+                // a clean slate.
+                self.consume_char(); // consume '='
+                self.skip_whitespace();
+                if self.peek_char() == Some('(') {
+                    comprehension_binding_variable = Some(identifier);
+                    true
+                } else {
+                    self.pos = saved_pos;
+                    self.line = saved_line;
+                    self.column = saved_column;
+                    false
+                }
+            } else {
+                // Check if identifier is followed by ':' (label) or '-' (relationship)
+                let is_pattern = next_char == Some(':') || next_char == Some('-');
+                // Reset position
+                self.pos = saved_pos;
+                self.line = saved_line;
+                self.column = saved_column;
+                is_pattern
+            }
         } else {
             false
         };
 
         if is_pattern_comprehension {
-            // Parse pattern comprehension: [(pattern) WHERE ... | ...]
-            let pattern = self.parse_pattern_until_where_or_brace()?;
-            self.skip_whitespace();
-
-            // Parse optional WHERE clause
-            let where_clause = if self.peek_keyword("WHERE") {
-                self.expect_keyword("WHERE")?;
-                self.skip_whitespace();
-                Some(Box::new(self.parse_expression()?))
-            } else {
-                None
-            };
-            self.skip_whitespace();
-
-            // Parse optional transformation expression (after |)
-            let transform_expression = if self.peek_char() == Some('|') {
-                self.consume_char();
-                self.skip_whitespace();
-                Some(Box::new(self.parse_expression()?))
-            } else {
-                None
-            };
-            self.skip_whitespace();
-
-            self.expect_char(']')?;
-
-            return Ok(Expression::PatternComprehension {
-                pattern,
-                where_clause,
-                transform_expression,
-            });
+            // When a binding variable was captured above, `self.pos`
+            // already sits right at the pattern's opening '(' (the
+            // `ident =` prefix was consumed, not restored) — the tail
+            // parser picks up from there.
+            match self.try_parse_pattern_comprehension_tail(comprehension_binding_variable) {
+                Ok(expr) => return Ok(expr),
+                // Once the pattern has at least one relationship, a
+                // shape violation (comma-separated parts, a missing
+                // `| expr`) has no other valid Cypher reading to fall
+                // back to — surface it directly instead of swallowing
+                // it into a confusing fallback parse error.
+                Err(e) if is_hard_pattern_comprehension_shape_error(&e) => return Err(e),
+                Err(_) => {
+                    self.pos = saved_pos;
+                    self.line = saved_line;
+                    self.column = saved_column;
+                }
+            }
         }
 
         // Check if this is a list comprehension: [x IN list WHERE ... | ...]
@@ -289,6 +313,130 @@ impl CypherParser {
         Ok(expr)
     }
 
+    /// Attempts the pattern/WHERE/transform/`]` tail of a pattern
+    /// comprehension once [`Self::parse_list_expression`]'s `[(` /
+    /// `[ident:` / `[ident-` / `[ident = (` lookahead has identified a
+    /// candidate. `self.pos` must already sit at the pattern's opening
+    /// `(` — the caller has consumed any `ident =` prefix but has not
+    /// restored position for it.
+    ///
+    /// Returns `Err` — always discarded by the caller, which restores
+    /// position to right after `[` and falls back to list-comprehension
+    /// / list-literal parsing — for a genuine parse failure, or when
+    /// `binding_variable` is `Some` but the parsed pattern fails either
+    /// of openCypher's path-binding shape requirements:
+    /// - at least one relationship (a bare `(b)` is never a
+    ///   comprehension — `[a = (b)]` is a one-element list holding a
+    ///   boolean equality, never a path binding), and
+    /// - a mandatory `| expr` transform (the non-path-bound forms
+    ///   tolerate its absence, an extra permissiveness of this dialect's
+    ///   parser, but a path binding with nothing to project is never
+    ///   intentional).
+    ///
+    /// A path-bound pattern (`binding_variable` is `Some`) must also be
+    /// a single connected component: comma-separated pattern parts
+    /// (`[p = (a)-->(b), (c)-->(d) | p]`) have no single traversal
+    /// order to bind `p` to, so the parsed pattern is rejected outright
+    /// rather than letting the graph walk silently build a
+    /// nodes-from-every-component path.
+    fn try_parse_pattern_comprehension_tail(
+        &mut self,
+        binding_variable: Option<String>,
+    ) -> Result<Expression> {
+        let pattern = self.parse_pattern_until_where_or_brace()?;
+        self.skip_whitespace();
+
+        // Parse optional WHERE clause
+        let where_clause = if self.peek_keyword("WHERE") {
+            self.expect_keyword("WHERE")?;
+            self.skip_whitespace();
+            Some(Box::new(self.parse_expression()?))
+        } else {
+            None
+        };
+        self.skip_whitespace();
+
+        // Parse optional transformation expression (after |)
+        let transform_expression = if self.peek_char() == Some('|') {
+            self.consume_char();
+            self.skip_whitespace();
+            Some(Box::new(self.parse_expression()?))
+        } else {
+            None
+        };
+        self.skip_whitespace();
+
+        self.expect_char(']')?;
+
+        if binding_variable.is_some() {
+            // `has_relationship` is the disambiguator: it decides
+            // whether every OTHER shape violation below is a hard,
+            // non-swallowed error or a soft one the caller falls back
+            // from. A pattern with zero relationships (`(b)`, or
+            // `(b), (c)`) has a perfectly valid alternate reading as a
+            // plain list/equality expression — `(b)` is a parenthesized
+            // variable, and the comma in `(b), (c)` may be the outer
+            // LIST LITERAL's own element separator, not a pattern's
+            // comma-separated-parts syntax at all (`[a = (b), (c)]`
+            // must parse as the two-element list `[a = (b), (c)]`, not
+            // be misread as a botched comma-separated path binding).
+            // Once at least one relationship HAS parsed, though, the
+            // input is unambiguously an attempted path-bound
+            // comprehension, and every remaining violation (a
+            // comma-separated second part, a missing `| expr`) has no
+            // other valid Cypher reading — those become hard errors,
+            // tagged with an `ERR_PATTERN_COMPREHENSION_` sentinel
+            // prefix `is_hard_pattern_comprehension_shape_error` checks
+            // for, mirroring this crate's `ERR_*` error-code convention.
+            let has_relationship = pattern
+                .elements
+                .iter()
+                .any(|e| matches!(e, PatternElement::Relationship(_)));
+
+            if has_relationship {
+                let has_comma_separated_parts = pattern.elements.windows(2).any(|w| {
+                    matches!(
+                        (&w[0], &w[1]),
+                        (PatternElement::Node(_), PatternElement::Node(_))
+                    )
+                });
+                if has_comma_separated_parts {
+                    return Err(Error::CypherSyntax(
+                        "ERR_PATTERN_COMPREHENSION_COMMA_SEPARATED_PATH_BINDING: a path-bound \
+                         pattern comprehension (`p = pattern | expr`) requires a single \
+                         connected pattern; comma-separated pattern parts are not supported"
+                            .to_string(),
+                    ));
+                }
+                if transform_expression.is_none() {
+                    return Err(Error::CypherSyntax(
+                        "ERR_PATTERN_COMPREHENSION_MISSING_TRANSFORM_PATH_BINDING: a \
+                         path-bound pattern comprehension (`p = pattern | expr`) requires a \
+                         `| expr` transform"
+                            .to_string(),
+                    ));
+                }
+            } else {
+                // No relationship at all — genuinely ambiguous with a
+                // plain list/equality expression; swallow via a
+                // generic (non-sentinel) `Err` so the caller falls back
+                // to list/expression parsing.
+                return Err(Error::CypherSyntax(
+                    "a path-bound pattern comprehension (`p = pattern | expr`) requires at \
+                     least one relationship and a `| expr` transform"
+                        .to_string(),
+                ));
+            }
+        }
+
+        Ok(Expression::PatternComprehension {
+            pattern,
+            where_clause,
+            transform_expression,
+            binding_variable,
+        })
+    }
+
     /// Parse point literal
     /// Syntax: point({x: 1, y: 2}) or point({x: 1, y: 2, z: 3}) or point({longitude: -122, latitude: 37, crs: 'wgs-84'})
     pub(super) fn parse_point_literal(&mut self) -> Result<Expression> {
@@ -426,4 +574,21 @@ impl CypherParser {
             )),
         }
     }
+}
+
+/// Recognises the hard, non-swallowed errors `try_parse_pattern_comprehension_tail`
+/// raises once a path-bound pattern (`binding_variable` is `Some`) has
+/// already parsed at least one relationship — a comma-separated second
+/// part, or a missing `| expr` transform — so `parse_list_expression`
+/// can propagate them directly instead of swallowing them into the
+/// generic tentative-parse fallback. Every OTHER failure from that
+/// function (a genuine parse error, or any shape violation on a
+/// relationship-less pattern) genuinely may describe something else
+/// entirely — a parenthesized expression, a bare-node equality, or the
+/// outer list literal's own comma separator — and stays swallowed.
+fn is_hard_pattern_comprehension_shape_error(err: &Error) -> bool {
+    matches!(
+        err,
+        Error::CypherSyntax(msg) if msg.starts_with("ERR_PATTERN_COMPREHENSION_")
+    )
 }

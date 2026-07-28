@@ -635,91 +635,86 @@ impl Executor {
                 pattern,
                 where_clause,
                 transform_expression,
+                binding_variable,
             } => {
-                // Pattern comprehensions collect matching patterns and transform them
-                // This is a simplified implementation that works within the current context
-
-                // For a full implementation, we would need to:
-                // 1. Execute the pattern as a subquery within the current context
-                // 2. Collect all matching results
-                // 3. Apply WHERE clause filtering
-                // 4. Apply transformation expression
-                // 5. Return as array
-
-                // For now, we'll implement a basic version that:
-                // - Extracts variables from the pattern
-                // - Checks if they exist in the current row context
-                // - Applies WHERE and transform if present
-
-                // Extract variables from pattern
-                let mut pattern_vars = Vec::new();
-                for element in &pattern.elements {
-                    match element {
-                        parser::PatternElement::Node(node) => {
-                            if let Some(var) = &node.variable {
-                                pattern_vars.push(var.clone());
+                // Order in which the pattern itself declares node/
+                // relationship variables — only consulted as the
+                // fallback projection when no `| expr` transform is
+                // present. Real Cypher always supplies one; this
+                // dialect's parser tolerates its absence, so the
+                // fallback generalises the single-variable case (mirror
+                // `RETURN` of that one variable) and the multi-variable
+                // case (mirror a tuple of all of them, in pattern
+                // order) rather than guessing at an arbitrary shape.
+                let pattern_vars: Vec<String> = if transform_expression.is_none() {
+                    let mut vars = Vec::new();
+                    for element in &pattern.elements {
+                        match element {
+                            parser::PatternElement::Node(node) => {
+                                if let Some(var) = &node.variable {
+                                    vars.push(var.clone());
+                                }
                             }
-                        }
-                        parser::PatternElement::Relationship(rel) => {
-                            if let Some(var) = &rel.variable {
-                                pattern_vars.push(var.clone());
+                            parser::PatternElement::Relationship(rel) => {
+                                if let Some(var) = &rel.variable {
+                                    vars.push(var.clone());
+                                }
                             }
-                        }
-                        parser::PatternElement::QuantifiedGroup(_) => {
-                            return Err(Error::CypherExecution(
-                                "ERR_QPP_NOT_IMPLEMENTED: quantified path \
-                                 patterns inside COLLECT subqueries need the \
-                                 QPP operator (tracked as follow-up task)"
-                                    .to_string(),
-                            ));
+                            parser::PatternElement::QuantifiedGroup(_) => {}
                         }
                     }
-                }
-
-                // Check if all pattern variables exist in current row
-                let mut all_vars_exist = true;
-                let mut pattern_row = HashMap::new();
-                for var in &pattern_vars {
-                    if let Some(value) = row.get(var) {
-                        pattern_row.insert(var.clone(), value.clone());
-                    } else {
-                        all_vars_exist = false;
-                        break;
-                    }
-                }
-
-                // If pattern variables don't exist in current row, return empty array
-                if !all_vars_exist || pattern_row.is_empty() {
-                    return Ok(Value::Array(Vec::new()));
-                }
-
-                // Apply WHERE clause if present
-                if let Some(where_expr) = where_clause {
-                    let condition_value =
-                        self.evaluate_projection_expression(&pattern_row, context, where_expr)?;
-
-                    // If WHERE condition is false, return empty array
-                    if !self.value_to_bool(&condition_value)? {
-                        return Ok(Value::Array(Vec::new()));
-                    }
-                }
-
-                // Apply transformation if present, otherwise return the pattern variables
-                if let Some(transform_expr) = transform_expression {
-                    // Evaluate transformation expression (can be MapProjection, property access, etc.)
-                    let transformed_value =
-                        self.evaluate_projection_expression(&pattern_row, context, transform_expr)?;
-
-                    // Always return as array (even if single value)
-                    Ok(Value::Array(vec![transformed_value]))
+                    vars
                 } else {
-                    // No transformation - return array of pattern variable values
-                    let values: Vec<Value> = pattern_vars
-                        .iter()
-                        .filter_map(|var| pattern_row.get(var).cloned())
-                        .collect();
-                    Ok(Value::Array(values))
-                }
+                    Vec::new()
+                };
+
+                // Enumerate every complete binding of `pattern` against
+                // live graph state (correlated to `row`'s already-bound
+                // variables), streaming each one through this closure the
+                // moment the walk finds it — see `collect_pattern_bindings`'s
+                // doc comment for why nothing is materialised in between.
+                // The inner WHERE is applied per binding by the walk
+                // itself, never re-applied here.
+                let needs_trail = binding_variable.is_some();
+                let result_items = self.collect_pattern_bindings(
+                    row,
+                    context,
+                    pattern,
+                    where_clause.as_deref(),
+                    needs_trail,
+                    |mut comprehension_row, trail| {
+                        if let Some(path_var) = binding_variable {
+                            comprehension_row.insert(path_var.clone(), self.path_to_value(trail));
+                        }
+
+                        if let Some(transform_expr) = transform_expression {
+                            self.evaluate_projection_expression(
+                                &comprehension_row,
+                                context,
+                                transform_expr,
+                            )
+                        } else if let Some(path_var) = binding_variable {
+                            Ok(comprehension_row
+                                .get(path_var)
+                                .cloned()
+                                .unwrap_or(Value::Null))
+                        } else if pattern_vars.len() == 1 {
+                            Ok(comprehension_row
+                                .get(&pattern_vars[0])
+                                .cloned()
+                                .unwrap_or(Value::Null))
+                        } else {
+                            Ok(Value::Array(
+                                pattern_vars
+                                    .iter()
+                                    .filter_map(|var| comprehension_row.get(var).cloned())
+                                    .collect(),
+                            ))
+                        }
+                    },
+                )?;
+
+                Ok(Value::Array(result_items))
             }
             parser::Expression::List(elements) => {
                 // Evaluate each element and return as JSON array

@@ -13,13 +13,37 @@ use crate::{Error, Result};
 use serde_json::{Map, Value};
 use std::collections::{HashMap, HashSet};
 
+/// Shared error for a named relationship variable on a variable-length
+/// hop inside a construct (`EXISTS { … }`, a pattern comprehension)
+/// that only ever materialises a single relationship value per hop —
+/// binding it as `LIST<RELATIONSHIP>` (full Cypher's semantics for a
+/// named var-length relationship variable) is not supported.
+/// `context_word` names the construct in the message, e.g. `"EXISTS"`
+/// or `"a pattern comprehension"`.
+///
+/// `pub(super)`: shared by [`Executor::exists_probe`] and the
+/// pattern-comprehension walk (`eval::helpers::pattern_comprehension`)
+/// instead of duplicating the message text.
+pub(super) fn var_length_rel_variable_not_implemented_error(context_word: &str) -> Error {
+    Error::CypherExecution(format!(
+        "ERR_VAR_LENGTH_REL_VARIABLE_NOT_IMPLEMENTED: a named relationship variable on a \
+         variable-length relationship inside {context_word} is not supported (it binds a \
+         LIST<RELATIONSHIP> in full Cypher); use an anonymous variable-length relationship \
+         instead"
+    ))
+}
+
 /// Candidate-resolution outcome for the node that anchors a fresh
 /// component of an `EXISTS { … }` pattern probe (the pattern's first
 /// element, or a node that starts a new comma-separated pattern part).
 /// `Null` signals that the anchor is correlated to an outer variable
 /// that is bound but currently `NULL` — under Cypher's three-valued
 /// logic this must propagate a `NULL` result rather than `false`.
-enum ExistsAnchor {
+///
+/// `pub(super)` (not private) so the pattern-comprehension full
+/// enumeration walk (`eval::helpers::pattern_comprehension`) shares
+/// this exact anchor-resolution outcome instead of duplicating it.
+pub(super) enum ExistsAnchor {
     Null,
     Ids(Vec<u64>),
 }
@@ -27,7 +51,10 @@ enum ExistsAnchor {
 /// Outcome of testing a single candidate node against a pattern node's
 /// constraints (labels, properties, and — when the pattern reuses an
 /// already-bound variable name — identity with the existing binding).
-enum ExistsAcceptOutcome {
+///
+/// `pub(super)` for the same reason as [`ExistsAnchor`] — shared with
+/// the pattern-comprehension full enumeration walk.
+pub(super) enum ExistsAcceptOutcome {
     /// The candidate satisfies every constraint; carries the row
     /// extended with the node's variable (unchanged if it was already
     /// bound).
@@ -74,26 +101,32 @@ impl ExistsOutcome {
 /// `bound_relationships` set change per recursive call. Bundled into one
 /// borrowed struct so the recursive function itself stays under
 /// clippy's argument-count lint without duplicating any of these values.
-struct ExistsVarLengthWalk<'a> {
-    context: &'a ExecutionContext,
-    elements: &'a [parser::PatternElement],
+///
+/// `pub(super)` (struct and fields) so the pattern-comprehension full
+/// enumeration walk (`eval::helpers::pattern_comprehension`) can build
+/// the identical loop-invariant bundle and drive its own depth-first
+/// walk of the same variable-length segment shape, instead of
+/// duplicating the quantifier/type-id resolution that produces it.
+pub(super) struct ExistsVarLengthWalk<'a> {
+    pub(super) context: &'a ExecutionContext,
+    pub(super) elements: &'a [parser::PatternElement],
     /// Index of the `Relationship` element itself within `elements` —
     /// the following node lives at `elements[pos + 1]`
     /// (`next_node`, cached separately below) and the rest of the
     /// pattern resumes at `pos + 2` once a witness for this segment is
     /// found.
-    pos: usize,
-    rel: &'a parser::RelationshipPattern,
-    next_node: &'a parser::NodePattern,
-    min_hops: usize,
-    max_hops: usize,
+    pub(super) pos: usize,
+    pub(super) rel: &'a parser::RelationshipPattern,
+    pub(super) next_node: &'a parser::NodePattern,
+    pub(super) min_hops: usize,
+    pub(super) max_hops: usize,
     /// `false` when the declared relationship type(s) never resolved
     /// to a real catalog type id — see the doc comment on
     /// [`Executor::exists_probe_var_length`].
-    can_extend: bool,
-    type_ids: &'a [u32],
-    direction: Direction,
-    where_clause: Option<&'a parser::Expression>,
+    pub(super) can_extend: bool,
+    pub(super) type_ids: &'a [u32],
+    pub(super) direction: Direction,
+    pub(super) where_clause: Option<&'a parser::Expression>,
 }
 
 impl Executor {
@@ -156,7 +189,10 @@ impl Executor {
     /// Resolve the candidate node id(s) that anchor a fresh component
     /// of an `EXISTS` pattern (the very first element, or a node that
     /// starts a new comma-separated pattern part).
-    fn exists_resolve_anchor(
+    ///
+    /// `pub(super)`: also drives the pattern-comprehension full
+    /// enumeration walk's anchor resolution.
+    pub(super) fn exists_resolve_anchor(
         &self,
         binding: &HashMap<String, Value>,
         context: &ExecutionContext,
@@ -249,7 +285,10 @@ impl Executor {
     /// backs the liveness check, the label check, and (when accepted)
     /// the property load reused for both the inline property-map match
     /// and the binding's materialised node value.
-    fn exists_accept_node_candidate(
+    ///
+    /// `pub(super)`: also drives the pattern-comprehension full
+    /// enumeration walk's per-candidate acceptance test.
+    pub(super) fn exists_accept_node_candidate(
         &self,
         binding: &HashMap<String, Value>,
         context: &ExecutionContext,
@@ -357,7 +396,10 @@ impl Executor {
 
     /// Evaluate a pattern relationship's inline property map against a
     /// candidate relationship. Mirrors `exists_node_properties_match`.
-    fn exists_relationship_properties_match(
+    ///
+    /// `pub(super)`: also used by the pattern-comprehension full
+    /// enumeration walk's relationship-hop filtering.
+    pub(super) fn exists_relationship_properties_match(
         &self,
         binding: &HashMap<String, Value>,
         context: &ExecutionContext,
@@ -527,14 +569,7 @@ impl Executor {
                     // value per hop variable. Reject clearly rather than
                     // bind something wrong.
                     if rel.variable.is_some() {
-                        return Err(Error::CypherExecution(
-                            "ERR_VAR_LENGTH_REL_VARIABLE_NOT_IMPLEMENTED: a named \
-                             relationship variable on a variable-length relationship \
-                             inside EXISTS is not supported (it binds a \
-                             LIST<RELATIONSHIP> in full Cypher); use an anonymous \
-                             variable-length relationship instead"
-                                .to_string(),
-                        ));
+                        return Err(var_length_rel_variable_not_implemented_error("EXISTS"));
                     }
                     let (min_hops, max_hops) = match quantifier {
                         // openCypher defines a bare `*` as `*1..` (one

@@ -18,7 +18,7 @@ exercise) or the scenario was skip-listed. Skips are counted, never hidden.
 
 ## Totals
 
-**3868 scenarios — 925 passed (23.9%), 2853 failed, 90 skipped.**
+**3868 scenarios — 930 passed (24.0%), 2848 failed, 90 skipped.**
 
 ## Per-category
 
@@ -38,7 +38,7 @@ exercise) or the scenario was skip-listed. Skips are counted, never hidden.
 | `clauses/union` | 6 | 6 | 0 | 12 | 50.0% |
 | `clauses/unwind` | 6 | 8 | 0 | 14 | 42.9% |
 | `clauses/with` | 4 | 25 | 0 | 29 | 13.8% |
-| `clauses/with-orderBy` | 50 | 242 | 0 | 292 | 17.1% |
+| `clauses/with-orderBy` | 51 | 241 | 0 | 292 | 17.5% |
 | `clauses/with-skip-limit` | 1 | 8 | 0 | 9 | 11.1% |
 | `clauses/with-where` | 0 | 19 | 0 | 19 | 0.0% |
 | `expressions/aggregation` | 16 | 18 | 1 | 35 | 45.7% |
@@ -47,13 +47,13 @@ exercise) or the scenario was skip-listed. Skips are counted, never hidden.
 | `expressions/conditional` | 13 | 0 | 0 | 13 | 100.0% |
 | `expressions/existentialSubqueries` | 2 | 8 | 0 | 10 | 20.0% |
 | `expressions/graph` | 21 | 37 | 3 | 61 | 34.4% |
-| `expressions/list` | 88 | 97 | 0 | 185 | 47.6% |
+| `expressions/list` | 91 | 94 | 0 | 185 | 49.2% |
 | `expressions/literals` | 102 | 29 | 0 | 131 | 77.9% |
 | `expressions/map` | 18 | 17 | 9 | 44 | 40.9% |
 | `expressions/mathematical` | 3 | 3 | 0 | 6 | 50.0% |
 | `expressions/null` | 40 | 4 | 0 | 44 | 90.9% |
 | `expressions/path` | 0 | 7 | 0 | 7 | 0.0% |
-| `expressions/pattern` | 3 | 47 | 0 | 50 | 6.0% |
+| `expressions/pattern` | 4 | 46 | 0 | 50 | 8.0% |
 | `expressions/precedence` | 39 | 82 | 0 | 121 | 32.2% |
 | `expressions/quantifier` | 41 | 563 | 0 | 604 | 6.8% |
 | `expressions/string` | 12 | 20 | 0 | 32 | 37.5% |
@@ -61,7 +61,7 @@ exercise) or the scenario was skip-listed. Skips are counted, never hidden.
 | `expressions/typeConversion` | 20 | 27 | 0 | 47 | 42.6% |
 | `useCases/countingSubgraphMatches` | 9 | 2 | 0 | 11 | 81.8% |
 | `useCases/triadicSelection` | 0 | 0 | 19 | 19 | 0.0% |
-| **total** | **925** | **2853** | **90** | **3868** | **23.9%** |
+| **total** | **930** | **2848** | **90** | **3868** | **24.0%** |
 
 ## Skip-list (deliberately un-evaluated)
 
