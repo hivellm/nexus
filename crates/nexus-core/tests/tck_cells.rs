@@ -9,7 +9,7 @@
 mod tck_common;
 
 use serde_json::json;
-use tck_common::{tck_cell_to_json, values_equal};
+use tck_common::{rows_equal, tck_cell_to_json, values_equal};
 
 // ── Parser: IEEE special floats + temporal/duration strings ──
 
@@ -184,4 +184,109 @@ fn relationship_type_mismatch_does_not_match() {
         "_nexus_id": 9, "_nexus_rel_type": "FOLLOWS", "type": "FOLLOWS"
     });
     assert!(!values_equal(&expected, &actual));
+}
+
+// ── Comparison: marker gating (a bare map is not a node/rel) ──
+
+#[test]
+fn bare_map_does_not_match_a_nexus_node() {
+    // The expected cell has no `@tck_node` marker (it is a plain map
+    // literal), so it must be compared as a map, not gated through
+    // `tck_node_matches` — and a real Nexus node value (which always
+    // carries `_nexus_id`/`_nexus_labels`) has a different key set than
+    // the bare map, so the two must not match.
+    let expected = tck_cell_to_json("{x: 1}");
+    let actual = json!({"x": 1, "_nexus_id": 5, "_nexus_labels": []});
+    assert!(!values_equal(&expected, &actual));
+}
+
+#[test]
+fn bare_map_matches_a_plain_map_value() {
+    let expected = tck_cell_to_json("{x: 1}");
+    let actual = json!({"x": 1});
+    assert!(values_equal(&expected, &actual));
+}
+
+// ── Comparison: graph elements nested in lists/maps ──
+
+#[test]
+fn nodes_nested_in_a_list_match_elementwise() {
+    let expected = tck_cell_to_json("[(:A {x: 1}), (:B {x: 2})]");
+    let actual = json!([
+        {"x": 1, "_nexus_id": 1, "_nexus_labels": ["A"]},
+        {"x": 2, "_nexus_id": 2, "_nexus_labels": ["B"]},
+    ]);
+    assert!(values_equal(&expected, &actual));
+}
+
+#[test]
+fn nodes_nested_in_a_list_detect_a_mismatch() {
+    let expected = tck_cell_to_json("[(:A {x: 1}), (:B {x: 2})]");
+    let actual = json!([
+        {"x": 1, "_nexus_id": 1, "_nexus_labels": ["A"]},
+        {"x": 99, "_nexus_id": 2, "_nexus_labels": ["B"]},
+    ]);
+    assert!(!values_equal(&expected, &actual));
+}
+
+#[test]
+fn relationship_nested_in_a_list_matches() {
+    let expected = tck_cell_to_json("[[:KNOWS {num: 1}]]");
+    let actual = json!([
+        {"num": 1, "_nexus_id": 9, "_nexus_rel_type": "KNOWS", "type": "KNOWS"},
+    ]);
+    assert!(values_equal(&expected, &actual));
+}
+
+#[test]
+fn node_nested_in_a_map_value_matches() {
+    let expected = tck_cell_to_json("{n: (:A {x: 1})}");
+    let actual = json!({"n": {"x": 1, "_nexus_id": 3, "_nexus_labels": ["A"]}});
+    assert!(values_equal(&expected, &actual));
+}
+
+// ── `rows_equal`: regression guard for the (actual, expected) argument
+// order the runner's `compare_table` actually calls it with (`got` first,
+// `want` second) — `values_equal`'s marker dispatch only inspects its FIRST
+// argument, so `rows_equal` must internally flip the pair before delegating,
+// or every graph-element/path/special-float row silently falls through to
+// the generic key-set comparison and never matches Nexus's
+// `_nexus_id`/`_nexus_labels`-carrying result shape.
+
+#[test]
+fn rows_equal_matches_a_node_row_with_got_before_want() {
+    let want = vec![tck_cell_to_json("(:A {name: 'c'})")];
+    let got = vec![json!({"name": "c", "_nexus_id": 5, "_nexus_labels": ["A"]})];
+    assert!(rows_equal(&got, &want));
+}
+
+#[test]
+fn rows_equal_matches_a_relationship_row_with_got_before_want() {
+    let want = vec![tck_cell_to_json("[:KNOWS {num: 1}]")];
+    let got = vec![json!({
+        "num": 1, "_nexus_id": 9, "_nexus_rel_type": "KNOWS", "type": "KNOWS"
+    })];
+    assert!(rows_equal(&got, &want));
+}
+
+#[test]
+fn rows_equal_matches_a_path_row_with_got_before_want() {
+    let want = vec![tck_cell_to_json("<(:A)-[:T]->(:B)>")];
+    let got = vec![json!({
+        "nodes": [
+            {"_nexus_id": 1, "_nexus_labels": ["A"]},
+            {"_nexus_id": 2, "_nexus_labels": ["B"]},
+        ],
+        "relationships": [
+            {"_nexus_id": 3, "_nexus_rel_type": "T", "type": "T"},
+        ],
+    })];
+    assert!(rows_equal(&got, &want));
+}
+
+#[test]
+fn rows_equal_rejects_a_mismatched_node_row() {
+    let want = vec![tck_cell_to_json("(:A {name: 'c'})")];
+    let got = vec![json!({"name": "different", "_nexus_id": 5, "_nexus_labels": ["A"]})];
+    assert!(!rows_equal(&got, &want));
 }

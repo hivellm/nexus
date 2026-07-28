@@ -92,7 +92,14 @@ pub fn compare_table(result: &ResultSet, table: &gherkin::Table, ordered: bool) 
 }
 
 pub fn rows_equal(got: &[Value], want: &[Value]) -> bool {
-    got.len() == want.len() && got.iter().zip(want.iter()).all(|(g, w)| values_equal(g, w))
+    // `values_equal(a, b)` requires `a` to be the expected (TCK-tagged) value
+    // and `b` to be the actual Nexus value — its marker dispatch (`@tck_node`
+    // / `@tck_rel` / `@tck_path` / `@tck_float`) only ever inspects the first
+    // argument. Pass `want` (expected) first so graph-element and
+    // special-float cells route into their structural matchers instead of
+    // silently falling through to the generic key-set comparison, which can
+    // never match Nexus's `_nexus_id`/`_nexus_labels`-carrying result shape.
+    got.len() == want.len() && got.iter().zip(want.iter()).all(|(g, w)| values_equal(w, g))
 }
 
 pub fn assert_rows_equal(got: &[Value], want: &[Value], idx: usize) {
