@@ -38,6 +38,8 @@ SCOPES=(
     "crates/nexus-cli/src/main.rs"
     "crates/nexus-cli/src/commands"
     "crates/nexus-server/src/main.rs"
+    "crates/nexus-server/src/routes.rs"
+    "crates/nexus-server/src/mcp_router.rs"
 )
 
 mode="enforce"
