@@ -222,6 +222,34 @@ impl Executor {
                 let mut rel_columns: Vec<String> = created_rel_ids.keys().cloned().collect();
                 columns.append(&mut rel_columns);
 
+                // A write-only statement (no `RETURN`/`WITH` downstream of
+                // this CREATE) must yield an EMPTY result set per
+                // openCypher — TCK `Create2[2]`/[3]/[5]-[12] all assert
+                // "the result should be empty" for
+                // `CREATE (a) CREATE (b) CREATE (a)-[:R]->(b)`-shaped
+                // statements with bound variables and correct side effects.
+                // Only synthesize `context.result_set` from the created
+                // entities when a downstream row consumer actually exists:
+                // `Project` (a plain RETURN), `With`, or `Aggregate` (an
+                // aggregating RETURN like `RETURN count(*)` — the planner
+                // only emits `Project` when there is a non-empty
+                // `projection_items` list; a pure-aggregate RETURN plans as
+                // a bare `Operator::Aggregate` with no `Project` at all).
+                // `Project`/`With` fall back to `materialize_rows_from_variables`
+                // (fed by the `context.set_variable` calls below) when
+                // `result_set.rows` is empty, so skipping the synthesis
+                // does not change what a RETURN/WITH-bearing statement
+                // returns; it only stops the phantom row from leaking out
+                // when nothing downstream consumes it.
+                let has_downstream_row_consumer = operators[1..].iter().any(|op| {
+                    matches!(
+                        op,
+                        Operator::Project { .. }
+                            | Operator::With { .. }
+                            | Operator::Aggregate { .. }
+                    )
+                });
+
                 // Create a single row with all created entities
                 if !columns.is_empty() {
                     let mut row_values = Vec::new();
@@ -249,7 +277,7 @@ impl Executor {
                         }
                     }
 
-                    if !row_values.is_empty() {
+                    if has_downstream_row_consumer && !row_values.is_empty() {
                         context.result_set.columns = columns;
                         context.result_set.rows = vec![Row { values: row_values }];
                     }
@@ -266,6 +294,29 @@ impl Executor {
                         }
                         Operator::With { items, distinct } => {
                             self.execute_with(&mut context, items, *distinct)?;
+                        }
+                        Operator::Aggregate {
+                            group_by,
+                            aggregations,
+                            projection_items,
+                            output_order,
+                            source: _,
+                            streaming_optimized: _,
+                            push_down_optimized: _,
+                        } => {
+                            // A pure-aggregate RETURN (`RETURN count(*)`)
+                            // plans as a bare Aggregate with no Project —
+                            // without this arm the `_` catch-all below
+                            // silently dropped it, leaving the CREATE's
+                            // own phantom row (or, pre-gating-fix, an
+                            // empty result) instead of the actual count.
+                            self.execute_aggregate_with_projections(
+                                &mut context,
+                                group_by,
+                                aggregations,
+                                projection_items.as_deref(),
+                                output_order.as_deref(),
+                            )?;
                         }
                         Operator::Limit { count } => {
                             self.execute_limit(&mut context, *count)?;
@@ -667,16 +718,45 @@ impl Executor {
                         existing_rows.len()
                     );
 
+                    // A write-only `MATCH ... CREATE` (no `RETURN`/`WITH`
+                    // after this Create in the plan) must return an EMPTY
+                    // result set — only synthesize one when a downstream
+                    // Project, With, or Aggregate operator exists to
+                    // consume it (a pure-aggregate RETURN like `RETURN
+                    // count(*)` plans as a bare `Operator::Aggregate`, no
+                    // `Project`; see the standalone-CREATE fast path's
+                    // matching comment above). Safe in both directions
+                    // here regardless of which way the gate falls: unlike
+                    // the fast path, this main loop actually executes the
+                    // following `Operator::Aggregate` normally, and
+                    // `execute_aggregate_with_projections`
+                    // (`operators/aggregate/core.rs`) falls back to
+                    // `materialize_rows_from_variables` off
+                    // `context.variables` whenever `result_set.columns`
+                    // doesn't look like a MATCH projection — so it
+                    // overwrites whatever this CREATE left in
+                    // `result_set` either way.
+                    let has_downstream_row_consumer = operators[op_idx + 1..].iter().any(|op| {
+                        matches!(
+                            op,
+                            Operator::Project { .. }
+                                | Operator::With { .. }
+                                | Operator::Aggregate { .. }
+                        )
+                    });
+
                     // CREATE with MATCH context - use existing implementation
                     self.execute_create_with_context(
                         &mut context,
                         pattern,
                         resolved_external_id,
                         policy,
+                        has_downstream_row_consumer,
                     )?;
 
-                    // If no RETURN clause follows, result_set is already populated above
-                    // If RETURN follows, Project operator will handle it
+                    // If a RETURN/WITH follows, Project/With will handle
+                    // (and overwrite) the result_set; otherwise it stays
+                    // empty per the gating above.
                 }
                 Operator::Delete { variables } => {
                     self.execute_delete(&mut context, variables, false)?;

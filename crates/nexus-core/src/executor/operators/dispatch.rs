@@ -264,11 +264,19 @@ impl Executor {
                 let context_has_scope = !context.variables.is_empty()
                     || context.result_set.rows.iter().any(|r| !r.values.is_empty());
                 if context_has_scope {
+                    // This dispatcher only sees one `Operator` at a time
+                    // (no lookahead into a sibling `Project`/`With`), and
+                    // its callers (UNION branches, JOIN sides, CALL
+                    // subquery bodies) already own how they consume the
+                    // resulting rows — preserve the existing
+                    // always-synthesize behaviour here rather than
+                    // guessing at a downstream projection.
                     self.execute_create_with_context(
                         context,
                         pattern,
                         resolved_external_id,
                         policy,
+                        true,
                     )?;
                 } else {
                     let (created_nodes, created_rels) = self

@@ -27,4 +27,5 @@ mod required_expand_no_phantom_partial_row_test;
 mod show_indexes_test;
 
 mod test_regression_fixes;
+mod write_only_statement_empty_result_test;
 mod write_where_id_filter_test;

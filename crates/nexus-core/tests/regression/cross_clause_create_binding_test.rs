@@ -81,18 +81,24 @@ fn two_clause_create_wires_relationships_onto_original_nodes() {
 /// TCK `Create2[3]`: "Create two nodes and a single relationship in
 /// separate clauses".
 ///
-/// Deliberately does NOT assert an empty result set: the standalone-CREATE
-/// fast path still synthesizes a result row from named CREATE variables even
-/// without a `RETURN` (see `operator_loop.rs`, the `!columns.is_empty()`
-/// block) — a separate pre-existing bug. Do not add that assertion here
-/// until that bug is fixed.
+/// A write-only multi-clause `CREATE` (no `RETURN`/`WITH` downstream) must
+/// yield an EMPTY result set — the standalone-CREATE fast path used to
+/// synthesize a result row from named CREATE variables even without a
+/// `RETURN` (see `operator_loop.rs`, the `!columns.is_empty()` block); that
+/// phantom-row bug is fixed, so this now asserts the empty result on top of
+/// the reuse/side-effect checks.
 #[test]
 fn three_clause_chain_create_reuses_across_clauses() {
     let (mut engine, _ctx) = engine();
-    engine
+    let result = engine
         .execute_cypher("CREATE (a) CREATE (b) CREATE (a)-[:R]->(b)")
         .expect("three-clause chain");
 
+    assert!(
+        result.rows.is_empty(),
+        "write-only CREATE must return an empty result set, got {} rows",
+        result.rows.len()
+    );
     assert_eq!(count(&mut engine, "MATCH (n) RETURN count(n)"), 2);
     assert_eq!(count(&mut engine, "MATCH ()-[r:R]->() RETURN count(r)"), 1);
 }

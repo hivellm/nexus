@@ -50,16 +50,24 @@ fn test_create_single_node_without_return() {
         };
 
         let result = executor.execute(&query).unwrap();
-        // Should return the created node even without RETURN
+        // A write-only CREATE (no RETURN/WITH downstream) must yield an
+        // EMPTY result set per openCypher/TCK semantics (Create2[2]/[3]/
+        // [5]-[12]) — the node is still created, just not projected.
         assert!(
-            !result.rows.is_empty(),
-            "CREATE without RETURN should return created node"
+            result.rows.is_empty(),
+            "CREATE without RETURN must return an empty result set"
         );
-        assert_eq!(result.columns.len(), 1);
-        assert_eq!(result.columns[0], "n");
+        assert!(result.columns.is_empty());
 
-        // Verify the node has the correct properties
-        if let Some(Value::Object(obj)) = result.rows[0].values.first() {
+        // Verify the node was actually created (side effect) via a
+        // follow-up MATCH on the same executor/store.
+        let verify = Query {
+            cypher: "MATCH (n:Person {name: 'Alice'}) RETURN n".to_string(),
+            params: std::collections::HashMap::new(),
+        };
+        let verify_result = executor.execute(&verify).unwrap();
+        assert_eq!(verify_result.rows.len(), 1, "node must have been created");
+        if let Some(Value::Object(obj)) = verify_result.rows[0].values.first() {
             if let Some(Value::String(name)) = obj.get("name") {
                 assert_eq!(name, "Alice");
             } else {
@@ -68,7 +76,7 @@ fn test_create_single_node_without_return() {
         } else {
             panic!(
                 "Expected node object, got: {:?}",
-                result.rows[0].values.first()
+                verify_result.rows[0].values.first()
             );
         }
     });
@@ -85,14 +93,21 @@ fn test_create_multiple_nodes_without_return() {
         };
 
         let result = executor.execute(&query).unwrap();
-        // Should return both created nodes
+        // Write-only CREATE must yield an empty result set even with
+        // multiple bound variables.
         assert!(
-            !result.rows.is_empty(),
-            "CREATE without RETURN should return created nodes"
+            result.rows.is_empty(),
+            "CREATE without RETURN must return an empty result set"
         );
-        assert_eq!(result.columns.len(), 2);
-        assert!(result.columns.contains(&"a".to_string()));
-        assert!(result.columns.contains(&"b".to_string()));
+        assert!(result.columns.is_empty());
+
+        // Both nodes must still have been created (side effect).
+        let verify = Query {
+            cypher: "MATCH (n:Person) RETURN count(n) AS c".to_string(),
+            params: std::collections::HashMap::new(),
+        };
+        let verify_result = executor.execute(&verify).unwrap();
+        assert_eq!(verify_result.rows[0].values[0].as_i64(), Some(2));
     });
 }
 
@@ -109,16 +124,22 @@ fn test_create_node_with_multiple_labels_without_return() {
             };
 
             let result = executor.execute(&query).unwrap();
-            // Should return the created node even without RETURN
+            // Write-only CREATE must yield an empty result set.
             assert!(
-                !result.rows.is_empty(),
-                "CREATE without RETURN should return created node"
+                result.rows.is_empty(),
+                "CREATE without RETURN must return an empty result set"
             );
-            assert_eq!(result.columns.len(), 1);
-            assert_eq!(result.columns[0], "n");
+            assert!(result.columns.is_empty());
 
-            // Verify the node has the correct properties
-            if let Some(Value::Object(obj)) = result.rows[0].values.first() {
+            // Verify the node was actually created (side effect) via a
+            // follow-up MATCH on the same executor/store.
+            let verify = Query {
+                cypher: "MATCH (n:Person:Employee {name: 'Alice'}) RETURN n".to_string(),
+                params: std::collections::HashMap::new(),
+            };
+            let verify_result = executor.execute(&verify).unwrap();
+            assert_eq!(verify_result.rows.len(), 1, "node must have been created");
+            if let Some(Value::Object(obj)) = verify_result.rows[0].values.first() {
                 if let Some(Value::String(name)) = obj.get("name") {
                     assert_eq!(name, "Alice");
                 } else {
@@ -132,7 +153,7 @@ fn test_create_node_with_multiple_labels_without_return() {
             } else {
                 panic!(
                     "Expected node object, got: {:?}",
-                    result.rows[0].values.first()
+                    verify_result.rows[0].values.first()
                 );
             }
         },
@@ -158,17 +179,24 @@ fn test_create_relationship_without_return() {
         };
 
         let result = executor.execute(&query).unwrap();
-        // Should return the created relationship even without RETURN
+        // Write-only `MATCH ... CREATE` (no RETURN) must return an empty
+        // result set (routes through `execute_create_with_context` via
+        // the main operator loop, not the standalone-CREATE fast path,
+        // but shares the same "no downstream Project/With -> empty"
+        // contract).
         assert!(
-            !result.rows.is_empty(),
-            "CREATE without RETURN should return created relationship"
+            result.rows.is_empty(),
+            "CREATE without RETURN must return an empty result set"
         );
-        // Should have at least the relationship variable
-        assert!(
-            result.columns.contains(&"r".to_string())
-                || result.columns.contains(&"a".to_string())
-                || result.columns.contains(&"b".to_string())
-        );
+        assert!(result.columns.is_empty());
+
+        // Verify the relationship was actually created (side effect).
+        let verify = Query {
+            cypher: "MATCH ()-[r:KNOWS]->() RETURN count(r) AS c".to_string(),
+            params: std::collections::HashMap::new(),
+        };
+        let verify_result = executor.execute(&verify).unwrap();
+        assert_eq!(verify_result.rows[0].values[0].as_i64(), Some(1));
     });
 }
 
@@ -183,16 +211,29 @@ fn test_create_path_without_return() {
         };
 
         let result = executor.execute(&query).unwrap();
-        // Should return created entities (nodes and relationships)
+        // Write-only CREATE must yield an empty result set even for a
+        // multi-hop chained pattern.
         assert!(
-            !result.rows.is_empty(),
-            "CREATE without RETURN should return created path"
+            result.rows.is_empty(),
+            "CREATE without RETURN must return an empty result set"
         );
-        // Should have variables for nodes and relationships
-        assert!(
-            result.columns.len() >= 3,
-            "Should have at least 3 variables (a, b, c or r1, r2)"
-        );
+        assert!(result.columns.is_empty());
+
+        // All three nodes and both relationships must still have been
+        // created (side effect).
+        let verify = Query {
+            cypher: "MATCH (n:Person) RETURN count(n) AS c".to_string(),
+            params: std::collections::HashMap::new(),
+        };
+        let verify_result = executor.execute(&verify).unwrap();
+        assert_eq!(verify_result.rows[0].values[0].as_i64(), Some(3));
+
+        let verify_rels = Query {
+            cypher: "MATCH ()-[r:KNOWS]->() RETURN count(r) AS c".to_string(),
+            params: std::collections::HashMap::new(),
+        };
+        let verify_rels_result = executor.execute(&verify_rels).unwrap();
+        assert_eq!(verify_rels_result.rows[0].values[0].as_i64(), Some(2));
     });
 }
 

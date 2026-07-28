@@ -869,6 +869,7 @@ impl Executor {
         pattern: &parser::Pattern,
         external_id: Option<crate::storage::external_id::ExternalId>,
         policy: crate::storage::external_id::ConflictPolicy,
+        has_downstream_row_consumer: bool,
     ) -> Result<()> {
         // Note: TransactionManager is now accessed via self.transaction_manager() (shared)
         use serde_json::Value as JsonValue;
@@ -1410,32 +1411,60 @@ impl Executor {
         // Using Acquire/Release is sufficient here since we're in single-writer context
         std::sync::atomic::fence(std::sync::atomic::Ordering::Release);
 
-        // CRITICAL FIX: Populate result_set with created entities for CREATE without RETURN
-        // Instead of clearing everything, we populate result_set with the variables we have
-        // This ensures that CREATE without RETURN returns the created entities
-        // If RETURN clause follows, Project operator will overwrite this
-        let mut columns: Vec<String> = context.variables.keys().cloned().collect();
-        columns.sort(); // Ensure consistent column order
+        // A write-only `MATCH ... CREATE` (no `RETURN`/`WITH` downstream)
+        // must yield an EMPTY result set per openCypher/TCK semantics
+        // (Create2[5]/[6]/[10]-[12] all assert "the result should be
+        // empty" for this exact shape). Only synthesize `result_set` from
+        // the bound variables when the caller confirms a downstream row
+        // consumer actually exists — `Project`, `With`, or `Aggregate`
+        // (a pure-aggregate RETURN like `RETURN count(*)` plans as a bare
+        // `Operator::Aggregate`, no `Project`). All three fall back to
+        // reading `context.variables` when `result_set.rows`/`columns`
+        // are empty (`Project`/`With` via `materialize_rows_from_variables`;
+        // `Aggregate` via `execute_aggregate_with_projections`'s own
+        // `has_match_columns` check in `operators/aggregate/core.rs`,
+        // which treats an EMPTY `result_set.columns` as "no MATCH
+        // projection to respect" and materializes from `context.variables`
+        // instead) — so a RETURN-bearing statement's rows are unaffected
+        // by skipping this synthesis. This also means the `else` branch's
+        // `context.result_set.columns.clear()` below is load-bearing, not
+        // cosmetic: it is exactly what keeps `has_match_columns` false for
+        // that Aggregate fallback on the write-only path. A future
+        // "optimization" that preserves the columns here (e.g. to avoid
+        // reallocating) would silently break aggregation-after-write by
+        // making the Aggregate operator think a real MATCH projection ran
+        // and skip materializing from variables. Mirrors the same fix
+        // applied to the standalone-CREATE fast path in
+        // `executor/dispatch/operator_loop.rs`.
+        if has_downstream_row_consumer {
+            let mut columns: Vec<String> = context.variables.keys().cloned().collect();
+            columns.sort(); // Ensure consistent column order
 
-        if !columns.is_empty() {
-            let mut row_values = Vec::new();
-            for col in &columns {
-                if let Some(value) = context.variables.get(col) {
-                    // CRITICAL FIX: Unwrap arrays to get the actual node object
-                    // Variables from MATCH are arrays, but we need single objects
-                    let unwrapped = match value {
-                        JsonValue::Array(arr) if arr.len() == 1 => arr[0].clone(),
-                        _ => value.clone(),
-                    };
-                    row_values.push(unwrapped);
-                } else {
-                    row_values.push(JsonValue::Null);
+            if !columns.is_empty() {
+                let mut row_values = Vec::new();
+                for col in &columns {
+                    if let Some(value) = context.variables.get(col) {
+                        // CRITICAL FIX: Unwrap arrays to get the actual node object
+                        // Variables from MATCH are arrays, but we need single objects
+                        let unwrapped = match value {
+                            JsonValue::Array(arr) if arr.len() == 1 => arr[0].clone(),
+                            _ => value.clone(),
+                        };
+                        row_values.push(unwrapped);
+                    } else {
+                        row_values.push(JsonValue::Null);
+                    }
                 }
+                context.result_set.columns = columns;
+                context.result_set.rows = vec![Row { values: row_values }];
+            } else {
+                // No variables created - clear result_set
+                context.result_set.rows.clear();
+                context.result_set.columns.clear();
             }
-            context.result_set.columns = columns;
-            context.result_set.rows = vec![Row { values: row_values }];
         } else {
-            // No variables created - clear result_set
+            // Write-only: no downstream Project/With/Aggregate to consume
+            // a synthesized row, so leave result_set empty.
             context.result_set.rows.clear();
             context.result_set.columns.clear();
         }
