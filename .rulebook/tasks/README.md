@@ -15,11 +15,11 @@
 | Status | Task | Progress | Description |
 |--------|------|----------|-------------|
 | ⬚ | phase21_tck-binary-tree-fixtures | 0/5 | tck binary tree fixtures |
+| ⬚ | phase21_tck-create-cross-clause-binding | 0/5 | tck create cross clause binding |
 | ⬚ | phase21_tck-exists-subquery | 0/6 | tck exists subquery |
 | ⬚ | phase21_tck-non-finite-floats | 0/5 | tck non finite floats |
 | ⬚ | phase21_tck-order-by-expression-re-evaluation | 0/5 | tck order by expression re evaluation |
 | ⬚ | phase21_tck-path-null-and-semantics | 0/5 | tck path null and semantics |
-| ⬚ | phase21_tck-pattern-comprehension-output | 0/4 | tck pattern comprehension output |
 | ⬚ | phase21_tck-procedure-registration-call | 0/5 | tck procedure registration call |
 | ⬚ | phase21_tck-temporal-accessors-and-properties | 0/5 | tck temporal accessors and properties |
 | ⬚ | phase21_tck-temporal-comparison-and-arithmetic | 0/7 | tck temporal comparison and arithmetic |
