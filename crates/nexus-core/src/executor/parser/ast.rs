@@ -1162,12 +1162,11 @@ pub enum Expression {
         /// Whether this is IS NOT NULL (true) or IS NULL (false)
         negated: bool,
     },
-    /// EXISTS subquery - checks if a pattern exists
+    /// EXISTS subquery - checks if a pattern or a full subquery has any match
     Exists {
-        /// Pattern to check for existence
-        pattern: Pattern,
-        /// Optional WHERE clause for filtering
-        where_clause: Option<Box<Expression>>,
+        /// The abbreviated pattern-probe form or the full clause-list
+        /// subquery form (see [`ExistsInner`]).
+        inner: ExistsInner,
     },
     /// `COLLECT { … }` subquery expression
     /// (phase6_opencypher-subquery-transactions §9 / Cypher 25).
@@ -1251,6 +1250,131 @@ impl Expression {
             _ => None,
         }
     }
+
+    /// True when this expression, and everything reachable from it, calls
+    /// no aggregate function. An aggregate call changes row cardinality in
+    /// a way plain projection never does — most notably, an aggregate over
+    /// zero input rows still yields exactly one output row (`count(*)` = 0,
+    /// not zero rows) — so any transform that assumes an expression is
+    /// cardinality-*preserving* (never manufacturing or discarding a row)
+    /// must first confirm it is aggregate-free.
+    ///
+    /// Shared by the `EXISTS { … }` subquery→pattern-probe desugar
+    /// (`parser::expressions::structured::try_desugar_exists_pattern`) and
+    /// the full-subquery evaluator's trailing-`RETURN`-drop guard
+    /// (`eval::projection::core::correlate_exists_subquery`): both fold
+    /// away a `RETURN` only when doing so cannot change whether the
+    /// pipeline it sits atop looks empty or non-empty, and an aggregate
+    /// `RETURN` breaks exactly that guarantee.
+    #[must_use]
+    pub fn is_aggregate_free(&self) -> bool {
+        fn direct_children(expr: &Expression) -> Vec<&Expression> {
+            match expr {
+                Expression::BinaryOp { left, right, .. } => vec![left, right],
+                Expression::UnaryOp { operand, .. } => vec![operand],
+                Expression::ArrayIndex { base, index } => vec![base, index],
+                Expression::ArraySlice { base, start, end } => {
+                    let mut v = vec![base.as_ref()];
+                    if let Some(s) = start {
+                        v.push(s);
+                    }
+                    if let Some(e) = end {
+                        v.push(e);
+                    }
+                    v
+                }
+                Expression::IsNull { expr, .. } => vec![expr],
+                Expression::Case {
+                    input,
+                    when_clauses,
+                    else_clause,
+                } => {
+                    let mut v = Vec::new();
+                    if let Some(i) = input {
+                        v.push(i.as_ref());
+                    }
+                    for w in when_clauses {
+                        v.push(&w.condition);
+                        v.push(&w.result);
+                    }
+                    if let Some(e) = else_clause {
+                        v.push(e.as_ref());
+                    }
+                    v
+                }
+                Expression::List(items) => items.iter().collect(),
+                Expression::Map(entries) => entries.values().collect(),
+                Expression::MapProjection { source, .. } => vec![source],
+                Expression::FunctionCall { args, .. } => args.iter().collect(),
+                _ => vec![],
+            }
+        }
+
+        if let Expression::FunctionCall { name, .. } = self {
+            if AGGREGATE_FN_NAMES.contains(&name.to_lowercase().as_str()) {
+                return false;
+            }
+        }
+        direct_children(self)
+            .into_iter()
+            .all(Expression::is_aggregate_free)
+    }
+}
+
+/// The aggregate function names the planner recognises. Mirrors
+/// `semantic_validation::AGGREGATE_FNS`; duplicated here (rather than
+/// shared) to keep the parser/AST layer from depending on the
+/// semantic-analysis module. `semantic_validation`'s test module pins the
+/// two lists together so they cannot silently drift apart.
+pub(crate) const AGGREGATE_FN_NAMES: &[&str] = &[
+    "count",
+    "sum",
+    "avg",
+    "min",
+    "max",
+    "collect",
+    "stdev",
+    "stdevp",
+    "variance",
+    "variancep",
+    "percentilecont",
+    "percentiledisc",
+];
+
+/// The two forms `EXISTS { … }` accepts (openCypher 25 grammar).
+///
+/// **Three-valued logic.** The `Pattern` form is itself an expression
+/// (`evaluate_exists_pattern`) and keeps openCypher's normal NULL
+/// propagation — a `NULL` anchor or a `WHERE` that evaluates to `NULL`
+/// makes the whole `EXISTS` `NULL`, not `false`. The `Subquery` form is
+/// deliberately two-valued: it always evaluates to a `Bool` (row set
+/// non-empty or not), matching the openCypher spec's `EXISTS { MATCH … }`
+/// semantics, which never surfaces `NULL`. The parse-time desugar
+/// (`try_desugar_exists_pattern`) only ever *rewrites* a foldable
+/// `Subquery`-shaped body back into `Pattern` — it does not change which
+/// semantics apply to a given piece of source syntax, so a query that
+/// desugars still gets the `Pattern` form's NULL propagation it would have
+/// gotten had it been written in the abbreviated syntax directly.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum ExistsInner {
+    /// Abbreviated pattern-probe form: `EXISTS { (n)-[:R]->(m) [WHERE expr] }`.
+    /// No clause keyword (`MATCH`, …) appears inside the braces.
+    Pattern {
+        /// Pattern to check for existence
+        pattern: Pattern,
+        /// Optional WHERE clause for filtering
+        where_clause: Option<Box<Expression>>,
+    },
+    /// Full subquery form: `EXISTS { MATCH … [WHERE …] [WITH …] [RETURN …] }`.
+    /// Runs the inner clause list correlated against the outer row's
+    /// bindings; the expression evaluates to `true` when the inner yields
+    /// at least one row. Write clauses (`SET`/`CREATE`/`DELETE`/`MERGE`/
+    /// `REMOVE`/`FOREACH`) are rejected at parse time — openCypher TCK
+    /// `ExistentialSubquery2[3]`.
+    Subquery {
+        /// Inner query AST; never empty (validated at parse time).
+        inner: Box<CypherQuery>,
+    },
 }
 
 /// When clause for CASE expressions

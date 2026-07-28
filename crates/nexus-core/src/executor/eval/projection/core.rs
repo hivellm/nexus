@@ -528,10 +528,15 @@ impl Executor {
                 let is_null = value.is_null();
                 Ok(Value::Bool(if *negated { !is_null } else { is_null }))
             }
-            parser::Expression::Exists {
-                pattern,
-                where_clause,
-            } => self.evaluate_exists_pattern(row, context, pattern, where_clause.as_deref()),
+            parser::Expression::Exists { inner } => match inner {
+                parser::ExistsInner::Pattern {
+                    pattern,
+                    where_clause,
+                } => self.evaluate_exists_pattern(row, context, pattern, where_clause.as_deref()),
+                parser::ExistsInner::Subquery { inner } => {
+                    self.evaluate_exists_subquery(row, context, inner)
+                }
+            },
             parser::Expression::CollectSubquery { inner } => {
                 self.evaluate_collect_subquery(row, context, inner)
             }
@@ -856,6 +861,147 @@ impl Executor {
             }
         }
         Ok(Value::Array(out))
+    }
+
+    /// Evaluate the full `EXISTS { MATCH … [WHERE …] [WITH …] [RETURN …] }`
+    /// subquery form (openCypher TCK `ExistentialSubquery2`/`3`).
+    ///
+    /// Mirrors [`Self::evaluate_collect_subquery`]: plans the inner AST
+    /// once, runs every operator against a fresh inner
+    /// [`ExecutionContext`] seeded with the outer row's bindings (plus the
+    /// outer scope's variables not already shadowed by the row), and reads
+    /// the resulting row set. `RETURN` is optional here (unlike
+    /// `COLLECT { … }`) — the inner row set is populated by the `MATCH`/
+    /// `WHERE`/`WITH` pipeline itself; a trailing `RETURN` only reshapes
+    /// it. The expression is `true` when that row set is non-empty. The
+    /// inner context is discarded after the run, so nothing it binds
+    /// (its own `MATCH`/`WITH` aliases) leaks back into the outer row or
+    /// scope — the correlation is one-directional (outer → inner only).
+    pub(in crate::executor) fn evaluate_exists_subquery(
+        &self,
+        row: &HashMap<String, Value>,
+        context: &ExecutionContext,
+        inner: &parser::CypherQuery,
+    ) -> Result<Value> {
+        let correlated = self.correlate_exists_subquery(row, context, inner);
+        let inner_operators = self.plan_ast(&correlated)?;
+
+        let mut inner_ctx = ExecutionContext::new(
+            self.collect_subquery_params_for(context),
+            self.collect_subquery_cache_for(context),
+        );
+        inner_ctx.set_plan_hints(self.collect_subquery_hints_for(context));
+        for (k, v) in row.iter() {
+            inner_ctx.set_variable(k, v.clone());
+        }
+        for (k, v) in self.collect_subquery_outer_vars(context) {
+            if !row.contains_key(&k) {
+                inner_ctx.set_variable(&k, v);
+            }
+        }
+
+        for op in &inner_operators {
+            self.execute_operator(&mut inner_ctx, op)?;
+        }
+
+        Ok(Value::Bool(!inner_ctx.result_set.rows.is_empty()))
+    }
+
+    /// Build a copy of `inner` prepared for existence-only evaluation:
+    /// drop a trailing bare `RETURN` (see below) and prefix a synthetic
+    /// `WITH <outer name> AS <outer name>, …` clause carrying every
+    /// currently-bound outer name (the row's own bindings plus the outer
+    /// scope's variables not already shadowed by the row) into the inner
+    /// query's own binder set.
+    ///
+    /// **Correlation.** Seeding `inner_ctx.variables` alone (as
+    /// [`Self::evaluate_exists_subquery`] does above) is not enough to
+    /// correlate a pattern like `MATCH (n)-->(m)` back to a single
+    /// already-bound `n`: the inner AST's first real clause has no
+    /// lexical predecessor establishing `n` as bound, so the planner
+    /// treats it as a fresh, unbound scan variable and expands from
+    /// every node in the graph instead of the one the outer row already
+    /// carries. A `WITH` clause is the engine's normal "this variable is
+    /// already bound, expand from it" signal — `MATCH (n) WITH n MATCH
+    /// (n)-->(m)` already plans the second `MATCH` as an expand, not a
+    /// rescan — so prefixing one here reuses that existing machinery
+    /// instead of adding new planner logic. A name the inner query never
+    /// references is simply an unused `WITH` item, so importing every
+    /// outer name unconditionally (mirroring
+    /// [`Self::evaluate_collect_subquery`]'s "sees the entire outer
+    /// scope" behaviour) cannot introduce a false correlation.
+    ///
+    /// **Trailing-`RETURN` drop.** A *non-aggregating* `RETURN` only
+    /// reshapes the row set it receives — it can never turn a non-empty
+    /// set into an empty one or vice versa (`DISTINCT` only removes
+    /// duplicates, and any `ORDER BY`/`LIMIT`/`SKIP` that could change
+    /// cardinality parses as its own trailing clause, which disqualifies
+    /// this fast path entirely by leaving something after `RETURN`) — so
+    /// existence is identical whether it runs or not. Dropping such a
+    /// *terminal* `RETURN` sidesteps `execute_project`'s "no rows, no
+    /// variables" unit-row bootstrap (the classic `RETURN 1+1` / bare
+    /// `RETURN true` shape), which cannot distinguish that from "the
+    /// pipeline genuinely narrowed to zero rows" and would otherwise
+    /// resurrect a phantom row for the openCypher-idiomatic `EXISTS {
+    /// MATCH … RETURN true }` shape once a `WITH`/aggregation `WHERE` —
+    /// rather than the desugared pattern probe — is doing the filtering.
+    ///
+    /// An *aggregating* `RETURN` (`RETURN count(*)`) is the opposite of
+    /// cardinality-preserving: it always yields exactly one row, even
+    /// over zero input rows, so dropping it would flip `EXISTS { MATCH
+    /// (n:NoSuchLabel) RETURN count(*) }` from `true` to `false`. Such a
+    /// `RETURN` is therefore left in place and runs through the normal
+    /// pipeline, which correctly reports one (non-empty) row regardless
+    /// of whether anything matched upstream.
+    fn correlate_exists_subquery(
+        &self,
+        row: &HashMap<String, Value>,
+        context: &ExecutionContext,
+        inner: &parser::CypherQuery,
+    ) -> parser::CypherQuery {
+        let probe_clauses = match inner.clauses.split_last() {
+            Some((parser::Clause::Return(r), rest))
+                if r.items.iter().all(|i| i.expression.is_aggregate_free()) =>
+            {
+                rest
+            }
+            _ => &inner.clauses[..],
+        };
+
+        let mut names: Vec<String> = row.keys().cloned().collect();
+        for (k, _) in self.collect_subquery_outer_vars(context) {
+            if !row.contains_key(&k) && !names.contains(&k) {
+                names.push(k);
+            }
+        }
+        names.sort();
+        if names.is_empty() {
+            return parser::CypherQuery {
+                clauses: probe_clauses.to_vec(),
+                params: inner.params.clone(),
+                graph_scope: inner.graph_scope.clone(),
+            };
+        }
+
+        let items = names
+            .into_iter()
+            .map(|name| parser::ReturnItem {
+                expression: parser::Expression::Variable(name.clone()),
+                alias: Some(name),
+            })
+            .collect();
+        let mut clauses = Vec::with_capacity(probe_clauses.len() + 1);
+        clauses.push(parser::Clause::With(parser::WithClause {
+            items,
+            distinct: false,
+            where_clause: None,
+        }));
+        clauses.extend(probe_clauses.iter().cloned());
+        parser::CypherQuery {
+            clauses,
+            params: inner.params.clone(),
+            graph_scope: inner.graph_scope.clone(),
+        }
     }
 
     /// Borrow the outer params for a COLLECT { … } inner subquery.

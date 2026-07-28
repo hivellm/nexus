@@ -23,8 +23,8 @@
 use std::collections::HashSet;
 
 use crate::executor::parser::ast::{
-    Clause, CypherQuery, Expression, ForeachClause, Literal, MatchClause, Pattern, PatternElement,
-    ReturnItem, UnwindClause,
+    Clause, CypherQuery, ExistsInner, Expression, ForeachClause, Literal, MatchClause, Pattern,
+    PatternElement, ReturnItem, SetItem, UnwindClause,
 };
 
 /// In-band sentinel the parser pushes as the first argument of an aggregate
@@ -38,7 +38,7 @@ pub fn validate(query: &CypherQuery) -> crate::Result<()> {
     // Only queries composed entirely of clause kinds whose scoping this
     // pass fully models are checked; anything else is passed through
     // untouched (see module docs).
-    if !is_fully_modeled(query) {
+    if !is_fully_modeled(query) || query_contains_exists_subquery(query) {
         return Ok(());
     }
 
@@ -78,6 +78,90 @@ fn is_fully_modeled(query: &CypherQuery) -> bool {
                 | Clause::Foreach(_)
         )
     })
+}
+
+/// True when any expression reachable from `query` is the full
+/// `EXISTS { MATCH … }` subquery form (as opposed to the abbreviated
+/// pattern-probe form `EXISTS { pattern [WHERE …] }`, which this pass
+/// already treats as an opaque leaf). The subquery form's binder set
+/// depends on its own inner clause list — it may bind `WITH` aliases,
+/// aggregation results, or nothing at all — which this increment's
+/// binder/reference tracking does not model. Mirroring the `CALL { … }`
+/// clause bail-out in `is_fully_modeled`, a query containing one anywhere
+/// is skipped entirely rather than risk a false positive.
+fn query_contains_exists_subquery(query: &CypherQuery) -> bool {
+    query.clauses.iter().any(clause_contains_exists_subquery)
+}
+
+fn clause_contains_exists_subquery(clause: &Clause) -> bool {
+    match clause {
+        Clause::Match(m) => m
+            .where_clause
+            .as_ref()
+            .is_some_and(|w| expr_contains_exists_subquery(&w.expression)),
+        Clause::With(w) => {
+            w.items
+                .iter()
+                .any(|i| expr_contains_exists_subquery(&i.expression))
+                || w.where_clause
+                    .as_ref()
+                    .is_some_and(|w| expr_contains_exists_subquery(&w.expression))
+        }
+        Clause::Return(r) => r
+            .items
+            .iter()
+            .any(|i| expr_contains_exists_subquery(&i.expression)),
+        Clause::Where(w) => expr_contains_exists_subquery(&w.expression),
+        Clause::OrderBy(o) => o
+            .items
+            .iter()
+            .any(|i| expr_contains_exists_subquery(&i.expression)),
+        Clause::Limit(l) => expr_contains_exists_subquery(&l.count),
+        Clause::Skip(s) => expr_contains_exists_subquery(&s.count),
+        Clause::Unwind(u) => expr_contains_exists_subquery(&u.expression),
+        Clause::Foreach(f) => expr_contains_exists_subquery(&f.list_expression),
+        Clause::Set(sc) => sc.items.iter().any(set_item_contains_exists_subquery),
+        Clause::Merge(m) => {
+            m.on_create
+                .as_ref()
+                .is_some_and(|sc| sc.items.iter().any(set_item_contains_exists_subquery))
+                || m.on_match
+                    .as_ref()
+                    .is_some_and(|sc| sc.items.iter().any(set_item_contains_exists_subquery))
+        }
+        _ => false,
+    }
+}
+
+fn set_item_contains_exists_subquery(item: &SetItem) -> bool {
+    match item {
+        SetItem::Property { value, .. } => expr_contains_exists_subquery(value),
+        SetItem::MapMerge { map, .. } => expr_contains_exists_subquery(map),
+        SetItem::Replace { value, .. } => expr_contains_exists_subquery(value),
+        SetItem::Label { .. } => false,
+    }
+}
+
+/// True when `expr` itself, or anything reachable from it, is a full
+/// `EXISTS { MATCH … }` subquery. Recurses into the abbreviated
+/// `EXISTS { … }` form's own `WHERE` (which may nest a subquery form) and
+/// into `COLLECT { … }`'s inner clause list, matching the two other
+/// constructs this pass treats as inner scopes.
+fn expr_contains_exists_subquery(expr: &Expression) -> bool {
+    match expr {
+        Expression::Exists {
+            inner: ExistsInner::Subquery { .. },
+        } => true,
+        Expression::Exists {
+            inner: ExistsInner::Pattern { where_clause, .. },
+        } => where_clause
+            .as_deref()
+            .is_some_and(expr_contains_exists_subquery),
+        Expression::CollectSubquery { inner } => query_contains_exists_subquery(inner),
+        _ => child_exprs(expr)
+            .into_iter()
+            .any(expr_contains_exists_subquery),
+    }
 }
 
 // ── Variable type conflicts ────────────────────────────────────────────
@@ -688,15 +772,26 @@ fn collect_expr_binders(expr: &Expression, binders: &mut HashSet<String>) {
                 collect_expr_binders(t, binders);
             }
         }
-        Expression::Exists {
-            pattern,
-            where_clause,
-        } => {
-            collect_pattern_binders(pattern, binders);
-            if let Some(w) = where_clause {
-                collect_expr_binders(w, binders);
+        Expression::Exists { inner } => match inner {
+            ExistsInner::Pattern {
+                pattern,
+                where_clause,
+            } => {
+                collect_pattern_binders(pattern, binders);
+                if let Some(w) = where_clause {
+                    collect_expr_binders(w, binders);
+                }
             }
-        }
+            // Unreachable when `validate` runs this walk: `validate` bails
+            // out of the whole query via `query_contains_exists_subquery`
+            // before `collect_query_binders` is ever called on a query
+            // that contains one. Recursing anyway (mirroring
+            // `CollectSubquery` below) keeps this arm defensively correct
+            // — over-collecting binders can only produce a safe false
+            // negative, never a false positive — should that invariant
+            // ever change.
+            ExistsInner::Subquery { inner } => collect_query_binders(inner, binders),
+        },
         Expression::CollectSubquery { inner } => collect_query_binders(inner, binders),
         Expression::FunctionCall { name, args } => {
             // `any`/`all`/`none`/`single(x IN list WHERE pred)` are lowered to
@@ -982,6 +1077,25 @@ fn column_name_conflict(name: &str) -> crate::Error {
 mod tests {
     use super::*;
     use crate::executor::parser::CypherParser;
+
+    /// `AGGREGATE_FNS` (this module) and `parser::ast::AGGREGATE_FN_NAMES`
+    /// (used by the `EXISTS { … }` subquery→pattern-probe desugar and its
+    /// trailing-`RETURN`-drop guard) are independent, deliberately
+    /// undependent copies of the same aggregate-function name list — pin
+    /// them together so a future aggregate addition/removal cannot silently
+    /// drift one list out of sync with the other.
+    #[test]
+    fn aggregate_fn_lists_stay_in_sync() {
+        let mut semantic: Vec<&str> = AGGREGATE_FNS.to_vec();
+        let mut ast: Vec<&str> = crate::executor::parser::ast::AGGREGATE_FN_NAMES.to_vec();
+        semantic.sort_unstable();
+        ast.sort_unstable();
+        assert_eq!(
+            semantic, ast,
+            "semantic_validation::AGGREGATE_FNS and parser::ast::AGGREGATE_FN_NAMES \
+             have drifted apart"
+        );
+    }
 
     fn run(query: &str) -> crate::Result<()> {
         let ast = CypherParser::new(query.to_string())

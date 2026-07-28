@@ -214,18 +214,28 @@ impl<'a> QueryPlanner<'a> {
                 };
                 Ok(format!("{} {}", op_str, operand_str))
             }
-            Expression::Exists {
-                pattern,
-                where_clause,
-            } => {
-                let pattern_str = self.pattern_to_string(pattern)?;
-                if let Some(where_expr) = where_clause {
-                    let where_str = self.expr_to_string_impl(where_expr, parenthesize)?;
-                    Ok(format!("EXISTS {{ {} WHERE {} }}", pattern_str, where_str))
-                } else {
-                    Ok(format!("EXISTS {{ {} }}", pattern_str))
+            Expression::Exists { inner } => match inner {
+                ExistsInner::Pattern {
+                    pattern,
+                    where_clause,
+                } => {
+                    let pattern_str = self.pattern_to_string(pattern)?;
+                    if let Some(where_expr) = where_clause {
+                        let where_str = self.expr_to_string_impl(where_expr, parenthesize)?;
+                        Ok(format!("EXISTS {{ {} WHERE {} }}", pattern_str, where_str))
+                    } else {
+                        Ok(format!("EXISTS {{ {} }}", pattern_str))
+                    }
                 }
-            }
+                // Same synthetic-shape rationale as `CollectSubquery`
+                // below: this formatter serves diagnostics and the
+                // no-AS column-name fallback, not a source
+                // reconstruction, so the full clause list is summarised
+                // rather than rendered verbatim.
+                ExistsInner::Subquery { inner } => {
+                    Ok(format!("EXISTS {{ {} clauses }}", inner.clauses.len()))
+                }
+            },
             Expression::CollectSubquery { inner } => {
                 // The expression-to-string formatter is used for
                 // diagnostic logging (and the projection-alias fallback

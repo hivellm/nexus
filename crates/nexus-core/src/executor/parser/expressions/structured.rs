@@ -115,20 +115,9 @@ impl CypherParser {
         self.expect_char('{')?;
         self.skip_whitespace();
 
-        let mut clauses = Vec::new();
-        while self.pos < self.input.len() {
-            self.skip_whitespace();
-            if self.peek_char() == Some('}') {
-                self.consume_char();
-                break;
-            }
-            if self.is_clause_boundary() {
-                let clause = self.parse_clause(clauses.last())?;
-                clauses.push(clause);
-            } else {
-                break;
-            }
-        }
+        let clauses = self.parse_subquery_clause_body()?;
+        self.skip_whitespace();
+        self.expect_char('}')?;
 
         if clauses.is_empty() {
             return Err(self.error(
@@ -158,7 +147,41 @@ impl CypherParser {
         })
     }
 
-    /// Parse EXISTS expression
+    /// Parse the `{ … }` clause list shared by `COLLECT { … }` and the
+    /// full `EXISTS { MATCH … }` subquery form. The caller has already
+    /// consumed the opening `{`. Stops at the first `}` or the first token
+    /// that is not a valid clause start, WITHOUT consuming that closing
+    /// `}` — every caller must follow up with its own
+    /// `self.expect_char('}')?` so a missing/malformed closing brace
+    /// surfaces a clear syntax error instead of silently truncating the
+    /// clause list.
+    fn parse_subquery_clause_body(&mut self) -> Result<Vec<Clause>> {
+        let mut clauses = Vec::new();
+        while self.pos < self.input.len() {
+            self.skip_whitespace();
+            if self.peek_char() == Some('}') {
+                break;
+            }
+            if self.is_clause_boundary() {
+                let clause = self.parse_clause(clauses.last())?;
+                clauses.push(clause);
+            } else {
+                break;
+            }
+        }
+        Ok(clauses)
+    }
+
+    /// Parse an `EXISTS { … }` expression: either the abbreviated
+    /// pattern-probe form (`EXISTS { pattern [WHERE expr] }`) or, when the
+    /// body opens with a clause keyword (`MATCH`, `OPTIONAL MATCH`,
+    /// `WITH`, or — structurally, to be rejected with
+    /// `InvalidClauseComposition` — a write clause), the full subquery
+    /// form (`EXISTS { MATCH … [WHERE …] [WITH …] [RETURN …] }`,
+    /// openCypher TCK `ExistentialSubquery2`/`ExistentialSubquery3`). The
+    /// abbreviated form's pattern never starts with a clause keyword (it
+    /// starts with `(`), so `is_clause_boundary()` cleanly distinguishes
+    /// the two without a `MATCH`-only special case.
     pub(super) fn parse_exists_expression(&mut self) -> Result<Expression> {
         self.expect_keyword("EXISTS")?; // consume EXISTS
         self.skip_whitespace();
@@ -166,6 +189,13 @@ impl CypherParser {
         // Expect opening brace {
         self.expect_char('{')?;
         self.skip_whitespace();
+
+        // A clause-keyword start (MATCH, OPTIONAL, WITH, or a write
+        // clause) is always the full subquery form; anything else (a bare
+        // pattern) is the abbreviated pattern-probe form.
+        if self.is_clause_boundary() {
+            return self.parse_exists_subquery_body();
+        }
 
         // Parse the pattern inside the braces
         // We need to stop before WHERE or closing brace
@@ -186,8 +216,65 @@ impl CypherParser {
         self.expect_char('}')?;
 
         Ok(Expression::Exists {
-            pattern,
-            where_clause,
+            inner: ExistsInner::Pattern {
+                pattern,
+                where_clause,
+            },
+        })
+    }
+
+    /// Parse the clause list of the full `EXISTS { MATCH … }` subquery
+    /// form. The caller has already consumed the opening `{` and confirmed
+    /// the body opens on a clause keyword. Write clauses (`SET`/`CREATE`/
+    /// `DELETE`/`MERGE`/`REMOVE`/`FOREACH`) are rejected here — openCypher
+    /// TCK `ExistentialSubquery2[3]` requires a compile-time
+    /// `InvalidClauseComposition` `SyntaxError` for `EXISTS { MATCH … SET
+    /// … }`, and the same check catches a write clause with no leading
+    /// `MATCH` at all (`EXISTS { CREATE (x) }`).
+    fn parse_exists_subquery_body(&mut self) -> Result<Expression> {
+        let clauses = self.parse_subquery_clause_body()?;
+        self.skip_whitespace();
+        self.expect_char('}')?;
+
+        if clauses.is_empty() {
+            return Err(self.error(
+                "ERR_EXISTS_SUBQUERY_EMPTY: EXISTS { … } must contain at least one clause",
+            ));
+        }
+
+        if let Some(write_clause) = clauses.iter().find(|c| is_write_clause(c)) {
+            return Err(self.error(&format!(
+                "InvalidClauseComposition: {} is not allowed inside an \
+                 EXISTS {{ … }} subquery",
+                write_clause_name(write_clause)
+            )));
+        }
+
+        // Fast path: a single MATCH (optionally filtered by one WHERE,
+        // optionally followed by one non-aggregating RETURN) desugars
+        // straight into the abbreviated pattern-probe form, so evaluation
+        // reuses `evaluate_exists_pattern`'s short-circuiting
+        // depth-first witness search instead of planning and running a
+        // full operator pipeline on every outer row — openCypher TCK
+        // `ExistentialSubquery2[1]`.
+        if let Some((pattern, where_clause)) = try_desugar_exists_pattern(&clauses) {
+            return Ok(Expression::Exists {
+                inner: ExistsInner::Pattern {
+                    pattern,
+                    where_clause,
+                },
+            });
+        }
+
+        let inner = CypherQuery {
+            clauses,
+            params: std::collections::HashMap::new(),
+            graph_scope: None,
+        };
+        Ok(Expression::Exists {
+            inner: ExistsInner::Subquery {
+                inner: Box::new(inner),
+            },
         })
     }
 
@@ -271,4 +358,66 @@ impl CypherParser {
             path_variable: None, // Set by caller if path variable assignment detected
         })
     }
+}
+
+/// True for clause kinds that mutate the graph and are therefore illegal
+/// inside an `EXISTS { … }` subquery body (openCypher TCK
+/// `ExistentialSubquery2[3]`).
+fn is_write_clause(clause: &Clause) -> bool {
+    matches!(
+        clause,
+        Clause::Create(_)
+            | Clause::Merge(_)
+            | Clause::Set(_)
+            | Clause::Delete(_)
+            | Clause::Remove(_)
+            | Clause::Foreach(_)
+    )
+}
+
+/// Display name for the write-clause token embedded in the
+/// `InvalidClauseComposition` error message.
+fn write_clause_name(clause: &Clause) -> &'static str {
+    match clause {
+        Clause::Create(_) => "CREATE",
+        Clause::Merge(_) => "MERGE",
+        Clause::Set(_) => "SET",
+        Clause::Delete(_) => "DELETE",
+        Clause::Remove(_) => "REMOVE",
+        Clause::Foreach(_) => "FOREACH",
+        _ => "clause",
+    }
+}
+
+/// When `clauses` is exactly a single non-`OPTIONAL` `MATCH` — optionally
+/// followed by one `WHERE`, optionally followed by one `RETURN` whose
+/// items call no aggregate function — extracts the pattern and
+/// where-expression the abbreviated `EXISTS { pattern [WHERE …] }` form
+/// needs. Returns `None` for anything else (a second `MATCH`, `WITH`,
+/// `UNION`, `OPTIONAL MATCH`, or a `RETURN` that aggregates): every one of
+/// those can change the inner row count from what the bare pattern would
+/// report (an aggregate `RETURN` in particular always yields exactly one
+/// row, even over zero matches, so folding it away would silently turn a
+/// non-match into a match).
+fn try_desugar_exists_pattern(clauses: &[Clause]) -> Option<(Pattern, Option<Box<Expression>>)> {
+    let (match_clause, rest) = match clauses.split_first()? {
+        (Clause::Match(m), rest) if !m.optional => (m, rest),
+        _ => return None,
+    };
+
+    let (where_expr, rest) = match rest.split_first() {
+        Some((Clause::Where(w), rest)) => (Some(&w.expression), rest),
+        _ => (None, rest),
+    };
+
+    match rest {
+        [] => {}
+        [Clause::Return(r)] if r.items.iter().all(|i| i.expression.is_aggregate_free()) => {}
+        _ => return None,
+    }
+
+    Some((
+        match_clause.pattern.clone(),
+        where_expr.cloned().map(Box::new),
+    ))
 }

@@ -15,9 +15,9 @@ pub use cache::{CANONICAL_VERSION, canonicalise_query, hash_canonicalised};
 pub use preparse::{PlanHint, extract_plan_hints};
 
 use super::parser::{
-    BinaryOperator, Clause, CypherQuery, Expression, Literal, NodePattern, Pattern, PatternElement,
-    PropertyMap, QuantifiedGroup, QueryHint, RelationshipDirection, RelationshipPattern,
-    RelationshipQuantifier, ReturnItem, SortDirection, UnaryOperator,
+    BinaryOperator, Clause, CypherQuery, ExistsInner, Expression, Literal, NodePattern, Pattern,
+    PatternElement, PropertyMap, QuantifiedGroup, QueryHint, RelationshipDirection,
+    RelationshipPattern, RelationshipQuantifier, ReturnItem, SortDirection, UnaryOperator,
 };
 use super::types::Notification;
 use super::{Aggregation, Direction, JoinType, Operator, ProjectionItem};

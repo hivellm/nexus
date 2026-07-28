@@ -24,8 +24,8 @@
 //! double-prefix.
 
 use crate::executor::parser::ast::{
-    Clause, CypherQuery, Expression, NodePattern, Pattern, PatternElement, PropertyMap,
-    RelationshipPattern, RemoveItem, ReturnItem, SetItem, WhereClause, WithClause,
+    Clause, CypherQuery, ExistsInner, Expression, NodePattern, Pattern, PatternElement,
+    PropertyMap, RelationshipPattern, RemoveItem, ReturnItem, SetItem, WhereClause, WithClause,
 };
 
 use super::config::TenantIsolationMode;
@@ -280,15 +280,27 @@ fn scope_expression(expr: &mut Expression, ns: &UserNamespace) {
             }
         }
         Expression::IsNull { expr, .. } => scope_expression(expr, ns),
-        Expression::Exists {
-            pattern,
-            where_clause,
-        } => {
-            scope_pattern(pattern, ns);
-            if let Some(e) = where_clause.as_deref_mut() {
-                scope_expression(e, ns);
+        Expression::Exists { inner } => match inner {
+            ExistsInner::Pattern {
+                pattern,
+                where_clause,
+            } => {
+                scope_pattern(pattern, ns);
+                if let Some(e) = where_clause.as_deref_mut() {
+                    scope_expression(e, ns);
+                }
             }
-        }
+            ExistsInner::Subquery { inner } => {
+                // `scope_expression` only ever runs once `scope_query` has
+                // already confirmed `CatalogPrefix` mode is active, so the
+                // inner clause list is walked directly (mirrors
+                // `scope_query`'s own loop) rather than re-entering the
+                // public, mode-checked entry point.
+                for clause in &mut inner.clauses {
+                    scope_clause(clause, ns);
+                }
+            }
+        },
         // Catch-all for expression variants added after this was
         // written (e.g. list comprehensions, predicates). Rather
         // than silently leaking unscoped property names, leave them

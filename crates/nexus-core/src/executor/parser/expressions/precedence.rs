@@ -83,8 +83,10 @@ impl CypherParser {
                     return Ok(Expression::UnaryOp {
                         op: UnaryOperator::Not,
                         operand: Box::new(Expression::Exists {
-                            pattern,
-                            where_clause: None,
+                            inner: ExistsInner::Pattern {
+                                pattern,
+                                where_clause: None,
+                            },
                         }),
                     });
                 }
