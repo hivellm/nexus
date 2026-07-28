@@ -154,6 +154,36 @@ impl Engine {
                         }
                         match element {
                             executor::parser::PatternElement::Node(node) => {
+                                // Cross-clause / cross-element reuse: a bare
+                                // reference to a variable already bound to
+                                // EXACTLY ONE node — by an earlier MATCH or
+                                // CREATE clause in this same statement, or by
+                                // an earlier element of this very pattern —
+                                // resolves to that node instead of minting a
+                                // duplicate. Semantic validation already
+                                // rejects re-declaring a bound variable with
+                                // labels/properties/`_id`
+                                // (`check_create_element_rebind`), so a bound
+                                // `node.variable` reaching here is always the
+                                // bare `(a)` shape with no structure to
+                                // apply. A variable bound to MULTIPLE ids
+                                // (e.g. a preceding comma-joined MATCH cross
+                                // product) is NOT handled by this loop: the
+                                // arm falls through, mints a fresh node from
+                                // the bare `(a)` shape and overwrites the
+                                // binding below — a pre-existing duplicate-
+                                // node gap. Proper per-row fan-out belongs to
+                                // a multi-row write path this single-pass
+                                // clause loop does not implement, so this
+                                // guard only short-circuits the unambiguous
+                                // single-id case.
+                                if let Some(var) = &node.variable {
+                                    if let Some([existing_id]) = context.get(var).map(Vec::as_slice)
+                                    {
+                                        last_node_id = Some(*existing_id);
+                                        continue;
+                                    }
+                                }
                                 let mut props = Map::new();
                                 if let Some(pm) = &node.properties {
                                     for (k, expr) in &pm.properties {
@@ -185,22 +215,41 @@ impl Engine {
                                 })?;
                                 let target_id = match create_clause.pattern.elements.get(i + 1) {
                                     Some(executor::parser::PatternElement::Node(target_node)) => {
-                                        let mut props = Map::new();
-                                        if let Some(pm) = &target_node.properties {
-                                            for (k, expr) in &pm.properties {
-                                                props.insert(
-                                                    k.clone(),
-                                                    self.eval_write_value(expr)?,
-                                                );
+                                        // Same cross-clause/cross-element
+                                        // single-id reuse as the `Node` arm
+                                        // above, applied to a relationship's
+                                        // target endpoint — `(a)-[:R]->(b)`
+                                        // must wire onto the ORIGINAL `b`
+                                        // when it is already bound, not mint
+                                        // an unconnected duplicate.
+                                        let reused_id =
+                                            target_node.variable.as_ref().and_then(|var| {
+                                                match context.get(var).map(Vec::as_slice) {
+                                                    Some([existing_id]) => Some(*existing_id),
+                                                    _ => None,
+                                                }
+                                            });
+                                        let tid = if let Some(existing_id) = reused_id {
+                                            existing_id
+                                        } else {
+                                            let mut props = Map::new();
+                                            if let Some(pm) = &target_node.properties {
+                                                for (k, expr) in &pm.properties {
+                                                    props.insert(
+                                                        k.clone(),
+                                                        self.eval_write_value(expr)?,
+                                                    );
+                                                }
                                             }
-                                        }
-                                        let tid = self.create_node(
-                                            target_node.labels.clone(),
-                                            Value::Object(props),
-                                        )?;
-                                        if let Some(var) = &target_node.variable {
-                                            context.insert(var.clone(), vec![tid]);
-                                        }
+                                            let new_id = self.create_node(
+                                                target_node.labels.clone(),
+                                                Value::Object(props),
+                                            )?;
+                                            if let Some(var) = &target_node.variable {
+                                                context.insert(var.clone(), vec![new_id]);
+                                            }
+                                            new_id
+                                        };
                                         last_node_id = Some(tid);
                                         // Mark `i + 1` consumed so the loop's
                                         // own `Node` arm does not re-create

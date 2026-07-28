@@ -160,25 +160,38 @@ impl Executor {
             let policy = operators::create::ast_conflict_policy_to_storage(*conflict_policy);
             let existing_rows = self.materialize_rows_from_variables(&context)?;
             if existing_rows.is_empty() {
-                // CREATE standalone - create nodes and relationships directly
-                let (mut created_node_ids, mut created_rel_ids) = self
-                    .execute_create_pattern_with_variables(
-                        pattern,
-                        resolved_external_id,
-                        policy,
-                        &context.params,
-                    )?;
-
+                // CREATE standalone - create nodes and relationships directly.
+                //
                 // A statement may carry SEVERAL consecutive CREATE clauses
-                // (`CREATE (a) CREATE (b)` — standard openCypher, distinct
-                // from the comma form, which arrives as one pattern). The
-                // planner emits one Create operator per clause, but this
-                // fast path executed only `operators.first()` and the
-                // trailing loop ignored the rest — the statement silently
-                // created ONLY the first clause's entities (parity harness
-                // case 02c). Execute every remaining Create here, merging
-                // the created-entity maps so the response row and context
-                // variables cover all clauses.
+                // (`CREATE (a) CREATE (b) CREATE (a)-[:R]->(b)` — standard
+                // openCypher, distinct from the comma form, which arrives as
+                // one pattern). The planner emits one Create operator per
+                // clause; `created_node_ids` / `created_rel_ids` are threaded
+                // through every clause below via `execute_create_pattern_internal`
+                // (rather than each clause calling the
+                // `execute_create_pattern_with_variables` wrapper, which
+                // always starts from a fresh, clause-local map) so a bare
+                // variable reference in a LATER clause — `(a)` with no
+                // labels/properties, the only shape that reaches here once
+                // `a` is already bound (re-declaring a bound variable with
+                // structure is rejected earlier, at semantic validation) —
+                // resolves to the node an EARLIER clause created instead of
+                // minting an unbound duplicate.
+                // `execute_create_pattern_internal`'s own node/relationship-target
+                // arms already prefer an existing `created_node_ids` entry
+                // over creating a fresh node; sharing the accumulator across
+                // clauses is what makes that reuse span clause boundaries.
+                let mut created_node_ids = std::collections::HashMap::new();
+                let mut created_rel_ids = std::collections::HashMap::new();
+                self.execute_create_pattern_internal(
+                    pattern,
+                    &mut created_node_ids,
+                    &mut created_rel_ids,
+                    resolved_external_id,
+                    policy,
+                    &context.params,
+                )?;
+
                 for op in operators.iter().skip(1) {
                     if let Operator::Create {
                         pattern: extra_pattern,
@@ -193,15 +206,14 @@ impl Executor {
                         };
                         let extra_policy =
                             operators::create::ast_conflict_policy_to_storage(*extra_policy);
-                        let (extra_nodes, extra_rels) = self
-                            .execute_create_pattern_with_variables(
-                                extra_pattern,
-                                extra_ext_id,
-                                extra_policy,
-                                &context.params,
-                            )?;
-                        created_node_ids.extend(extra_nodes);
-                        created_rel_ids.extend(extra_rels);
+                        self.execute_create_pattern_internal(
+                            extra_pattern,
+                            &mut created_node_ids,
+                            &mut created_rel_ids,
+                            extra_ext_id,
+                            extra_policy,
+                            &context.params,
+                        )?;
                     }
                 }
 
