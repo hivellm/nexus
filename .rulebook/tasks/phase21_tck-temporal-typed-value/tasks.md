@@ -1,10 +1,10 @@
 ## 1. Implementation
-- [ ] 1.1 typed temporal value
-- [ ] 1.2 constructors return typed value
-- [ ] 1.3 canonical ISO rendering at projection boundary
-- [ ] 1.4 tagged form never leaks into responses
+- [x] 1.1 typed temporal value — new eval/temporal_value.rs (789 lines): tagged intermediate representation for date/localtime/localdatetime/time/datetime/duration; duration stores Neo4j's internal (months, days, seconds, nanos) layout with unconditional nanos normalization (invariant enforced in duration_parts, i32::MIN safe); canonical ISO-8601 duration renderer with per-component signs, months→years split, nanosecond trimming — algorithm derived from and verified against TCK Temporal1/2/6/8/10 expectation tables; 20+ unit tests
+- [x] 1.2 constructors return typed value — fn_temporal.rs: date/time/localtime/datetime/localdatetime/duration return tagged values; duration() gains weeks support (folds into days) and exact integer arithmetic (checked_mul/checked_add fast path, f64 only for fractional literals, hours*3600 overflow errors); accessors read tagged + legacy forms; weeks(d) accessor wired (days/7, was null)
+- [x] 1.3 canonical ISO rendering at projection boundary — canonicalization at Executor::execute (dispatch/execute.rs) covering all read paths incl. lock-free executor; engine write-path RETURN (build_return_result / evaluate_return_expression_with_rels in write_exec/return_builder.rs) canonicalizes its three storage-read sites independently; CREATE property values canonicalized at the storage boundary (resolve_property_expr_for_create) so the tagged form never reaches disk; doc comments enumerate all canonicalization points
+- [x] 1.4 tagged form never leaks into responses — toString()/toStringList() leak fixed in fn_list.rs (tag was serializing as literal string content); values_equal_for_comparison + compare_values_for_sort canonicalize temporal operands (WHERE =, ORDER BY work mid-pipeline); regression tests: CREATE round-trip (duration + date) asserts ISO string and no marker key, MERGE inline RETURN no-leak, nested list/map descent; independent opus review APPROVE after 2 rounds (2 BLOCKERs — stored tag + write-path bypass — and 2 MAJORs fixed)
 
 ## 2. Tail (docs + tests — check or waive with tailWaiver)
-- [ ] 2.1 Update or create documentation covering the implementation
-- [ ] 2.2 Write tests covering the new behavior
-- [ ] 2.3 Run tests and confirm they pass
+- [x] 2.1 Update or create documentation covering the implementation — CHANGELOG entry; doc comments on the canonicalization contract at every boundary; OPENCYPHER_TCK_REPORT.md regenerated
+- [x] 2.2 Write tests covering the new behavior — temporal_value.rs unit tests (rendering ladder, normalization, i32::MIN, PT0S guard) + tests/cypher/temporal_typed_value_test.rs (round-trip, no-leak, containers) + updated legacy assertions that encoded the old Object-shape bug
+- [x] 2.3 Run tests and confirm they pass — cypher 468/468, compatibility 245/245, lib 2620 passed (pre-existing flaky trio only, unrelated), clippy -D warnings clean, rustfmt clean; TCK: gate case P14DT16H12M passes, expressions/temporal unblocked for the follow-up chain

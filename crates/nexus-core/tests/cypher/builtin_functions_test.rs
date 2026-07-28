@@ -696,24 +696,33 @@ fn test_time_function_current() {
     let value = get_single_value(&result);
     assert!(value.is_string());
 
-    // Should be in HH:MM:SS format
+    // Cypher's TIME type is timezone-aware — its canonical ISO form always
+    // carries a UTC-offset suffix (e.g. "14:30:45+01:00"), unlike the old
+    // pre-typed-value implementation, which rendered a bare "HH:MM:SS" with
+    // no offset at all. `time()` with no arguments also carries the current
+    // sub-second nanosecond fraction, so only the fixed-width "HH:MM:SS"
+    // prefix and the offset suffix are checked here, not an exact overall
+    // length.
     let time_str = value.as_str().unwrap();
-    assert_eq!(time_str.len(), 8);
+    assert!(time_str.len() >= 14, "unexpectedly short: {time_str}");
     assert_eq!(time_str.chars().nth(2).unwrap(), ':');
     assert_eq!(time_str.chars().nth(5).unwrap(), ':');
+    assert!(time_str.contains('+') || time_str[6..].contains('-'));
 }
 
 #[test]
 fn test_time_function_from_string() {
     let (mut engine, _ctx) = setup_isolated_test_engine().unwrap();
 
-    // Parse time string HH:MM:SS
+    // Parse time string HH:MM:SS — canonical rendering appends the (here,
+    // UTC) offset, since TIME is always zoned (see the doc comment on
+    // `test_time_function_current`).
     let result = execute_query(&mut engine, "RETURN time('14:30:45') AS parsed_time");
-    assert_eq!(get_single_value(&result), "14:30:45");
+    assert_eq!(get_single_value(&result), "14:30:45+00:00");
 
     // Parse time string HH:MM
     let result = execute_query(&mut engine, "RETURN time('09:15') AS parsed_time");
-    assert_eq!(get_single_value(&result), "09:15:00");
+    assert_eq!(get_single_value(&result), "09:15:00+00:00");
 
     // Invalid time should return null
     let result = execute_query(&mut engine, "RETURN time('invalid') AS parsed_time");
@@ -801,10 +810,28 @@ fn test_temporal_functions_with_nodes() {
     });
     assert_eq!(count, 2, "Should find exactly 2 events");
 
-    // Query with time comparison
+    // Query with time comparison. `localtime(...)`, not `time(...)`: `TIME`
+    // is timezone-aware and its canonical ISO form always carries a
+    // UTC-offset suffix (e.g. `14:30:00+00:00`), so `time('14:30:00')`
+    // would never string-match the offset-less `'14:30:00'` literal
+    // regardless of the point below.
+    //
+    // This assertion passes only because `values_equal_for_comparison`
+    // canonicalizes a temporal operand to its ISO string before comparing
+    // it against a plain `STRING` node property — a deliberate, but
+    // strictly non-spec, type-blind equality: openCypher says comparing a
+    // `TEMPORAL` value to a `STRING` is always `false` (different types
+    // never compare equal), not "compare as strings". `e.time` here is an
+    // ordinary `STRING` property (Nexus does not yet type-tag stored
+    // properties as `LOCALTIME`), so under strict spec semantics this
+    // `WHERE` would match nothing. This test therefore pins *current*
+    // Nexus behavior, not openCypher-correct behavior — fixing the
+    // deviation (typed property storage + strict-type comparison) is
+    // out of scope for the typed intermediate-value work this test lives
+    // next to.
     let result = execute_query(
         &mut engine,
-        "MATCH (e:Event) WHERE e.time = time('14:30:00') RETURN e.name AS name",
+        "MATCH (e:Event) WHERE e.time = localtime('14:30:00') RETURN e.name AS name",
     );
     assert_eq!(get_single_value(&result), "Meeting");
 }

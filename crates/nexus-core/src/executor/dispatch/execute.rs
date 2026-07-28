@@ -128,6 +128,32 @@ impl Executor {
     /// with [`crate::executor::planner::queries::stash_planner_notifications`]
     /// which the planner's per-call accumulator flushes into right
     /// before the planner is dropped.
+    ///
+    /// This is also **one of three** canonicalization points for typed
+    /// temporal values (see `eval::temporal_value`): every row this call
+    /// returns has any `_nexus_temporal_type`-tagged intermediate value —
+    /// including ones nested inside a list or map — canonicalized to its
+    /// ISO-8601 string before the `ResultSet` leaves the executor. This
+    /// call covers the HTTP layer's read-only lock-free fast path
+    /// (`lock_free_executor.execute(&query)`), `Engine::dispatch`'s
+    /// fallback/standalone-CREATE branches, and PROFILE/EXPLAIN's internal
+    /// re-execution — exactly the shape the openCypher TCK's
+    /// `expressions/temporal` scenarios use (bare `RETURN`/`WITH`, no write
+    /// clauses).
+    ///
+    /// It is **not** the only canonicalization point, and callers must not
+    /// assume it is: `crate::engine`'s write path (`MERGE`/`SET`/`REMOVE`/
+    /// `FOREACH`, dispatched through `Engine::execute_write_query`) builds
+    /// its own inline `RETURN` result via
+    /// `engine::write_exec::return_builder::{build_return_result,
+    /// build_return_result_with_rels}`, which reads node/relationship
+    /// properties straight out of storage and never calls this method —
+    /// those two functions canonicalize independently. The property-value
+    /// *storage* boundary (`CREATE`'s
+    /// `executor::operators::create::Executor::resolve_property_expr_for_create`)
+    /// is a fourth, separate point: it canonicalizes before a value is
+    /// ever written to a node/relationship record, so a tagged value never
+    /// reaches disk in the first place for that write path.
     pub fn execute(&self, query: &Query) -> Result<ResultSet> {
         // Drain (and discard) any stale notifications from a prior
         // panic-aborted call before planning the new query. Equivalent
@@ -135,6 +161,12 @@ impl Executor {
         let _stale = planner::queries::drain_pending_planner_notifications();
 
         let mut result = self.execute_inner(query)?;
+
+        for row in &mut result.rows {
+            for value in &mut row.values {
+                eval::temporal_value::canonicalize_value_in_place(value);
+            }
+        }
 
         // Attach planner-level diagnostics produced for this call.
         // Vec is empty in the hot path (no unindexed access), so this

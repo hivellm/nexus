@@ -7,6 +7,7 @@
 use super::super::context::ExecutionContext;
 use super::super::engine::Executor;
 use super::super::parser;
+use super::temporal_value;
 use crate::{Error, Result};
 use serde_json::Value;
 use std::collections::HashMap;
@@ -413,11 +414,35 @@ impl Executor {
     }
 
     /// Compare two values for equality, handling numeric type differences (1.0 == 1)
+    ///
+    /// A tagged intermediate temporal value (see `super::temporal_value`)
+    /// is canonicalized to its ISO string before the comparison below runs
+    /// — otherwise `WHERE n.date = date('2024-11-01')` would compare a
+    /// plain-string node property against a `{_nexus_temporal_type:
+    /// "date", ...}` object and never match, since equality/WHERE
+    /// filtering happens mid-pipeline, well before the single
+    /// projection-boundary canonicalization pass in `Executor::execute`.
     pub(in crate::executor) fn values_equal_for_comparison(
         &self,
         left: &Value,
         right: &Value,
     ) -> bool {
+        let left_canon;
+        let right_canon;
+        let left = match temporal_value::canonicalize_temporal(left) {
+            Some(s) => {
+                left_canon = Value::String(s);
+                &left_canon
+            }
+            None => left,
+        };
+        let right = match temporal_value::canonicalize_temporal(right) {
+            Some(s) => {
+                right_canon = Value::String(s);
+                &right_canon
+            }
+            None => right,
+        };
         match (left, right) {
             (Value::Number(a), Value::Number(b)) => {
                 // Compare numbers (handle int/float conversion)
@@ -617,11 +642,44 @@ impl Executor {
     }
 
     /// Compare values for sorting
+    ///
+    /// Tagged intermediate temporal values (see `super::temporal_value`)
+    /// canonicalize to their ISO string before comparing — the `(Object,
+    /// Object)` shape would otherwise fall through to the generic
+    /// `value_to_string` catch-all below, which renders any object as its
+    /// entry count (`"{4}"`), not a chronological order. Canonical ISO
+    /// strings sort correctly for same-kind dates/times (lexicographic
+    /// order matches chronological order for a fixed-width `YYYY-MM-DD`/
+    /// `HH:MM:SS[.fraction]` form).
+    ///
+    /// Duration ordering is wrong under this scheme: the canonical string
+    /// is variable-width per unit, so lexicographic order does not match
+    /// magnitude — `"PT10H"` sorts before `"PT9H"` (`'1' < '9'`) even
+    /// though 10 hours is the longer duration. Correct duration comparison
+    /// needs a component-wise total order (e.g. months/days/seconds
+    /// converted to a common unit), which is `docs/analysis/tck/03-temporal.md`
+    /// workstream #5's job, not this function's.
     pub(in crate::executor) fn compare_values_for_sort(
         &self,
         a: &Value,
         b: &Value,
     ) -> std::cmp::Ordering {
+        let a_canon;
+        let b_canon;
+        let a = match temporal_value::canonicalize_temporal(a) {
+            Some(s) => {
+                a_canon = Value::String(s);
+                &a_canon
+            }
+            None => a,
+        };
+        let b = match temporal_value::canonicalize_temporal(b) {
+            Some(s) => {
+                b_canon = Value::String(s);
+                &b_canon
+            }
+            None => b,
+        };
         match (a, b) {
             (Value::Null, Value::Null) => std::cmp::Ordering::Equal,
             (Value::Null, _) => std::cmp::Ordering::Less,

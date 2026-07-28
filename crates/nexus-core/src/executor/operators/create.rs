@@ -610,7 +610,15 @@ impl Executor {
         params: &std::collections::HashMap<String, Value>,
     ) -> Result<Value> {
         // Static-literal (and `$param`) fast path. Keeps the hot
-        // CREATE-with-literal case as cheap as before this lift.
+        // CREATE-with-literal case as cheap as before this lift. No
+        // canonicalization is needed on this branch: it's not that a
+        // literal/parameter value can never syntactically carry the
+        // `_nexus_temporal_type` tag key (a client-supplied `$param` could
+        // hand-craft one, the same marker-collision hazard as
+        // `_nexus_rel_type`) — it's that no *executor-produced* value
+        // reaches this branch. Canonicalization here exists to collapse
+        // the executor's own tagged intermediate representation, not to
+        // sanitize arbitrary client input.
         if let Ok(v) = self.expression_to_json_value(expr, params) {
             return Ok(v);
         }
@@ -620,7 +628,19 @@ impl Executor {
         // expressions resolve too (the ctx used to be built EMPTY, which
         // made every parameterized property unresolvable here — G1).
         let inner_ctx = super::super::context::ExecutionContext::new(params.clone(), None);
-        self.evaluate_projection_expression(row, &inner_ctx, expr)
+        let mut value = self.evaluate_projection_expression(row, &inner_ctx, expr)?;
+        // A property value built from a `FunctionCall` — e.g.
+        // `CREATE (n {d: duration({days: 1})})` — reaches here via the
+        // shared projection evaluator, which returns the tagged
+        // intermediate temporal shape (`{"_nexus_temporal_type": ...}`),
+        // not the canonical ISO string. Storage is a durability boundary
+        // the executor's own projection-boundary canonicalization
+        // (`Executor::execute`) never sees: a tagged value written here
+        // would persist as a raw JSON object on disk, corrupt any index
+        // built over it, and read back un-rendered on every later MATCH.
+        // Canonicalize before the value ever reaches `create_node*`.
+        super::super::eval::temporal_value::canonicalize_value_in_place(&mut value);
+        Ok(value)
     }
 
     /// Convert expression to JSON value. `params` resolves

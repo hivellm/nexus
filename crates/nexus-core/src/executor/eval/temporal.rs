@@ -1,12 +1,21 @@
-//! Date/time + duration arithmetic. Detects `Duration` objects and ISO
-//! datetime strings, decomposes them into (years, months, days, h, m, s)
-//! tuples, and implements add/subtract/difference between datetimes and
-//! durations (both directions).
+//! Date/time + duration arithmetic. Detects tagged temporal values (see
+//! [`super::temporal_value`]) and legacy ISO datetime strings, and
+//! implements add/subtract/difference between datetimes and durations
+//! (both directions).
+//!
+//! Operands may arrive either as a tagged intermediate temporal value
+//! (`date`/`datetime`/`duration`/... built by `fn_temporal.rs`'s
+//! constructors) or as a plain ISO string (a literal the parser never
+//! routed through a temporal constructor). [`coerce_temporal_instant`]
+//! bridges the former down to the latter at each function's entry point, so
+//! the chrono parsing below — unchanged from before the typed-value work —
+//! only ever has to deal with one shape.
 
 use super::super::engine::Executor;
+use super::temporal_value;
 use crate::{Error, Result};
 use chrono::{Datelike, TimeZone, Timelike};
-use serde_json::{Map, Value};
+use serde_json::Value;
 
 /// Combines `years * 12 + months` into a total month delta using checked
 /// arithmetic. Both components come from user-controlled duration literals
@@ -70,22 +79,33 @@ fn checked_month_rollover(
     Ok((final_year, final_month))
 }
 
-impl Executor {
-    pub(in crate::executor) fn is_duration_object(value: &Value) -> bool {
-        if let Value::Object(map) = value {
-            map.contains_key("years")
-                || map.contains_key("months")
-                || map.contains_key("days")
-                || map.contains_key("hours")
-                || map.contains_key("minutes")
-                || map.contains_key("seconds")
-        } else {
-            false
+/// Bridges a tagged temporal *instant* (date/localtime/localdatetime/time/
+/// datetime) down to its canonical ISO string, so the chrono-based parsing
+/// in this module — which predates the typed-value representation — only
+/// ever has to handle `Value::String`. Non-instant values (durations,
+/// plain strings, anything else) pass through unchanged.
+fn coerce_temporal_instant(value: &Value) -> Value {
+    if temporal_value::is_temporal_instant(value) {
+        if let Some(rendered) = temporal_value::canonicalize_temporal(value) {
+            return Value::String(rendered);
         }
     }
+    value.clone()
+}
 
-    /// Check if value is a datetime string (RFC3339 format)
+impl Executor {
+    pub(in crate::executor) fn is_duration_object(value: &Value) -> bool {
+        temporal_value::is_duration(value)
+    }
+
+    /// True when `value` is usable as the instant side of datetime
+    /// arithmetic: either a tagged temporal instant, or (backward
+    /// compatibility for any code path that still hands this a raw
+    /// literal) a plain ISO date/datetime string.
     pub(in crate::executor) fn is_datetime_string(value: &Value) -> bool {
+        if temporal_value::is_temporal_instant(value) {
+            return true;
+        }
         if let Value::String(s) = value {
             chrono::DateTime::parse_from_rfc3339(s).is_ok()
                 || chrono::NaiveDateTime::parse_from_str(s, "%Y-%m-%dT%H:%M:%S").is_ok()
@@ -95,21 +115,27 @@ impl Executor {
         }
     }
 
-    /// Extract duration components as (years, months, days, hours, minutes, seconds)
+    /// Extract duration components as (years, months, days, hours, minutes, seconds).
+    ///
+    /// Reads a tagged `duration` value's normalized `(months, days,
+    /// seconds, nanos)` fields and re-expands them into this legacy
+    /// six-component shape (`years` always `0` — the tagged value already
+    /// folds years into `months`) so the arithmetic below, which predates
+    /// the typed-value representation, needs no further changes. Sub-second
+    /// precision (`nanos`) has no slot in this shape and is truncated —
+    /// full nanosecond-precision arithmetic is out of scope for the typed-
+    /// value gate (see `docs/analysis/tck/03-temporal.md` F-019).
     pub(in crate::executor) fn extract_duration_components(
         value: &Value,
     ) -> (i64, i64, i64, i64, i64, i64) {
-        if let Value::Object(map) = value {
-            let years = map.get("years").and_then(|v| v.as_i64()).unwrap_or(0);
-            let months = map.get("months").and_then(|v| v.as_i64()).unwrap_or(0);
-            let days = map.get("days").and_then(|v| v.as_i64()).unwrap_or(0);
-            let hours = map.get("hours").and_then(|v| v.as_i64()).unwrap_or(0);
-            let minutes = map.get("minutes").and_then(|v| v.as_i64()).unwrap_or(0);
-            let seconds = map.get("seconds").and_then(|v| v.as_i64()).unwrap_or(0);
-            (years, months, days, hours, minutes, seconds)
-        } else {
-            (0, 0, 0, 0, 0, 0)
+        if let Some((months, days, seconds, _nanos)) = temporal_value::duration_components(value) {
+            let hours = seconds / 3600;
+            let rem = seconds % 3600;
+            let minutes = rem / 60;
+            let secs = rem % 60;
+            return (0, months, days, hours, minutes, secs);
         }
+        (0, 0, 0, 0, 0, 0)
     }
 
     /// Try to add datetime + duration
@@ -135,43 +161,22 @@ impl Executor {
         left: &Value,
         right: &Value,
     ) -> Result<Option<Value>> {
-        if Self::is_duration_object(left) && Self::is_duration_object(right) {
-            let (y1, mo1, d1, h1, mi1, s1) = Self::extract_duration_components(left);
-            let (y2, mo2, d2, h2, mi2, s2) = Self::extract_duration_components(right);
-
+        if let (Some((m1, d1, s1, n1)), Some((m2, d2, s2, n2))) = (
+            temporal_value::duration_components(left),
+            temporal_value::duration_components(right),
+        ) {
             let overflow = |unit: &str| {
                 Error::CypherExecution(format!(
                     "duration arithmetic overflow: {unit} component exceeds i64 range"
                 ))
             };
-            let mut result_map = Map::new();
-            let years = y1.checked_add(y2).ok_or_else(|| overflow("years"))?;
-            let months = mo1.checked_add(mo2).ok_or_else(|| overflow("months"))?;
+            let months = m1.checked_add(m2).ok_or_else(|| overflow("months"))?;
             let days = d1.checked_add(d2).ok_or_else(|| overflow("days"))?;
-            let hours = h1.checked_add(h2).ok_or_else(|| overflow("hours"))?;
-            let minutes = mi1.checked_add(mi2).ok_or_else(|| overflow("minutes"))?;
             let seconds = s1.checked_add(s2).ok_or_else(|| overflow("seconds"))?;
-
-            if years != 0 {
-                result_map.insert("years".to_string(), Value::Number(years.into()));
-            }
-            if months != 0 {
-                result_map.insert("months".to_string(), Value::Number(months.into()));
-            }
-            if days != 0 {
-                result_map.insert("days".to_string(), Value::Number(days.into()));
-            }
-            if hours != 0 {
-                result_map.insert("hours".to_string(), Value::Number(hours.into()));
-            }
-            if minutes != 0 {
-                result_map.insert("minutes".to_string(), Value::Number(minutes.into()));
-            }
-            if seconds != 0 {
-                result_map.insert("seconds".to_string(), Value::Number(seconds.into()));
-            }
-
-            return Ok(Some(Value::Object(result_map)));
+            let nanos = n1.checked_add(n2).ok_or_else(|| overflow("nanoseconds"))?;
+            return Ok(Some(temporal_value::make_duration(
+                months, days, seconds, nanos,
+            )));
         }
         Ok(None)
     }
@@ -206,43 +211,22 @@ impl Executor {
         left: &Value,
         right: &Value,
     ) -> Result<Option<Value>> {
-        if Self::is_duration_object(left) && Self::is_duration_object(right) {
-            let (y1, mo1, d1, h1, mi1, s1) = Self::extract_duration_components(left);
-            let (y2, mo2, d2, h2, mi2, s2) = Self::extract_duration_components(right);
-
+        if let (Some((m1, d1, s1, n1)), Some((m2, d2, s2, n2))) = (
+            temporal_value::duration_components(left),
+            temporal_value::duration_components(right),
+        ) {
             let overflow = |unit: &str| {
                 Error::CypherExecution(format!(
                     "duration arithmetic overflow: {unit} component exceeds i64 range"
                 ))
             };
-            let mut result_map = Map::new();
-            let years = y1.checked_sub(y2).ok_or_else(|| overflow("years"))?;
-            let months = mo1.checked_sub(mo2).ok_or_else(|| overflow("months"))?;
+            let months = m1.checked_sub(m2).ok_or_else(|| overflow("months"))?;
             let days = d1.checked_sub(d2).ok_or_else(|| overflow("days"))?;
-            let hours = h1.checked_sub(h2).ok_or_else(|| overflow("hours"))?;
-            let minutes = mi1.checked_sub(mi2).ok_or_else(|| overflow("minutes"))?;
             let seconds = s1.checked_sub(s2).ok_or_else(|| overflow("seconds"))?;
-
-            if years != 0 {
-                result_map.insert("years".to_string(), Value::Number(years.into()));
-            }
-            if months != 0 {
-                result_map.insert("months".to_string(), Value::Number(months.into()));
-            }
-            if days != 0 {
-                result_map.insert("days".to_string(), Value::Number(days.into()));
-            }
-            if hours != 0 {
-                result_map.insert("hours".to_string(), Value::Number(hours.into()));
-            }
-            if minutes != 0 {
-                result_map.insert("minutes".to_string(), Value::Number(minutes.into()));
-            }
-            if seconds != 0 {
-                result_map.insert("seconds".to_string(), Value::Number(seconds.into()));
-            }
-
-            return Ok(Some(Value::Object(result_map)));
+            let nanos = n1.checked_sub(n2).ok_or_else(|| overflow("nanoseconds"))?;
+            return Ok(Some(temporal_value::make_duration(
+                months, days, seconds, nanos,
+            )));
         }
         Ok(None)
     }
@@ -253,10 +237,11 @@ impl Executor {
         datetime: &Value,
         duration: &Value,
     ) -> Result<Value> {
+        let datetime = coerce_temporal_instant(datetime);
         let (years, months, days, hours, minutes, seconds) =
             Self::extract_duration_components(duration);
 
-        if let Value::String(dt_str) = datetime {
+        if let Value::String(dt_str) = &datetime {
             // Try RFC3339 format first
             if let Ok(dt) = chrono::DateTime::parse_from_rfc3339(dt_str) {
                 let mut result = dt.with_timezone(&chrono::Utc);
@@ -370,10 +355,11 @@ impl Executor {
         datetime: &Value,
         duration: &Value,
     ) -> Result<Value> {
+        let datetime = coerce_temporal_instant(datetime);
         let (years, months, days, hours, minutes, seconds) =
             Self::extract_duration_components(duration);
 
-        if let Value::String(dt_str) = datetime {
+        if let Value::String(dt_str) = &datetime {
             // Try RFC3339 format first
             if let Ok(dt) = chrono::DateTime::parse_from_rfc3339(dt_str) {
                 let mut result = dt.with_timezone(&chrono::Utc);
@@ -496,13 +482,18 @@ impl Executor {
         Ok(Value::Null)
     }
 
-    /// Compute difference between two datetimes (returns duration)
+    /// Compute difference between two datetimes (returns a tagged
+    /// `duration` value — see [`temporal_value::make_duration`] — so it
+    /// canonicalizes to an ISO string at the projection boundary instead of
+    /// leaking a raw `{...}` object).
     pub(in crate::executor) fn datetime_difference(
         &self,
         left: &Value,
         right: &Value,
     ) -> Result<Value> {
-        if let (Value::String(left_str), Value::String(right_str)) = (left, right) {
+        let left = coerce_temporal_instant(left);
+        let right = coerce_temporal_instant(right);
+        if let (Value::String(left_str), Value::String(right_str)) = (&left, &right) {
             // Try RFC3339 format
             let left_dt = chrono::DateTime::parse_from_rfc3339(left_str)
                 .map(|dt| dt.with_timezone(&chrono::Utc));
@@ -512,29 +503,10 @@ impl Executor {
             if let (Ok(l), Ok(r)) = (left_dt, right_dt) {
                 let diff = l.signed_duration_since(r);
                 let total_seconds = diff.num_seconds();
-
                 let days = total_seconds / 86400;
-                let remaining = total_seconds % 86400;
-                let hours = remaining / 3600;
-                let remaining = remaining % 3600;
-                let minutes = remaining / 60;
-                let seconds = remaining % 60;
+                let remaining_seconds = total_seconds % 86400;
 
-                let mut result_map = Map::new();
-                if days != 0 {
-                    result_map.insert("days".to_string(), Value::Number(days.into()));
-                }
-                if hours != 0 {
-                    result_map.insert("hours".to_string(), Value::Number(hours.into()));
-                }
-                if minutes != 0 {
-                    result_map.insert("minutes".to_string(), Value::Number(minutes.into()));
-                }
-                if seconds != 0 {
-                    result_map.insert("seconds".to_string(), Value::Number(seconds.into()));
-                }
-
-                return Ok(Value::Object(result_map));
+                return Ok(temporal_value::make_duration(0, days, remaining_seconds, 0));
             }
 
             // Try NaiveDate format
@@ -545,12 +517,7 @@ impl Executor {
                 let diff = l.signed_duration_since(r);
                 let days = diff.num_days();
 
-                let mut result_map = Map::new();
-                if days != 0 {
-                    result_map.insert("days".to_string(), Value::Number(days.into()));
-                }
-
-                return Ok(Value::Object(result_map));
+                return Ok(temporal_value::make_duration(0, days, 0, 0));
             }
         }
 

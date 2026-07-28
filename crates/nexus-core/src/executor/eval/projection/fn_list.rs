@@ -12,6 +12,7 @@
 use super::super::super::context::ExecutionContext;
 use super::super::super::engine::Executor;
 use super::super::super::parser;
+use super::super::temporal_value;
 use crate::{Error, Result};
 use serde_json::Value;
 use std::collections::HashMap;
@@ -692,6 +693,17 @@ impl Executor {
                         Ok(v) => v,
                         Err(e) => return Some(Err(e)),
                     };
+                    // A tagged intermediate temporal value (see
+                    // `temporal_value`) must canonicalize to its ISO-8601
+                    // string here too — otherwise `toString(duration(...))`
+                    // falls into the generic `Value::Object` branch below
+                    // and leaks the raw `{"_nexus_temporal_type": ...}`
+                    // tag as literal string content, which the projection-
+                    // boundary canonicalization pass never gets a chance to
+                    // catch (the leak already happened, inside a STRING).
+                    if let Some(rendered) = temporal_value::canonicalize_temporal(&value) {
+                        return Some(Ok(Value::String(rendered)));
+                    }
                     return Some(match value {
                         Value::String(s) => Ok(Value::String(s)),
                         Value::Number(n) => Ok(Value::String(n.to_string())),
@@ -958,12 +970,15 @@ impl Executor {
                     Value::Array(items) => {
                         let out: Vec<Value> = items
                             .into_iter()
-                            .map(|el| match el {
-                                Value::Null => Value::Null,
-                                Value::String(s) => Value::String(s),
-                                Value::Number(n) => Value::String(n.to_string()),
-                                Value::Bool(b) => Value::String(b.to_string()),
-                                other => Value::String(other.to_string()),
+                            .map(|el| match temporal_value::canonicalize_temporal(&el) {
+                                Some(rendered) => Value::String(rendered),
+                                None => match el {
+                                    Value::Null => Value::Null,
+                                    Value::String(s) => Value::String(s),
+                                    Value::Number(n) => Value::String(n.to_string()),
+                                    Value::Bool(b) => Value::String(b.to_string()),
+                                    other => Value::String(other.to_string()),
+                                },
                             })
                             .collect();
                         Ok(Value::Array(out))

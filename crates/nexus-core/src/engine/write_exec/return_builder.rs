@@ -4,6 +4,7 @@
 //! executor. Extracted from `engine/write_exec.rs`.
 
 use super::super::Engine;
+use crate::executor::eval::temporal_value;
 use crate::{Error, Result, executor};
 use serde_json::{Map, Value};
 use std::collections::{HashMap, HashSet};
@@ -129,7 +130,16 @@ impl Engine {
                     if let Some((rel_id, _)) = entries.last() {
                         let props = self.storage.load_relationship_properties(*rel_id)?;
                         if let Some(Value::Object(map)) = props {
-                            return Ok(map.get(property).cloned().unwrap_or(Value::Null));
+                            let mut value = map.get(property).cloned().unwrap_or(Value::Null);
+                            // Defense in depth alongside the storage-boundary
+                            // canonicalization in `resolve_property_expr_for_create`
+                            // — this write path's own inline `RETURN` reads
+                            // straight out of storage and never calls
+                            // `Executor::execute`, so it must canonicalize
+                            // independently (see `temporal_value::canonicalize_value_in_place`'s
+                            // doc comment).
+                            temporal_value::canonicalize_value_in_place(&mut value);
+                            return Ok(value);
                         }
                     }
                 }
@@ -212,7 +222,15 @@ impl Engine {
                 let mut row_values = Vec::new();
 
                 for item in &return_clause.items {
-                    let value = match &item.expression {
+                    // Both arms below read straight out of storage and
+                    // never call `Executor::execute` — this write path's
+                    // own inline `RETURN`, so each must canonicalize a
+                    // tagged intermediate temporal value independently
+                    // (defense in depth alongside the storage-boundary fix
+                    // in `resolve_property_expr_for_create`; see
+                    // `temporal_value::canonicalize_value_in_place`'s doc
+                    // comment).
+                    let mut value = match &item.expression {
                         executor::parser::Expression::Variable(_) => {
                             self.node_to_result_value(node_id)?
                         }
@@ -242,6 +260,7 @@ impl Engine {
                         }
                         _ => Value::Null,
                     };
+                    temporal_value::canonicalize_value_in_place(&mut value);
                     row_values.push(value);
                 }
 

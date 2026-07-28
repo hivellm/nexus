@@ -137,15 +137,15 @@ fn test_datetime_difference_days() {
         "RETURN datetime('2025-01-20T10:30:00') - datetime('2025-01-15T10:30:00') AS result",
     );
     let value = get_single_value(&result);
-    // Should return a duration object with days component
-    assert!(
-        value.is_object(),
-        "Expected duration object, got: {:?}",
+    // A typed `duration` value canonicalizes to its ISO-8601 string at the
+    // projection boundary — it no longer leaks the old `{days: 5}` raw
+    // JSON object shape.
+    assert_eq!(
+        value.as_str(),
+        Some("P5D"),
+        "Expected canonical ISO duration string, got: {:?}",
         value
     );
-    if let Some(days) = value.get("days") {
-        assert_eq!(days.as_i64().unwrap_or(0), 5, "Expected 5 days difference");
-    }
 }
 
 // ============================================================================
@@ -162,14 +162,13 @@ fn test_duration_plus_duration() {
         "RETURN duration({days: 3}) + duration({days: 2}) AS result",
     );
     let value = get_single_value(&result);
-    assert!(
-        value.is_object(),
-        "Expected duration object, got: {:?}",
+    // Canonical ISO string, not the old raw `{days: 5}` object shape.
+    assert_eq!(
+        value.as_str(),
+        Some("P5D"),
+        "Expected canonical ISO duration string, got: {:?}",
         value
     );
-    if let Some(days) = value.get("days") {
-        assert_eq!(days.as_i64().unwrap_or(0), 5, "Expected 5 days total");
-    }
 }
 
 #[test]
@@ -182,18 +181,13 @@ fn test_duration_plus_duration_mixed_units() {
         "RETURN duration({days: 1, hours: 2}) + duration({hours: 3, minutes: 30}) AS result",
     );
     let value = get_single_value(&result);
-    assert!(
-        value.is_object(),
-        "Expected duration object, got: {:?}",
+    // 1 day, 2h+3h=5h, 30m -> canonical "P1DT5H30M" (not the old raw object).
+    assert_eq!(
+        value.as_str(),
+        Some("P1DT5H30M"),
+        "Expected canonical ISO duration string, got: {:?}",
         value
     );
-    // Should have days: 1, hours: 5, minutes: 30
-    if let Some(days) = value.get("days") {
-        assert_eq!(days.as_i64().unwrap_or(-1), 1, "Expected 1 day");
-    }
-    if let Some(hours) = value.get("hours") {
-        assert_eq!(hours.as_i64().unwrap_or(-1), 5, "Expected 5 hours");
-    }
 }
 
 // ============================================================================
@@ -210,14 +204,13 @@ fn test_duration_minus_duration() {
         "RETURN duration({days: 5}) - duration({days: 2}) AS result",
     );
     let value = get_single_value(&result);
-    assert!(
-        value.is_object(),
-        "Expected duration object, got: {:?}",
+    // Canonical ISO string, not the old raw `{days: 3}` object shape.
+    assert_eq!(
+        value.as_str(),
+        Some("P3D"),
+        "Expected canonical ISO duration string, got: {:?}",
         value
     );
-    if let Some(days) = value.get("days") {
-        assert_eq!(days.as_i64().unwrap_or(-1), 3, "Expected 3 days");
-    }
 }
 
 #[test]
@@ -230,14 +223,14 @@ fn test_duration_negative_result() {
         "RETURN duration({days: 2}) - duration({days: 5}) AS result",
     );
     let value = get_single_value(&result);
-    assert!(
-        value.is_object(),
-        "Expected duration object, got: {:?}",
+    // Canonical ISO string with a per-component sign, not the old raw
+    // `{days: -3}` object shape.
+    assert_eq!(
+        value.as_str(),
+        Some("P-3D"),
+        "Expected canonical ISO duration string, got: {:?}",
         value
     );
-    if let Some(days) = value.get("days") {
-        assert_eq!(days.as_i64().unwrap_or(0), -3, "Expected -3 days");
-    }
 }
 
 // ============================================================================
@@ -290,39 +283,31 @@ fn test_duration_creation() {
         "RETURN duration({days: 5, hours: 3, minutes: 30}) AS result",
     );
     let value = get_single_value(&result);
-    assert!(
-        value.is_object(),
-        "Expected duration object, got: {:?}",
+    // Canonical ISO string ("P5DT3H30M"), not the old raw
+    // `{days: 5, hours: 3, minutes: 30}` object shape.
+    assert_eq!(
+        value.as_str(),
+        Some("P5DT3H30M"),
+        "Expected canonical ISO duration string, got: {:?}",
         value
     );
-
-    if let Some(days) = value.get("days") {
-        assert_eq!(days.as_i64().unwrap_or(-1), 5, "Expected 5 days");
-    }
-    if let Some(hours) = value.get("hours") {
-        assert_eq!(hours.as_i64().unwrap_or(-1), 3, "Expected 3 hours");
-    }
-    if let Some(minutes) = value.get("minutes") {
-        assert_eq!(minutes.as_i64().unwrap_or(-1), 30, "Expected 30 minutes");
-    }
 }
 
 #[test]
 fn test_duration_with_weeks() {
     let (mut engine, _ctx) = setup_isolated_test_engine().unwrap();
 
-    // Duration with weeks
+    // Duration with weeks — `weeks` folds into `days` (2 weeks = 14 days),
+    // matching Neo4j's own internal Duration representation, which has no
+    // separate "weeks" bucket.
     let result = execute_query(&mut engine, "RETURN duration({weeks: 2}) AS result");
     let value = get_single_value(&result);
-    assert!(
-        value.is_object(),
-        "Expected duration object, got: {:?}",
+    assert_eq!(
+        value.as_str(),
+        Some("P14D"),
+        "Expected canonical ISO duration string, got: {:?}",
         value
     );
-
-    if let Some(weeks) = value.get("weeks") {
-        assert_eq!(weeks.as_i64().unwrap_or(-1), 2, "Expected 2 weeks");
-    }
 }
 
 #[test]
@@ -479,12 +464,19 @@ fn test_date_plus_duration_large_but_in_range_succeeds() {
 #[test]
 fn test_duration_plus_duration_years_overflow_errors() {
     let (mut engine, _ctx) = setup_isolated_test_engine().unwrap();
+    // `duration({years: 9223372036854775807})` (i.e. `{years: i64::MAX}`)
+    // itself now errors at construction (`years * 12` overflows i64 before
+    // the `+` operator is ever reached) — that no longer exercises the
+    // addition-overflow guard in `eval/temporal.rs`'s `try_duration_add`.
+    // `{months: i64::MAX}` survives construction (`years * 12` isn't
+    // involved), so the overflow below is guaranteed to come from the `+`
+    // itself.
     let result = engine.execute_cypher(
-        "RETURN duration({years: 9223372036854775807}) + duration({years: 1}) AS result",
+        "RETURN duration({months: 9223372036854775807}) + duration({months: 1}) AS result",
     );
     assert!(
         result.is_err(),
-        "duration + duration years overflow (i64::MAX + 1) must error in both debug and release; got: {:?}",
+        "duration + duration months overflow (i64::MAX + 1) must error in both debug and release; got: {:?}",
         result
     );
 }
@@ -492,13 +484,18 @@ fn test_duration_plus_duration_years_overflow_errors() {
 #[test]
 fn test_duration_plus_duration_years_boundary_succeeds() {
     let (mut engine, _ctx) = setup_isolated_test_engine().unwrap();
-    // i64::MAX - 1 + 1 == i64::MAX — no overflow, must succeed.
+    // A typed `duration` folds `years` into a single total-months field
+    // (`years * 12 + months`, Neo4j's own internal Duration layout), so the
+    // i64 boundary this test exercises is on *months*, not years directly.
+    // 768614336404564650 years == 9223372036854775800 months
+    // (i64::MAX / 12, truncated); adding 7 more months lands exactly on
+    // i64::MAX with no overflow.
     let result = engine.execute_cypher(
-        "RETURN duration({years: 9223372036854775806}) + duration({years: 1}) AS result",
+        "RETURN duration({years: 768614336404564650}) + duration({months: 7}) AS result",
     );
     assert!(
         result.is_ok(),
-        "duration + duration exactly at i64::MAX must succeed; got: {:?}",
+        "duration + duration exactly at i64::MAX total months must succeed; got: {:?}",
         result
     );
 }
@@ -512,6 +509,50 @@ fn test_duration_minus_duration_years_underflow_errors() {
     assert!(
         result.is_err(),
         "duration - duration years underflow (i64::MIN - 1) must error in both debug and release; got: {:?}",
+        result
+    );
+}
+
+// ============================================================================
+// hours/minutes/seconds must go through exact integer arithmetic, not a
+// lossy f64 round-trip: `f64`'s 52-bit mantissa cannot represent every
+// `i64` exactly, and casting an out-of-range `f64` back with `as i64`
+// *saturates* silently instead of erroring — hiding a genuine overflow
+// behind a plausible-looking wrong answer.
+// ============================================================================
+
+#[test]
+fn test_duration_seconds_i64_max_round_trips_exactly() {
+    let (mut engine, _ctx) = setup_isolated_test_engine().unwrap();
+    // A whole-seconds value of exactly `i64::MAX` is legitimately
+    // representable (there is no overflow: `hours`/`minutes` default to 0,
+    // so nothing is multiplied against it) — the integer fast path must
+    // carry it through unchanged rather than losing precision by routing
+    // it through `f64` (which cannot represent `i64::MAX` exactly and
+    // would round it to `9223372036854775808.0`, one past the max).
+    let result = engine
+        .execute_cypher("RETURN duration({seconds: 9223372036854775807}) AS result")
+        .expect("an exactly-representable whole-seconds value must not error");
+    let value = &result.rows[0].values[0];
+    assert_eq!(
+        value.as_str(),
+        Some("PT2562047788015215H30M7S"),
+        "seconds must round-trip through i64 exactly, not lose precision via f64; got: {value:?}"
+    );
+}
+
+#[test]
+fn test_duration_hours_times_3600_overflow_errors() {
+    let (mut engine, _ctx) = setup_isolated_test_engine().unwrap();
+    // The direct analog of the `years * 12` overflow guard: `hours *
+    // 3600` overflows i64 for `hours: i64::MAX`, and the integer fast
+    // path's `checked_mul` must surface that as an error rather than
+    // silently saturating (the old `f64`-based combination's failure
+    // mode).
+    let result = engine.execute_cypher("RETURN duration({hours: 9223372036854775807}) AS result");
+    assert!(
+        result.is_err(),
+        "duration hours * 3600 overflow must error, not silently saturate; got: {:?}",
         result
     );
 }

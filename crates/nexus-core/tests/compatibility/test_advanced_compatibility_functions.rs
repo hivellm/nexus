@@ -121,12 +121,12 @@ fn test_duration_weeks_extraction() {
         &mut engine,
         "RETURN weeks(duration({weeks: 4, days: 2})) AS result",
     );
-    // If weeks component doesn't exist in duration, returns null
-    // This is expected behavior for duration component extraction
-    let value = get_single_value(&result);
-    if !value.is_null() {
-        assert_eq!(value.as_i64().unwrap(), 4);
-    }
+    // `weeks({weeks: 4, days: 2})` folds into 30 total days (4*7 + 2);
+    // `weeks()` is a computed accessor (total weeks = days / 7 =
+    // 30 / 7 = 4), the same total/component-of-parent-unit convention as
+    // `years`/`months`/`hours`/`minutes`/`seconds` — see
+    // `temporal_value::duration_parts`.
+    assert_eq!(get_single_value(&result).as_i64(), Some(4));
 }
 
 #[test]
@@ -294,9 +294,16 @@ fn test_temporal_localdatetime_with_null() {
 #[test]
 fn test_duration_without_specified_component() {
     let (mut engine, _ctx) = setup_test_engine().unwrap();
-    // Duration without years should return null for years()
+    // `years(duration(...))` is a *computed* accessor (whole years =
+    // total_months / 12 — see `temporal_value::duration_parts`, shared with
+    // canonical ISO rendering), not a presence check on the literal map key
+    // the duration was constructed from. `duration({months: 5})` has 5
+    // total months, so `years` is 0 (not `null` — the old, pre-typed-value
+    // implementation only returned a component when the input map
+    // literally carried that key, an inconsistency the typed-value work
+    // fixed).
     let result = execute_query(&mut engine, "RETURN years(duration({months: 5})) AS result");
-    assert!(get_single_value(&result).is_null());
+    assert_eq!(get_single_value(&result).as_i64(), Some(0));
 }
 
 // #[test]
