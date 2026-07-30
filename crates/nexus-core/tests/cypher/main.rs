@@ -23,6 +23,7 @@ mod phase4_cypher_parity_quick_wins_test;
 mod return_where_tests;
 mod side_effect_counting_test;
 mod skip_pattern_queries_test;
+mod temporal_accessor_property_test;
 mod temporal_iso_parse_test;
 mod temporal_typed_value_test;
 mod test_aggregation_virtual_row;

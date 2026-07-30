@@ -158,7 +158,23 @@ impl Executor {
 
                 Ok(entity_opt
                     .as_ref()
-                    .map(|e| Self::extract_property(e, actual_property))
+                    .map(|e| {
+                        // A tagged temporal (`date`/`localtime`/
+                        // `localdatetime`/`time`/`datetime`/`duration`)
+                        // routes through its own derived-component table
+                        // instead of the generic `Object` key descent —
+                        // the tagged object's raw fields (`year`,
+                        // `months`, …) are Neo4j's internal storage
+                        // shape, not the openCypher-visible property
+                        // surface (`quarter`, `weekYear`,
+                        // `secondsOfMinute`, …). See
+                        // `super::super::temporal_accessors`.
+                        if super::super::temporal_value::temporal_kind(e).is_some() {
+                            super::super::temporal_accessors::temporal_property(e, actual_property)
+                        } else {
+                            Self::extract_property(e, actual_property)
+                        }
+                    })
                     .unwrap_or(Value::Null))
             }
             parser::Expression::ArrayIndex { base, index } => {

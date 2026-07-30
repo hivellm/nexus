@@ -327,6 +327,30 @@ pub(in crate::executor) fn time_components(value: &Value) -> Option<(u32, u32, u
     ))
 }
 
+/// Extracts the UTC offset (in seconds) from a tagged `time`/`datetime`
+/// value, or `None` for a value that doesn't carry one — every other
+/// kind (`date`, `localtime`, `localdatetime`, `duration`) or a value
+/// that isn't a tagged temporal at all.
+pub(in crate::executor) fn offset_seconds(value: &Value) -> Option<i32> {
+    let kind = temporal_kind(value)?;
+    if !matches!(kind, TemporalKind::Time | TemporalKind::DateTime) {
+        return None;
+    }
+    let raw = value.as_object()?.get("offset_seconds")?.as_i64()?;
+    Some(raw as i32)
+}
+
+/// Extracts the IANA zone name from a tagged `datetime` value
+/// constructed with one (see [`make_datetime`]'s `tz_name` argument), or
+/// `None` for a fixed-offset `datetime` (no `tz` field) or any other
+/// kind.
+pub(in crate::executor) fn zone_name(value: &Value) -> Option<&str> {
+    if temporal_kind(value) != Some(TemporalKind::DateTime) {
+        return None;
+    }
+    value.as_object()?.get("tz")?.as_str()
+}
+
 /// The `years` / `monthsOfYear` / `weeks` / `days` / `hours` /
 /// `minutesOfHour` / `secondsOfMinute` / `nanos` decomposition shared by
 /// canonical duration rendering ([`render_duration`]) and the
@@ -424,7 +448,13 @@ fn render_time_of_day(hour: u32, minute: u32, second: u32, nanosecond: u32) -> S
 /// Renders a UTC offset in seconds as `+HH:MM` (or `+HH:MM:SS` when the
 /// offset carries a sub-minute remainder), matching the TCK's
 /// `12:31:14+01:00` form.
-fn render_offset(offset_seconds: i32) -> String {
+///
+/// `pub(in crate::executor)`, not private: `temporal_accessors` reuses
+/// this for the `offset`/`timezone` property accessors on `time`/
+/// `datetime` values, so the offset renders identically whether it
+/// reaches the caller through canonical rendering or a `d.offset`
+/// property read.
+pub(in crate::executor) fn render_offset(offset_seconds: i32) -> String {
     let sign = if offset_seconds < 0 { '-' } else { '+' };
     let abs = offset_seconds.unsigned_abs();
     let hours = abs / 3600;
@@ -846,6 +876,36 @@ mod tests {
         let d = make_duration(14, 2, 90, 500_000_000);
         assert_eq!(duration_components(&d), Some((14, 2, 90, 500_000_000)));
         assert_eq!(duration_components(&make_date(2020, 1, 1)), None);
+    }
+
+    #[test]
+    fn offset_seconds_reads_time_and_datetime_only() {
+        let t = make_time(12, 31, 14, 0, 3600);
+        assert_eq!(offset_seconds(&t), Some(3600));
+        let dt = make_datetime(2020, 1, 1, 0, 0, 0, 0, -1800, None);
+        assert_eq!(offset_seconds(&dt), Some(-1800));
+        assert_eq!(offset_seconds(&make_localtime(12, 31, 14, 0)), None);
+        assert_eq!(offset_seconds(&make_date(2020, 1, 1)), None);
+    }
+
+    #[test]
+    fn zone_name_reads_datetime_tz_field_only() {
+        let dt = make_datetime(
+            2020,
+            1,
+            1,
+            0,
+            0,
+            0,
+            0,
+            3600,
+            Some("Europe/Stockholm".to_string()),
+        );
+        assert_eq!(zone_name(&dt), Some("Europe/Stockholm"));
+        let dt_no_zone = make_datetime(2020, 1, 1, 0, 0, 0, 0, 3600, None);
+        assert_eq!(zone_name(&dt_no_zone), None);
+        let t = make_time(12, 31, 14, 0, 3600);
+        assert_eq!(zone_name(&t), None);
     }
 
     #[test]
