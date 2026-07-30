@@ -14,6 +14,7 @@ mod cypher_oom_guard_test;
 mod delete_node_dangling_relationships_test;
 mod executor_comprehensive_test;
 mod exists_subquery_test;
+mod expand_target_label_enforcement_test;
 mod multi_hop_count_test;
 mod node_key_delete_reuse_test;
 mod oom_budget_verification_test;

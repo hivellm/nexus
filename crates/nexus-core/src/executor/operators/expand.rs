@@ -28,7 +28,7 @@ impl Executor {
     #[tracing::instrument(
         skip_all,
         level = "debug",
-        fields(source_var, target_var, rel_var, optional, types = type_ids.len())
+        fields(source_var, target_var, rel_var, optional, types = type_ids.len(), target_labels = target_labels.len())
     )]
     pub(in crate::executor) fn execute_expand(
         &self,
@@ -39,8 +39,22 @@ impl Executor {
         target_var: &str,
         rel_var: &str,
         optional: bool,
+        target_labels: &[String],
         cache: Option<&crate::cache::MultiLayerCache>,
     ) -> Result<()> {
+        // Resolve the target node's inline label predicate ONCE per Expand
+        // call (not per candidate row/relationship): a `$`-prefixed entry
+        // is a dynamic-label sentinel that must be resolved against runtime
+        // params, never at plan time (see
+        // `dynamic-label-sentinel-in-match-defers-to-a-filter` — the
+        // planner already defers this the same way for Filter-based label
+        // checks). Static entries pass through unchanged. Empty when the
+        // target node pattern carries no inline label.
+        let resolved_target_labels: Vec<String> = if target_labels.is_empty() {
+            Vec::new()
+        } else {
+            crate::engine::dynamic_labels::resolve_labels(target_labels, &context.params)?
+        };
         // TRACE: Log input source and check for relationships
         let rows_source = if !context.result_set.rows.is_empty() {
             "result_set.rows"
@@ -179,9 +193,26 @@ impl Executor {
                             new_row.insert(source_var.to_string(), source_node);
                         }
 
-                        // Add target node if target_var is specified
+                        // Add target node if target_var is specified. Read it
+                        // up front (instead of only when about to insert) so
+                        // an inline target-label predicate can reject this
+                        // candidate BEFORE the row is pushed — same
+                        // AND-intersection semantics as the per-source loop
+                        // below.
                         if !target_var.is_empty() {
                             let target_node = self.read_node_as_value(target_id)?;
+                            if !resolved_target_labels.is_empty()
+                                && !target_node.is_null()
+                                && !node_value_has_all_labels(&target_node, &resolved_target_labels)
+                            {
+                                tracing::trace!(
+                                    "Expand (source-less): skipping relationship {} - target node {} missing required label(s) {:?}",
+                                    rel_info.id,
+                                    target_id,
+                                    resolved_target_labels
+                                );
+                                continue;
+                            }
                             new_row.insert(target_var.to_string(), target_node);
                         }
 
@@ -491,6 +522,34 @@ impl Executor {
                             continue;
                         }
 
+                        // Enforce the target node pattern's inline label(s)
+                        // (e.g. the `:X` in `(a)-->(b:X)`) as an
+                        // AND-intersection: a candidate whose node does not
+                        // carry every declared label is rejected — for a
+                        // REQUIRED expand this just narrows the candidate
+                        // set (`continue`, same as the checks above/below);
+                        // for an OPTIONAL expand a rejection here correctly
+                        // feeds `matched_for_this_source` below, so if EVERY
+                        // candidate for this source is label-rejected the
+                        // row is NULL-padded via `pad_optional_row` instead
+                        // of being bound to a wrongly-labeled node. A
+                        // dangling (`Null`) endpoint already took its own
+                        // branch above and is exempt here, preserving the
+                        // existing OPTIONAL dangling-endpoint behavior.
+                        if !resolved_target_labels.is_empty()
+                            && !target_node.is_null()
+                            && !node_value_has_all_labels(&target_node, &resolved_target_labels)
+                        {
+                            tracing::trace!(
+                                "Expand: skipping relationship {} (rel_id: {}) - target node {} missing required label(s) {:?}",
+                                rel_idx + 1,
+                                rel_info.id,
+                                target_id,
+                                resolved_target_labels
+                            );
+                            continue;
+                        }
+
                         // CRITICAL FIX: Check if target variable is already bound in the row
                         // If so, we must ensure the relationship's target matches the bound value
                         // This prevents Cartesian product issues where Expand overwrites the target variable
@@ -718,4 +777,29 @@ fn pad_optional_row(
         new_row.insert(rel_var.to_string(), Value::Null);
     }
     new_row
+}
+
+/// Does the materialized node `value` (as produced by
+/// [`Executor::read_node_as_value_with_store`] / [`Executor::read_node_as_value`])
+/// carry EVERY label in `required` — an AND-intersection, matching the same
+/// multi-label semantics as `(n:A:B)` elsewhere in the planner/executor.
+/// Reads the node's `_nexus_labels` array (already resolved to label NAMES
+/// by the node materialiser) instead of re-reading the raw
+/// `NodeRecord::label_bits` bitmap, so this works uniformly for both
+/// statically- and dynamically- (`$param`) resolved label names without a
+/// second store round-trip. `required` being empty always returns `true`
+/// (no predicate to enforce); an object missing the `_nexus_labels` key or
+/// carrying zero of the required labels returns `false`.
+fn node_value_has_all_labels(value: &Value, required: &[String]) -> bool {
+    if required.is_empty() {
+        return true;
+    }
+    let Some(Value::Array(node_labels)) = value.get("_nexus_labels") else {
+        return false;
+    };
+    required.iter().all(|needed| {
+        node_labels
+            .iter()
+            .any(|label| matches!(label, Value::String(s) if s == needed))
+    })
 }

@@ -545,6 +545,7 @@ impl Executor {
                     target_var,
                     rel_var,
                     optional,
+                    target_labels,
                 } => {
                     // Advanced JOIN algorithms framework ready - using traditional expand for now
                     self.execute_expand(
@@ -555,6 +556,7 @@ impl Executor {
                         target_var,
                         rel_var,
                         *optional,
+                        target_labels,
                         None, // Cache not available at this level
                     )?;
                 }

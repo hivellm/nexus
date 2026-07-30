@@ -140,9 +140,17 @@ impl Executor {
                 target_var,
                 rel_var,
                 optional,
+                target_labels,
             } => {
                 self.execute_expand(
-                    context, type_ids, *direction, source_var, target_var, rel_var, *optional,
+                    context,
+                    type_ids,
+                    *direction,
+                    source_var,
+                    target_var,
+                    rel_var,
+                    *optional,
+                    target_labels,
                     None, // Cache not available at this level
                 )?;
             }

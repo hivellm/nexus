@@ -136,6 +136,7 @@ fn test_estimate_cost_all_operators() {
             rel_var: "r".to_string(),
             direction: Direction::Outgoing,
             optional: false,
+            target_labels: Vec::new(),
         },
         Operator::Project {
             items: vec![ProjectionItem {

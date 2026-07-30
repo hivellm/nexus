@@ -408,6 +408,15 @@ pub enum Operator {
         rel_var: String,
         /// Optional (LEFT OUTER JOIN semantics - preserve rows with NULL if no match)
         optional: bool,
+        /// Inline label(s) declared on the target node pattern (e.g. the
+        /// `:X` in `(a)-->(b:X)`), enforced as an AND-intersection — the
+        /// candidate's node must carry every one of them. Raw label names
+        /// in the same encoding as `NodePattern::labels` (a `$`-prefixed
+        /// entry is a dynamic-label sentinel resolved against runtime
+        /// params at execution time, never at plan time — see
+        /// `dynamic_label_sentinel_in_match_defers_to_a_filter`). Empty
+        /// when the target node carries no inline label predicate.
+        target_labels: Vec<String>,
     },
     /// Project columns
     Project {

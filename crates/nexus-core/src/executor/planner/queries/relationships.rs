@@ -16,6 +16,13 @@ impl<'a> QueryPlanner<'a> {
         for pattern in patterns {
             // Track previous node variable for relationship expansion
             let mut prev_node_var: Option<String> = None;
+            // Inline label(s) declared on the node currently tracked by
+            // `prev_node_var` (the WRITTEN source of the next hop). Kept in
+            // lock-step with `prev_node_var` — see the two update sites
+            // below — so a chained hop's `target_labels` can be recovered
+            // for the traversal-reversed case (target already bound, see
+            // the swap logic further down).
+            let mut prev_node_labels: Vec<String> = Vec::new();
 
             for (idx, element) in pattern.elements.iter().enumerate() {
                 match element {
@@ -25,6 +32,7 @@ impl<'a> QueryPlanner<'a> {
                         // Otherwise, keep the previous value (from last Expand's target_var)
                         if let Some(var) = &node_pattern.variable {
                             prev_node_var = Some(var.clone());
+                            prev_node_labels = node_pattern.labels.clone();
                         }
                         // Don't update prev_node_var if no variable - it should already be set by previous Expand
                     }
@@ -37,49 +45,81 @@ impl<'a> QueryPlanner<'a> {
 
                         // Determine source and target variables
                         let source_var = prev_node_var.clone().unwrap_or_default();
+                        let source_labels = prev_node_labels.clone();
 
                         // Target will be the next node in the pattern
-                        let target_var = if idx + 1 < pattern.elements.len() {
+                        let (target_var, target_labels) = if idx + 1 < pattern.elements.len() {
                             if let PatternElement::Node(next_node) = &pattern.elements[idx + 1] {
                                 // If target node has explicit variable, use it
                                 // Otherwise, generate temporary variable for chaining
-                                next_node.variable.clone().unwrap_or_else(|| {
+                                let var = next_node.variable.clone().unwrap_or_else(|| {
                                     let tmp_var = format!("__tmp_{}", tmp_var_counter);
                                     tmp_var_counter += 1;
                                     tmp_var
-                                })
+                                });
+                                (var, next_node.labels.clone())
                             } else {
-                                "".to_string()
+                                ("".to_string(), Vec::new())
                             }
                         } else {
-                            "".to_string()
+                            ("".to_string(), Vec::new())
                         };
 
                         // Update prev_node_var to the target for next relationship
                         // This ensures multi-hop patterns chain correctly
                         prev_node_var = Some(target_var.clone());
+                        prev_node_labels = target_labels.clone();
 
                         // CRITICAL FIX: For OPTIONAL MATCH, if target is already bound but source is not,
                         // we need to reverse the traversal direction and swap source/target
-                        let (final_source_var, final_target_var, final_direction) =
-                            if is_optional && !previously_bound_vars.is_empty() {
-                                let source_bound = previously_bound_vars.contains(&source_var);
-                                let target_bound = previously_bound_vars.contains(&target_var);
+                        //
+                        // The label predicate travels with whichever WRITTEN
+                        // node ends up occupying the operator's `target_var`
+                        // slot: on the normal (non-reversed) path that is the
+                        // pattern's written target; when reversed, the
+                        // operator's target_var becomes the pattern's WRITTEN
+                        // source var, so its label predicate (`source_labels`)
+                        // must travel with it instead — otherwise a reversed
+                        // `(a:A)-->(c)` where `c` is already bound would
+                        // silently drop `a`'s label constraint.
+                        let (
+                            final_source_var,
+                            final_target_var,
+                            final_direction,
+                            final_target_labels,
+                        ) = if is_optional && !previously_bound_vars.is_empty() {
+                            let source_bound = previously_bound_vars.contains(&source_var);
+                            let target_bound = previously_bound_vars.contains(&target_var);
 
-                                if target_bound && !source_bound {
-                                    // Target is bound, source is not - reverse the traversal
-                                    let reversed_direction = match direction {
-                                        Direction::Outgoing => Direction::Incoming,
-                                        Direction::Incoming => Direction::Outgoing,
-                                        Direction::Both => Direction::Both,
-                                    };
-                                    (target_var.clone(), source_var.clone(), reversed_direction)
-                                } else {
-                                    (source_var.clone(), target_var.clone(), direction)
-                                }
+                            if target_bound && !source_bound {
+                                // Target is bound, source is not - reverse the traversal
+                                let reversed_direction = match direction {
+                                    Direction::Outgoing => Direction::Incoming,
+                                    Direction::Incoming => Direction::Outgoing,
+                                    Direction::Both => Direction::Both,
+                                };
+                                (
+                                    target_var.clone(),
+                                    source_var.clone(),
+                                    reversed_direction,
+                                    source_labels,
+                                )
                             } else {
-                                (source_var.clone(), target_var.clone(), direction)
-                            };
+                                (
+                                    source_var.clone(),
+                                    target_var.clone(),
+                                    direction,
+                                    target_labels,
+                                )
+                            }
+                        } else {
+                            (
+                                source_var.clone(),
+                                target_var.clone(),
+                                direction,
+                                target_labels,
+                            )
+                        };
 
                         // Get type_ids from relationship types (support multiple types like :TYPE1|TYPE2)
                         // CRITICAL FIX: Use get_or_create_type to ensure type exists even if not yet in catalog
@@ -175,6 +215,7 @@ impl<'a> QueryPlanner<'a> {
                                 rel_var: rel.variable.clone().unwrap_or_default(),
                                 direction: final_direction,
                                 optional: is_optional,
+                                target_labels: final_target_labels,
                             });
                         }
                     }
