@@ -19,6 +19,7 @@
 
 use super::super::super::context::ExecutionContext;
 use super::super::super::engine::Executor;
+use super::super::temporal_parse;
 use super::super::temporal_value;
 use crate::Result;
 use chrono::{Datelike, Offset, TimeZone, Timelike};
@@ -168,13 +169,11 @@ impl Executor {
                     };
                     match value {
                         Value::String(s) => {
-                            // Try to parse ISO date format
-                            if let Ok(date) = chrono::NaiveDate::parse_from_str(&s, "%Y-%m-%d") {
-                                return Some(Ok(temporal_value::make_date(
-                                    date.year(),
-                                    date.month(),
-                                    date.day(),
-                                )));
+                            // Full ISO-8601 calendar/week/ordinal date
+                            // parsing (extended and compact notation) — see
+                            // `temporal_parse::parse_iso_date`.
+                            if let Some((year, month, day)) = temporal_parse::parse_iso_date(&s) {
+                                return Some(Ok(temporal_value::make_date(year, month, day)));
                             }
                         }
                         Value::Object(map) => {
@@ -399,6 +398,21 @@ impl Executor {
                         Ok(v) => v,
                         Err(e) => return Some(Err(e)),
                     };
+                    if let Value::String(s) = &value {
+                        // Full ISO-8601 duration string parsing (standard
+                        // component form + the alternative
+                        // `P<date>T<time>` count form), including
+                        // fractional-component carry — see
+                        // `temporal_parse::parse_iso_duration`.
+                        if let Some((months, days, seconds, nanos)) =
+                            temporal_parse::parse_iso_duration(s)
+                        {
+                            return Some(Ok(temporal_value::make_duration(
+                                months, days, seconds, nanos,
+                            )));
+                        }
+                        return Some(Ok(Value::Null));
+                    }
                     if let Value::Object(map) = value {
                         // Fold years into months, weeks into days, and
                         // hours/minutes/seconds into a single (whole-seconds,
