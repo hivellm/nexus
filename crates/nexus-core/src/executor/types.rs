@@ -421,6 +421,16 @@ pub enum Operator {
         items: Vec<ProjectionItem>,
         /// DISTINCT flag
         distinct: bool,
+        /// WHERE predicate attached to this WITH clause (`WITH ... WHERE ...`),
+        /// evaluated per row against a scope merging the pre-projection
+        /// bindings with this WITH's newly projected aliases — openCypher
+        /// lets a WITH's WHERE reference a variable that is in scope but NOT
+        /// carried forward by the projection itself (e.g. `WITH c WHERE r IS
+        /// NULL` after `OPTIONAL MATCH (a)-[r]->(c)`). `None` when the WITH
+        /// has no WHERE, or when the WITH aggregates (aggregating WITH+WHERE
+        /// is planned separately as a post-aggregation predicate — see
+        /// `with_aggregation_where` in the planner).
+        where_predicate: Option<Box<parser::Expression>>,
     },
     /// Limit results
     Limit {

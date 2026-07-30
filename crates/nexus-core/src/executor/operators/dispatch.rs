@@ -149,8 +149,12 @@ impl Executor {
             Operator::Project { items } => {
                 self.execute_project(context, items)?;
             }
-            Operator::With { items, distinct } => {
-                self.execute_with(context, items, *distinct)?;
+            Operator::With {
+                items,
+                distinct,
+                where_predicate,
+            } => {
+                self.execute_with(context, items, *distinct, where_predicate.as_deref())?;
             }
             Operator::Limit { count } => {
                 self.execute_limit(context, *count)?;

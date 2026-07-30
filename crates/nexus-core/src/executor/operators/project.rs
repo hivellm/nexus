@@ -5,6 +5,7 @@
 
 use super::super::context::ExecutionContext;
 use super::super::engine::Executor;
+use super::super::parser;
 use super::super::push_with_row_cap;
 use super::super::types::{Operator, ProjectionItem, ResultSet, Row};
 use crate::{Error, Result};
@@ -409,13 +410,29 @@ impl Executor {
     /// 1. Evaluates expressions and creates new variables with aliased names
     /// 2. Replaces the current scope (old variables are removed)
     /// 3. Does NOT finalize result_set (that's what RETURN/Project does)
+    ///
+    /// `where_predicate` is the WHERE attached to this WITH clause (if any).
+    /// openCypher lets that predicate reference a variable that is in scope
+    /// but not among the WITH's own projected aliases (e.g. `WITH c WHERE r
+    /// IS NULL` after `OPTIONAL MATCH (a)-[r]->(c)`), so it must be
+    /// evaluated per row against the merged pre-projection + newly-projected
+    /// scope BEFORE the scope cut below discards `r`. A separate post-WITH
+    /// `Filter` operator cannot see `r` — by the time it runs,
+    /// `context.variables` has already been replaced with only the
+    /// projected aliases.
     pub(in crate::executor) fn execute_with(
         &self,
         context: &mut ExecutionContext,
         items: &[ProjectionItem],
         distinct: bool,
+        where_predicate: Option<&parser::Expression>,
     ) -> Result<()> {
-        tracing::trace!("execute_with: {} items, distinct={}", items.len(), distinct);
+        tracing::trace!(
+            "execute_with: {} items, distinct={}, has_where={}",
+            items.len(),
+            distinct,
+            where_predicate.is_some()
+        );
 
         // Materialize current rows from variables
         let mut rows = if !context.result_set.rows.is_empty() {
@@ -460,8 +477,16 @@ impl Executor {
             return Ok(());
         }
 
-        // Evaluate WITH items for each row and create new variables
-        let mut new_rows: Vec<HashMap<String, Value>> = Vec::new();
+        // Evaluate WITH items for each row and create new variables. When a
+        // WHERE is attached, test it per row against a scope merging the
+        // pre-projection bindings (`row`) with the freshly projected
+        // aliases (`new_row` wins on name collisions — an alias shadows a
+        // same-named upstream variable, matching openCypher WITH
+        // semantics). Rows that fail (predicate false OR NULL — standard
+        // WHERE 3VL truthiness via `evaluate_predicate_on_row`) are dropped
+        // here, before the scope cut further down erases `row`'s
+        // pre-projection variables.
+        let mut new_rows: Vec<HashMap<String, Value>> = Vec::with_capacity(rows.len());
 
         for row in &rows {
             let mut new_row = HashMap::new();
@@ -474,10 +499,21 @@ impl Executor {
                 new_row.insert(item.alias.clone(), value);
             }
 
+            if let Some(predicate) = where_predicate {
+                let mut merged_scope = row.clone();
+                merged_scope.extend(new_row.iter().map(|(k, v)| (k.clone(), v.clone())));
+                if !self.evaluate_predicate_on_row(&merged_scope, context, predicate)? {
+                    continue;
+                }
+            }
+
             new_rows.push(new_row);
         }
 
-        // Handle DISTINCT
+        // Handle DISTINCT — applied AFTER the WHERE filter above. openCypher
+        // TCK `WithWhere1[2]` (`WITH DISTINCT a.name2 AS name WHERE
+        // a.name2 = 'B'`) filters against the pre-dedup, pre-shadowed scope
+        // first, then deduplicates the surviving projected rows.
         if distinct {
             let mut seen = std::collections::HashSet::new();
             new_rows.retain(|row| {

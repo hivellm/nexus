@@ -18,7 +18,7 @@ exercise) or the scenario was skip-listed. Skips are counted, never hidden.
 
 ## Totals
 
-**3868 scenarios — 1127 passed (29.1%), 2670 failed, 71 skipped.**
+**3868 scenarios — 1162 passed (30.0%), 2635 failed, 71 skipped.**
 
 ## Per-category
 
@@ -27,9 +27,9 @@ exercise) or the scenario was skip-listed. Skips are counted, never hidden.
 | `clauses/call` | 0 | 2 | 50 | 52 | 0.0% |
 | `clauses/create` | 42 | 36 | 0 | 78 | 53.8% |
 | `clauses/delete` | 7 | 34 | 0 | 41 | 17.1% |
-| `clauses/match` | 134 | 217 | 1 | 352 | 38.1% |
+| `clauses/match` | 136 | 215 | 1 | 352 | 38.6% |
 | `clauses/match-where` | 28 | 6 | 0 | 34 | 82.4% |
-| `clauses/merge` | 23 | 49 | 3 | 75 | 30.7% |
+| `clauses/merge` | 24 | 48 | 3 | 75 | 32.0% |
 | `clauses/remove` | 6 | 27 | 0 | 33 | 18.2% |
 | `clauses/return` | 23 | 39 | 1 | 63 | 36.5% |
 | `clauses/return-orderby` | 19 | 15 | 1 | 35 | 54.3% |
@@ -40,7 +40,7 @@ exercise) or the scenario was skip-listed. Skips are counted, never hidden.
 | `clauses/with` | 6 | 23 | 0 | 29 | 20.7% |
 | `clauses/with-orderBy` | 68 | 224 | 0 | 292 | 23.3% |
 | `clauses/with-skip-limit` | 5 | 4 | 0 | 9 | 55.6% |
-| `clauses/with-where` | 11 | 8 | 0 | 19 | 57.9% |
+| `clauses/with-where` | 12 | 7 | 0 | 19 | 63.2% |
 | `expressions/aggregation` | 17 | 17 | 1 | 35 | 48.6% |
 | `expressions/boolean` | 130 | 20 | 0 | 150 | 86.7% |
 | `expressions/comparison` | 44 | 28 | 0 | 72 | 61.1% |
@@ -57,11 +57,11 @@ exercise) or the scenario was skip-listed. Skips are counted, never hidden.
 | `expressions/precedence` | 39 | 82 | 0 | 121 | 32.2% |
 | `expressions/quantifier` | 45 | 559 | 0 | 604 | 7.5% |
 | `expressions/string` | 26 | 6 | 0 | 32 | 81.2% |
-| `expressions/temporal` | 57 | 947 | 0 | 1004 | 5.7% |
+| `expressions/temporal` | 75 | 929 | 0 | 1004 | 7.5% |
 | `expressions/typeConversion` | 20 | 27 | 0 | 47 | 42.6% |
 | `useCases/countingSubgraphMatches` | 9 | 2 | 0 | 11 | 81.8% |
-| `useCases/triadicSelection` | 2 | 17 | 0 | 19 | 10.5% |
-| **total** | **1127** | **2670** | **71** | **3868** | **29.1%** |
+| `useCases/triadicSelection` | 15 | 4 | 0 | 19 | 78.9% |
+| **total** | **1162** | **2635** | **71** | **3868** | **30.0%** |
 
 ## Skip-list (deliberately un-evaluated)
 

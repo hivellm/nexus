@@ -254,13 +254,7 @@ impl Executor {
                     if optional {
                         // OPTIONAL MATCH semantics: preserve the row with NULL for target and rel
                         // This handles chained OPTIONAL MATCHes where the previous optional produced NULL
-                        let mut new_row = row.clone();
-                        if !target_var.is_empty() {
-                            new_row.insert(target_var.to_string(), Value::Null);
-                        }
-                        if !rel_var.is_empty() {
-                            new_row.insert(rel_var.to_string(), Value::Null);
-                        }
+                        let new_row = pad_optional_row(row, target_var, rel_var);
                         push_with_row_cap(
                             &mut expanded_rows,
                             new_row,
@@ -400,14 +394,12 @@ impl Executor {
                     if relationships.is_empty() {
                         // LEFT OUTER JOIN semantics: preserve row with NULL values when optional=true
                         if optional {
-                            // Create a row with NULL for target and relationship variables
-                            let mut new_row = row.clone();
-                            if !target_var.is_empty() {
-                                new_row.insert(target_var.to_string(), Value::Null);
-                            }
-                            if !rel_var.is_empty() {
-                                new_row.insert(rel_var.to_string(), Value::Null);
-                            }
+                            // Create a row with NULL for the relationship
+                            // variable — and for the target variable too,
+                            // UNLESS it was already bound by an earlier
+                            // clause (a closing pattern), in which case its
+                            // known value must survive untouched.
+                            let new_row = pad_optional_row(row, target_var, rel_var);
                             push_with_row_cap(
                                 &mut expanded_rows,
                                 new_row,
@@ -447,6 +439,20 @@ impl Executor {
                     // doc comment for the acquire-once rationale and the
                     // non-reentrancy constraint it must satisfy.
                     let expand_store = self.store();
+                    // LEFT OUTER JOIN bookkeeping: tracks whether ANY
+                    // candidate relationship below survived every rejection
+                    // check (dangling endpoint, target-var mismatch on a
+                    // closing pattern, `allowed_target_ids` mismatch) and
+                    // was actually pushed as an output row for THIS source.
+                    // `relationships.is_empty()` above already pads a NULL
+                    // row when the source has no candidates at all; this
+                    // covers the sibling case where candidates existed but
+                    // every one of them was rejected per-row (e.g.
+                    // `OPTIONAL MATCH (a)-[r:KNOWS]->(c)` where `c` is
+                    // already bound to a specific node from an earlier
+                    // clause and `a` has KNOWS relationships, just not to
+                    // that `c`) — openCypher TCK `triadicSelection`.
+                    let mut matched_for_this_source = false;
                     for (rel_idx, rel_info) in filtered_relationships.iter().enumerate() {
                         let target_id = match direction {
                             Direction::Outgoing => rel_info.target_id,
@@ -543,8 +549,22 @@ impl Executor {
                             rel_info.target_id
                         );
                         push_with_row_cap(&mut expanded_rows, new_row, "Expand")?;
+                        matched_for_this_source = true;
                     }
                     drop(expand_store);
+
+                    if !matched_for_this_source && optional {
+                        // Every candidate relationship for this source was
+                        // rejected — preserve the row via the same padding
+                        // rule as the `relationships.is_empty()` branch
+                        // above.
+                        let new_row = pad_optional_row(row, target_var, rel_var);
+                        push_with_row_cap(
+                            &mut expanded_rows,
+                            new_row,
+                            "Expand (optional, all candidates rejected)",
+                        )?;
+                    }
                 }
             }
         }
@@ -672,4 +692,30 @@ impl Executor {
 
         Ok(())
     }
+}
+
+/// Build a LEFT-OUTER-JOIN padding row for `OPTIONAL MATCH` when a hop
+/// found no admissible relationship for `row`: `rel_var` becomes `NULL`,
+/// and `target_var` becomes `NULL` too — UNLESS it was already bound by an
+/// earlier clause (a closing pattern, e.g. `OPTIONAL MATCH (a)-[r]->(other)`
+/// where `other` came from a prior `MATCH`), in which case its known value
+/// must survive untouched. Unconditionally nulling an already-bound target
+/// here would silently corrupt that variable's binding for every
+/// downstream clause instead of correctly leaving it alone and only
+/// nulling `r`. Every `execute_expand` optional-padding site (no source
+/// value, zero candidate relationships, every candidate rejected per-row)
+/// must go through this single helper so they cannot drift apart again.
+fn pad_optional_row(
+    row: &HashMap<String, Value>,
+    target_var: &str,
+    rel_var: &str,
+) -> HashMap<String, Value> {
+    let mut new_row = row.clone();
+    if !target_var.is_empty() && !new_row.contains_key(target_var) {
+        new_row.insert(target_var.to_string(), Value::Null);
+    }
+    if !rel_var.is_empty() {
+        new_row.insert(rel_var.to_string(), Value::Null);
+    }
+    new_row
 }

@@ -292,8 +292,17 @@ impl Executor {
                                 items.iter().map(|item| item.alias.clone()).collect();
                             results = self.execute_project(&mut context, items)?;
                         }
-                        Operator::With { items, distinct } => {
-                            self.execute_with(&mut context, items, *distinct)?;
+                        Operator::With {
+                            items,
+                            distinct,
+                            where_predicate,
+                        } => {
+                            self.execute_with(
+                                &mut context,
+                                items,
+                                *distinct,
+                                where_predicate.as_deref(),
+                            )?;
                         }
                         Operator::Aggregate {
                             group_by,
@@ -394,8 +403,17 @@ impl Executor {
                 }
                 Operator::Create { .. } => "Create".to_string(),
                 Operator::Project { items } => format!("Project({} items)", items.len()),
-                Operator::With { items, distinct } => {
-                    format!("With({} items, distinct={})", items.len(), distinct)
+                Operator::With {
+                    items,
+                    distinct,
+                    where_predicate,
+                } => {
+                    format!(
+                        "With({} items, distinct={}, has_where={})",
+                        items.len(),
+                        distinct,
+                        where_predicate.is_some()
+                    )
                 }
                 _ => format!("{:?}", std::mem::discriminant(operator)),
             };
@@ -564,8 +582,12 @@ impl Executor {
                         results = self.execute_project(&mut context, items)?;
                     }
                 }
-                Operator::With { items, distinct } => {
-                    self.execute_with(&mut context, items, *distinct)?;
+                Operator::With {
+                    items,
+                    distinct,
+                    where_predicate,
+                } => {
+                    self.execute_with(&mut context, items, *distinct, where_predicate.as_deref())?;
                 }
                 Operator::Limit { count } => {
                     self.execute_limit(&mut context, *count)?;

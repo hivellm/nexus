@@ -703,46 +703,31 @@ impl<'a> QueryPlanner<'a> {
                     .rposition(|op| matches!(op, Operator::Unwind { .. }));
                 last_unwind_pos.map(|p| p + 1).unwrap_or(operators.len())
             };
+            // A WITH-attached WHERE must see variables that are in scope but
+            // not carried forward by the projection itself (e.g. `WITH c
+            // WHERE r IS NULL` after `OPTIONAL MATCH (a)-[r]->(c)` —
+            // openCypher TriadicSelection/WithWhere1 scenarios). Lowering it
+            // as a separate post-WITH `Filter` cannot see `r` because `With`
+            // already replaced `context.variables` with only the projected
+            // aliases by the time `Filter` runs. Threading the predicate
+            // into `Operator::With` lets `execute_with` evaluate it per row
+            // BEFORE the scope cut, against the merged pre-projection +
+            // projected-alias scope, then clear the scope as before.
+            let with_where = where_expr.as_ref().map(|e| Box::new(e.clone()));
+            if with_where.is_some() {
+                tracing::debug!(
+                    "WITH WHERE: attaching predicate to With operator at position {}",
+                    insert_pos
+                );
+            }
             operators.insert(
                 insert_pos,
                 Operator::With {
                     items: projection_items,
                     distinct: *with_distinct,
+                    where_predicate: with_where,
                 },
             );
-
-            // If WITH has a WHERE clause, insert a Filter operator AFTER the WITH operator
-            // This ensures the WHERE clause filters the projected WITH variables, not the original variables
-            if let Some(where_expression) = where_expr {
-                let filter_str = self.predicate_to_string(where_expression)?;
-                tracing::debug!(
-                    "WITH WHERE: Inserting Filter at position {} (after WITH at {})",
-                    insert_pos + 1,
-                    insert_pos
-                );
-                operators.insert(
-                    insert_pos + 1, // Insert right after the WITH operator we just inserted
-                    Operator::Filter {
-                        predicate: filter_str,
-                        predicate_ast: Some(Box::new(where_expression.clone())),
-                    },
-                );
-                // DEBUG: Show operator order after insertion
-                for (idx, op) in operators.iter().enumerate() {
-                    let op_name = match op {
-                        Operator::NodeByLabel { variable, .. } => {
-                            format!("NodeByLabel({})", variable)
-                        }
-                        Operator::Filter { predicate, .. } => {
-                            format!("Filter({})", predicate.chars().take(30).collect::<String>())
-                        }
-                        Operator::With { items, .. } => format!("With({} items)", items.len()),
-                        Operator::Project { items } => format!("Project({} items)", items.len()),
-                        _ => format!("{:?}", std::mem::discriminant(op)),
-                    };
-                    tracing::debug!("  Operator #{}: {}", idx, op_name);
-                }
-            }
         }
 
         // Add CREATE operators AFTER MATCH/Filter but BEFORE Project OR Aggregate
