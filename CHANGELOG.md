@@ -97,6 +97,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **Temporal component property access.** Temporal values now support Neo4j-style component access as properties: `d.year`, `d.quarter`, `d.week`, `d.weekYear`, `d.ordinalDay`, `d.dayOfQuarter` on dates; `d.hour` through `d.nanosecond` plus `d.offset`/`d.offsetMinutes`/`d.offsetSeconds`/`d.timezone` on times and datetimes; `d.epochSeconds`/`d.epochMillis` on datetimes; and the full duration surface — totals (`d.months`, `d.minutes`, ...) alongside remainder variants (`d.monthsOfYear`, `d.minutesOfHour`, `d.secondsOfMinute`, ...). Unknown component names return `null`. Property access on non-temporal maps is unchanged.
 
+### Fixed — `CREATE` property values can now be computed expressions
+
+- **`CREATE` property values can now be computed expressions.** Standalone `CREATE (:V {d: date('2015-07-21')})` previously failed with "Complex expressions not supported in CREATE properties" — function calls and other computed expressions are now evaluated through the same evaluator as row-aware CREATE, with temporal results stored in their canonical ISO form. References to undefined variables in a standalone CREATE still error. Also fixed: relationship properties in row-aware CREATE that failed to resolve were silently dropped; they now raise the resolution error instead.
+
 ### Fixed — Inline label predicates on pattern target nodes are now enforced
 
 - **Inline label predicates on pattern target nodes are now enforced.** Patterns like `MATCH (a)-[:T]->(b:X)` previously matched nodes regardless of `b`'s declared label when `b` followed a relationship — the traversal operator never checked target labels. Labels are now enforced per hop (multi-hop chains included, AND semantics for multiple labels, dynamic `$param` labels resolved at execution time), and in OPTIONAL MATCH a label-rejected candidate correctly produces a null-padded row instead of a wrong match.

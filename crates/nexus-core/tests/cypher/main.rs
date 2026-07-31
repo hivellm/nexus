@@ -34,6 +34,7 @@ mod test_bracketless_relationships;
 mod test_call_procedures;
 mod test_collect_aggregation;
 mod test_create_arrow_direction;
+mod test_create_function_call_properties;
 mod test_create_with_return;
 mod test_create_without_return;
 mod test_filter_function;

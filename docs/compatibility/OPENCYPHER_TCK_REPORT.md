@@ -18,27 +18,27 @@ exercise) or the scenario was skip-listed. Skips are counted, never hidden.
 
 ## Totals
 
-**3868 scenarios — 1173 passed (30.3%), 2624 failed, 71 skipped.**
+**3868 scenarios — 1192 passed (30.8%), 2605 failed, 71 skipped.**
 
 ## Per-category
 
 | Category | Pass | Fail | Skip | Total | Pass % |
 |---|---:|---:|---:|---:|---:|
 | `clauses/call` | 0 | 2 | 50 | 52 | 0.0% |
-| `clauses/create` | 43 | 35 | 0 | 78 | 55.1% |
+| `clauses/create` | 44 | 34 | 0 | 78 | 56.4% |
 | `clauses/delete` | 7 | 34 | 0 | 41 | 17.1% |
 | `clauses/match` | 139 | 212 | 1 | 352 | 39.5% |
 | `clauses/match-where` | 28 | 6 | 0 | 34 | 82.4% |
 | `clauses/merge` | 24 | 48 | 3 | 75 | 32.0% |
 | `clauses/remove` | 6 | 27 | 0 | 33 | 18.2% |
-| `clauses/return` | 23 | 39 | 1 | 63 | 36.5% |
+| `clauses/return` | 27 | 35 | 1 | 63 | 42.9% |
 | `clauses/return-orderby` | 19 | 15 | 1 | 35 | 54.3% |
 | `clauses/return-skip-limit` | 18 | 13 | 0 | 31 | 58.1% |
 | `clauses/set` | 17 | 34 | 2 | 53 | 32.1% |
 | `clauses/union` | 8 | 4 | 0 | 12 | 66.7% |
 | `clauses/unwind` | 7 | 7 | 0 | 14 | 50.0% |
-| `clauses/with` | 8 | 21 | 0 | 29 | 27.6% |
-| `clauses/with-orderBy` | 69 | 223 | 0 | 292 | 23.6% |
+| `clauses/with` | 9 | 20 | 0 | 29 | 31.0% |
+| `clauses/with-orderBy` | 76 | 216 | 0 | 292 | 26.0% |
 | `clauses/with-skip-limit` | 5 | 4 | 0 | 9 | 55.6% |
 | `clauses/with-where` | 12 | 7 | 0 | 19 | 63.2% |
 | `expressions/aggregation` | 17 | 17 | 1 | 35 | 48.6% |
@@ -57,11 +57,11 @@ exercise) or the scenario was skip-listed. Skips are counted, never hidden.
 | `expressions/precedence` | 39 | 82 | 0 | 121 | 32.2% |
 | `expressions/quantifier` | 45 | 559 | 0 | 604 | 7.5% |
 | `expressions/string` | 26 | 6 | 0 | 32 | 81.2% |
-| `expressions/temporal` | 75 | 929 | 0 | 1004 | 7.5% |
+| `expressions/temporal` | 81 | 923 | 0 | 1004 | 8.1% |
 | `expressions/typeConversion` | 20 | 27 | 0 | 47 | 42.6% |
 | `useCases/countingSubgraphMatches` | 9 | 2 | 0 | 11 | 81.8% |
 | `useCases/triadicSelection` | 19 | 0 | 0 | 19 | 100.0% |
-| **total** | **1173** | **2624** | **71** | **3868** | **30.3%** |
+| **total** | **1192** | **2605** | **71** | **3868** | **30.8%** |
 
 ## Skip-list (deliberately un-evaluated)
 

@@ -165,10 +165,12 @@ fn create_duration_property_persists_as_canonical_string_not_tagged_object() {
     // executor routes through the row-scoped `execute_create_with_context`
     // / `resolve_property_expr_for_create` path this test targets, not the
     // separate `execute_create_pattern_with_variables` fast path a
-    // context-free standalone `CREATE` takes (which rejects any
-    // function-call property value outright — a pre-existing, unrelated
-    // limitation, not the storage-boundary canonicalization this test is
-    // about).
+    // context-free standalone `CREATE` takes. Both paths now canonicalize
+    // function-call property values identically (see
+    // `test_create_function_call_properties.rs`); this test keeps the
+    // `UNWIND` form specifically to exercise the row-aware
+    // `resolve_property_expr_for_create` path rather than the standalone
+    // one.
     execute_query(
         &mut engine,
         "UNWIND [1] AS i CREATE (:Event {d: duration({days: 1, hours: 2})})",
