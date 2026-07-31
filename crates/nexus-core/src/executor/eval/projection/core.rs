@@ -801,6 +801,96 @@ impl Executor {
         }
     }
 
+    /// Resolve `name(args…)` strictly: `Err` when no registered UDF or
+    /// builtin dispatch table (graph/string/math/geo/temporal/list)
+    /// recognises `name`, instead of the lenient `Ok(Value::Null)`
+    /// fallback [`Self::evaluate_projection_expression`]'s `FunctionCall`
+    /// arm uses. That leniency is deliberate and unrelated to this
+    /// function: `RETURN`/`WITH`/`WHERE` treat an unrecognised name the
+    /// same as an aggregate name reaching this scalar dispatch by mistake
+    /// (`count`/`sum`/… are routed through the separate aggregation
+    /// pipeline, never through here) — both legitimately evaluate to
+    /// `Null` in a read position. A write path has no such excuse: a
+    /// typo'd function name in a CREATE property value must not silently
+    /// persist `null`. Callers that need the strict behaviour call this
+    /// directly instead of `evaluate_projection_expression`; this
+    /// duplicates the dispatch-order chain (not any evaluation logic —
+    /// every arm still delegates to the same `eval_builtin_*` helper) so
+    /// the widely-used lenient path stays byte-for-byte unchanged.
+    pub(in crate::executor) fn eval_function_call_strict(
+        &self,
+        row: &HashMap<String, Value>,
+        context: &ExecutionContext,
+        name: &str,
+        args: &[parser::Expression],
+    ) -> Result<Value> {
+        let lowered = name.to_lowercase();
+
+        if let Some(udf) = self.shared.udf_registry.get(&lowered) {
+            let mut evaluated_args = Vec::new();
+            for arg_expr in args {
+                evaluated_args.push(self.evaluate_projection_expression(row, context, arg_expr)?);
+            }
+            return udf
+                .execute(&evaluated_args)
+                .map_err(|e| Error::CypherSyntax(format!("UDF execution error: {}", e)));
+        }
+        if let Some(r) = self.eval_builtin_graph(row, context, lowered.as_str(), args) {
+            return r;
+        }
+        if let Some(r) = self.eval_builtin_string(row, context, lowered.as_str(), args) {
+            return r;
+        }
+        if let Some(r) = self.eval_builtin_math(row, context, lowered.as_str(), args) {
+            return r;
+        }
+        if let Some(r) = self.eval_builtin_geo(row, context, lowered.as_str(), args) {
+            return r;
+        }
+        if let Some(r) = self.eval_builtin_temporal(row, context, lowered.as_str(), args) {
+            return r;
+        }
+        if let Some(r) = self.eval_builtin_list(row, context, lowered.as_str(), args) {
+            return r;
+        }
+
+        Err(Error::CypherSyntax(format!(
+            "UnknownFunction: function `{name}` does not exist \
+             (or is not valid in this position — aggregate functions \
+             require a grouping context)"
+        )))
+    }
+
+    /// Probe whether `name` is dispatchable at all — a registered UDF or a
+    /// name any of the six builtin groups recognises — without evaluating
+    /// the caller's real arguments. A registered UDF is checked first via
+    /// a pure membership lookup (`udf_registry.contains`, no `execute`
+    /// call): running an arbitrary UDF body — even with an empty argument
+    /// list — could have side effects or panic on an unguarded `args[0]`,
+    /// neither of which this is allowed to trigger. Only for a name no UDF
+    /// claims does this fall back to calling
+    /// [`Self::eval_function_call_strict`] with an empty argument list,
+    /// purely to observe whether *some* builtin arm claims the name; the
+    /// value or error that empty-arg trial produces is otherwise discarded
+    /// (an arm that itself errors on zero arguments — most of them do —
+    /// still means the *name* is known). Lets the CREATE property-value
+    /// resolvers' function-name pre-pass (`operators::create::properties`)
+    /// validate a NESTED function-call name — `1 + bogusFn(1)`,
+    /// `[bogusFn(1)]` — without forcing evaluation of its real (possibly
+    /// unresolvable) arguments.
+    pub(in crate::executor) fn is_known_function_name(&self, name: &str) -> bool {
+        let lowered = name.to_lowercase();
+        if self.shared.udf_registry.contains(&lowered) {
+            return true;
+        }
+        let empty_row: HashMap<String, Value> = HashMap::new();
+        let probe_ctx = ExecutionContext::new(HashMap::new(), None);
+        match self.eval_function_call_strict(&empty_row, &probe_ctx, name, &[]) {
+            Err(Error::CypherSyntax(msg)) if msg.starts_with("UnknownFunction:") => false,
+            _ => true,
+        }
+    }
+
     /// Evaluate a `COLLECT { … }` subquery expression
     /// (phase6_opencypher-subquery-transactions §9).
     ///

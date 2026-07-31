@@ -99,7 +99,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed — `CREATE` property values can now be computed expressions
 
-- **`CREATE` property values can now be computed expressions.** Standalone `CREATE (:V {d: date('2015-07-21')})` previously failed with "Complex expressions not supported in CREATE properties" — function calls and other computed expressions are now evaluated through the same evaluator as row-aware CREATE, with temporal results stored in their canonical ISO form. References to undefined variables in a standalone CREATE still error. Also fixed: relationship properties in row-aware CREATE that failed to resolve were silently dropped; they now raise the resolution error instead.
+- **`CREATE` property values can now be computed expressions.** Standalone `CREATE (:V {d: date('2015-07-21')})` previously failed with "Complex expressions not supported in CREATE properties" — function calls and other computed expressions are now evaluated through the same evaluator as row-aware CREATE, with temporal results stored in their canonical ISO form. References to undefined variables in a standalone CREATE still error. Also fixed: relationship properties in row-aware CREATE that failed to resolve were silently dropped; they now raise the resolution error instead. Map-valued property values (and a whole node/relationship used as a property value) are now rejected with a type error — openCypher property values must be primitives or arrays of primitives; these were previously stored verbatim.
 
 ### Fixed — Inline label predicates on pattern target nodes are now enforced
 

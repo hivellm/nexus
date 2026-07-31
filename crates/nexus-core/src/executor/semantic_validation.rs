@@ -348,6 +348,43 @@ fn add_element_vars(element: &PatternElement, bound: &mut HashSet<String>) {
     }
 }
 
+// ── CREATE pattern property-map expressions ─────────────────────────────
+
+/// Every property-value expression in a `CREATE` pattern — both node and
+/// relationship property maps, including inside a quantified group.
+/// Shared by the aggregation-placement check (reject an aggregate with no
+/// grouping context to run over) and the reference check (reject a name
+/// bound nowhere in the query) below; a `CREATE` pattern's own node/
+/// relationship *variables* are handled separately by
+/// `collect_pattern_binders` — this only walks the property *values*.
+fn pattern_property_exprs(pattern: &Pattern) -> Vec<&Expression> {
+    let mut out = Vec::new();
+    for element in &pattern.elements {
+        collect_pattern_property_exprs(element, &mut out);
+    }
+    out
+}
+
+fn collect_pattern_property_exprs<'a>(element: &'a PatternElement, out: &mut Vec<&'a Expression>) {
+    match element {
+        PatternElement::Node(n) => {
+            if let Some(props) = &n.properties {
+                out.extend(props.properties.values());
+            }
+        }
+        PatternElement::Relationship(r) => {
+            if let Some(props) = &r.properties {
+                out.extend(props.properties.values());
+            }
+        }
+        PatternElement::QuantifiedGroup(g) => {
+            for inner in &g.inner {
+                collect_pattern_property_exprs(inner, out);
+            }
+        }
+    }
+}
+
 // ── Aggregation placement ──────────────────────────────────────────────
 
 /// The aggregate function names the planner recognises (lower-cased match).
@@ -366,7 +403,12 @@ const AGGREGATE_FNS: &[&str] = &[
     "percentiledisc",
 ];
 
-fn is_aggregate_name(name: &str) -> bool {
+/// `pub(in crate::executor)` so the CREATE property-value resolvers'
+/// unknown-function-name walk (`operators::create::properties`) can skip
+/// an aggregate name — already rejected, with the more precise
+/// `InvalidAggregation`, by [`check_aggregation_placement`] — instead of
+/// misclassifying it as `UnknownFunction`.
+pub(in crate::executor) fn is_aggregate_name(name: &str) -> bool {
     AGGREGATE_FNS.contains(&name.to_lowercase().as_str())
 }
 
@@ -398,8 +440,29 @@ fn check_aggregation_placement(query: &CypherQuery) -> crate::Result<()> {
                     check_nested_aggregation(&item.expression)?;
                 }
             }
+            // A `CREATE` property map has no grouping context to aggregate
+            // over — `count(*)`/`collect(x)`/… in `{c: count(*)}` cannot
+            // mean anything and must not silently store `null` (the
+            // pre-existing behaviour: none of the scalar builtin-function
+            // dispatch tables recognise an aggregate name, so it fell
+            // through to `Ok(Value::Null)`). Any aggregate anywhere in a
+            // CREATE pattern's property values — nested or not — is
+            // rejected outright, unlike the `WHERE`/`RETURN`/`WITH` checks
+            // above which only reject specific misplacements.
+            Clause::Create(c) => {
+                for expr in pattern_property_exprs(&c.pattern) {
+                    reject_aggregate_in_create(expr)?;
+                }
+            }
             _ => {}
         }
+    }
+    Ok(())
+}
+
+fn reject_aggregate_in_create(expr: &Expression) -> crate::Result<()> {
+    if expr_contains_aggregate(expr) {
+        return Err(invalid_aggregation_in_create());
     }
     Ok(())
 }
@@ -437,7 +500,13 @@ fn expr_contains_aggregate(expr: &Expression) -> bool {
 
 /// Direct sub-expressions of `expr`. Does not descend into `EXISTS`/`COLLECT`
 /// subqueries — their aggregations belong to their own inner scope.
-fn child_exprs(expr: &Expression) -> Vec<&Expression> {
+///
+/// `pub(in crate::executor)` so the CREATE property-value resolvers'
+/// unknown-function-name walk (`operators::create::properties`) can reuse
+/// this exact "does not descend into EXISTS/COLLECT" traversal — those
+/// are full inner queries validated on their own, not CREATE property-map
+/// surface — instead of re-deriving its own copy.
+pub(in crate::executor) fn child_exprs(expr: &Expression) -> Vec<&Expression> {
     match expr {
         Expression::BinaryOp { left, right, .. } => vec![left, right],
         Expression::UnaryOp { operand, .. } => vec![operand],
@@ -613,7 +682,21 @@ fn collect_clause_binders(clause: &Clause, binders: &mut HashSet<String>) {
                 collect_expr_binders(&w.expression, binders);
             }
         }
-        Clause::Create(c) => collect_pattern_binders(&c.pattern, binders),
+        Clause::Create(c) => {
+            collect_pattern_binders(&c.pattern, binders);
+            // The pattern's own node/relationship variables are only half
+            // of what a CREATE property map can legally reference: a
+            // comprehension, `any`/`all`/`none`/`single` predicate, or
+            // pattern comprehension *inside* a property value binds its
+            // own name(s) inline (`[x IN [1,2,3] | x*2]`'s `x`,
+            // `[(x)-->(y) | y.n]`'s `x`/`y`, …). Without this, the
+            // reference check below (which now also walks CREATE property
+            // maps) would flag every such inline-bound name as undefined
+            // — a false positive on a previously-valid query.
+            for expr in pattern_property_exprs(&c.pattern) {
+                collect_expr_binders(expr, binders);
+            }
+        }
         Clause::Merge(m) => {
             collect_pattern_binders(&m.pattern, binders);
             if let Some(sc) = &m.on_create {
@@ -738,7 +821,16 @@ fn collect_pattern_element_binders(element: &PatternElement, binders: &mut HashS
 /// constructs: list/pattern comprehensions, the `any`/`all`/`none`/`single`
 /// list predicates (whose bound name is the first argument, a string
 /// literal), `EXISTS { … }` patterns, and `COLLECT { … }` subqueries.
-fn collect_expr_binders(expr: &Expression, binders: &mut HashSet<String>) {
+///
+/// `pub(in crate::executor)` (rather than private) so the CREATE
+/// property-value resolvers (`operators::create::properties`) can reuse
+/// this exact comprehension-aware walk as a defense-in-depth check —
+/// seeding it with an empty (standalone CREATE) or row-derived
+/// (row-aware CREATE) outer binder set — instead of re-deriving their own
+/// copy of "what does this inline construct bind" or, worse, naively
+/// rejecting any `Variable`/`PropertyAccess` node regardless of whether a
+/// comprehension it's nested inside legitimately bound it.
+pub(in crate::executor) fn collect_expr_binders(expr: &Expression, binders: &mut HashSet<String>) {
     match expr {
         Expression::ListComprehension {
             variable,
@@ -904,7 +996,22 @@ fn check_clause_references(clause: &Clause, binders: &HashSet<String>) -> crate:
         Clause::Skip(s) => check_expr_references(&s.count, binders)?,
         Clause::Unwind(u) => check_expr_references(&u.expression, binders)?,
         Clause::Foreach(f) => check_expr_references(&f.list_expression, binders)?,
-        // Write-clause target references (SET/DELETE/REMOVE/CREATE/MERGE) are
+        // A `CREATE` property map referencing a name bound nowhere in the
+        // query (`CREATE (b {name: missing})` — TCK `Create1[20]`,
+        // `Create2[24]`) is a `SyntaxError`/`UndefinedVariable` exactly
+        // like any other read position; `missing` never syntactically
+        // differs from a legitimate row reference, so it goes through the
+        // same walk. The pattern's OWN node/relationship variables are
+        // already in `binders` (via `collect_pattern_binders`, called on
+        // every `Clause::Create` during binder collection), so a property
+        // value referencing an earlier-bound variable — from this query's
+        // own `MATCH`/`UNWIND`/an earlier `CREATE` clause — still passes.
+        Clause::Create(c) => {
+            for expr in pattern_property_exprs(&c.pattern) {
+                check_expr_references(expr, binders)?;
+            }
+        }
+        // Write-clause target references (SET/DELETE/REMOVE/MERGE) are
         // validated by a later increment; pattern property maps are not
         // reference-checked here.
         _ => {}
@@ -916,7 +1023,13 @@ fn check_clause_references(clause: &Clause, binders: &HashSet<String>) -> crate:
 /// Recurses through every sub-expression; inline-bound names (comprehension /
 /// predicate variables) are already present in `binders`, so their inner
 /// references pass.
-fn check_expr_references(expr: &Expression, binders: &HashSet<String>) -> crate::Result<()> {
+///
+/// `pub(in crate::executor)` — see [`collect_expr_binders`]'s doc comment
+/// for why the CREATE property-value resolvers reuse this directly.
+pub(in crate::executor) fn check_expr_references(
+    expr: &Expression,
+    binders: &HashSet<String>,
+) -> crate::Result<()> {
     match expr {
         Expression::Variable(name) => {
             // `__DISTINCT__` is an in-band marker the parser injects as the
@@ -1049,6 +1162,14 @@ fn nested_aggregation() -> crate::Error {
 fn invalid_aggregation_in_where() -> crate::Error {
     crate::Error::CypherSyntax(
         "InvalidAggregation: aggregate functions are not allowed in WHERE (use WITH … WHERE)"
+            .to_string(),
+    )
+}
+
+fn invalid_aggregation_in_create() -> crate::Error {
+    crate::Error::CypherSyntax(
+        "InvalidAggregation: aggregate functions are not allowed in a CREATE property map \
+         (there is no grouping context to aggregate over)"
             .to_string(),
     )
 }
@@ -1258,6 +1379,60 @@ mod tests {
         assert_ok("MATCH (a) WITH count(a) AS c WHERE c > 10 RETURN c");
         // A non-aggregate call wrapping an aggregate is not nested aggregation.
         assert_ok("MATCH (a) RETURN size(collect(a)) AS n");
+    }
+
+    #[test]
+    fn aggregate_in_create_property_map_is_rejected() {
+        assert_token("CREATE (:V {c: count(*)})", "InvalidAggregation");
+        // Nested inside another expression, and on a relationship property.
+        assert_token("CREATE ()-[:T {c: 1 + count(*)}]->()", "InvalidAggregation");
+    }
+
+    #[test]
+    fn undefined_variable_in_create_property_map_is_rejected() {
+        // Standalone CREATE — TCK Create1[20].
+        assert_undefined("CREATE (b {name: missing}) RETURN b");
+        // Nested one level deeper than a bare top-level reference.
+        assert_undefined("CREATE (b {name: toUpper(missing)}) RETURN b");
+        // Row-aware CREATE (an upstream MATCH precedes it) — TCK Create2[24].
+        assert_undefined("MATCH (a) CREATE (a)-[:KNOWS]->(b {name: missing}) RETURN b");
+    }
+
+    #[test]
+    fn defined_variable_in_create_property_map_passes() {
+        // A property value referencing a variable bound by an earlier
+        // clause in the SAME query must still pass — this pass never
+        // rejects a currently-valid query.
+        assert_ok("MATCH (a) CREATE (b {name: a.name}) RETURN b");
+        assert_ok("CREATE (a:X), (b:Y {name: a.name})");
+        assert_ok("UNWIND [1, 2] AS i CREATE (:V {n: i})");
+    }
+
+    /// A construct that binds its own name(s) *inline*, inside a CREATE
+    /// property-map expression, must not have that name flagged as
+    /// undefined — `collect_clause_binders`'s `Clause::Create` arm has to
+    /// walk property-map expressions (not just the pattern's own node/
+    /// relationship variables) to pick these up before the reference
+    /// check runs. Regression coverage for a false positive the reference
+    /// check introduced: `CREATE (:Lc {v: [x IN [1,2,3] | x*2]})` and
+    /// siblings all used to error `UndefinedVariable` on `x`/`y`.
+    #[test]
+    fn inline_bound_names_in_create_property_map_pass() {
+        // List comprehension — `x` is the comprehension's own loop
+        // variable, not a free reference.
+        assert_ok("CREATE (:Lc {v: [x IN [1, 2, 3] | x * 2]})");
+        // any/all/none/single predicate — the bound name is the first
+        // (string-literal) argument.
+        assert_ok("CREATE (:Lc {v: all(x IN [1, 2, 3] WHERE x > 0)})");
+        assert_ok("CREATE (:Lc {v: any(x IN [1, 2, 3] WHERE x > 0)})");
+        // Pattern comprehension — its own pattern binds `x`/`y`.
+        assert_ok("CREATE (:Lc {v: [(x)-->(y) | y.n]})");
+        // The pattern-comprehension form fed by an outer bound variable:
+        // the comprehension's pattern reuses `m` (already bound by the
+        // preceding MATCH) as its own start node instead of declaring a
+        // fresh one — `m` must still resolve, and `y` remains
+        // comprehension-local.
+        assert_ok("MATCH (m) CREATE (m)-[:R]->(:Lc {v: [(m)-->(y) | y.n]})");
     }
 
     #[test]

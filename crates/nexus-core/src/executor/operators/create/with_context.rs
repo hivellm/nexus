@@ -2,11 +2,11 @@
 //! creation helper) and `execute_create_with_context`, which drives a
 //! `CREATE` clause fed by an upstream `MATCH`/`UNWIND` row.
 
-use super::super::super::context::{ExecutionContext, RelationshipInfo};
-use super::super::super::engine::Executor;
-use super::super::super::parser;
-use super::super::super::types::Row;
 use crate::catalog::TypeId;
+use crate::executor::context::{CompensatingUndoOp, ExecutionContext, RelationshipInfo};
+use crate::executor::engine::Executor;
+use crate::executor::parser;
+use crate::executor::types::Row;
 use crate::{Error, Result};
 use serde_json::{Map, Value};
 
@@ -372,11 +372,7 @@ impl Executor {
                             // unwind this node. No-op when the
                             // executor is not running inside a
                             // batch attempt.
-                            context.push_undo(
-                                super::super::super::context::CompensatingUndoOp::DeleteNode(
-                                    new_id,
-                                ),
-                            );
+                            context.push_undo(CompensatingUndoOp::DeleteNode(new_id));
                             if let Some(var) = &node.variable {
                                 node_ids.insert(var.clone(), new_id);
                             }
@@ -390,17 +386,26 @@ impl Executor {
                         if let Some(rel_type) = rel.types.first() {
                             let type_id = self.catalog().get_or_create_type(rel_type)?;
 
-                            // Extract relationship properties. Errors
-                            // propagate instead of silently dropping the
-                            // key: the previous `.ok()` discarded ANY
-                            // unresolvable property value — including a
+                            // Extract relationship properties via the same
+                            // resolver `create_pattern_node_with_context`
+                            // uses for node properties just above —
+                            // `resolve_property_expr_for_create` both
+                            // propagates resolution failures (a
                             // function-call value like
-                            // `duration({days: 1})` — leaving the
-                            // relationship persisted with that key simply
-                            // missing rather than surfacing the
-                            // evaluation failure. Mirrors
-                            // `create_pattern_node_with_context`'s node
-                            // property resolution just above.
+                            // `duration({days: 1})`, or a reference to a
+                            // name bound nowhere in the query) as `?`
+                            // errors and rejects a resolved value that
+                            // isn't a primitive/array-of-primitives (e.g.
+                            // `{peer: b}` where `b` is a bound node —
+                            // storing a whole node/relationship object
+                            // under a property key is a marker-collision
+                            // hazard, not a value CREATE should persist).
+                            // The previous `.filter_map(...).ok()` here
+                            // instead silently DROPPED any key whose value
+                            // failed to resolve, which is a different
+                            // (also wrong) failure mode: the relationship
+                            // still got created, just missing that key,
+                            // with no error surfaced at all.
                             let properties = if let Some(props_map) = &rel.properties {
                                 let mut resolved = Map::with_capacity(props_map.properties.len());
                                 for (k, v) in &props_map.properties {
@@ -483,11 +488,7 @@ impl Executor {
                                             &mut tx,
                                             &mut created_nodes_with_labels,
                                         )?;
-                                        context.push_undo(
-                                            super::super::super::context::CompensatingUndoOp::DeleteNode(
-                                                new_id,
-                                            ),
-                                        );
+                                        context.push_undo(CompensatingUndoOp::DeleteNode(new_id));
                                         if let Some(var) = &target_node.variable {
                                             node_ids.insert(var.clone(), new_id);
                                         }
@@ -542,11 +543,7 @@ impl Executor {
                                 &mut tx, source_id, target_id, type_id, properties,
                             )?;
                             *rel_count_updates.entry(type_id).or_insert(0) += 1;
-                            context.push_undo(
-                                super::super::super::context::CompensatingUndoOp::DeleteRelationship(
-                                    rel_id,
-                                ),
-                            );
+                            context.push_undo(CompensatingUndoOp::DeleteRelationship(rel_id));
                             tracing::trace!(
                                 "execute_create_with_context: relationship created successfully, rel_id={}",
                                 rel_id
