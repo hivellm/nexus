@@ -129,10 +129,8 @@ fn localdatetime_accessors_match_tck_scenario_5() {
 
 // ============================================================================
 // Temporal5.feature scenario [4] / [6] — time/datetime offset accessors,
-// exercised at the constructor's supported default (no explicit
-// timezone map key, so offset stays the implementation's zero default) —
-// still a faithful test of the accessor *dispatch and math*, distinct
-// from the (out-of-scope) map-key parsing gap.
+// exercised at the constructor's default (no explicit `timezone` map key,
+// so offset defaults to UTC — matching real Neo4j).
 // ============================================================================
 
 #[test]
@@ -144,21 +142,22 @@ fn time_offset_accessors_use_the_constructed_offset() {
          RETURN d.offset, d.offsetMinutes, d.offsetSeconds, d.timezone",
     );
     let values = row_values(&result);
-    assert_eq!(values[0].as_str(), Some("+00:00"));
+    // A zero UTC offset renders as `Z` (matches `java.time.ZoneOffset.UTC`,
+    // which Neo4j's own rendering is built on).
+    assert_eq!(values[0].as_str(), Some("Z"));
     assert_eq!(values[1].as_i64(), Some(0));
     assert_eq!(values[2].as_i64(), Some(0));
-    assert_eq!(values[3].as_str(), Some("+00:00"));
+    assert_eq!(values[3].as_str(), Some("Z"));
 }
 
 #[test]
 fn datetime_epoch_accessors_are_consistent_with_the_constructed_offset() {
-    // The `datetime({...})` map constructor picks the *executing
-    // machine's* local UTC offset when no explicit `timezone` key is
-    // given (a separate, pre-existing constructor gap — real Neo4j
-    // defaults to UTC) — so this test reads back `d.offsetSeconds`
-    // rather than assuming zero, keeping it correct on any CI runner's
-    // timezone, and checks the accessor's arithmetic invariant directly:
-    // `epochSeconds == (wall-clock reading, taken as UTC) - offsetSeconds`.
+    // The `datetime({...})` map constructor defaults to UTC when no
+    // explicit `timezone` key is given (matching real Neo4j) — this test
+    // still reads back `d.offsetSeconds` rather than hard-coding `0`, so
+    // it doubles as a regression check on that default and exercises the
+    // accessor's arithmetic invariant directly: `epochSeconds ==
+    // (wall-clock reading, taken as UTC) - offsetSeconds`.
     let (mut engine, _ctx) = setup_isolated_test_engine().unwrap();
     let result = execute_query(
         &mut engine,

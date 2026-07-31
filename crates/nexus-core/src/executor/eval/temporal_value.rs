@@ -436,17 +436,34 @@ fn render_date_ymd(year: i32, month: u32, day: u32) -> String {
     }
 }
 
+/// Renders `HH:MM[:SS[.fraction]]`, omitting the seconds field entirely
+/// when both `second` and `nanosecond` are zero — matches the openCypher
+/// TCK's `Temporal4.feature` store-round-trip table (`localtime({hour:
+/// 12})` -> `'12:00'`, not `'12:00:00'`) and `Temporal9.feature`'s
+/// `truncate` expectation table (`'1900-01-01T00:00'`, never
+/// `'...T00:00:00'`), which independently pins the same rule dozens of
+/// times. A non-zero `nanosecond` always forces the seconds field to show
+/// (even when `second` itself is `0`), since the fraction has nowhere
+/// else to attach — `Temporal9.feature`'s `{nanosecond: 2}` override rows
+/// render `'...T00:00:00.000000002'`, not `'...T00:00.000000002'`.
 fn render_time_of_day(hour: u32, minute: u32, second: u32, nanosecond: u32) -> String {
-    let mut s = format!("{hour:02}:{minute:02}:{second:02}");
-    if let Some(frac) = format_nanos_fraction(nanosecond) {
-        s.push('.');
-        s.push_str(&frac);
+    let mut s = format!("{hour:02}:{minute:02}");
+    if second != 0 || nanosecond != 0 {
+        s.push_str(&format!(":{second:02}"));
+        if let Some(frac) = format_nanos_fraction(nanosecond) {
+            s.push('.');
+            s.push_str(&frac);
+        }
     }
     s
 }
 
-/// Renders a UTC offset in seconds as `+HH:MM` (or `+HH:MM:SS` when the
-/// offset carries a sub-minute remainder), matching the TCK's
+/// Renders a UTC offset in seconds as `Z` (exactly zero — matches
+/// `java.time.ZoneOffset.UTC`'s own `toString()`, which is what Neo4j's
+/// temporal rendering is built on, and the openCypher TCK's
+/// `Temporal4.feature` store-round-trip table: `time({hour: 12})` ->
+/// `'12:00Z'`, never `'12:00+00:00'`), `+HH:MM` (or `+HH:MM:SS` when the
+/// offset carries a sub-minute remainder) otherwise, matching the TCK's
 /// `12:31:14+01:00` form.
 ///
 /// `pub(in crate::executor)`, not private: `temporal_accessors` reuses
@@ -455,6 +472,9 @@ fn render_time_of_day(hour: u32, minute: u32, second: u32, nanosecond: u32) -> S
 /// reaches the caller through canonical rendering or a `d.offset`
 /// property read.
 pub(in crate::executor) fn render_offset(offset_seconds: i32) -> String {
+    if offset_seconds == 0 {
+        return "Z".to_string();
+    }
     let sign = if offset_seconds < 0 { '-' } else { '+' };
     let abs = offset_seconds.unsigned_abs();
     let hours = abs / 3600;

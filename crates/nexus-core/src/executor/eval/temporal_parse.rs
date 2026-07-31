@@ -165,8 +165,13 @@ fn parse_calendar_or_ordinal(year: i32, body: &str, has_hyphen: bool) -> Option<
 /// month-length, so this approximation is unavoidable, and it is the same
 /// constant that reproduces the TCK's `'P0.75M'` -> `'P22DT19H51M49.5S'`
 /// expectation exactly.
-const AVG_SECONDS_PER_MONTH: f64 = 2_629_746.0;
-const SECONDS_PER_DAY: f64 = 86_400.0;
+///
+/// `pub(in crate::executor)`: `temporal`'s `scale_duration` (backing
+/// `duration * number`/`duration / number`) reuses the exact same
+/// fractional-month carry the string parser below performs, verified
+/// against `Temporal8.feature` scenario 7's `* 0.5` row.
+pub(in crate::executor) const AVG_SECONDS_PER_MONTH: f64 = 2_629_746.0;
+pub(in crate::executor) const SECONDS_PER_DAY: f64 = 86_400.0;
 
 /// Converts an already-integer-valued `f64` (the caller has called
 /// `.trunc()`/`.round()` on it) into an `i64`, rejecting anything outside
@@ -177,7 +182,10 @@ const SECONDS_PER_DAY: f64 = 86_400.0;
 /// saturated value can still overflow if something downstream negates it
 /// (`-i64::MIN` panics/wraps). Checking the `f64` magnitude before the cast
 /// avoids both.
-fn to_i64(v: f64) -> Option<i64> {
+///
+/// `pub(in crate::executor)`: shared with `temporal::scale_duration`'s
+/// float-to-i64 narrowing for the same overflow-safety reason.
+pub(in crate::executor) fn to_i64(v: f64) -> Option<i64> {
     (v.is_finite() && v >= -(2f64.powi(63)) && v < 2f64.powi(63)).then_some(v as i64)
 }
 

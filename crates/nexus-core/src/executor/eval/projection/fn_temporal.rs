@@ -20,6 +20,7 @@
 use super::super::super::context::ExecutionContext;
 use super::super::super::engine::Executor;
 use super::super::temporal_parse;
+use super::super::temporal_retag;
 use super::super::temporal_value;
 use crate::Result;
 use chrono::{Datelike, Offset, TimeZone, Timelike};
@@ -36,6 +37,76 @@ fn coerce_temporal_arg(value: Value) -> Value {
         Some(s) => Value::String(s),
         None => value,
     }
+}
+
+/// Reads and validates a map constructor's `nanosecond` key (defaults to
+/// `0` when absent) — shared by every instant map constructor
+/// (`localtime`/`time`/`localdatetime`/`datetime`). The openCypher TCK's
+/// `Temporal4.feature`/`Temporal5.feature` map literals all use this
+/// singular key (distinct from `duration({...})`'s own plural
+/// `nanoseconds` convention, which `"duration"`'s branch below reads
+/// separately).
+///
+/// Must be a non-negative integer strictly less than `1_000_000_000` (a
+/// whole second is exactly `1_000_000_000` nanoseconds) — anything else
+/// is rejected with an explicit error rather than silently reinterpreted
+/// as a smaller in-range quantity. `Value::Number::as_u64()` already
+/// returns `None` for a negative value AND for any float-backed value
+/// (whole or fractional), so the single `.filter()` below covers all
+/// three reject shapes (negative, fractional, `>= 1_000_000_000`) — e.g.
+/// `nanosecond: 1500000000` must be a hard error, not silently rendered
+/// as `.15` seconds (1.5 * 10^9 truncated into the `[0, 10^9)` window is
+/// a completely different quantity than the caller wrote).
+fn nanosecond_from_map(map: &Map<String, Value>) -> Result<u32> {
+    let Some(value) = map.get("nanosecond") else {
+        return Ok(0);
+    };
+    value
+        .as_u64()
+        .filter(|n| *n < 1_000_000_000)
+        .map(|n| n as u32)
+        .ok_or_else(|| {
+            crate::Error::CypherExecution(format!(
+                "InvalidArgumentValue: `nanosecond` must be a non-negative integer in \
+                 [0, 999999999], got {value}"
+            ))
+        })
+}
+
+/// Resolves a map constructor's `timezone` key into `(offset_seconds,
+/// zone_name)` for the `time`/`datetime` map constructors — defaulting to
+/// UTC (`(0, None)`) when the key is absent, matching real Neo4j's
+/// default (NOT the executing machine's local offset, a since-fixed
+/// constructor gap; see `Temporal4.feature`'s `datetime({year: 1912})` ->
+/// `'1912-01-01T00:00Z'`). A fixed-offset string (`'+01:00'`, `'Z'`, …) or
+/// the literal `'UTC'` resolves directly to `(offset, None)`.
+///
+/// Anything else — a named IANA zone like `'Europe/Stockholm'` — cannot
+/// be resolved to a real offset without a timezone database, which isn't
+/// wired into this codebase (see `temporal_value::make_datetime`'s doc
+/// comment). Previously this silently fell back to UTC while still
+/// carrying the unresolved name through as `zone_name`, which rendered a
+/// self-contradictory `...Z[Europe/Stockholm]` (the `Z` asserts UTC, the
+/// bracket asserts it isn't). Until a real timezone database lands, an
+/// unresolvable name is a hard error instead — the `Option<String>` in
+/// this function's return type stays `None` on every success path today,
+/// and only starts carrying a real resolved zone name once that database
+/// exists.
+fn timezone_from_map(map: &Map<String, Value>) -> Result<(i32, Option<String>)> {
+    let Some(tz) = map.get("timezone").and_then(Value::as_str) else {
+        return Ok((0, None));
+    };
+    if tz == "UTC" {
+        return Ok((0, None));
+    }
+    temporal_retag::strict_parse_offset(tz)
+        .map(|offset| (offset, None))
+        .ok_or_else(|| {
+            crate::Error::CypherExecution(format!(
+                "InvalidArgumentValue: timezone '{tz}' requires a timezone database, which is \
+                 not available; use a numeric UTC offset (e.g. '+02:00') or 'Z'/'UTC' instead"
+            ))
+        })
 }
 
 /// Resolves the `hours`/`minutes`/`seconds` fields of a `duration({...})`
@@ -257,7 +328,7 @@ impl Executor {
                             }
                         }
                         Value::Object(map) => {
-                            // Support {year, month, day, hour, minute, second} format
+                            // Support {year, month, day, hour, minute, second, nanosecond, timezone} format
                             let year = map
                                 .get("year")
                                 .and_then(|v| v.as_i64())
@@ -271,30 +342,29 @@ impl Executor {
                                 map.get("minute").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
                             let second =
                                 map.get("second").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
+                            let nanosecond = match nanosecond_from_map(&map) {
+                                Ok(n) => n,
+                                Err(e) => return Some(Err(e)),
+                            };
+                            let (offset_seconds, zone_name) = match timezone_from_map(&map) {
+                                Ok(pair) => pair,
+                                Err(e) => return Some(Err(e)),
+                            };
 
-                            if let Some(date) = chrono::NaiveDate::from_ymd_opt(year, month, day) {
-                                if let Some(time) =
-                                    chrono::NaiveTime::from_hms_opt(hour, minute, second)
-                                {
-                                    let dt = chrono::NaiveDateTime::new(date, time);
-                                    let local = chrono::Local::now().timezone();
-                                    let dt_local = local
-                                        .from_local_datetime(&dt)
-                                        .earliest()
-                                        .unwrap_or_else(|| local.from_utc_datetime(&dt));
-                                    let offset_seconds = dt_local.offset().fix().local_minus_utc();
-                                    return Some(Ok(temporal_value::make_datetime(
-                                        year,
-                                        month,
-                                        day,
-                                        hour,
-                                        minute,
-                                        second,
-                                        0,
-                                        offset_seconds,
-                                        None,
-                                    )));
-                                }
+                            if chrono::NaiveDate::from_ymd_opt(year, month, day).is_some()
+                                && chrono::NaiveTime::from_hms_opt(hour, minute, second).is_some()
+                            {
+                                return Some(Ok(temporal_value::make_datetime(
+                                    year,
+                                    month,
+                                    day,
+                                    hour,
+                                    minute,
+                                    second,
+                                    nanosecond,
+                                    offset_seconds,
+                                    zone_name,
+                                )));
                             }
                         }
                         _ => {}
@@ -343,16 +413,28 @@ impl Executor {
                             }
                         }
                         Value::Object(map) => {
-                            // Support {hour, minute, second} format
+                            // Support {hour, minute, second, nanosecond, timezone} format
                             let hour = map.get("hour").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
                             let minute =
                                 map.get("minute").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
                             let second =
                                 map.get("second").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
+                            let nanosecond = match nanosecond_from_map(&map) {
+                                Ok(n) => n,
+                                Err(e) => return Some(Err(e)),
+                            };
+                            let (offset_seconds, _zone_name) = match timezone_from_map(&map) {
+                                Ok(pair) => pair,
+                                Err(e) => return Some(Err(e)),
+                            };
 
                             if chrono::NaiveTime::from_hms_opt(hour, minute, second).is_some() {
                                 return Some(Ok(temporal_value::make_time(
-                                    hour, minute, second, 0, 0,
+                                    hour,
+                                    minute,
+                                    second,
+                                    nanosecond,
+                                    offset_seconds,
                                 )));
                             }
                         }
@@ -449,16 +531,41 @@ impl Executor {
                             }
                         };
 
-                        let (whole_seconds, nanos) = match seconds_from_hms(&map) {
+                        let (hms_seconds, hms_nanos) = match seconds_from_hms(&map) {
                             Ok(pair) => pair,
                             Err(e) => return Some(Err(e)),
+                        };
+
+                        // A `nanoseconds` map key folds in alongside (not
+                        // instead of) whatever fractional-seconds
+                        // remainder `seconds_from_hms` already produced —
+                        // `duration({seconds: 70, nanoseconds: 1})` sums
+                        // both, matching the openCypher TCK's
+                        // `Temporal8.feature` scenario 7 fixture.
+                        let extra_nanos =
+                            map.get("nanoseconds").and_then(Value::as_i64).unwrap_or(0);
+                        let overflow = || {
+                            crate::Error::CypherExecution(
+                                "duration arithmetic overflow: nanosecond component exceeds i64 range"
+                                    .to_string(),
+                            )
+                        };
+                        let combined_nanos = match i64::from(hms_nanos).checked_add(extra_nanos) {
+                            Some(n) => n,
+                            None => return Some(Err(overflow())),
+                        };
+                        let carry_seconds = combined_nanos.div_euclid(1_000_000_000);
+                        let remainder_nanos = combined_nanos.rem_euclid(1_000_000_000) as i32;
+                        let whole_seconds = match hms_seconds.checked_add(carry_seconds) {
+                            Some(s) => s,
+                            None => return Some(Err(overflow())),
                         };
 
                         return Some(Ok(temporal_value::make_duration(
                             months,
                             days,
                             whole_seconds,
-                            nanos,
+                            remainder_nanos,
                         )));
                     }
                 }
@@ -628,10 +735,14 @@ impl Executor {
                                 map.get("minute").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
                             let second =
                                 map.get("second").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
+                            let nanosecond = match nanosecond_from_map(&map) {
+                                Ok(n) => n,
+                                Err(e) => return Some(Err(e)),
+                            };
 
                             if chrono::NaiveTime::from_hms_opt(hour, minute, second).is_some() {
                                 return Some(Ok(temporal_value::make_localtime(
-                                    hour, minute, second, 0,
+                                    hour, minute, second, nanosecond,
                                 )));
                             }
                         }
@@ -703,12 +814,16 @@ impl Executor {
                                 map.get("minute").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
                             let second =
                                 map.get("second").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
+                            let nanosecond = match nanosecond_from_map(&map) {
+                                Ok(n) => n,
+                                Err(e) => return Some(Err(e)),
+                            };
 
                             if chrono::NaiveDate::from_ymd_opt(year, month, day).is_some()
                                 && chrono::NaiveTime::from_hms_opt(hour, minute, second).is_some()
                             {
                                 return Some(Ok(temporal_value::make_localdatetime(
-                                    year, month, day, hour, minute, second, 0,
+                                    year, month, day, hour, minute, second, nanosecond,
                                 )));
                             }
                         }
@@ -868,5 +983,100 @@ impl Executor {
             return Ok(Value::Number(f(parts).into()));
         }
         Ok(Value::Null)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn map(entries: &[(&str, Value)]) -> Map<String, Value> {
+        entries
+            .iter()
+            .map(|(k, v)| (k.to_string(), v.clone()))
+            .collect()
+    }
+
+    #[test]
+    fn nanosecond_from_map_defaults_to_zero_when_absent() {
+        assert_eq!(nanosecond_from_map(&map(&[])).unwrap(), 0);
+    }
+
+    #[test]
+    fn nanosecond_from_map_accepts_an_in_range_value() {
+        assert_eq!(
+            nanosecond_from_map(&map(&[("nanosecond", Value::from(645_876_123u64))])).unwrap(),
+            645_876_123
+        );
+    }
+
+    #[test]
+    fn nanosecond_from_map_rejects_a_value_of_exactly_one_billion() {
+        // BLOCKER 2 probe case: 1_500_000_000 must not silently become
+        // "1.5 seconds" (0.15s after a naive mod-1e9/zero-pad) — it is a
+        // flatly invalid nanosecond-of-second value.
+        let err = nanosecond_from_map(&map(&[("nanosecond", Value::from(1_500_000_000u64))]))
+            .unwrap_err();
+        assert!(matches!(err, crate::Error::CypherExecution(_)));
+    }
+
+    #[test]
+    fn nanosecond_from_map_rejects_a_value_far_beyond_u32() {
+        // BLOCKER 2 probe case: 4_294_967_297 (u32::MAX + 2) must error,
+        // not silently wrap into a small in-range u32.
+        let err = nanosecond_from_map(&map(&[("nanosecond", Value::from(4_294_967_297u64))]))
+            .unwrap_err();
+        assert!(matches!(err, crate::Error::CypherExecution(_)));
+    }
+
+    #[test]
+    fn nanosecond_from_map_rejects_a_negative_value() {
+        // BLOCKER 2 probe case: -1 must error, not silently become 0 (or
+        // wrap into a huge positive value).
+        let err = nanosecond_from_map(&map(&[("nanosecond", Value::from(-1i64))])).unwrap_err();
+        assert!(matches!(err, crate::Error::CypherExecution(_)));
+    }
+
+    #[test]
+    fn nanosecond_from_map_rejects_a_fractional_value() {
+        let err = nanosecond_from_map(&map(&[("nanosecond", Value::from(1.5))])).unwrap_err();
+        assert!(matches!(err, crate::Error::CypherExecution(_)));
+    }
+
+    #[test]
+    fn timezone_from_map_defaults_to_utc_when_absent() {
+        assert_eq!(timezone_from_map(&map(&[])).unwrap(), (0, None));
+    }
+
+    #[test]
+    fn timezone_from_map_accepts_a_numeric_offset() {
+        assert_eq!(
+            timezone_from_map(&map(&[("timezone", Value::from("+02:00"))])).unwrap(),
+            (7200, None)
+        );
+    }
+
+    #[test]
+    fn timezone_from_map_accepts_utc_and_z() {
+        assert_eq!(
+            timezone_from_map(&map(&[("timezone", Value::from("UTC"))])).unwrap(),
+            (0, None)
+        );
+        assert_eq!(
+            timezone_from_map(&map(&[("timezone", Value::from("Z"))])).unwrap(),
+            (0, None)
+        );
+    }
+
+    #[test]
+    fn timezone_from_map_rejects_an_unresolvable_named_zone() {
+        // MAJOR 1: a named IANA zone can't be resolved to a real offset
+        // without a timezone database — must error explicitly instead of
+        // silently falling back to UTC while still carrying the
+        // unresolved name (the old behaviour rendered the
+        // self-contradictory `...Z[Europe/Stockholm]`).
+        let err =
+            timezone_from_map(&map(&[("timezone", Value::from("Europe/Stockholm"))])).unwrap_err();
+        assert!(matches!(err, crate::Error::CypherExecution(_)));
     }
 }

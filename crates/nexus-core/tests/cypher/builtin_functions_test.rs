@@ -716,13 +716,16 @@ fn test_time_function_from_string() {
 
     // Parse time string HH:MM:SS — canonical rendering appends the (here,
     // UTC) offset, since TIME is always zoned (see the doc comment on
-    // `test_time_function_current`).
+    // `test_time_function_current`). A UTC offset renders as `Z`, matching
+    // `java.time.ZoneOffset.UTC` (which Neo4j's own rendering is built on)
+    // and the openCypher TCK's `Temporal4.feature` store-round-trip table.
     let result = execute_query(&mut engine, "RETURN time('14:30:45') AS parsed_time");
-    assert_eq!(get_single_value(&result), "14:30:45+00:00");
+    assert_eq!(get_single_value(&result), "14:30:45Z");
 
-    // Parse time string HH:MM
+    // Parse time string HH:MM — seconds are omitted entirely when zero
+    // (also a `Temporal4.feature` pin: `time({hour: 12})` -> `'12:00Z'`).
     let result = execute_query(&mut engine, "RETURN time('09:15') AS parsed_time");
-    assert_eq!(get_single_value(&result), "09:15:00+00:00");
+    assert_eq!(get_single_value(&result), "09:15Z");
 
     // Invalid time should return null
     let result = execute_query(&mut engine, "RETURN time('invalid') AS parsed_time");
@@ -785,14 +788,18 @@ fn test_duration_function() {
 fn test_temporal_functions_with_nodes() {
     let (mut engine, _ctx) = setup_isolated_test_engine().unwrap();
 
-    // Create nodes with temporal data
+    // Create nodes with temporal data. `time: '14:30'` (not `'14:30:00'`):
+    // `localtime`'s canonical rendering omits the seconds field entirely
+    // when it's zero (see `Temporal4.feature`'s store-round-trip table),
+    // so the literal here must match that shape for the `WHERE` comparison
+    // below to line up byte-for-byte.
     execute_query(
         &mut engine,
-        "CREATE (e:Event {name: 'Meeting', date: '2024-11-01', time: '14:30:00'})",
+        "CREATE (e:Event {name: 'Meeting', date: '2024-11-01', time: '14:30'})",
     );
     execute_query(
         &mut engine,
-        "CREATE (e:Event {name: 'Lunch', date: '2024-11-01', time: '12:00:00'})",
+        "CREATE (e:Event {name: 'Lunch', date: '2024-11-01', time: '12:00'})",
     );
     engine.refresh_executor().unwrap();
 
@@ -812,26 +819,20 @@ fn test_temporal_functions_with_nodes() {
 
     // Query with time comparison. `localtime(...)`, not `time(...)`: `TIME`
     // is timezone-aware and its canonical ISO form always carries a
-    // UTC-offset suffix (e.g. `14:30:00+00:00`), so `time('14:30:00')`
-    // would never string-match the offset-less `'14:30:00'` literal
-    // regardless of the point below.
+    // UTC-offset suffix (e.g. `14:30Z`), so `time('14:30')` would never
+    // string-match the offset-less `'14:30'` literal regardless of the
+    // point below.
     //
-    // This assertion passes only because `values_equal_for_comparison`
-    // canonicalizes a temporal operand to its ISO string before comparing
-    // it against a plain `STRING` node property — a deliberate, but
-    // strictly non-spec, type-blind equality: openCypher says comparing a
-    // `TEMPORAL` value to a `STRING` is always `false` (different types
-    // never compare equal), not "compare as strings". `e.time` here is an
-    // ordinary `STRING` property (Nexus does not yet type-tag stored
-    // properties as `LOCALTIME`), so under strict spec semantics this
-    // `WHERE` would match nothing. This test therefore pins *current*
-    // Nexus behavior, not openCypher-correct behavior — fixing the
-    // deviation (typed property storage + strict-type comparison) is
-    // out of scope for the typed intermediate-value work this test lives
-    // next to.
+    // `e.time` is a stored `STRING` property whose value happens to be an
+    // exact canonical `localtime` rendering; `localtime('14:30')` on the
+    // right is a freshly-constructed tagged value that canonicalizes to
+    // the same string before the comparison runs (see
+    // `values_equal_for_comparison`) — so this now also doubles as a
+    // stored-value-comparison regression check, not just a `STRING`/
+    // `TEMPORAL` type-blind-equality pin.
     let result = execute_query(
         &mut engine,
-        "MATCH (e:Event) WHERE e.time = localtime('14:30:00') RETURN e.name AS name",
+        "MATCH (e:Event) WHERE e.time = localtime('14:30') RETURN e.name AS name",
     );
     assert_eq!(get_single_value(&result), "Meeting");
 }

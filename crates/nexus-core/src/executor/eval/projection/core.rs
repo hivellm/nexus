@@ -171,6 +171,30 @@ impl Executor {
                         // `super::super::temporal_accessors`.
                         if super::super::temporal_value::temporal_kind(e).is_some() {
                             super::super::temporal_accessors::temporal_property(e, actual_property)
+                        } else if let Value::String(s) = e {
+                            // A stored temporal never survives as the
+                            // tagged shape above — the write boundary
+                            // always canonicalizes it to a plain ISO
+                            // string (see `temporal_value`'s module doc
+                            // for the storage design decision). Strictly
+                            // re-derive the tagged form here, ONLY for
+                            // the purpose of this property lookup — an
+                            // ordinary string that isn't an exact
+                            // canonical rendering (see
+                            // `temporal_retag`'s module doc) falls
+                            // through to `extract_property` unchanged,
+                            // which already yields `Null` for a
+                            // non-`Object` value, matching a plain
+                            // string's existing `.property` behaviour.
+                            match super::super::temporal_retag::retag_canonical_string(s) {
+                                Some(tagged) => {
+                                    super::super::temporal_accessors::temporal_property(
+                                        &tagged,
+                                        actual_property,
+                                    )
+                                }
+                                None => Self::extract_property(e, actual_property),
+                            }
                         } else {
                             Self::extract_property(e, actual_property)
                         }
@@ -528,6 +552,29 @@ impl Executor {
                         self.logical_operand(&value)?,
                     ))),
                     parser::UnaryOperator::Minus => {
+                        // Preserve integer typing: `-5` on an
+                        // INTEGER-backed operand must stay an INTEGER
+                        // (matches Neo4j and every other integer-
+                        // preserving arithmetic path in this evaluator —
+                        // see `arithmetic.rs`'s `both_as_i64`). Falling
+                        // straight through to `Number::from_f64` (as the
+                        // fallback below still does for a genuinely
+                        // fractional or non-numeric operand) always
+                        // produces a Float-backed `Number`, even for an
+                        // exact integer input — and `serde_json::Number
+                        // ::as_i64()` returns `None` for ANY Float-backed
+                        // number regardless of whether its value is
+                        // whole. That silently zeroes out every
+                        // `map.get(key).and_then(Value::as_i64)` reader
+                        // fed a negative integer map value (e.g.
+                        // `duration({days: -14})`'s `days` field).
+                        if let Value::Number(n) = &value {
+                            if let Some(i) = n.as_i64() {
+                                if let Some(negated) = i.checked_neg() {
+                                    return Ok(Value::Number(negated.into()));
+                                }
+                            }
+                        }
                         let number = self.value_to_number(&value)?;
                         serde_json::Number::from_f64(-number)
                             .map(Value::Number)

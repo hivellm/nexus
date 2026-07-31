@@ -328,9 +328,17 @@ fn test_datetime_arithmetic_preserves_time() {
         "Expected date to be 2025-01-20, got: {}",
         value_str
     );
-    // Original time was 10:30, should remain in some form (allowing for timezone conversion)
+    // Original time was 10:30, should remain in some form (allowing for
+    // timezone conversion). Seconds are omitted from the canonical
+    // rendering when zero (see `temporal_value::render_time_of_day`), so
+    // ":30" may be followed directly by an offset (`Z`, `+`, or `-`)
+    // instead of `:00` — checked on any CI runner's timezone, positive or
+    // negative offset alike.
     assert!(
-        value_str.contains(":30:") || value_str.contains(":30+"),
+        value_str.contains(":30:")
+            || value_str.contains(":30+")
+            || value_str.contains(":30-")
+            || value_str.contains(":30Z"),
         "Expected time to still have :30 minutes, got: {}",
         value_str
     );

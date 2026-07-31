@@ -38,6 +38,24 @@ impl Executor {
             return Ok(Value::Null);
         }
 
+        // Check for datetime + duration / duration + duration arithmetic
+        // BEFORE the string-concatenation fallback below: a stored
+        // temporal property is a plain `Value::String` on the wire (see
+        // `temporal_retag`'s module doc), so `a.date + b.dur` or
+        // `dur.date + dur2.date` (openCypher TCK `Temporal8.feature`
+        // scenario 6 — both operands read from storage) must resolve as
+        // temporal arithmetic, not literal string concatenation. Neither
+        // check fires unless BOTH operands strictly retag as a
+        // duration/instant pairing (see `temporal_retag`'s strict-shape
+        // matching), so an ordinary `'a' + 'b'` string concatenation is
+        // unaffected.
+        if let Some(result) = self.try_datetime_add(left, right)? {
+            return Ok(result);
+        }
+        if let Some(result) = self.try_duration_add(left, right)? {
+            return Ok(result);
+        }
+
         // Check if both values are strings - then concatenate
         if let (Value::String(l_str), Value::String(r_str)) = (left, right) {
             return Ok(Value::String(format!("{}{}", l_str, r_str)));
@@ -48,16 +66,6 @@ impl Executor {
             let mut result = l_arr.clone();
             result.extend(r_arr.iter().cloned());
             return Ok(Value::Array(result));
-        }
-
-        // Check for datetime + duration arithmetic
-        if let Some(result) = self.try_datetime_add(left, right)? {
-            return Ok(result);
-        }
-
-        // Check for duration + duration arithmetic
-        if let Some(result) = self.try_duration_add(left, right)? {
-            return Ok(result);
         }
 
         // phase6 §4 — preserve integer typing when both operands are ints.
@@ -131,6 +139,10 @@ impl Executor {
         if left.is_null() || right.is_null() {
             return Ok(Value::Null);
         }
+        // duration * number / number * duration.
+        if let Some(result) = Self::try_duration_multiply(left, right)? {
+            return Ok(result);
+        }
         if let Some((li, ri)) = both_as_i64(left, right) {
             if let Some(prod) = li.checked_mul(ri) {
                 return Ok(Value::Number(serde_json::Number::from(prod)));
@@ -150,6 +162,10 @@ impl Executor {
         // Handle null values - null / number or number / null = null (Neo4j behavior)
         if left.is_null() || right.is_null() {
             return Ok(Value::Null);
+        }
+        // duration / number.
+        if let Some(result) = Self::try_duration_divide(left, right)? {
+            return Ok(result);
         }
         // phase6 §4 — Cypher integer division: int / int stays int
         // (`100 / 4 = 25`, `7 / 2 = 3`). Only promote to float if either
