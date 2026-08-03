@@ -19,6 +19,7 @@
 
 use super::super::super::context::ExecutionContext;
 use super::super::super::engine::Executor;
+use super::super::temporal_duration_between;
 use super::super::temporal_parse;
 use super::super::temporal_retag;
 use super::super::temporal_value;
@@ -29,9 +30,10 @@ use std::collections::HashMap;
 
 /// If `value` is a tagged temporal instant or duration, replaces it with
 /// its canonical ISO-8601 string; otherwise returns `value` unchanged.
-/// Bridges the four legacy `duration.*` static functions (which only ever
-/// spoke `Value::String`) and `timestamp()` to the typed constructors
-/// without rewriting their own chrono parsing.
+/// Bridges `timestamp()`'s coerced-argument form to the typed constructors
+/// without rewriting its own chrono parsing (the four `duration.*`
+/// between-family functions retag their own operands directly — see
+/// `temporal_duration_between`).
 fn coerce_temporal_arg(value: Value) -> Value {
     match temporal_value::canonicalize_temporal(&value) {
         Some(s) => Value::String(s),
@@ -455,39 +457,32 @@ impl Executor {
                     };
                     match value {
                         Value::String(s) => {
-                            // Try to parse RFC3339/ISO8601 datetime
-                            if let Ok(dt) = chrono::DateTime::parse_from_rfc3339(&s) {
-                                return Some(Ok(temporal_value::make_datetime(
-                                    dt.year(),
-                                    dt.month(),
-                                    dt.day(),
-                                    dt.hour(),
-                                    dt.minute(),
-                                    dt.second(),
-                                    dt.nanosecond(),
-                                    dt.offset().local_minus_utc(),
-                                    None,
-                                )));
-                            }
-                            // Try to parse without timezone
-                            if let Ok(dt) =
-                                chrono::NaiveDateTime::parse_from_str(&s, "%Y-%m-%dT%H:%M:%S")
+                            // Full ISO-8601 `date'T'time[offset]` parsing
+                            // (extended/compact notation, fractional
+                            // seconds, the compact `+HHMM` offset form) —
+                            // see `temporal_parse::parse_iso_datetime`. No
+                            // offset present in the literal defaults to
+                            // `0` (UTC) — matching the `time()` string
+                            // constructor's own no-offset default just
+                            // above, and deliberately NOT the executing
+                            // machine's local offset (that would make an
+                            // identical query return a different value
+                            // depending on which host runs the server).
+                            if let Some((
+                                (year, month, day),
+                                (hour, minute, second, nanosecond),
+                                offset,
+                            )) = temporal_parse::parse_iso_datetime(&s)
                             {
-                                let local = chrono::Local::now().timezone();
-                                let dt_local = local
-                                    .from_local_datetime(&dt)
-                                    .earliest()
-                                    .unwrap_or_else(|| local.from_utc_datetime(&dt));
-                                let offset_seconds = dt_local.offset().fix().local_minus_utc();
                                 return Some(Ok(temporal_value::make_datetime(
-                                    dt.year(),
-                                    dt.month(),
-                                    dt.day(),
-                                    dt.hour(),
-                                    dt.minute(),
-                                    dt.second(),
-                                    dt.nanosecond(),
-                                    offset_seconds,
+                                    year,
+                                    month,
+                                    day,
+                                    hour,
+                                    minute,
+                                    second,
+                                    nanosecond,
+                                    offset.unwrap_or(0),
                                     None,
                                 )));
                             }
@@ -556,24 +551,22 @@ impl Executor {
                     };
                     match value {
                         Value::String(s) => {
-                            // Try to parse time format HH:MM:SS
-                            if let Ok(time) = chrono::NaiveTime::parse_from_str(&s, "%H:%M:%S") {
+                            // Full ISO-8601 time-of-day + offset parsing
+                            // (extended/compact notation, fractional
+                            // seconds, the compact `+HHMM` offset form) —
+                            // see `temporal_parse::parse_iso_time_and_offset`.
+                            // No offset present in the literal defaults to
+                            // `0` (UTC), matching this constructor's
+                            // pre-existing no-offset convention.
+                            if let Some(((hour, minute, second, nanosecond), offset)) =
+                                temporal_parse::parse_iso_time_and_offset(&s)
+                            {
                                 return Some(Ok(temporal_value::make_time(
-                                    time.hour(),
-                                    time.minute(),
-                                    time.second(),
-                                    time.nanosecond(),
-                                    0,
-                                )));
-                            }
-                            // Try HH:MM format
-                            if let Ok(time) = chrono::NaiveTime::parse_from_str(&s, "%H:%M") {
-                                return Some(Ok(temporal_value::make_time(
-                                    time.hour(),
-                                    time.minute(),
-                                    time.second(),
-                                    time.nanosecond(),
-                                    0,
+                                    hour,
+                                    minute,
+                                    second,
+                                    nanosecond,
+                                    offset.unwrap_or(0),
                                 )));
                             }
                         }
@@ -667,7 +660,10 @@ impl Executor {
                 Some(Ok(Value::Null))
             }
             "duration.between" => {
-                // duration.between(datetime1, datetime2) - computes the duration between two datetimes
+                // duration.between(a, b) - the full months-then-days-then-
+                // seconds cascade such that `a + result == b`; see
+                // `temporal_duration_between`'s module doc comment for the
+                // exact algorithm and operand-coercion rules.
                 if args.len() >= 2 {
                     let dt1 = match self.evaluate_projection_expression(row, context, &args[0]) {
                         Ok(v) => v,
@@ -677,17 +673,13 @@ impl Executor {
                         Ok(v) => v,
                         Err(e) => return Some(Err(e)),
                     };
-                    let dt1 = coerce_temporal_arg(dt1);
-                    let dt2 = coerce_temporal_arg(dt2);
-
-                    if Self::is_datetime_string(&dt1) && Self::is_datetime_string(&dt2) {
-                        return Some(self.datetime_difference(&dt1, &dt2));
-                    }
+                    return Some(temporal_duration_between::between(&dt1, &dt2));
                 }
                 Some(Ok(Value::Null))
             }
-            "duration.inMonths" => {
-                // duration.inMonths(datetime1, datetime2) - duration in months
+            "duration.inmonths" => {
+                // duration.inMonths(a, b) - whole months directly between a
+                // and b (zero when either operand has no date part).
                 if args.len() >= 2 {
                     let dt1 = match self.evaluate_projection_expression(row, context, &args[0]) {
                         Ok(v) => v,
@@ -697,35 +689,13 @@ impl Executor {
                         Ok(v) => v,
                         Err(e) => return Some(Err(e)),
                     };
-                    let dt1 = coerce_temporal_arg(dt1);
-                    let dt2 = coerce_temporal_arg(dt2);
-
-                    if let (Value::String(s1), Value::String(s2)) = (&dt1, &dt2) {
-                        // Try parsing as dates
-                        let d1 = chrono::NaiveDate::parse_from_str(s1, "%Y-%m-%d").or_else(|_| {
-                            chrono::DateTime::parse_from_rfc3339(s1).map(|dt| dt.date_naive())
-                        });
-                        let d2 = chrono::NaiveDate::parse_from_str(s2, "%Y-%m-%d").or_else(|_| {
-                            chrono::DateTime::parse_from_rfc3339(s2).map(|dt| dt.date_naive())
-                        });
-
-                        if let (Ok(date1), Ok(date2)) = (d1, d2) {
-                            let months = (date1.year() - date2.year()) * 12
-                                + (date1.month() as i32 - date2.month() as i32);
-
-                            return Some(Ok(temporal_value::make_duration(
-                                i64::from(months),
-                                0,
-                                0,
-                                0,
-                            )));
-                        }
-                    }
+                    return Some(temporal_duration_between::in_months(&dt1, &dt2));
                 }
                 Some(Ok(Value::Null))
             }
-            "duration.inDays" => {
-                // duration.inDays(datetime1, datetime2) - duration in days
+            "duration.indays" => {
+                // duration.inDays(a, b) - whole days directly between a and
+                // b (zero when either operand has no date part).
                 if args.len() >= 2 {
                     let dt1 = match self.evaluate_projection_expression(row, context, &args[0]) {
                         Ok(v) => v,
@@ -735,29 +705,14 @@ impl Executor {
                         Ok(v) => v,
                         Err(e) => return Some(Err(e)),
                     };
-                    let dt1 = coerce_temporal_arg(dt1);
-                    let dt2 = coerce_temporal_arg(dt2);
-
-                    if let (Value::String(s1), Value::String(s2)) = (&dt1, &dt2) {
-                        // Try parsing as dates
-                        let d1 = chrono::NaiveDate::parse_from_str(s1, "%Y-%m-%d").or_else(|_| {
-                            chrono::DateTime::parse_from_rfc3339(s1).map(|dt| dt.date_naive())
-                        });
-                        let d2 = chrono::NaiveDate::parse_from_str(s2, "%Y-%m-%d").or_else(|_| {
-                            chrono::DateTime::parse_from_rfc3339(s2).map(|dt| dt.date_naive())
-                        });
-
-                        if let (Ok(date1), Ok(date2)) = (d1, d2) {
-                            let days = date1.signed_duration_since(date2).num_days();
-
-                            return Some(Ok(temporal_value::make_duration(0, days, 0, 0)));
-                        }
-                    }
+                    return Some(temporal_duration_between::in_days(&dt1, &dt2));
                 }
                 Some(Ok(Value::Null))
             }
-            "duration.inSeconds" => {
-                // duration.inSeconds(datetime1, datetime2) - duration in seconds
+            "duration.inseconds" => {
+                // duration.inSeconds(a, b) - the full elapsed seconds+nanos
+                // directly between a and b (the whole elapsed span, not
+                // `between`'s sub-day remainder).
                 if args.len() >= 2 {
                     let dt1 = match self.evaluate_projection_expression(row, context, &args[0]) {
                         Ok(v) => v,
@@ -767,22 +722,7 @@ impl Executor {
                         Ok(v) => v,
                         Err(e) => return Some(Err(e)),
                     };
-                    let dt1 = coerce_temporal_arg(dt1);
-                    let dt2 = coerce_temporal_arg(dt2);
-
-                    if let (Value::String(s1), Value::String(s2)) = (&dt1, &dt2) {
-                        // Try parsing as datetimes
-                        let d1 = chrono::DateTime::parse_from_rfc3339(s1)
-                            .map(|dt| dt.with_timezone(&chrono::Utc));
-                        let d2 = chrono::DateTime::parse_from_rfc3339(s2)
-                            .map(|dt| dt.with_timezone(&chrono::Utc));
-
-                        if let (Ok(dt1), Ok(dt2)) = (d1, d2) {
-                            let seconds = dt1.signed_duration_since(dt2).num_seconds();
-
-                            return Some(Ok(temporal_value::make_duration(0, 0, seconds, 0)));
-                        }
-                    }
+                    return Some(temporal_duration_between::in_seconds(&dt1, &dt2));
                 }
                 Some(Ok(Value::Null))
             }
@@ -805,22 +745,17 @@ impl Executor {
                     };
                     match value {
                         Value::String(s) => {
-                            // Try to parse time format
-                            if let Ok(time) = chrono::NaiveTime::parse_from_str(&s, "%H:%M:%S") {
+                            // Full ISO-8601 time-of-day parsing (extended
+                            // and compact notation, fractional seconds) —
+                            // see `temporal_parse::parse_iso_time`. A
+                            // trailing offset is rejected (returns `None`)
+                            // rather than silently dropped: `localtime`
+                            // has no offset field to carry it in.
+                            if let Some((hour, minute, second, nanosecond)) =
+                                temporal_parse::parse_iso_time(&s)
+                            {
                                 return Some(Ok(temporal_value::make_localtime(
-                                    time.hour(),
-                                    time.minute(),
-                                    time.second(),
-                                    time.nanosecond(),
-                                )));
-                            }
-                            // Try HH:MM format
-                            if let Ok(time) = chrono::NaiveTime::parse_from_str(&s, "%H:%M") {
-                                return Some(Ok(temporal_value::make_localtime(
-                                    time.hour(),
-                                    time.minute(),
-                                    time.second(),
-                                    time.nanosecond(),
+                                    hour, minute, second, nanosecond,
                                 )));
                             }
                         }
@@ -867,31 +802,26 @@ impl Executor {
                     };
                     match value {
                         Value::String(s) => {
-                            // Try to parse datetime format
-                            if let Ok(dt) =
-                                chrono::NaiveDateTime::parse_from_str(&s, "%Y-%m-%dT%H:%M:%S")
+                            // Full ISO-8601 `date'T'time` parsing
+                            // (extended/compact notation, fractional
+                            // seconds) — see
+                            // `temporal_parse::parse_iso_datetime`. An
+                            // offset present in the literal is rejected
+                            // (`None` — falls through to `Value::Null`
+                            // below), matching the `localtime` sibling
+                            // branch: `localdatetime` has no offset field
+                            // to carry it in, so silently dropping it
+                            // would discard information the caller
+                            // explicitly wrote rather than surfacing the
+                            // type mismatch.
+                            if let Some((
+                                (year, month, day),
+                                (hour, minute, second, nanosecond),
+                                None,
+                            )) = temporal_parse::parse_iso_datetime(&s)
                             {
                                 return Some(Ok(temporal_value::make_localdatetime(
-                                    dt.year(),
-                                    dt.month(),
-                                    dt.day(),
-                                    dt.hour(),
-                                    dt.minute(),
-                                    dt.second(),
-                                    dt.nanosecond(),
-                                )));
-                            }
-                            // Try with timezone and convert to naive
-                            if let Ok(dt) = chrono::DateTime::parse_from_rfc3339(&s) {
-                                let naive = dt.naive_local();
-                                return Some(Ok(temporal_value::make_localdatetime(
-                                    naive.year(),
-                                    naive.month(),
-                                    naive.day(),
-                                    naive.hour(),
-                                    naive.minute(),
-                                    naive.second(),
-                                    naive.nanosecond(),
+                                    year, month, day, hour, minute, second, nanosecond,
                                 )));
                             }
                         }

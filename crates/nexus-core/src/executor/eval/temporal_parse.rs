@@ -1,13 +1,22 @@
 //! ISO-8601 string parsing for the temporal constructors (`date('...')`,
-//! `duration('...')`).
+//! `time('...')`, `localtime('...')`, `datetime('...')`,
+//! `localdatetime('...')`, `duration('...')`).
 //!
-//! Two independent grammars live here:
+//! Three independent grammars live here:
 //!
 //! - [`parse_iso_date`] — calendar (`YYYY-MM-DD`), week (`YYYY-Www-D`), and
 //!   ordinal (`YYYY-DDD`) date forms, each in both extended (hyphenated) and
 //!   basic (compact) notation, plus their truncated (`YYYY-MM`, `YYYY-Www`,
 //!   `YYYY`) variants. Verified against the openCypher TCK's
 //!   `Temporal2.feature` "Should parse date from string" scenario table.
+//! - [`parse_iso_time`] / [`parse_offset`] / [`parse_iso_time_and_offset`] /
+//!   [`parse_iso_datetime`] — time-of-day (`HH[:MM[:SS[.fraction]]]`,
+//!   extended or compact) plus a trailing UTC offset (`Z`, extended
+//!   `±HH:MM[:SS]`, or the compact `±HHMM[SS]`/`±HH` forms), and the full
+//!   `date'T'time[offset]` instant grammar built from the two. Verified
+//!   against the openCypher TCK's `Temporal10.feature` fixture set, which
+//!   exercises fractional seconds and the compact (colonless) offset form
+//!   throughout (e.g. `'2015-07-21T21:40:32.142+0100'`).
 //! - [`parse_iso_duration`] — the full `P[n Y][n M][n W][n D][T[n H][n
 //!   M][n S]]` duration grammar plus the ISO-8601 "alternative format"
 //!   (`P<year>-<month>-<day>T<hour>:<minute>:<second>`), with fractional
@@ -15,10 +24,10 @@
 //!   Verified against `Temporal2.feature`'s "Should parse duration from
 //!   string" scenario table.
 //!
-//! Both functions hand-roll their own tokenizing (no `regex` — every
+//! Every function here hand-rolls its own tokenizing (no `regex` — every
 //! substring access goes through `str::get`, so a malformed or non-ASCII
 //! argument returns `None` rather than panicking on a bad char-boundary
-//! slice) and return `None` on any malformed or out-of-range input; callers
+//! slice) and returns `None` on any malformed or out-of-range input; callers
 //! fall back to `Value::Null`, matching every other temporal constructor's
 //! existing convention for an unparseable argument.
 
@@ -155,6 +164,151 @@ fn parse_calendar_or_ordinal(year: i32, body: &str, has_hyphen: bool) -> Option<
         }
         _ => None,
     }
+}
+
+// ─────────────────────── Time-of-day + offset parsing ──────────────────────
+
+/// Parses an ISO-8601 time-of-day (`HH[:MM[:SS[.fraction]]]`, extended or
+/// the compact `HHMM[SS[.fraction]]`/`HH` notation — never mixed within one
+/// input) into `(hour, minute, second, nanosecond)`. Lenient
+/// constructor-input parsing (the same role [`parse_iso_date`] plays for
+/// the date grammar) — deliberately NOT the strict round-trip check
+/// `temporal_retag::strict_parse_time` performs against this codebase's own
+/// canonical renderings, which rejects any shape that renderer itself would
+/// never produce (e.g. `12:00:00` — zero seconds are always omitted on
+/// output, but a caller-supplied literal is free to spell them out).
+pub(in crate::executor) fn parse_iso_time(input: &str) -> Option<(u32, u32, u32, u32)> {
+    let (main, frac) = match input.split_once('.') {
+        Some((m, f)) => (m, Some(f)),
+        None => (input, None),
+    };
+
+    // Extended (colon-separated, `HH`/`HH:MM`/`HH:MM:SS`) or compact
+    // (`HH`/`HHMM`/`HHMMSS`) notation only — never mixed, and never a
+    // stray/doubled colon. A blind "strip every colon" would accept
+    // `'12::34:54'` (an empty field between two colons collapses away)
+    // or `'1230:54'` (compact hour+minute, extended seconds) as if they
+    // were well-formed; splitting on `:` first and requiring every
+    // resulting field to be exactly 2 digits rejects both.
+    let digits: String = if main.contains(':') {
+        let fields: Vec<&str> = main.split(':').collect();
+        if !matches!(fields.len(), 2 | 3) || fields.iter().any(|f| f.len() != 2) {
+            return None;
+        }
+        fields.concat()
+    } else {
+        main.to_string()
+    };
+    if !matches!(digits.len(), 2 | 4 | 6) || !digits.chars().all(|c| c.is_ascii_digit()) {
+        return None;
+    }
+
+    // A fractional component only ever attaches to a present SECONDS
+    // group (`HH:MM:SS.fraction` / `HHMMSS.fraction`) — Neo4j rejects it
+    // anywhere else. Without this check, `'16:30.5'` (no seconds group
+    // at all) would silently reinterpret the `.5` as a fractional SECOND
+    // with an implicit whole-second value of `0`, rather than the
+    // fractional MINUTE (or outright invalid literal) it actually reads
+    // as.
+    if frac.is_some() && digits.len() != 6 {
+        return None;
+    }
+
+    let hour: u32 = digits.get(0..2)?.parse().ok()?;
+    let minute: u32 = if digits.len() >= 4 {
+        digits.get(2..4)?.parse().ok()?
+    } else {
+        0
+    };
+    let second: u32 = if digits.len() == 6 {
+        digits.get(4..6)?.parse().ok()?
+    } else {
+        0
+    };
+    let nanosecond = match frac {
+        None => 0u32,
+        Some(f) if !f.is_empty() && f.len() <= 9 && f.chars().all(|c| c.is_ascii_digit()) => {
+            format!("{f:0<9}").parse().ok()?
+        }
+        Some(_) => return None,
+    };
+    if hour > 23 || minute > 59 || second > 59 {
+        return None;
+    }
+    Some((hour, minute, second, nanosecond))
+}
+
+/// Parses a lenient ISO-8601 UTC offset into signed seconds: `Z`/`z`, the
+/// extended `±HH:MM[:SS]`, or the compact `±HHMM[SS]`/bare `±HH` forms —
+/// unlike `temporal_retag::strict_parse_offset` (which only accepts the
+/// exact colon-delimited shape this codebase's own renderer produces),
+/// this accepts every offset shape a `time('...')`/`datetime('...')`
+/// argument may legally spell, e.g. `'+0100'` (no colon), the form the
+/// openCypher TCK's `Temporal10.feature` fixtures use throughout.
+pub(in crate::executor) fn parse_offset(input: &str) -> Option<i32> {
+    if input.eq_ignore_ascii_case("z") {
+        return Some(0);
+    }
+    let (sign, rest) = match input.strip_prefix('+') {
+        Some(r) => (1_i32, r),
+        None => (-1_i32, input.strip_prefix('-')?),
+    };
+    let digits: String = rest.chars().filter(|c| *c != ':').collect();
+    if !matches!(digits.len(), 2 | 4 | 6) || !digits.chars().all(|c| c.is_ascii_digit()) {
+        return None;
+    }
+    let hours: i32 = digits.get(0..2)?.parse().ok()?;
+    let minutes: i32 = if digits.len() >= 4 {
+        digits.get(2..4)?.parse().ok()?
+    } else {
+        0
+    };
+    let seconds: i32 = if digits.len() == 6 {
+        digits.get(4..6)?.parse().ok()?
+    } else {
+        0
+    };
+    if hours > 23 || minutes > 59 || seconds > 59 {
+        return None;
+    }
+    Some(sign * (hours * 3600 + minutes * 60 + seconds))
+}
+
+/// Splits a trailing UTC offset (`Z` or the first `+`/`-`, which can only
+/// ever start an offset in this grammar — the time-of-day portion is
+/// digits/`:`/`.` only) off a time-of-day argument, parsing whichever
+/// pieces are present. Returns `(time, None)` when no offset suffix is
+/// present at all (a `localtime('...')`-shaped argument), or `(time,
+/// Some(offset))` when one is (a `time('...')`-shaped argument).
+pub(in crate::executor) fn parse_iso_time_and_offset(
+    input: &str,
+) -> Option<((u32, u32, u32, u32), Option<i32>)> {
+    if let Some(stripped) = input.strip_suffix('Z').or_else(|| input.strip_suffix('z')) {
+        return Some((parse_iso_time(stripped)?, Some(0)));
+    }
+    for (idx, ch) in input.char_indices() {
+        if ch == '+' || ch == '-' {
+            let time = parse_iso_time(input.get(..idx)?)?;
+            let offset = parse_offset(input.get(idx..)?)?;
+            return Some((time, Some(offset)));
+        }
+    }
+    Some((parse_iso_time(input)?, None))
+}
+
+/// Parses a full `date'T'time[offset]` ISO-8601 instant (a
+/// `datetime('...')`/`localdatetime('...')` string argument) into its
+/// `(year, month, day)`, `(hour, minute, second, nanosecond)`, and
+/// optional offset parts, reusing [`parse_iso_date`] and
+/// [`parse_iso_time_and_offset`] for the two halves either side of the
+/// `T`/`t` separator.
+pub(in crate::executor) fn parse_iso_datetime(
+    input: &str,
+) -> Option<((i32, u32, u32), (u32, u32, u32, u32), Option<i32>)> {
+    let (date_part, time_part) = input.split_once('T').or_else(|| input.split_once('t'))?;
+    let date = parse_iso_date(date_part)?;
+    let (time, offset) = parse_iso_time_and_offset(time_part)?;
+    Some((date, time, offset))
 }
 
 // ────────────────────────────── Duration parsing ───────────────────────────
@@ -608,6 +762,121 @@ mod tests {
         assert_eq!(parse_iso_date("2015-366"), None);
         // 2016 is a leap year; day 366 is Dec 31.
         assert_eq!(parse_iso_date("2016-366"), Some((2016, 12, 31)));
+    }
+
+    // ───────────────── time-of-day / offset / datetime parse ────────────
+
+    #[test]
+    fn time_extended_and_compact_forms() {
+        assert_eq!(parse_iso_time("16:30"), Some((16, 30, 0, 0)));
+        assert_eq!(parse_iso_time("1630"), Some((16, 30, 0, 0)));
+        assert_eq!(parse_iso_time("14:30"), Some((14, 30, 0, 0)));
+        assert_eq!(parse_iso_time("12:34:54"), Some((12, 34, 54, 0)));
+        assert_eq!(parse_iso_time("123454"), Some((12, 34, 54, 0)));
+    }
+
+    #[test]
+    fn time_fractional_seconds() {
+        // openCypher TCK `Temporal10.feature` scenario [2]: fractional
+        // seconds on a bare time-of-day.
+        assert_eq!(
+            parse_iso_time("12:34:54.7"),
+            Some((12, 34, 54, 700_000_000))
+        );
+        assert_eq!(
+            parse_iso_time("21:40:32.142"),
+            Some((21, 40, 32, 142_000_000))
+        );
+    }
+
+    #[test]
+    fn time_invalid_forms_return_none_not_panic() {
+        assert_eq!(parse_iso_time(""), None);
+        assert_eq!(parse_iso_time("24:00"), None); // hour out of range
+        assert_eq!(parse_iso_time("12:60"), None); // minute out of range
+        assert_eq!(parse_iso_time("日本語"), None); // non-ASCII, must not panic
+    }
+
+    #[test]
+    fn time_fraction_requires_a_seconds_group() {
+        // A fraction with no seconds group present must be rejected, not
+        // silently reinterpreted as a fractional second with an implicit
+        // whole-second value of 0 (`'16:30.5'` is NOT `16:30:00.5`).
+        assert_eq!(parse_iso_time("16:30.5"), None);
+        assert_eq!(parse_iso_time("16.5"), None);
+        assert_eq!(parse_iso_time("1630.5"), None);
+        // A fraction WITH a seconds group present is still accepted.
+        assert_eq!(
+            parse_iso_time("16:30:30.5"),
+            Some((16, 30, 30, 500_000_000))
+        );
+        assert_eq!(parse_iso_time("163030.5"), Some((16, 30, 30, 500_000_000)));
+    }
+
+    #[test]
+    fn time_rejects_doubled_or_misplaced_colons() {
+        // A doubled colon collapses to an empty field, not a valid one.
+        assert_eq!(parse_iso_time("12::34:54"), None);
+        // Extended-vs-compact must not be mixed within one input: compact
+        // hour+minute with an extended (colon-separated) seconds field.
+        assert_eq!(parse_iso_time("1230:54"), None);
+        // A trailing stray colon.
+        assert_eq!(parse_iso_time("16:30:"), None);
+        // A colon-separated field that isn't exactly 2 digits.
+        assert_eq!(parse_iso_time("1:30"), None);
+        assert_eq!(parse_iso_time("16:3"), None);
+    }
+
+    #[test]
+    fn offset_extended_and_compact_forms() {
+        assert_eq!(parse_offset("Z"), Some(0));
+        assert_eq!(parse_offset("+01:00"), Some(3600));
+        // The TCK's `Temporal10.feature` fixtures use the compact
+        // (colonless) offset form throughout, e.g. `datetime('...+0100')`.
+        assert_eq!(parse_offset("+0100"), Some(3600));
+        assert_eq!(parse_offset("+0200"), Some(7200));
+        assert_eq!(parse_offset("-0100"), Some(-3600));
+        assert_eq!(parse_offset("+01"), Some(3600));
+    }
+
+    #[test]
+    fn offset_invalid_forms_return_none_not_panic() {
+        assert_eq!(parse_offset(""), None);
+        assert_eq!(parse_offset("+25:00"), None); // hour out of range
+        assert_eq!(parse_offset("nope"), None);
+    }
+
+    #[test]
+    fn time_and_offset_splits_correctly() {
+        assert_eq!(
+            parse_iso_time_and_offset("16:30+0100"),
+            Some(((16, 30, 0, 0), Some(3600)))
+        );
+        assert_eq!(
+            parse_iso_time_and_offset("14:30"),
+            Some(((14, 30, 0, 0), None))
+        );
+        assert_eq!(
+            parse_iso_time_and_offset("12:00Z"),
+            Some(((12, 0, 0, 0), Some(0)))
+        );
+    }
+
+    #[test]
+    fn datetime_fractional_seconds_and_compact_offset() {
+        // openCypher TCK `Temporal10.feature` scenario [2] fixture shapes.
+        assert_eq!(
+            parse_iso_datetime("2015-07-21T21:40:32.142+0100"),
+            Some(((2015, 7, 21), (21, 40, 32, 142_000_000), Some(3600)))
+        );
+        assert_eq!(
+            parse_iso_datetime("2015-07-21T21:40:32.142"),
+            Some(((2015, 7, 21), (21, 40, 32, 142_000_000), None))
+        );
+        assert_eq!(
+            parse_iso_datetime("2016-07-21T21:45:22.142"),
+            Some(((2016, 7, 21), (21, 45, 22, 142_000_000), None))
+        );
     }
 
     // ───────────────────────── duration parse + carry ───────────────────

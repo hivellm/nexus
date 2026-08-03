@@ -58,7 +58,12 @@ fn checked_duration_secs(days: i64, hours: i64, minutes: i64, seconds: i64) -> R
 /// final `i64 -> i32` year narrowing, which chrono's own `NaiveDate::with_year`
 /// takes as a bare `i32` and would otherwise wrap silently for out-of-range
 /// years. Returns a Cypher error instead of panicking or wrapping.
-fn checked_month_rollover(
+///
+/// `pub(in crate::executor)`, not private: `temporal_duration_between`
+/// reuses this for its own month-rollover step (`duration.between`'s
+/// months-first cascade) rather than re-deriving the same clamped
+/// rollover logic a second time.
+pub(in crate::executor) fn checked_month_rollover(
     current_year: i32,
     current_month: u32,
     signed_total_months: i64,
@@ -89,7 +94,11 @@ fn checked_month_rollover(
 /// return `None` for an out-of-range day, which every call site below
 /// used to treat as "do nothing" instead of "clamp the day", matching
 /// Neo4j's own month-rollover clamping behaviour).
-fn days_in_month(year: i32, month: u32) -> u32 {
+///
+/// `pub(in crate::executor)`, not private: shared with
+/// `temporal_duration_between`'s own month-rollover step, same reason as
+/// [`checked_month_rollover`] above.
+pub(in crate::executor) fn days_in_month(year: i32, month: u32) -> u32 {
     match month {
         1 | 3 | 5 | 7 | 8 | 10 | 12 => 31,
         4 | 6 | 9 | 11 => 30,

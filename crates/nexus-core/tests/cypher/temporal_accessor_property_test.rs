@@ -234,14 +234,13 @@ fn duration_accessors_match_tck_scenario_7() {
 #[test]
 fn duration_between_result_supports_property_access() {
     let (mut engine, _ctx) = setup_isolated_test_engine().unwrap();
-    // This implementation's `duration.between(a, b)` computes `a - b`
-    // (the reverse of Neo4j's documented `to - from` convention — a
-    // separate, pre-existing quirk in the unrelated `durationBetween`
-    // workstream, not this accessor dispatch); the later date goes
-    // first here purely so the resulting duration is positive.
+    // `duration.between(a, b)` computes `b - a` (Neo4j's documented
+    // `a + result == b` convention — see `temporal_duration_between`'s
+    // module doc comment); the earlier date goes first here so the
+    // resulting duration is positive.
     let result = execute_query(
         &mut engine,
-        "WITH duration.between(date({year: 2020, month: 1, day: 15}), date({year: 2020, month: 1, day: 1})) AS dur \
+        "WITH duration.between(date({year: 2020, month: 1, day: 1}), date({year: 2020, month: 1, day: 15})) AS dur \
          RETURN dur, dur.days, dur.seconds, dur.nanosecondsOfSecond",
     );
     let values = row_values(&result);
@@ -279,4 +278,73 @@ fn plain_map_property_access_is_unaffected_by_temporal_dispatch() {
     assert_eq!(values[0].as_i64(), Some(2020));
     assert_eq!(values[1].as_i64(), Some(1));
     assert!(values[2].is_null());
+}
+
+// ============================================================================
+// Regression — `localdatetime('...')`'s string-literal constructor must
+// REJECT an offset present in the literal (returning `Null`, matching the
+// `localtime` sibling branch), not silently drop it: `localdatetime` has
+// no offset field to carry a caller-supplied one in, and Null surfaces the
+// type mismatch instead of discarding information the caller explicitly
+// wrote.
+// ============================================================================
+
+#[test]
+fn localdatetime_string_without_an_offset_still_parses() {
+    let (mut engine, _ctx) = setup_isolated_test_engine().unwrap();
+    let result = execute_query(
+        &mut engine,
+        "RETURN localdatetime('2015-07-21T21:40:32.142') AS d",
+    );
+    let values = row_values(&result);
+    assert_eq!(values[0].as_str(), Some("2015-07-21T21:40:32.142"));
+}
+
+#[test]
+fn localdatetime_string_with_an_offset_is_rejected_not_silently_dropped() {
+    let (mut engine, _ctx) = setup_isolated_test_engine().unwrap();
+    let result = execute_query(
+        &mut engine,
+        "RETURN localdatetime('2015-07-21T21:40:32.142+05:30') AS d",
+    );
+    let values = row_values(&result);
+    assert!(
+        values[0].is_null(),
+        "an offset in a localdatetime literal must be rejected (Null), not dropped: got {:?}",
+        values[0]
+    );
+}
+
+// ============================================================================
+// Regression — `duration.between`'s months/days cascade must anchor on
+// `a`'s own local reading, not a shared UTC frame, or `a + between(a, b)
+// == b` silently breaks whenever the UTC shift crosses a day boundary the
+// unshifted comparison would not have.
+// ============================================================================
+
+#[test]
+fn duration_between_anchors_on_a_and_the_result_added_back_reproduces_b() {
+    let (mut engine, _ctx) = setup_isolated_test_engine().unwrap();
+    let result = execute_query(
+        &mut engine,
+        "WITH datetime('2015-03-01T00:30+02:00') AS a, datetime('2015-04-01T00:30+02:00') AS b \
+         RETURN duration.between(a, b), a + duration.between(a, b) = b",
+    );
+    let values = row_values(&result);
+    assert_eq!(values[0].as_str(), Some("P1M"));
+    assert_eq!(values[1].as_bool(), Some(true));
+}
+
+#[test]
+fn duration_between_thirty_minutes_short_of_a_month_is_days_not_a_month() {
+    let (mut engine, _ctx) = setup_isolated_test_engine().unwrap();
+    let result = execute_query(
+        &mut engine,
+        "WITH datetime('2015-03-01T00:30+02:00') AS a, datetime('2015-04-01T00:00+02:00') AS b \
+         RETURN duration.between(a, b), duration.inMonths(a, b), a + duration.between(a, b) = b",
+    );
+    let values = row_values(&result);
+    assert_eq!(values[0].as_str(), Some("P30DT23H30M"));
+    assert_eq!(values[1].as_str(), Some("PT0S"));
+    assert_eq!(values[2].as_bool(), Some(true));
 }

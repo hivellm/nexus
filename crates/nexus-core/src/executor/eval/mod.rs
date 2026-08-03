@@ -14,6 +14,7 @@ pub mod predicate;
 pub mod projection;
 pub mod temporal;
 pub mod temporal_accessors;
+pub mod temporal_duration_between;
 pub mod temporal_parse;
 pub mod temporal_retag;
 pub mod temporal_value;
