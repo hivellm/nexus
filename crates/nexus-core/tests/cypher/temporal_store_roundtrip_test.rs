@@ -286,6 +286,240 @@ fn order_by_orders_stored_dates_chronologically() {
     assert_eq!(dates, vec!["1984-10-11", "2000-01-01"]);
 }
 
+#[test]
+fn order_by_orders_stored_durations_by_component_value_not_lexicographically() {
+    let (mut engine, _ctx) = setup_isolated_test_engine().unwrap();
+    // Plain canonical-string lexicographic order (correct for dates, see
+    // `order_by_orders_stored_dates_chronologically` above) is WRONG for
+    // durations: `"PT10H"` sorts before `"PT9H"` under `str::cmp` (`'1'` <
+    // `'9'`) even though 10 hours is the longer duration. Neo4j's
+    // average-length ordering (`months * AVG_SECONDS_PER_MONTH + days *
+    // 86_400 + seconds`) must put `PT9H` first — for these two operands
+    // (`months = days = 0` on both) the average-length key degenerates to
+    // the raw second count, so this case alone doesn't distinguish it from
+    // a plain component-tuple compare; see the `P1M`-vs-`P31D` test below
+    // for a case where the two models disagree.
+    execute_query(&mut engine, "CREATE (:D {dur: duration({hours: 10})})");
+    execute_query(&mut engine, "CREATE (:D {dur: duration({hours: 9})})");
+    engine.refresh_executor().unwrap();
+    let result = execute_query(&mut engine, "MATCH (d:D) RETURN d.dur ORDER BY d.dur ASC");
+    let durations: Vec<&str> = result
+        .rows
+        .iter()
+        .map(|r| r.values[0].as_str().unwrap())
+        .collect();
+    assert_eq!(durations, vec!["PT9H", "PT10H"]);
+}
+
+#[test]
+fn order_by_orders_a_mix_of_stored_and_freshly_constructed_durations() {
+    let (mut engine, _ctx) = setup_isolated_test_engine().unwrap();
+    // A stored duration (round-tripped through storage as a plain
+    // canonical string) and freshly-constructed ones (still a tagged
+    // intermediate value at comparison time) must sort into the same
+    // total order — `compare_values_for_sort` canonicalizes each operand
+    // independently before comparing, so the two representations are
+    // never distinguishable to the comparator.
+    execute_query(&mut engine, "CREATE (:D {dur: duration({hours: 10})})");
+    engine.refresh_executor().unwrap();
+    let result = execute_query(
+        &mut engine,
+        "MATCH (d:D) UNWIND [d.dur, duration({hours: 9}), duration({minutes: 30})] AS x \
+         RETURN x ORDER BY x ASC",
+    );
+    let durations: Vec<&str> = result
+        .rows
+        .iter()
+        .map(|r| r.values[0].as_str().unwrap())
+        .collect();
+    assert_eq!(durations, vec!["PT30M", "PT9H", "PT10H"]);
+}
+
+#[test]
+fn where_less_than_and_greater_than_compare_durations_by_component_value() {
+    let (mut engine, _ctx) = setup_isolated_test_engine().unwrap();
+    // No openCypher TCK scenario in this corpus pins `<`/`>` semantics for
+    // Duration operands specifically (grepped `expressions/comparison/*`
+    // and `expressions/temporal/*` — no match); this locks in the actual
+    // resulting behavior of the shared `compare_values_for_sort` total
+    // order, which the executor's `BinaryOp` evaluator
+    // (`projection/core.rs`) already routes `<`/`<=`/`>`/`>=` through for
+    // every value kind, durations included — the same comparator ORDER BY
+    // uses, not a separate "durations aren't orderable" error path.
+    execute_query(&mut engine, "CREATE (:D {dur: duration({hours: 10})})");
+    engine.refresh_executor().unwrap();
+    let result = execute_query(
+        &mut engine,
+        "MATCH (d:D) RETURN d.dur < duration({hours: 9}) AS lt, \
+         d.dur > duration({hours: 9}) AS gt",
+    );
+    let row = row_values(&result);
+    assert_eq!(
+        row[0],
+        serde_json::Value::Bool(false),
+        "PT10H should not be < PT9H"
+    );
+    assert_eq!(
+        row[1],
+        serde_json::Value::Bool(true),
+        "PT10H should be > PT9H"
+    );
+}
+
+#[test]
+fn order_by_orders_durations_by_average_length_not_a_bare_component_tuple() {
+    let (mut engine, _ctx) = setup_isolated_test_engine().unwrap();
+    // Neo4j orders durations by "average length"
+    // (`months * AVG_SECONDS_PER_MONTH + days * 86_400 + seconds`,
+    // `AVG_SECONDS_PER_MONTH = 2_629_746`), matching
+    // `DurationValue.unsafeCompareTo` — NOT a bare lexicographic
+    // `(months, days, seconds, nanos)` tuple compare, which would put the
+    // larger `months` field first regardless of magnitude. `P1M` (average
+    // length 2_629_746s) is shorter than `P31D` (31 * 86_400 =
+    // 2_678_400s) even though a tuple compare would say `months: 1 > 0` and
+    // rank `P1M` after `P31D`.
+    let result = execute_query(
+        &mut engine,
+        "UNWIND [duration({days: 31}), duration({months: 1})] AS x RETURN x ORDER BY x ASC",
+    );
+    let durations: Vec<&str> = result
+        .rows
+        .iter()
+        .map(|r| r.values[0].as_str().unwrap())
+        .collect();
+    assert_eq!(durations, vec!["P1M", "P31D"], "P1M must sort before P31D");
+}
+
+#[test]
+fn order_by_orders_p12m_before_p366d_by_average_length() {
+    let (mut engine, _ctx) = setup_isolated_test_engine().unwrap();
+    // `P12M` (12 * 2_629_746 = 31_556_952s) is shorter than `P366D`
+    // (366 * 86_400 = 31_622_400s) under the average-length model. `P12M`
+    // canonically renders as `'P1Y'` (12 whole months fold into 1 year —
+    // see `temporal_value::duration_parts`), so that's the expected
+    // rendering here, not a literal `'P12M'`; the ordering claim (P12M
+    // sorts before P366D) is what this test actually pins.
+    let result = execute_query(
+        &mut engine,
+        "UNWIND [duration({days: 366}), duration({months: 12})] AS x RETURN x ORDER BY x ASC",
+    );
+    let durations: Vec<&str> = result
+        .rows
+        .iter()
+        .map(|r| r.values[0].as_str().unwrap())
+        .collect();
+    assert_eq!(
+        durations,
+        vec!["P1Y", "P366D"],
+        "P12M (rendered 'P1Y') must sort before P366D"
+    );
+}
+
+#[test]
+fn order_by_on_a_mix_of_duration_and_non_duration_strings_is_deterministic() {
+    let (mut engine, _ctx) = setup_isolated_test_engine().unwrap();
+    // `'PT5'` is not a valid duration (no unit letter) — a comparator that
+    // only special-cases the `(Some, Some)` duration/duration case and
+    // falls back to plain `str::cmp` for every other pairing is
+    // internally inconsistent (whether a duration sorts before or after
+    // `'PT5'` would depend on which side of the pair it's on), which
+    // breaks the total order `ORDER BY`'s sort needs and risks an
+    // inconsistent-comparator panic. The class-rank fix ranks every
+    // duration before every non-duration string, so the durations must
+    // end up contiguous (internally ordered `PT9H` before `PT10H`) with
+    // the non-duration string on one consistent side.
+    let result = execute_query(
+        &mut engine,
+        "UNWIND ['PT10H', 'PT5', 'PT9H'] AS x RETURN x ORDER BY x ASC",
+    );
+    let values: Vec<&str> = result
+        .rows
+        .iter()
+        .map(|r| r.values[0].as_str().unwrap())
+        .collect();
+    assert_eq!(values, vec!["PT9H", "PT10H", "PT5"]);
+}
+
+#[test]
+fn order_by_and_where_resolve_a_tied_average_length_via_the_tuple_tiebreak() {
+    let (mut engine, _ctx) = setup_isolated_test_engine().unwrap();
+    // `duration({months: 1})` (average length 1 * 2_629_746 = 2_629_746)
+    // and `duration({days: 30, seconds: 37746})` (30 * 86_400 + 37_746 =
+    // 2_592_000 + 37_746 = 2_629_746) land on the EXACT SAME average-length
+    // key — the case `compare_duration_parts`'s tuple tiebreak exists for.
+    // Tuple compare (months, days, seconds, nanos): `(1, 0, 0, 0)` vs
+    // `(0, 30, 37_746, 0)` — the first field alone decides it (`1 > 0`), so
+    // `{months: 1}` sorts AFTER `{days: 30, seconds: 37746}` despite the
+    // tied average length, and the two are neither `<` nor `=` each other.
+    let order_result = execute_query(
+        &mut engine,
+        "UNWIND [duration({months: 1}), duration({days: 30, seconds: 37746})] AS x \
+         RETURN x ORDER BY x ASC",
+    );
+    let durations: Vec<&str> = order_result
+        .rows
+        .iter()
+        .map(|r| r.values[0].as_str().unwrap())
+        .collect();
+    assert_eq!(
+        durations,
+        vec!["P30DT10H29M6S", "P1M"],
+        "tied average-length durations must still resolve deterministically via the tuple \
+         tiebreak"
+    );
+
+    let cmp_result = execute_query(
+        &mut engine,
+        "RETURN duration({months: 1}) < duration({days: 30, seconds: 37746}) AS lt, \
+         duration({months: 1}) = duration({days: 30, seconds: 37746}) AS eq",
+    );
+    let row = row_values(&cmp_result);
+    assert_eq!(
+        row[0],
+        serde_json::Value::Bool(false),
+        "{{months: 1}} is not < {{days: 30, seconds: 37746}} (tuple tiebreak ranks it greater)"
+    );
+    assert_eq!(
+        row[1],
+        serde_json::Value::Bool(false),
+        "a tied average-length key does not imply equality"
+    );
+}
+
+#[test]
+fn order_by_desc_is_the_exact_reverse_of_asc_on_a_mixed_duration_and_plain_string_column() {
+    let (mut engine, _ctx) = setup_isolated_test_engine().unwrap();
+    // Same mixed duration/non-duration-string column as
+    // `order_by_on_a_mix_of_duration_and_non_duration_strings_is_deterministic`
+    // above (ASC: `["PT9H", "PT10H", "PT5"]`) — `DESC` must be its exact
+    // reverse, proving the class-rank + average-length comparator is a
+    // genuine total order (not merely consistent in one sort direction).
+    let asc = execute_query(
+        &mut engine,
+        "UNWIND ['PT10H', 'PT5', 'PT9H'] AS x RETURN x ORDER BY x ASC",
+    );
+    let desc = execute_query(
+        &mut engine,
+        "UNWIND ['PT10H', 'PT5', 'PT9H'] AS x RETURN x ORDER BY x DESC",
+    );
+    let asc_values: Vec<&str> = asc
+        .rows
+        .iter()
+        .map(|r| r.values[0].as_str().unwrap())
+        .collect();
+    let mut desc_values: Vec<&str> = desc
+        .rows
+        .iter()
+        .map(|r| r.values[0].as_str().unwrap())
+        .collect();
+    assert_eq!(asc_values, vec!["PT9H", "PT10H", "PT5"]);
+    desc_values.reverse();
+    assert_eq!(
+        desc_values, asc_values,
+        "DESC must be the exact reverse of ASC"
+    );
+}
+
 // ============================================================================
 // ARITHMETIC ON STORED VALUE — Temporal8.feature shapes.
 // ============================================================================

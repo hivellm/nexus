@@ -351,6 +351,16 @@ pub(in crate::executor) fn retag_duration(value: &Value) -> Option<Value> {
             Some(value.clone())
         }
         Value::String(s) => {
+            // Fast-path guard: every canonical duration rendering starts
+            // with `P` (or `-P` for a leading-minus-negated one) —
+            // rejecting anything else here avoids paying
+            // `retag_canonical_string`'s full parse-and-verify cost (it
+            // tries every temporal kind's grammar in turn) on a
+            // date/time/datetime-shaped string, which is by far the
+            // common case wherever this runs inside a sort comparator.
+            if !(s.starts_with('P') || s.starts_with("-P")) {
+                return None;
+            }
             let candidate = retag_canonical_string(s)?;
             (temporal_value::temporal_kind(&candidate) == Some(TemporalKind::Duration))
                 .then_some(candidate)

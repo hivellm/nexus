@@ -7,10 +7,53 @@
 use super::super::context::ExecutionContext;
 use super::super::engine::Executor;
 use super::super::parser;
+use super::temporal_parse;
+use super::temporal_retag;
 use super::temporal_value;
 use crate::{Error, Result};
 use serde_json::Value;
 use std::collections::HashMap;
+
+/// Neo4j's own duration ordering key: `months * AVG_SECONDS_PER_MONTH +
+/// days * 86_400 + seconds`, matching `DurationValue.unsafeCompareTo`'s
+/// "average length" model rather than a plain lexicographic
+/// `(months, days, seconds, nanos)` tuple compare — `duration('P1M')`
+/// orders *before* `duration('P31D')` (2,629,746s < 2,678,400s) even
+/// though a bare tuple compare would put the larger `months` field first.
+/// `i128` (not `i64`) avoids overflow: `i64::MAX` months times the
+/// ~2.6M-second average month length overflows `i64` by several orders of
+/// magnitude.
+fn duration_average_length_key(parts: (i64, i64, i64, i32)) -> i128 {
+    // `AVG_SECONDS_PER_MONTH` is an `f64` (shared with the ISO-duration
+    // string parser's own fractional-month carry) but is always a whole
+    // number of seconds (365.2425 days/year * 86400 / 12 = exactly
+    // 2_629_746.0) — the `as i64` cast below relies on that exactness,
+    // so assert it explicitly rather than leaving the coupling implicit.
+    debug_assert!(
+        temporal_parse::AVG_SECONDS_PER_MONTH.fract() == 0.0,
+        "AVG_SECONDS_PER_MONTH must be a whole number of seconds for the `as i64` cast below \
+         to be exact"
+    );
+    let (months, days, seconds, _nanos) = parts;
+    i128::from(months) * i128::from(temporal_parse::AVG_SECONDS_PER_MONTH as i64)
+        + i128::from(days) * 86_400_i128
+        + i128::from(seconds)
+}
+
+/// Total order over two normalized `(months, days, seconds, nanos)`
+/// duration tuples: primary key is [`duration_average_length_key`]
+/// (Neo4j's average-length model), `nanos` breaks a tie on that key, and
+/// the raw tuple is a final tiebreak so two durations that land on the
+/// same average-length-and-nanos key (a real possibility — the average
+/// length collapses distinct `(months, days, seconds)` combinations onto
+/// the same total) still resolve deterministically rather than comparing
+/// `Equal` when they aren't identical.
+fn compare_duration_parts(a: (i64, i64, i64, i32), b: (i64, i64, i64, i32)) -> std::cmp::Ordering {
+    duration_average_length_key(a)
+        .cmp(&duration_average_length_key(b))
+        .then_with(|| a.3.cmp(&b.3))
+        .then_with(|| a.cmp(&b))
+}
 
 impl Executor {
     pub(in crate::executor) fn evaluate_predicate(
@@ -652,13 +695,33 @@ impl Executor {
     /// order matches chronological order for a fixed-width `YYYY-MM-DD`/
     /// `HH:MM:SS[.fraction]` form).
     ///
-    /// Duration ordering is wrong under this scheme: the canonical string
-    /// is variable-width per unit, so lexicographic order does not match
-    /// magnitude — `"PT10H"` sorts before `"PT9H"` (`'1' < '9'`) even
-    /// though 10 hours is the longer duration. Correct duration comparison
-    /// needs a component-wise total order (e.g. months/days/seconds
-    /// converted to a common unit), which is `docs/analysis/tck/03-temporal.md`
-    /// workstream #5's job, not this function's.
+    /// Duration ordering is wrong under plain lexicographic string
+    /// comparison: the canonical string is variable-width per unit, so
+    /// `"PT10H"` would sort before `"PT9H"` (`'1' < '9'`) even though 10
+    /// hours is the longer duration. The `(String, String)` arm below
+    /// special-cases this: each operand independently re-derives as a
+    /// tagged `duration` or not (via [`temporal_retag::retag_duration`] —
+    /// handles both an already-tagged value and a stored canonical string
+    /// alike), and the four `(Option, Option)` outcomes are ranked by
+    /// class first — `(Some, Some)` compares via
+    /// [`compare_duration_parts`] (Neo4j's average-length model, NOT a
+    /// bare component tuple — `duration('P1M')` orders *before*
+    /// `duration('P31D')`, matching `DurationValue.unsafeCompareTo`
+    /// converting `months`/`days`/`seconds` to a common "average length"
+    /// unit before comparing, not simply comparing `months` first);
+    /// `(Some, None)`/`(None, Some)` rank every duration before every
+    /// non-duration string, consistently in both orders; `(None, None)`
+    /// falls back to plain string comparison. This class-rank step is
+    /// required, not cosmetic: without it, comparing a duration against an
+    /// ordinary string (e.g. sorting `['PT10H', 'PT5', 'PT9H']`, where
+    /// `'PT5'` isn't a valid duration) is inconsistent — `a < b` and
+    /// `b < a` could both hold for different `(a, b)` pairs depending on
+    /// which side re-derives as a duration — which breaks the total order
+    /// `Ord`-based sorting requires and risks an inconsistent-comparator
+    /// panic in `sort_by`. This function backs both `ORDER BY` and the
+    /// `<`/`<=`/`>`/`>=` operators (see `projection/core.rs`'s `BinaryOp`
+    /// match), so a duration comparison in a `WHERE` clause resolves via
+    /// the same total order.
     pub(in crate::executor) fn compare_values_for_sort(
         &self,
         a: &Value,
@@ -691,7 +754,18 @@ impl Executor {
                     .partial_cmp(&b_f64)
                     .unwrap_or(std::cmp::Ordering::Equal)
             }
-            (Value::String(a_str), Value::String(b_str)) => a_str.cmp(b_str),
+            (Value::String(a_str), Value::String(b_str)) => {
+                let a_duration = temporal_retag::retag_duration(a)
+                    .and_then(|v| temporal_value::duration_components(&v));
+                let b_duration = temporal_retag::retag_duration(b)
+                    .and_then(|v| temporal_value::duration_components(&v));
+                match (a_duration, b_duration) {
+                    (Some(a_parts), Some(b_parts)) => compare_duration_parts(a_parts, b_parts),
+                    (Some(_), None) => std::cmp::Ordering::Less,
+                    (None, Some(_)) => std::cmp::Ordering::Greater,
+                    (None, None) => a_str.cmp(b_str),
+                }
+            }
             (Value::Bool(a_bool), Value::Bool(b_bool)) => a_bool.cmp(b_bool),
             (Value::Array(a_arr), Value::Array(b_arr)) => match a_arr.len().cmp(&b_arr.len()) {
                 std::cmp::Ordering::Equal => {

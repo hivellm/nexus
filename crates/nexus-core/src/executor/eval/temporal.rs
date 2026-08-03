@@ -230,11 +230,37 @@ fn apply_duration_to_tagged_instant(
                 }
             }
 
-            // Only the day component has a fixed calendar length against
-            // a date-only instant; hours/minutes/seconds/nanoseconds are
-            // ignored entirely (matches Neo4j: `Date +/- Duration`
-            // considers only the year/month/day fields).
-            let signed_days = days.checked_mul(sign).ok_or_else(overflow_date)?;
+            // A date-only instant has no time-of-day to absorb
+            // hours/minutes/seconds against, but a whole-day overflow in
+            // those fields still shifts the date: fold
+            // `hours*3600 + minutes*60 + seconds` into a whole-day count
+            // via plain (truncating-toward-zero) integer division —
+            // Neo4j truncates here, it does NOT floor — discarding the
+            // sub-day, and any sub-second/nanosecond, remainder (there is
+            // nowhere for it to go on a `Date`), and add it to `days`
+            // BEFORE `sign` is applied, exactly like `days` itself.
+            //
+            // What the openCypher TCK (`Temporal8.feature` Scenario [1]
+            // row 3) actually pins is the PRE-SIGN placement, not the
+            // rounding mode: `{..., hours: 16.5, minutes: 12.5,
+            // seconds: 70.5, ...}` -> normalized total seconds 122293
+            // (i.e. 1 day 9h58m13.5s beyond `days`); `1984-10-11 + <dur>`
+            // needs the extra day to land on `1997-10-11` (not
+            // `1997-10-10`), and `1984-10-11 - <dur>` needs it to land on
+            // `1971-10-12` (not `1971-10-13`) — both directions only agree
+            // when the extra day is folded into `days` pre-sign, not
+            // post-sign (a post-sign fold would subtract, not add, the
+            // extra day in the `diff` direction). `div_euclid` would also
+            // satisfy that pre-sign placement, but it floors: a negative
+            // sub-day remainder with no `days` component
+            // (`duration({seconds: -1})`) would floor to `-1` and invent a
+            // phantom day shift (`1984-10-11 -> 1984-10-10`) that Neo4j
+            // does not produce — Neo4j's own duration arithmetic
+            // truncates toward zero, matching plain `/`.
+            let dayless_seconds = checked_duration_secs(0, hours, minutes, seconds)?;
+            let extra_days = dayless_seconds / 86400;
+            let total_days = days.checked_add(extra_days).ok_or_else(overflow_date)?;
+            let signed_days = total_days.checked_mul(sign).ok_or_else(overflow_date)?;
             let delta = chrono::Duration::try_days(signed_days).ok_or_else(overflow_date)?;
             result = result.checked_add_signed(delta).ok_or_else(overflow_date)?;
 

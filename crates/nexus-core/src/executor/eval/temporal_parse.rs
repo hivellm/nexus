@@ -244,6 +244,33 @@ pub(in crate::executor) fn parse_iso_duration(input: &str) -> Option<(i64, i64, 
     let minutes = minutes * sign;
     let seconds = seconds * sign;
 
+    carry_duration_components(years, months, weeks, days, hours, minutes, seconds)
+}
+
+/// Folds raw (possibly fractional) `years`/`months`/`weeks`/`days`/
+/// `hours`/`minutes`/`seconds` magnitudes down into the normalized
+/// `(months, days, seconds, nanos)` shape [`temporal_value::make_duration`]
+/// expects — the exact carry chain [`parse_iso_duration`] performs on a
+/// string's fractional-component values (year -> month exact ×12, month
+/// remainder -> days/seconds via [`AVG_SECONDS_PER_MONTH`], week/day exact
+/// ×[`SECONDS_PER_DAY`], down to whole seconds + a nanosecond remainder),
+/// extracted here so any other caller with the same seven raw components
+/// (fractional or not) — namely the `duration({...})` map constructor's
+/// fractional `years`/`months`/`weeks`/`days` fields in
+/// `projection/fn_temporal.rs` — reuses this math byte-for-byte instead of
+/// re-deriving an approximation of it.
+///
+/// `pub(in crate::executor)`: shared with `fn_temporal`'s map-constructor
+/// fractional-component carry path.
+pub(in crate::executor) fn carry_duration_components(
+    years: f64,
+    months: f64,
+    weeks: f64,
+    days: f64,
+    hours: f64,
+    minutes: f64,
+    seconds: f64,
+) -> Option<(i64, i64, i64, i32)> {
     // Fold years into a single (possibly fractional) total-months value —
     // years never need the lossy avg-month conversion since 1 year is
     // always exactly 12 months.

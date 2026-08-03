@@ -109,6 +109,16 @@ fn timezone_from_map(map: &Map<String, Value>) -> Result<(i32, Option<String>)> 
         })
 }
 
+/// True when `v` is either absent or a JSON integer (`is_i64`/`is_u64` —
+/// i.e. the Cypher literal had no decimal point). Shared by
+/// [`seconds_from_hms`] (gating `hours`/`minutes`/`seconds`) and
+/// [`duration_from_map`] (gating the exact-integer path for
+/// `years`/`months`/`weeks`/`days` once none of them is genuinely
+/// fractional).
+fn is_int_or_absent(v: Option<&Value>) -> bool {
+    v.map(|n| n.is_i64() || n.is_u64()).unwrap_or(true)
+}
+
 /// Resolves the `hours`/`minutes`/`seconds` fields of a `duration({...})`
 /// map into a single normalized `(whole_seconds, nanos)` pair.
 ///
@@ -129,8 +139,6 @@ fn seconds_from_hms(map: &Map<String, Value>) -> Result<(i64, i32)> {
     let hours_v = map.get("hours");
     let minutes_v = map.get("minutes");
     let seconds_v = map.get("seconds");
-
-    let is_int_or_absent = |v: Option<&Value>| v.map(|n| n.is_i64() || n.is_u64()).unwrap_or(true);
 
     if is_int_or_absent(hours_v) && is_int_or_absent(minutes_v) && is_int_or_absent(seconds_v) {
         let hours = hours_v.and_then(Value::as_i64).unwrap_or(0);
@@ -162,6 +170,163 @@ fn seconds_from_hms(map: &Map<String, Value>) -> Result<(i64, i32)> {
     let whole_seconds = total_seconds_f64.trunc() as i64;
     let nanos = ((total_seconds_f64 - total_seconds_f64.trunc()) * 1_000_000_000.0).round() as i32;
     Ok((whole_seconds, nanos))
+}
+
+/// Builds a tagged `duration` value from a `duration({...})` map literal's
+/// fields — the `Value::Object` branch of the `duration` builtin, factored
+/// out so that match arm stays small. Folds `years` into `months`, `weeks`
+/// into `days`, `hours`/`minutes`/`seconds` into a single (whole-seconds,
+/// nanos) pair, and `nanoseconds`/`milliseconds`/`microseconds` into a
+/// single nanosecond remainder — see `temporal_value`'s module doc for why
+/// this `(months, days, seconds, nanos)` shape (Neo4j's own internal
+/// Duration layout) is what canonical rendering needs, rather than the raw
+/// components a `duration({...})` literal supplies.
+fn duration_from_map(map: Map<String, Value>) -> Result<Value> {
+    let years_v = map.get("years");
+    let months_v = map.get("months");
+    let weeks_v = map.get("weeks");
+    let days_v = map.get("days");
+
+    // Gate on genuinely-fractional (JSON float-syntax, `Value::is_f64` —
+    // true only for a Number literal written with a decimal point/
+    // exponent, per serde_json's own parse-time Float/PosInt/NegInt
+    // categorization), NOT merely "not an exact integer": a
+    // `years`/`months`/`weeks`/`days` field that's absent, a string,
+    // `null`, or a boolean is not a fractional literal either, and must
+    // NOT reroute `hours`/`minutes`/`seconds` off `seconds_from_hms`'s own
+    // exact-integer path. Gating on `!is_int_or_absent(...)` instead would
+    // conflate "not an integer" with "fractional" and could silently
+    // corrupt precision for a large integer `seconds` value (e.g. near
+    // `i64::MAX`) whenever some unrelated field happened to be a
+    // non-numeric value.
+    let is_fractional = |v: Option<&Value>| v.map(Value::is_f64).unwrap_or(false);
+
+    let overflow_year_month = || {
+        crate::Error::CypherExecution(
+            "duration arithmetic overflow: year/month component exceeds i64 range".to_string(),
+        )
+    };
+    let overflow_week_day = || {
+        crate::Error::CypherExecution(
+            "duration arithmetic overflow: week/day component exceeds i64 range".to_string(),
+        )
+    };
+
+    let (months, days, hms_seconds, hms_nanos) = if is_fractional(years_v)
+        || is_fractional(months_v)
+        || is_fractional(weeks_v)
+        || is_fractional(days_v)
+    {
+        // At least one of years/months/weeks/days is a genuinely
+        // fractional literal (e.g. `duration({years: 12.5, ...})`) —
+        // carry it down through the same chain
+        // `temporal_parse::parse_iso_duration` uses for a fractional ISO
+        // duration string (year -> month exact ×12, month remainder ->
+        // days/seconds via the average-month-in-seconds constant,
+        // week/day exact, down to whole seconds + a nanosecond
+        // remainder). Once any one of these four is fractional, feed
+        // hours/minutes/seconds through the same call too (rather than
+        // `seconds_from_hms`'s separate integer-fast-path) so a
+        // fractional day's carry-through and a literal
+        // `hours`/`minutes`/`seconds` value land in exactly the same
+        // combined total the string parser would produce. This preserves
+        // exact precision for the realistic range these TCK fixtures use
+        // (small integers, `f64`'s 52-bit mantissa represents them
+        // exactly); an `hours`/`minutes`/`seconds` value near `i64::MAX`
+        // combined with a fractional year/month/week/day would still lose
+        // precision through the shared `f64` carry — an inherent
+        // trade-off of routing every component through one
+        // fractional-carry call once any single one of them requires it,
+        // not something avoidable without duplicating the entire carry
+        // chain per component.
+        let years = years_v.and_then(Value::as_f64).unwrap_or(0.0);
+        let months_in = months_v.and_then(Value::as_f64).unwrap_or(0.0);
+        let weeks = weeks_v.and_then(Value::as_f64).unwrap_or(0.0);
+        let days_in = days_v.and_then(Value::as_f64).unwrap_or(0.0);
+        let hours = map.get("hours").and_then(Value::as_f64).unwrap_or(0.0);
+        let minutes = map.get("minutes").and_then(Value::as_f64).unwrap_or(0.0);
+        let seconds = map.get("seconds").and_then(Value::as_f64).unwrap_or(0.0);
+
+        match temporal_parse::carry_duration_components(
+            years, months_in, weeks, days_in, hours, minutes, seconds,
+        ) {
+            Some((m, d, s, n)) => (m, d, s, n),
+            None => {
+                return Err(crate::Error::CypherExecution(
+                    "duration arithmetic overflow: fractional component exceeds i64 range"
+                        .to_string(),
+                ));
+            }
+        }
+    } else {
+        // Every year/month/week/day field is an exact JSON integer (or
+        // absent/non-numeric, which defaults to `0` the same as always) —
+        // take the checked exact-integer path.
+        let years = years_v.and_then(Value::as_i64).unwrap_or(0);
+        let months_in = months_v.and_then(Value::as_i64).unwrap_or(0);
+        let weeks = weeks_v.and_then(Value::as_i64).unwrap_or(0);
+        let days_in = days_v.and_then(Value::as_i64).unwrap_or(0);
+
+        let months = years
+            .checked_mul(12)
+            .and_then(|y12| y12.checked_add(months_in))
+            .ok_or_else(overflow_year_month)?;
+        let days = weeks
+            .checked_mul(7)
+            .and_then(|w7| w7.checked_add(days_in))
+            .ok_or_else(overflow_week_day)?;
+        let (hms_seconds, hms_nanos) = seconds_from_hms(&map)?;
+        (months, days, hms_seconds, hms_nanos)
+    };
+
+    // `nanoseconds`/`milliseconds`/`microseconds` map keys all fold in
+    // alongside (not instead of) whatever fractional-seconds remainder the
+    // branch above already produced — `duration({seconds: 70, nanoseconds:
+    // 1})` sums both, matching the openCypher TCK's `Temporal8.feature`
+    // scenario 7 fixture; `milliseconds`/`microseconds` fold the same way
+    // (×1_000_000 / ×1_000 into nanoseconds), matching
+    // `Temporal1.feature` scenario 12's `{days: 14, seconds: 70,
+    // milliseconds: 1}` -> `'P14DT1M10.001S'` and `{days: 14, seconds: 70,
+    // microseconds: 1}` -> `'P14DT1M10.000001S'`, and `Temporal6.feature`
+    // scenario 6's negative rows (e.g. `{seconds: 2, milliseconds: -1}` ->
+    // `'PT1.999S'`, `{seconds: -2, milliseconds: 1}` -> `'PT-1.999S'`,
+    // `{seconds: -2, milliseconds: -1}` -> `'PT-2.001S'`).
+    let nanoseconds_key = map.get("nanoseconds").and_then(Value::as_i64).unwrap_or(0);
+    let milliseconds_key = map.get("milliseconds").and_then(Value::as_i64).unwrap_or(0);
+    let microseconds_key = map.get("microseconds").and_then(Value::as_i64).unwrap_or(0);
+    let overflow_sub_second = || {
+        crate::Error::CypherExecution(
+            "duration arithmetic overflow: millisecond/microsecond/nanosecond component exceeds \
+             i64 range"
+                .to_string(),
+        )
+    };
+    let millis_as_nanos = milliseconds_key
+        .checked_mul(1_000_000)
+        .ok_or_else(overflow_sub_second)?;
+    let micros_as_nanos = microseconds_key
+        .checked_mul(1_000)
+        .ok_or_else(overflow_sub_second)?;
+    let extra_nanos = nanoseconds_key
+        .checked_add(millis_as_nanos)
+        .and_then(|n| n.checked_add(micros_as_nanos))
+        .ok_or_else(overflow_sub_second)?;
+
+    let combined_nanos = i64::from(hms_nanos)
+        .checked_add(extra_nanos)
+        .ok_or_else(overflow_sub_second)?;
+    let carry_seconds = combined_nanos.div_euclid(1_000_000_000);
+    let remainder_nanos = combined_nanos.rem_euclid(1_000_000_000) as i32;
+    let whole_seconds = hms_seconds
+        .checked_add(carry_seconds)
+        .ok_or_else(overflow_sub_second)?;
+
+    Ok(temporal_value::make_duration(
+        months,
+        days,
+        whole_seconds,
+        remainder_nanos,
+    ))
 }
 
 impl Executor {
@@ -496,77 +661,7 @@ impl Executor {
                         return Some(Ok(Value::Null));
                     }
                     if let Value::Object(map) = value {
-                        // Fold years into months, weeks into days, and
-                        // hours/minutes/seconds into a single (whole-seconds,
-                        // nanos) pair — see `temporal_value`'s module doc for
-                        // why this (months, days, seconds, nanos) shape
-                        // (Neo4j's own internal Duration layout) is what
-                        // canonical rendering needs, rather than the raw
-                        // components a `duration({...})` literal supplies.
-                        let years = map.get("years").and_then(|v| v.as_i64()).unwrap_or(0);
-                        let months_in = map.get("months").and_then(|v| v.as_i64()).unwrap_or(0);
-                        let weeks = map.get("weeks").and_then(|v| v.as_i64()).unwrap_or(0);
-                        let days_in = map.get("days").and_then(|v| v.as_i64()).unwrap_or(0);
-
-                        let months = match years
-                            .checked_mul(12)
-                            .and_then(|y12| y12.checked_add(months_in))
-                        {
-                            Some(m) => m,
-                            None => {
-                                return Some(Err(crate::Error::CypherExecution(
-                                    "duration arithmetic overflow: year/month component exceeds i64 range"
-                                        .to_string(),
-                                )));
-                            }
-                        };
-                        let days = match weeks.checked_mul(7).and_then(|w7| w7.checked_add(days_in))
-                        {
-                            Some(d) => d,
-                            None => {
-                                return Some(Err(crate::Error::CypherExecution(
-                                    "duration arithmetic overflow: week/day component exceeds i64 range"
-                                        .to_string(),
-                                )));
-                            }
-                        };
-
-                        let (hms_seconds, hms_nanos) = match seconds_from_hms(&map) {
-                            Ok(pair) => pair,
-                            Err(e) => return Some(Err(e)),
-                        };
-
-                        // A `nanoseconds` map key folds in alongside (not
-                        // instead of) whatever fractional-seconds
-                        // remainder `seconds_from_hms` already produced —
-                        // `duration({seconds: 70, nanoseconds: 1})` sums
-                        // both, matching the openCypher TCK's
-                        // `Temporal8.feature` scenario 7 fixture.
-                        let extra_nanos =
-                            map.get("nanoseconds").and_then(Value::as_i64).unwrap_or(0);
-                        let overflow = || {
-                            crate::Error::CypherExecution(
-                                "duration arithmetic overflow: nanosecond component exceeds i64 range"
-                                    .to_string(),
-                            )
-                        };
-                        let combined_nanos = match i64::from(hms_nanos).checked_add(extra_nanos) {
-                            Some(n) => n,
-                            None => return Some(Err(overflow())),
-                        };
-                        let carry_seconds = combined_nanos.div_euclid(1_000_000_000);
-                        let remainder_nanos = combined_nanos.rem_euclid(1_000_000_000) as i32;
-                        let whole_seconds = match hms_seconds.checked_add(carry_seconds) {
-                            Some(s) => s,
-                            None => return Some(Err(overflow())),
-                        };
-
-                        return Some(Ok(temporal_value::make_duration(
-                            months,
-                            days,
-                            whole_seconds,
-                            remainder_nanos,
-                        )));
+                        return Some(duration_from_map(map));
                     }
                 }
                 Some(Ok(Value::Null))
