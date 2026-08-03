@@ -26,6 +26,7 @@ mod skip_pattern_queries_test;
 mod temporal_accessor_property_test;
 mod temporal_iso_parse_test;
 mod temporal_store_roundtrip_test;
+mod temporal_truncate_test;
 mod temporal_typed_value_test;
 mod test_aggregation_virtual_row;
 mod test_array_concatenation;

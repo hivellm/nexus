@@ -22,6 +22,7 @@ use super::super::super::engine::Executor;
 use super::super::temporal_duration_between;
 use super::super::temporal_parse;
 use super::super::temporal_retag;
+use super::super::temporal_truncate;
 use super::super::temporal_value;
 use crate::Result;
 use chrono::{Datelike, Offset, TimeZone, Timelike};
@@ -98,17 +99,11 @@ fn timezone_from_map(map: &Map<String, Value>) -> Result<(i32, Option<String>)> 
     let Some(tz) = map.get("timezone").and_then(Value::as_str) else {
         return Ok((0, None));
     };
-    if tz == "UTC" {
-        return Ok((0, None));
-    }
-    temporal_retag::strict_parse_offset(tz)
-        .map(|offset| (offset, None))
-        .ok_or_else(|| {
-            crate::Error::CypherExecution(format!(
-                "InvalidArgumentValue: timezone '{tz}' requires a timezone database, which is \
-                 not available; use a numeric UTC offset (e.g. '+02:00') or 'Z'/'UTC' instead"
-            ))
-        })
+    // Delegates the "UTC"/`strict_parse_offset`/named-zone-error resolution
+    // to `temporal_retag::resolve_timezone_string`, shared with
+    // `temporal_truncate.rs`'s own `timezone` override so both report
+    // byte-for-byte identical error text for a named IANA zone.
+    temporal_retag::resolve_timezone_string(tz).map(|offset| (offset, None))
 }
 
 /// True when `v` is either absent or a JSON integer (`is_i64`/`is_u64` —
@@ -726,6 +721,39 @@ impl Executor {
                 }
                 Some(Ok(Value::Null))
             }
+            // `<kind>.truncate(unit, other, map)` — see
+            // `temporal_truncate`'s module doc comment for the exact
+            // per-unit truncation and map-override semantics.
+            "date.truncate" => Some(self.eval_temporal_truncate(
+                row,
+                context,
+                args,
+                temporal_value::TemporalKind::Date,
+            )),
+            "datetime.truncate" => Some(self.eval_temporal_truncate(
+                row,
+                context,
+                args,
+                temporal_value::TemporalKind::DateTime,
+            )),
+            "localdatetime.truncate" => Some(self.eval_temporal_truncate(
+                row,
+                context,
+                args,
+                temporal_value::TemporalKind::LocalDateTime,
+            )),
+            "time.truncate" => Some(self.eval_temporal_truncate(
+                row,
+                context,
+                args,
+                temporal_value::TemporalKind::Time,
+            )),
+            "localtime.truncate" => Some(self.eval_temporal_truncate(
+                row,
+                context,
+                args,
+                temporal_value::TemporalKind::LocalTime,
+            )),
             // Advanced temporal functions
             "localtime" => {
                 // localtime() - returns current local time without timezone
@@ -919,6 +947,33 @@ impl Executor {
             ),
             _ => None,
         }
+    }
+
+    /// Shared body for the five `<kind>.truncate(unit, other, map)`
+    /// builtins: evaluate the `unit`/`other`/optional-`map` arguments and
+    /// delegate the actual truncation computation to
+    /// `temporal_truncate::truncate`. `target` selects which of the five
+    /// temporal constructors builds the result.
+    fn eval_temporal_truncate(
+        &self,
+        row: &HashMap<String, Value>,
+        context: &ExecutionContext,
+        args: &[super::super::super::parser::Expression],
+        target: temporal_value::TemporalKind,
+    ) -> Result<Value> {
+        let Some(unit_arg) = args.first() else {
+            return Ok(Value::Null);
+        };
+        let Some(source_arg) = args.get(1) else {
+            return Ok(Value::Null);
+        };
+        let unit = self.evaluate_projection_expression(row, context, unit_arg)?;
+        let source = self.evaluate_projection_expression(row, context, source_arg)?;
+        let map = match args.get(2) {
+            Some(map_arg) => Some(self.evaluate_projection_expression(row, context, map_arg)?),
+            None => None,
+        };
+        temporal_truncate::truncate(target, &unit, &source, map.as_ref())
     }
 
     /// Shared body for `year`/`month`/`day`/`quarter`/`week`/`dayofweek`/

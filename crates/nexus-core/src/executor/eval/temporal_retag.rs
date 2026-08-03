@@ -184,6 +184,30 @@ pub(in crate::executor) fn strict_parse_offset(s: &str) -> Option<i32> {
     Some(sign * (hours * 3600 + minutes * 60 + seconds))
 }
 
+/// Resolves an already-extracted `timezone` map value's string form to a
+/// UTC offset in seconds — the one piece every `timezone` map key in this
+/// crate shares: `fn_temporal.rs`'s `time`/`datetime` map constructors and
+/// `temporal_truncate.rs`'s `<kind>.truncate(...)` override map. Kept as a
+/// single function so both report byte-for-byte identical error text for
+/// the one case they both reject — a named IANA zone (e.g.
+/// `'Europe/Stockholm'`), which cannot be resolved to a real offset without
+/// a timezone database (see `temporal_value::make_datetime`'s doc comment).
+/// `'UTC'` resolves to `0`; anything [`strict_parse_offset`] itself accepts
+/// (a numeric offset or `'Z'`) resolves through it unchanged. Each caller
+/// still decides its own key-presence/JSON-type handling before calling
+/// this — those legitimately differ (e.g. a missing key's default value).
+pub(in crate::executor) fn resolve_timezone_string(tz: &str) -> crate::Result<i32> {
+    if tz == "UTC" {
+        return Ok(0);
+    }
+    strict_parse_offset(tz).ok_or_else(|| {
+        crate::Error::CypherExecution(format!(
+            "InvalidArgumentValue: timezone '{tz}' requires a timezone database, which is not \
+             available; use a numeric UTC offset (e.g. '+02:00') or 'Z'/'UTC' instead"
+        ))
+    })
+}
+
 /// Strictly parses a bare time-of-day (`HH:MM[:SS[.fraction]]` — exactly
 /// the shape [`super::temporal_value::canonicalize_temporal`]'s time
 /// rendering produces, including its "omit seconds when zero" rule)
@@ -513,5 +537,19 @@ mod tests {
             retag_duration(&Value::String("1984-10-11".to_string())),
             None
         );
+    }
+
+    #[test]
+    fn resolve_timezone_string_accepts_utc_z_and_a_numeric_offset() {
+        assert_eq!(resolve_timezone_string("UTC").unwrap(), 0);
+        assert_eq!(resolve_timezone_string("Z").unwrap(), 0);
+        assert_eq!(resolve_timezone_string("+02:00").unwrap(), 7200);
+        assert_eq!(resolve_timezone_string("-01:00").unwrap(), -3600);
+    }
+
+    #[test]
+    fn resolve_timezone_string_rejects_a_named_zone() {
+        let err = resolve_timezone_string("Europe/Stockholm").unwrap_err();
+        assert!(matches!(err, crate::Error::CypherExecution(_)));
     }
 }

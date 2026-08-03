@@ -1,0 +1,20 @@
+{
+  "id": "temporal-truncate-nanosecond-map-override-adds-to-the-remainder-not-replaces-it",
+  "type": "pattern",
+  "title": "Temporal truncate()'s nanosecond map override ADDS to the truncated remainder, never replaces it",
+  "category": "temporal-semantics",
+  "description": "Neo4j's `date.truncate`/`datetime.truncate`/`localdatetime.truncate`/`time.truncate`/`localtime.truncate` third-argument map can carry a `nanosecond` key. The openCypher TCK's `Temporal9.feature` proves this is an ADD onto the already-truncated nanosecond remainder, not a REPLACE of the whole field: truncating to `millisecond` on `nanosecond: 645876123` leaves `645000000` (below-millisecond digits zeroed); applying `{nanosecond: 2}` on top must yield `645000002`, not `2`. For `day`/`hour`/`minute`/`second` truncation the remainder is already `0`, so add and replace are indistinguishable there — only `millisecond`/`microsecond` truncation exposes the difference, which is why it's easy to miss without checking the exact table rows. The clean way to implement the add (with correct calendar carry on overflow) is to build a `chrono::NaiveDateTime` from the truncated `(date, time)` and call `checked_add_signed(chrono::Duration::nanoseconds(override_value))` — chrono's own arithmetic handles any overflow into seconds/minutes/hours/date correctly, no hand-rolled carry logic needed. The `day`/`dayOfWeek` map keys, by contrast, are a genuine REPLACE (`{day: 5}` sets day-of-month to `5` outright, not '+5 days').",
+  "example": "// crates/nexus-core/src/executor/eval/temporal_truncate.rs\nlet base_dt = NaiveDateTime::new(base_date, base_time); // already unit-truncated\nlet final_dt = match nanosecond_override(map)? {\n    Some(extra_nanos) => base_dt\n        .checked_add_signed(chrono::Duration::nanoseconds(extra_nanos))\n        .ok_or(...)?,\n    None => base_dt,\n};",
+  "whenToUse": "Implementing or extending Neo4j's temporal truncate()/select()-style map-override semantics — any time a map argument layers fields on top of an already-computed instant. Verify per-field add-vs-replace semantics against the TCK's exact expected strings (hand-derive at least one row with a non-zero pre-override remainder) rather than assuming uniform replace semantics across every map key.",
+  "whenNotToUse": "Do not assume every map override key behaves the same way — day/dayOfWeek in the same truncate() map are a REPLACE, not an add. Do not hand-roll nanosecond/second/day carry math; chrono's checked_add_signed on a NaiveDateTime already gets it right.",
+  "createdAt": "2026-08-03T00:00:00.000Z",
+  "tags": [
+    "cypher",
+    "temporal",
+    "truncate",
+    "chrono",
+    "tck",
+    "map-override"
+  ],
+  "source": "manual"
+}
