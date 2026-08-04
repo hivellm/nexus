@@ -22,7 +22,7 @@
 | Status | Task | Progress | Description |
 |--------|------|----------|-------------|
 | ⬚ | phase22_tck-aggregation-grouping-key | 0/12 | tck aggregation grouping key |
-| ⬚ | phase22_tck-chained-with-alias-null | 0/11 | tck chained with alias null |
+| 🚫 | phase22_tck-chained-with-alias-null | 10/11 | tck chained with alias null |
 | ⬚ | phase22_tck-column-name-fidelity-residue | 0/12 | tck column name fidelity residue |
 | ⬚ | phase22_tck-named-path-value | 0/13 | tck named path value |
 | ⬚ | phase22_tck-optional-match-and-varlength-bindings | 0/13 | tck optional match and varlength bindings |
