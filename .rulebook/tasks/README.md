@@ -15,12 +15,12 @@
 | Status | Task | Progress | Description |
 |--------|------|----------|-------------|
 | ⬚ | phase21_tck-comma-pattern-binding-materialization | 0/5 | tck comma pattern binding materialization |
-| ⬚ | phase21_tck-consecutive-relationship-match-clauses | 0/5 | tck consecutive relationship match clauses |
+| ⬚ | phase21_tck-consecutive-relationship-match-clauses | 0/9 | tck consecutive relationship match clauses |
 | ⬚ | phase21_tck-non-finite-floats | 0/5 | tck non finite floats |
 | ⬚ | phase21_tck-null-property-write-semantics | 0/6 | tck null property write semantics |
 | ⬚ | phase21_tck-order-by-expression-re-evaluation | 0/5 | tck order by expression re evaluation |
 | ⬚ | phase21_tck-procedure-registration-call | 0/5 | tck procedure registration call |
 | ⬚ | phase21_tck-semantic-validation-entry-point-coverage | 0/6 | tck semantic validation entry point coverage |
 | ⬚ | phase21_tck-temporal-canonicalization-on-set | 0/6 | tck temporal canonicalization on set |
-| ⬚ | phase21_tck-undirected-self-loop-counting | 0/5 | tck undirected self loop counting |
+| 🚫 | phase21_tck-undirected-self-loop-counting | 4/5 | tck undirected self loop counting |
 
