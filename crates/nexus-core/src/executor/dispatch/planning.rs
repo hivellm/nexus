@@ -12,6 +12,19 @@ impl Executor {
         // Use the parser to parse the query
         let mut parser = parser::CypherParser::new(cypher.to_string());
         let ast = parser.parse()?;
+        // Semantic validation, on the AST this call just parsed — so it costs no
+        // extra parse. This is the choke point for every query that reaches the
+        // executor WITHOUT passing through `Engine`: both transports carve a pure
+        // autocommit read out of the engine lock and run it straight on a cloned
+        // `Executor` (`api::cypher::execute::handler` and the RPC `CYPHER`
+        // dispatcher). Without a check here those reads were unvalidated on BOTH
+        // transports, so which errors a client saw depended on whether its query
+        // happened to need engine interception.
+        //
+        // Deliberately not in `plan_ast`: the cluster-mode handoff lands there
+        // with an AST the engine already validated and then rewrote for tenant
+        // scoping, and re-validating a rewritten AST buys nothing.
+        crate::executor::semantic_validation::validate(&ast)?;
         self.plan_ast(&ast)
     }
 

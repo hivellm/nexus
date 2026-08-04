@@ -272,16 +272,16 @@ fn pattern_comprehension_size_counts_matches() {
 /// followed by `(`), so this pins the pre-existing lookahead-only
 /// behavior as a regression guard around the surrounding rewrite.
 ///
-/// This pins PARSER behavior only, via the low-level `Executor` (no
-/// semantic-validation pass): `a`, `b`, `x` are never bound by any
-/// clause, so through the full engine pipeline these same queries
-/// would be rejected with `UndefinedVariable` before execution.
+/// This pins PARSER behavior only. `a`, `b` and `x` are bound to `null`
+/// by the `WITH` so the queries are semantically valid on every entry
+/// point; the parser fallback is what is under test, not the scoping
+/// pass.
 #[test]
 fn pattern_comprehension_parser_leaves_bare_equality_lists_alone() {
     let (mut executor, _ctx) = create_test_executor();
 
     let query = Query {
-        cypher: "WITH 1 AS _seed \
+        cypher: "WITH 1 AS _seed, null AS a, null AS b, null AS x \
                  RETURN [a = b] AS bare_vars, [x = 1] AS var_and_literal"
             .to_string(),
         params: HashMap::new(),
@@ -312,16 +312,18 @@ fn pattern_comprehension_parser_leaves_bare_equality_lists_alone() {
 /// this is the core MAJOR-2 regression: the parser must never commit
 /// irreversibly once it has consumed `ident = (`.
 ///
-/// This pins PARSER behavior only, via the low-level `Executor` (no
-/// semantic-validation pass): `x` is never bound by any clause, so
-/// through the full engine pipeline this same query would be rejected
-/// with `UndefinedVariable` before execution.
+/// This pins PARSER behavior only. `x` is bound to `null` by the `WITH`
+/// so the query is semantically valid on every entry point — the parser
+/// fallback is what is under test, not the scoping pass, and an
+/// unbound `x` would now be rejected as `UndefinedVariable` before
+/// execution (which the earlier version of this test relied on NOT
+/// happening on the low-level `Executor`).
 #[test]
 fn pattern_comprehension_parser_backtracks_on_non_pattern_parenthesized_expression() {
     let (mut executor, _ctx) = create_test_executor();
 
     let query = Query {
-        cypher: "WITH 1 AS _seed RETURN [x = (1 + 2)] AS r".to_string(),
+        cypher: "WITH 1 AS _seed, null AS x RETURN [x = (1 + 2)] AS r".to_string(),
         params: HashMap::new(),
     };
     let result = executor.execute(&query).expect(
@@ -341,16 +343,15 @@ fn pattern_comprehension_parser_backtracks_on_non_pattern_parenthesized_expressi
 /// and the parenthesized value of `b`, not silently accept `(b)` as a
 /// one-node comprehension.
 ///
-/// This pins PARSER behavior only, via the low-level `Executor` (no
-/// semantic-validation pass): `a`, `b` are never bound by any clause,
-/// so through the full engine pipeline this same query would be
-/// rejected with `UndefinedVariable` before execution.
+/// This pins PARSER behavior only. `a` and `b` are bound to `null` by the
+/// `WITH` so the query is semantically valid on every entry point; the
+/// parser fallback is what is under test, not the scoping pass.
 #[test]
 fn pattern_comprehension_parser_rejects_bare_node_as_path_binding() {
     let (mut executor, _ctx) = create_test_executor();
 
     let query = Query {
-        cypher: "WITH 1 AS _seed RETURN [a = (b)] AS r".to_string(),
+        cypher: "WITH 1 AS _seed, null AS a, null AS b RETURN [a = (b)] AS r".to_string(),
         params: HashMap::new(),
     };
     let result = executor
@@ -372,16 +373,17 @@ fn pattern_comprehension_parser_rejects_bare_node_as_path_binding() {
 /// relationship check first, `has_relationship` is `false` here, so
 /// every failure — including the comma — stays soft and falls back.
 ///
-/// This pins PARSER behavior only, via the low-level `Executor` (no
-/// semantic-validation pass): `a`, `b`, `c` are never bound by any
-/// clause, so through the full engine pipeline this same query would
-/// be rejected with `UndefinedVariable` before execution.
+/// This pins PARSER behavior only. `a`, `b` and `c` are bound to `null`
+/// by the `WITH` so the query is semantically valid on every entry
+/// point; the parser fallback is what is under test, not the scoping
+/// pass.
 #[test]
 fn pattern_comprehension_parser_treats_relationshipless_comma_pattern_as_two_list_elements() {
     let (mut executor, _ctx) = create_test_executor();
 
     let query = Query {
-        cypher: "WITH 1 AS _seed RETURN [a = (b), (c)] AS r".to_string(),
+        cypher: "WITH 1 AS _seed, null AS a, null AS b, null AS c RETURN [a = (b), (c)] AS r"
+            .to_string(),
         params: HashMap::new(),
     };
     let result = executor.execute(&query).expect(

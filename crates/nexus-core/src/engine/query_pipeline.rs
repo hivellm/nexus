@@ -180,10 +180,11 @@ impl Engine {
         ctx: Option<&crate::cluster::UserContext>,
         mode: crate::cluster::TenantIsolationMode,
     ) -> Result<executor::ResultSet> {
-        // Parse query to check if it contains CREATE or DELETE clauses
+        // Parse query to check if it contains CREATE or DELETE clauses.
+        // Semantic validation happens in the shared body below, so it covers the
+        // pre-parsed-AST entry point too.
         let mut parser = executor::parser::CypherParser::new(query.to_string());
         let ast = parser.parse()?;
-        crate::executor::semantic_validation::validate(&ast)?;
         self.execute_cypher_ast_with_context(&ast, query, ctx, mode)
     }
 
@@ -202,6 +203,23 @@ impl Engine {
         ctx: Option<&crate::cluster::UserContext>,
         mode: crate::cluster::TenantIsolationMode,
     ) -> Result<executor::ResultSet> {
+        // Semantic validation belongs on every path that executes an AST, not on
+        // the one that happens to parse the text. Sitting here it also covers
+        // `execute_cypher_ast_with_params`, the pre-parsed entry point the RPC
+        // transport uses — which used to skip validation entirely, so
+        // `RETURN b` executed silently over RPC while erroring over HTTP.
+        //
+        // Validated BEFORE the cluster-mode scope rewrite below, so the checks
+        // (and any error message they produce) see the names the user wrote
+        // rather than their tenant-prefixed form.
+        //
+        // This is not the only site: a pure read on either transport bypasses
+        // `Engine` altogether via the lock-free executor, which validates at its
+        // own parse (`executor::dispatch::planning::parse_and_plan`). Both are
+        // needed — the engine's write path builds its own result without going
+        // through that parse, and the lock-free path never reaches here.
+        crate::executor::semantic_validation::validate(ast)?;
+
         let mut ast = ast.clone();
 
         // phase6_opencypher-advanced-types §6 — honour a leading

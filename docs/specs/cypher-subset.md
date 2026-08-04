@@ -2235,6 +2235,19 @@ containing constructs whose scoping it does not yet fully model (`UNION`,
 | `RETURN n SKIP -1` (negative integer literal) | `NegativeIntegerArgument` |
 | `RETURN n SKIP n.count` (SKIP/LIMIT depends on a variable) | `NonConstantExpression` |
 | `RETURN 1 AS a, 2 AS a` (duplicate projection alias) | `ColumnNameConflict` |
+| `MATCH (a)-[r]->()-[r]->(a)` (relationship variable reused in one pattern) | `RelationshipUniquenessViolation` |
+
+**The pass applies to every transport and every entry point.** It runs at the two
+places an executed query must pass through: the engine's shared AST body (which
+covers both the parse-the-text entry point and the pre-parsed-AST one the binary
+RPC transport uses) and the executor's own parse (which covers the pure-read
+requests both transports deliberately route around the engine lock, straight onto
+a cloned executor). A semantically invalid query is therefore rejected with the
+same detail token whichever SDK or transport sent it — which was not true before:
+validation used to hang off the single entry point that parses query text, so
+whether a client saw an error depended on the query's shape and its transport.
+`api::cypher::semantic_validation_parity` pins both surfaces against one server
+so they cannot drift again.
 
 Not yet detected (deferred refinements): `AmbiguousAggregationExpression`
 (implicit-grouping analysis), `UNION` column-structure checks
