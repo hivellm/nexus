@@ -349,6 +349,41 @@ verdict from this table.
 > **Note.** `NaN`'s slot between `NUMBER` and `null` is currently unreachable —
 > the value representation cannot hold a non-finite float. Tracked separately.
 
+### Comparison and equality across types
+
+The ordering operators are defined only **within** a type; equality is defined
+across all of them. The two rules differ, deliberately:
+
+```cypher
+RETURN 1 < 'text'      -- null  (incomparable: no verdict, not false)
+RETURN true < 1        -- null
+RETURN [1] < 1         -- null
+RETURN 1 < 3.14        -- true  (INTEGER and FLOAT are one numeric kind)
+
+RETURN 1.0 = '1.0'     -- false (a number never equals a string, however spelled)
+RETURN 1 = 1.0         -- true
+RETURN 1 <> 1.0        -- false (always the exact negation of `=`)
+```
+
+`null` on either side yields `null` for every one of these operators. Under
+`WHERE`, a `null` result drops the row — which is why an incomparable pair
+filters nothing rather than filtering by accident.
+
+Inline property matching (`MATCH (n {id: 1})`) is equality, so it follows the
+same rule: `{id: '1'}` does not match a node whose `id` is the number `1`.
+
+Temporal values are a documented exception to "a string is never a number's
+peer": they are stored as canonical ISO-8601 strings, so nothing downstream can
+tell `'PT10H'` from `duration('PT10H')`, and the two compare as the durations
+they spell.
+
+> **Remaining gaps in this area.** Structural comparison *within* a type is not
+> yet fully conformant — map equality's own three-valued rule (a differing key
+> set is `false`, an equal key set with a `null` on either side is `null`) and
+> parts of list comparison. And `WHERE` has a third comparison implementation
+> that coerces operands to numbers, so `WHERE n.number < 'text'` still keeps the
+> row where a projected `n.number < 'text'` correctly yields `null`.
+
 ### LIMIT Clause
 
 ```cypher

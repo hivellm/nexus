@@ -427,47 +427,41 @@ impl Executor {
                         if left_val.is_null() || right_val.is_null() {
                             Ok(Value::Null)
                         } else {
-                            Ok(Value::Bool(left_val != right_val))
+                            // Exact negation of `Equal` above: a raw `!=` made
+                            // `1 = 1.0` and `1 <> 1.0` both true.
+                            Ok(Value::Bool(
+                                !self.values_equal_for_comparison(&left_val, &right_val),
+                            ))
                         }
                     }
-                    parser::BinaryOperator::LessThan => {
-                        // 3VL: ordering against NULL is unknown → NULL, never a
-                        // sort default (`compare_values_for_sort` sorts NULL as
-                        // least, which is right for ORDER BY but wrong for `<`).
-                        if left_val.is_null() || right_val.is_null() {
+                    // 3VL: ordering against NULL is unknown → NULL, never a
+                    // sort default (`compare_values_for_sort` sorts NULL as
+                    // least, which is right for ORDER BY but wrong for `<`).
+                    // Ordering ACROSS types is equally undefined — see
+                    // `Executor::comparable_kinds`.
+                    parser::BinaryOperator::LessThan
+                    | parser::BinaryOperator::LessThanOrEqual
+                    | parser::BinaryOperator::GreaterThan
+                    | parser::BinaryOperator::GreaterThanOrEqual => {
+                        if left_val.is_null()
+                            || right_val.is_null()
+                            || !Self::comparable_kinds(&left_val, &right_val)
+                        {
                             return Ok(Value::Null);
                         }
-                        Ok(Value::Bool(
-                            self.compare_values_for_sort(&left_val, &right_val)
-                                == std::cmp::Ordering::Less,
-                        ))
-                    }
-                    parser::BinaryOperator::LessThanOrEqual => {
-                        if left_val.is_null() || right_val.is_null() {
-                            return Ok(Value::Null);
-                        }
-                        Ok(Value::Bool(matches!(
-                            self.compare_values_for_sort(&left_val, &right_val),
-                            std::cmp::Ordering::Less | std::cmp::Ordering::Equal
-                        )))
-                    }
-                    parser::BinaryOperator::GreaterThan => {
-                        if left_val.is_null() || right_val.is_null() {
-                            return Ok(Value::Null);
-                        }
-                        Ok(Value::Bool(
-                            self.compare_values_for_sort(&left_val, &right_val)
-                                == std::cmp::Ordering::Greater,
-                        ))
-                    }
-                    parser::BinaryOperator::GreaterThanOrEqual => {
-                        if left_val.is_null() || right_val.is_null() {
-                            return Ok(Value::Null);
-                        }
-                        Ok(Value::Bool(matches!(
-                            self.compare_values_for_sort(&left_val, &right_val),
-                            std::cmp::Ordering::Greater | std::cmp::Ordering::Equal
-                        )))
+                        let ordering = self.compare_values_for_sort(&left_val, &right_val);
+                        Ok(Value::Bool(match op {
+                            parser::BinaryOperator::LessThan => {
+                                ordering == std::cmp::Ordering::Less
+                            }
+                            parser::BinaryOperator::LessThanOrEqual => {
+                                ordering != std::cmp::Ordering::Greater
+                            }
+                            parser::BinaryOperator::GreaterThan => {
+                                ordering == std::cmp::Ordering::Greater
+                            }
+                            _ => ordering != std::cmp::Ordering::Less,
+                        }))
                     }
                     parser::BinaryOperator::And => {
                         let l = self.logical_operand(&left_val)?;

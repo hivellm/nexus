@@ -6,6 +6,7 @@ mod builtin_functions_test;
 mod column_name_fidelity_test;
 mod comma_pattern_binding_test;
 mod count_distinct_tests;
+mod cross_type_comparison_test;
 mod cypher_external_id;
 mod cypher_external_id_rel_merge;
 mod cypher_external_id_write_paths;

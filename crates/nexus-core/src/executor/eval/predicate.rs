@@ -83,7 +83,12 @@ impl Executor {
                         if left_val.is_null() || right_val.is_null() {
                             Ok(false) // null comparisons in WHERE clauses evaluate to false
                         } else {
-                            Ok(left_val != right_val)
+                            // Must be the exact negation of `Equal` above. With a
+                            // raw `!=` it was not: `1 <> 1.0` and `1 = 1.0` were
+                            // BOTH true, because serde's `Number(1)` and
+                            // `Number(1.0)` differ structurally while Cypher
+                            // treats them as the same value.
+                            Ok(!self.values_equal_for_comparison(&left_val, &right_val))
                         }
                     }
                     parser::BinaryOperator::LessThan => {
@@ -385,25 +390,40 @@ impl Executor {
                         if left_val.is_null() || right_val.is_null() {
                             Ok(Value::Null)
                         } else {
-                            Ok(Value::Bool(left_val != right_val))
+                            // Exact negation of `Equal`; see the same fix in
+                            // `evaluate_predicate`.
+                            Ok(Value::Bool(
+                                !self.values_equal_for_comparison(&left_val, &right_val),
+                            ))
                         }
                     }
-                    parser::BinaryOperator::LessThan => Ok(Value::Bool(
-                        self.compare_values_for_sort(&left_val, &right_val)
-                            == std::cmp::Ordering::Less,
-                    )),
-                    parser::BinaryOperator::LessThanOrEqual => Ok(Value::Bool(matches!(
-                        self.compare_values_for_sort(&left_val, &right_val),
-                        std::cmp::Ordering::Less | std::cmp::Ordering::Equal
-                    ))),
-                    parser::BinaryOperator::GreaterThan => Ok(Value::Bool(
-                        self.compare_values_for_sort(&left_val, &right_val)
-                            == std::cmp::Ordering::Greater,
-                    )),
-                    parser::BinaryOperator::GreaterThanOrEqual => Ok(Value::Bool(matches!(
-                        self.compare_values_for_sort(&left_val, &right_val),
-                        std::cmp::Ordering::Greater | std::cmp::Ordering::Equal
-                    ))),
+                    // Ordering is undefined across types — see
+                    // `Self::comparable_kinds`. A NULL operand already yields
+                    // NULL through the arms above.
+                    parser::BinaryOperator::LessThan
+                    | parser::BinaryOperator::LessThanOrEqual
+                    | parser::BinaryOperator::GreaterThan
+                    | parser::BinaryOperator::GreaterThanOrEqual => {
+                        if left_val.is_null()
+                            || right_val.is_null()
+                            || !Self::comparable_kinds(&left_val, &right_val)
+                        {
+                            return Ok(Value::Null);
+                        }
+                        let ordering = self.compare_values_for_sort(&left_val, &right_val);
+                        Ok(Value::Bool(match op {
+                            parser::BinaryOperator::LessThan => {
+                                ordering == std::cmp::Ordering::Less
+                            }
+                            parser::BinaryOperator::LessThanOrEqual => {
+                                ordering != std::cmp::Ordering::Greater
+                            }
+                            parser::BinaryOperator::GreaterThan => {
+                                ordering == std::cmp::Ordering::Greater
+                            }
+                            _ => ordering != std::cmp::Ordering::Less,
+                        }))
+                    }
                     parser::BinaryOperator::Add => self.add_values(&left_val, &right_val),
                     parser::BinaryOperator::Subtract => self.subtract_values(&left_val, &right_val),
                     parser::BinaryOperator::Multiply => self.multiply_values(&left_val, &right_val),
@@ -465,6 +485,29 @@ impl Executor {
     /// "date", ...}` object and never match, since equality/WHERE
     /// filtering happens mid-pipeline, well before the single
     /// projection-boundary canonicalization pass in `Executor::execute`.
+    /// Whether `left` and `right` are of the same Cypher TYPE for comparison
+    /// purposes, with `INTEGER` and `FLOAT` counted as one numeric kind.
+    ///
+    /// The ordering operators (`<`, `<=`, `>`, `>=`) are only defined WITHIN a
+    /// kind: openCypher yields `null` for `1 < 'text'`, not a verdict. Without
+    /// this gate they fell through to `compare_values_for_sort`, whose last arm
+    /// stringifies both operands — so `1 < 'text'` compared `"1"` against
+    /// `"text"` and confidently answered `true`, and a `WHERE` over
+    /// heterogeneous properties kept or dropped rows by spelling.
+    ///
+    /// Source: openCypher TCK `expressions/comparison/Comparison2.feature` [3]
+    /// "Comparing across types yields null, except numbers", which draws every
+    /// pair from `[node, rel, path, '', 1, 3.14, true, null, [], {}]` and expects
+    /// only the numeric pairs to survive a `WHERE result`.
+    ///
+    /// Equality does NOT use this gate: `'1.0' = 1.0` is `false`, not `null`
+    /// (same file's sibling, `Comparison1.feature` [9]). Neither does `ORDER BY`,
+    /// which needs a total order over every type — see
+    /// `operators::project::order_by_type_rank`.
+    pub(in crate::executor) fn comparable_kinds(left: &Value, right: &Value) -> bool {
+        value_type_kind(left) == value_type_kind(right)
+    }
+
     pub(in crate::executor) fn values_equal_for_comparison(
         &self,
         left: &Value,
@@ -501,35 +544,13 @@ impl Executor {
                 // String comparison - exact match
                 a == b
             }
-            (Value::String(a), Value::Number(b)) => {
-                // Try to parse string as number for comparison
-                if let Ok(parsed) = a.parse::<f64>() {
-                    if let Some(b_f64) = b.as_f64() {
-                        (parsed - b_f64).abs() < f64::EPSILON * 10.0
-                    } else if let Some(b_i64) = b.as_i64() {
-                        (parsed - b_i64 as f64).abs() < f64::EPSILON * 10.0
-                    } else {
-                        false
-                    }
-                } else {
-                    false
-                }
-            }
-            (Value::Number(a), Value::String(b)) => {
-                // Try to parse string as number for comparison
-                if let Ok(parsed) = b.parse::<f64>() {
-                    if let Some(a_f64) = a.as_f64() {
-                        (parsed - a_f64).abs() < f64::EPSILON * 10.0
-                    } else if let Some(a_i64) = a.as_i64() {
-                        (parsed - a_i64 as f64).abs() < f64::EPSILON * 10.0
-                    } else {
-                        false
-                    }
-                } else {
-                    false
-                }
-            }
-            _ => left == right,
+            // NO string<->number coercion: a STRING never equals a NUMBER in
+            // Cypher, however numeric its spelling. `'1.0' = 1.0` is `false`
+            // (openCypher TCK `expressions/comparison/Comparison1.feature` [9]);
+            // it used to parse the string and answer `true`, which also made an
+            // inline property match `{id: '1'}` find a node whose `id` is the
+            // number 1.
+            _ => value_type_kind(left) == value_type_kind(right) && left == right,
         }
     }
 
@@ -797,6 +818,65 @@ impl Executor {
             Value::Null => "null".to_string(),
             Value::Array(arr) => format!("[{}]", arr.len()),
             Value::Object(obj) => format!("{{{}}}", obj.len()),
+        }
+    }
+}
+
+/// The Cypher TYPE of a value, at the granularity comparison and ordering care
+/// about. `INTEGER` and `FLOAT` collapse into [`ValueKind::Number`] because Cypher
+/// treats them as one numeric family: `1 = 1.0` is `true` and `1 < 3.14` is
+/// defined.
+///
+/// One taxonomy, two uses: [`Executor::comparable_kinds`] asks whether two values
+/// are of the SAME kind (the ordering operators are undefined across kinds), and
+/// `operators::project::order_by_type_rank` assigns each kind its position in
+/// `ORDER BY`'s total order. Keeping a single classifier means the two cannot
+/// drift into disagreeing about what a value is.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(in crate::executor) enum ValueKind {
+    Null,
+    Map,
+    Node,
+    Relationship,
+    List,
+    Path,
+    String,
+    Boolean,
+    Number,
+}
+
+/// Classify a value for comparison and ordering. Entity kinds are recognised by
+/// their markers (`is_node_value` / `is_relationship_value`) rather than by the
+/// presence of any particular property — a node with a `type` property is not a
+/// relationship.
+pub(in crate::executor) fn value_type_kind(value: &Value) -> ValueKind {
+    // A temporal value has TWO representations — the executor's tagged object
+    // while it flows through evaluation, and its canonical ISO-8601 string once
+    // stored — and `compare_values_for_sort` canonicalizes both operands before
+    // comparing them. Classify the same way, or `duration('PT10H') < d.stored`
+    // sees Map-vs-String, reads as incomparable, and returns NULL where the
+    // comparator would have compared components. (That temporals classify as
+    // STRING at all is the known cost of string-typed temporal storage: nothing
+    // downstream can tell `'PT10H'` from `duration('PT10H')`.)
+    if temporal_value::canonicalize_temporal(value).is_some() {
+        return ValueKind::String;
+    }
+    match value {
+        Value::Null => ValueKind::Null,
+        Value::Bool(_) => ValueKind::Boolean,
+        Value::Number(_) => ValueKind::Number,
+        Value::String(_) => ValueKind::String,
+        Value::Array(_) => ValueKind::List,
+        Value::Object(map) => {
+            if crate::executor::is_node_value(value) {
+                ValueKind::Node
+            } else if crate::executor::is_relationship_value(value) {
+                ValueKind::Relationship
+            } else if map.contains_key("nodes") && map.contains_key("relationships") {
+                ValueKind::Path
+            } else {
+                ValueKind::Map
+            }
         }
     }
 }

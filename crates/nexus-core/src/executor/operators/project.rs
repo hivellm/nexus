@@ -821,25 +821,17 @@ fn drop_hidden_order_by_columns(context: &mut ExecutionContext) {
 /// representation is `serde_json::Number`, which cannot hold a non-finite float
 /// (tracked by `phase21_tck-non-finite-floats`).
 fn order_by_type_rank(value: &Value) -> u8 {
-    match value {
-        Value::Object(map) => {
-            if crate::executor::is_node_value(value) {
-                1
-            } else if crate::executor::is_relationship_value(value) {
-                2
-            } else if map.contains_key("nodes") && map.contains_key("relationships") {
-                // The path shape produced by `shortestPath` / a path-bound
-                // pattern comprehension (`{nodes: [...], relationships: [...]}`).
-                4
-            } else {
-                0
-            }
-        }
-        Value::Array(_) => 3,
-        Value::String(_) => 5,
-        Value::Bool(_) => 6,
-        Value::Number(_) => 7,
+    use crate::executor::eval::predicate::{ValueKind, value_type_kind};
+    match value_type_kind(value) {
+        ValueKind::Map => 0,
+        ValueKind::Node => 1,
+        ValueKind::Relationship => 2,
+        ValueKind::List => 3,
+        ValueKind::Path => 4,
+        ValueKind::String => 5,
+        ValueKind::Boolean => 6,
+        ValueKind::Number => 7,
         // Unreachable in practice: the wrapper resolves null before ranking.
-        Value::Null => 9,
+        ValueKind::Null => 9,
     }
 }
