@@ -663,3 +663,128 @@ fn merge_relationship_standalone_creates_edge_idempotently() {
         "edge must terminate at the GB node with id 2"
     );
 }
+
+/// A temporal value must reach disk in ONE representation — its canonical
+/// ISO-8601 string — no matter which clause wrote it. `CREATE` canonicalized at
+/// its own storage boundary; the `SET` write path did not, and in fact could not
+/// even evaluate a temporal constructor (every function call in `SET` was
+/// rejected as an "unsupported expression type"). Both now converge on
+/// `Executor::resolve_persisted_property_value`.
+///
+/// Read back through `storage` directly, NOT through a `RETURN`: the executor's
+/// projection boundary canonicalizes every outgoing row value, which would mask
+/// a stale tag on disk instead of revealing it.
+#[test]
+fn temporal_values_written_by_set_match_create_on_disk() {
+    let ctx = crate::testing::TestContext::new();
+    let mut engine = Engine::with_data_dir(ctx.path()).unwrap();
+
+    engine
+        .execute_cypher("CREATE (n:TWrite {created: duration({days: 1})})")
+        .expect("CREATE with a temporal property");
+    engine
+        .execute_cypher(
+            "MATCH (n:TWrite)              SET n.by_set = duration({days: 1}), n.by_map_merge = 'x', n.a_date = date('2020-01-01')",
+        )
+        .expect("SET with temporal constructors");
+    engine
+        .execute_cypher("MATCH (n:TWrite) SET n += {in_map: duration({days: 1})}")
+        .expect("SET += with a temporal inside the map");
+
+    let props = engine
+        .storage
+        .load_node_properties(0)
+        .expect("load properties")
+        .expect("node 0 has properties");
+
+    let created = props.get("created").expect("created");
+    assert_eq!(
+        created,
+        &serde_json::Value::String("P1D".to_string()),
+        "CREATE must store the canonical ISO string"
+    );
+    assert_eq!(
+        props.get("by_set"),
+        Some(created),
+        "SET must store the SAME representation CREATE does, got {:?}",
+        props.get("by_set")
+    );
+    assert_eq!(
+        props.get("in_map"),
+        Some(created),
+        "SET += must canonicalize inside the map too, got {:?}",
+        props.get("in_map")
+    );
+    assert_eq!(
+        props.get("a_date"),
+        Some(&serde_json::Value::String("2020-01-01".to_string())),
+        "a date() written by SET is canonical too"
+    );
+}
+
+/// A value already on disk in the legacy raw tagged form — what the `SET` path
+/// would have written had it been able to evaluate the constructor at all —
+/// must still read back correctly. Reads stay tolerant; only writes changed.
+#[test]
+fn a_legacy_raw_tagged_temporal_on_disk_still_reads_back_canonical() {
+    let ctx = crate::testing::TestContext::new();
+    let mut engine = Engine::with_data_dir(ctx.path()).unwrap();
+
+    engine
+        .execute_cypher("CREATE (n:TLegacy {tag: 'x'})")
+        .expect("CREATE");
+
+    // Hand-write the tagged shape `duration({days: 1})` has while it flows
+    // through row evaluation (see `executor::eval::temporal_value`).
+    engine
+        .storage
+        .update_node_properties(
+            0,
+            serde_json::json!({
+                "tag": "x",
+                "d": {
+                    "_nexus_temporal_type": "duration",
+                    "months": 0,
+                    "days": 1,
+                    "seconds": 0,
+                    "nanos": 0
+                }
+            }),
+        )
+        .expect("write the legacy shape directly");
+
+    let out = engine
+        .execute_cypher("MATCH (n:TLegacy) RETURN n.d")
+        .expect("read back");
+    assert_eq!(
+        out.rows[0].values[0],
+        serde_json::Value::String("P1D".to_string()),
+        "the projection boundary must still render a legacy tagged value, got {:?}",
+        out.rows[0].values[0]
+    );
+}
+
+/// The gap was never temporal-specific: `SET` rejected EVERY function call.
+/// This pins the class fix, so a later narrowing back to "temporal only" fails.
+#[test]
+fn set_evaluates_a_non_temporal_function_call() {
+    let ctx = crate::testing::TestContext::new();
+    let mut engine = Engine::with_data_dir(ctx.path()).unwrap();
+
+    engine
+        .execute_cypher("CREATE (n:TFn {name: 'alice'})")
+        .expect("CREATE");
+    engine
+        .execute_cypher("MATCH (n:TFn) SET n.upper = toUpper(n.name)")
+        .expect("SET with a function call over the node's own property");
+
+    let out = engine
+        .execute_cypher("MATCH (n:TFn) RETURN n.upper")
+        .expect("read back");
+    assert_eq!(
+        out.rows[0].values[0],
+        serde_json::Value::String("ALICE".to_string()),
+        "got {:?}",
+        out.rows[0].values[0]
+    );
+}

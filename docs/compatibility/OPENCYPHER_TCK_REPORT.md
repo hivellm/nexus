@@ -18,7 +18,7 @@ exercise) or the scenario was skip-listed. Skips are counted, never hidden.
 
 ## Totals
 
-**3868 scenarios — 1827 passed (47.2%), 1970 failed, 71 skipped.**
+**3868 scenarios — 1831 passed (47.3%), 1966 failed, 71 skipped.**
 
 ## Per-category
 
@@ -29,16 +29,16 @@ exercise) or the scenario was skip-listed. Skips are counted, never hidden.
 | `clauses/delete` | 7 | 34 | 0 | 41 | 17.1% |
 | `clauses/match` | 145 | 206 | 1 | 352 | 41.2% |
 | `clauses/match-where` | 28 | 6 | 0 | 34 | 82.4% |
-| `clauses/merge` | 24 | 48 | 3 | 75 | 32.0% |
+| `clauses/merge` | 25 | 47 | 3 | 75 | 33.3% |
 | `clauses/remove` | 6 | 27 | 0 | 33 | 18.2% |
-| `clauses/return` | 30 | 32 | 1 | 63 | 47.6% |
+| `clauses/return` | 29 | 33 | 1 | 63 | 46.0% |
 | `clauses/return-orderby` | 21 | 13 | 1 | 35 | 60.0% |
 | `clauses/return-skip-limit` | 18 | 13 | 0 | 31 | 58.1% |
 | `clauses/set` | 17 | 34 | 2 | 53 | 32.1% |
 | `clauses/union` | 8 | 4 | 0 | 12 | 66.7% |
 | `clauses/unwind` | 7 | 7 | 0 | 14 | 50.0% |
 | `clauses/with` | 9 | 20 | 0 | 29 | 31.0% |
-| `clauses/with-orderBy` | 90 | 202 | 0 | 292 | 30.8% |
+| `clauses/with-orderBy` | 92 | 200 | 0 | 292 | 31.5% |
 | `clauses/with-skip-limit` | 5 | 4 | 0 | 9 | 55.6% |
 | `clauses/with-where` | 13 | 6 | 0 | 19 | 68.4% |
 | `expressions/aggregation` | 17 | 17 | 1 | 35 | 48.6% |
@@ -47,7 +47,7 @@ exercise) or the scenario was skip-listed. Skips are counted, never hidden.
 | `expressions/conditional` | 13 | 0 | 0 | 13 | 100.0% |
 | `expressions/existentialSubqueries` | 9 | 1 | 0 | 10 | 90.0% |
 | `expressions/graph` | 25 | 33 | 3 | 61 | 41.0% |
-| `expressions/list` | 94 | 91 | 0 | 185 | 50.8% |
+| `expressions/list` | 96 | 89 | 0 | 185 | 51.9% |
 | `expressions/literals` | 102 | 29 | 0 | 131 | 77.9% |
 | `expressions/map` | 18 | 17 | 9 | 44 | 40.9% |
 | `expressions/mathematical` | 3 | 3 | 0 | 6 | 50.0% |
@@ -61,7 +61,7 @@ exercise) or the scenario was skip-listed. Skips are counted, never hidden.
 | `expressions/typeConversion` | 20 | 27 | 0 | 47 | 42.6% |
 | `useCases/countingSubgraphMatches` | 11 | 0 | 0 | 11 | 100.0% |
 | `useCases/triadicSelection` | 19 | 0 | 0 | 19 | 100.0% |
-| **total** | **1827** | **1970** | **71** | **3868** | **47.2%** |
+| **total** | **1831** | **1966** | **71** | **3868** | **47.3%** |
 
 ## Skip-list (deliberately un-evaluated)
 

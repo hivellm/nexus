@@ -570,7 +570,22 @@ SET n += {age: 31, city: 'NYC'}
 -- entity's current property bag), or a map parameter (`SET n = $props`).
 MATCH (n:Person {name: 'Alice'})
 SET n = {name: 'Alice', age: 31}
+
+-- Function calls, including temporal constructors, evaluate on the SET RHS
+-- (and inside a `+=` map), against the target's own current properties.
+MATCH (n:Person {name: 'Alice'})
+SET n.name_upper = toUpper(n.name),
+    n.seen = duration({days: 1}),
+    n.born = date('1990-05-17')
 ```
+
+**Temporal values persist in one representation.** A temporal property is stored
+as its canonical ISO-8601 `STRING` regardless of which clause wrote it — `CREATE`
+and `SET` converge on the same storage boundary, so two nodes holding the same
+logical value are byte-identical on disk (which is what lets an index or
+constraint be built over a temporal column). Values written by older versions in
+the executor's internal tagged form still read back correctly: reads render the
+tag, only writes changed.
 
 **Current limitations:**
 - Whole-entity replace (`SET x = {...}`) and the parenthetical target form

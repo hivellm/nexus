@@ -629,14 +629,25 @@ impl Engine {
         }
     }
 
-    /// Evaluate expression for SET clause with node context
+    /// Evaluate expression for SET clause with node context.
+    ///
+    /// The arms below are the SET-specific ones — a self-property read
+    /// (`SET n.a = n.b`), an UNWIND row binding, the map form `+=` consumes
+    /// key-by-key — which need `node_props` and `self.unwind_bindings`, neither
+    /// of which the executor's row-aware evaluator has. Everything richer
+    /// (function calls, CASE, comprehensions, …) is delegated to that evaluator
+    /// through the shared persisted-property boundary instead of being rejected,
+    /// which is what used to happen: `SET n.d = duration({days: 1})` and
+    /// `SET n.name = toUpper(n.name)` both failed with "Unsupported expression
+    /// type in SET clause" because this function was a parallel, strictly
+    /// smaller re-implementation of expression evaluation.
     pub(super) fn evaluate_set_expression(
         &self,
         expr: &executor::parser::Expression,
         target_var: &str,
         node_props: &serde_json::Map<String, serde_json::Value>,
     ) -> Result<serde_json::Value> {
-        match expr {
+        let mut value = match expr {
             executor::parser::Expression::Literal(lit) => match lit {
                 executor::parser::Literal::String(s) => Ok(serde_json::Value::String(s.clone())),
                 executor::parser::Literal::Integer(i) => Ok(serde_json::Value::Number((*i).into())),
@@ -736,10 +747,39 @@ impl Engine {
                 .get(name)
                 .cloned()
                 .unwrap_or(serde_json::Value::Null)),
-            _ => Err(Error::CypherExecution(
-                "Unsupported expression type in SET clause".to_string(),
-            )),
-        }
+            // Everything else goes to the executor's real evaluator, through
+            // the shared boundary that canonicalizes a temporal result before
+            // it can be persisted (`Executor::resolve_persisted_property_value`
+            // — see its doc for why storage must never see the tagged shape).
+            //
+            // The row it evaluates against carries what SET knows: the target
+            // variable bound to its own properties (so `toUpper(n.name)`
+            // resolves `n.name` through map property access) plus any UNWIND row
+            // bindings. A function call that references nothing — the temporal
+            // constructors this task is about — needs neither.
+            other => {
+                let mut row: std::collections::HashMap<String, serde_json::Value> =
+                    self.unwind_bindings.clone();
+                if !target_var.is_empty() {
+                    row.insert(
+                        target_var.to_string(),
+                        serde_json::Value::Object(node_props.clone()),
+                    );
+                }
+                self.executor
+                    .resolve_persisted_property_value(other, &row, &self.current_params)
+            }
+        }?;
+        // Canonicalize at the FUNCTION exit, not per arm: every SET form —
+        // `SET n.p = <expr>`, `SET n = {map}`, `SET n += {map}`, the
+        // relationship variants, and MERGE's `ON CREATE` / `ON MATCH` — funnels
+        // through here on its way to storage, so one call covers them all and a
+        // future arm cannot silently skip it. It also reaches inside a map
+        // (`SET n += {d: duration(…)}`), since canonicalization recurses.
+        // Idempotent, so the delegating arm above canonicalizing already is
+        // harmless.
+        crate::executor::eval::temporal_value::canonicalize_value_in_place(&mut value);
+        Ok(value)
     }
 
     pub(super) fn json_add_values(

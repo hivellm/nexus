@@ -45,6 +45,41 @@ use serde_json::Value;
 use std::collections::{HashMap, HashSet};
 
 impl Executor {
+    /// Evaluate a property expression that is about to be **persisted**, and
+    /// canonicalize the result — the shared storage boundary for every write
+    /// path.
+    ///
+    /// The row-aware projection evaluator returns temporal values in the
+    /// executor's tagged intermediate shape (`{"_nexus_temporal_type": …}`).
+    /// That shape must never reach disk: it would persist as a raw JSON object,
+    /// corrupt any index built over it, and read back un-rendered. Storage is a
+    /// durability boundary the executor's own projection-boundary
+    /// canonicalization (`Executor::execute`) never sees.
+    ///
+    /// Both write paths converge here rather than each canonicalizing for
+    /// itself: `CREATE` via [`Self::resolve_property_expr_for_create`], and the
+    /// engine's `SET`/`MERGE`-`ON …` path via `Engine::evaluate_set_expression`
+    /// (which owns the SET-specific arms — self-property reads, UNWIND row
+    /// bindings — and delegates every richer expression here). Before that,
+    /// `SET n.d = duration({days: 1})` did not merely skip canonicalization: it
+    /// was rejected outright as an "unsupported expression type", along with
+    /// every other function call.
+    ///
+    /// Property-value validity is deliberately NOT enforced here — the caller
+    /// decides, because `SET n += {…}` legitimately evaluates to a MAP that is
+    /// consumed key-by-key instead of stored.
+    pub(crate) fn resolve_persisted_property_value(
+        &self,
+        expr: &parser::Expression,
+        row: &HashMap<String, Value>,
+        params: &HashMap<String, Value>,
+    ) -> Result<Value> {
+        let inner_ctx = ExecutionContext::new(params.clone(), None);
+        let mut value = self.evaluate_projection_expression(row, &inner_ctx, expr)?;
+        temporal_value::canonicalize_value_in_place(&mut value);
+        Ok(value)
+    }
+
     /// Resolve a `CREATE` property expression against the current
     /// row (`row`) using the row-aware projection evaluator when the
     /// expression references a variable, and falling back to the
@@ -97,19 +132,11 @@ impl Executor {
         // request's parameters so `$param` references inside complex
         // expressions resolve too (the ctx used to be built EMPTY, which
         // made every parameterized property unresolvable here — G1).
-        let inner_ctx = ExecutionContext::new(params.clone(), None);
-        let mut value = self.evaluate_projection_expression(row, &inner_ctx, expr)?;
-        // A property value built from a `FunctionCall` — e.g.
-        // `CREATE (n {d: duration({days: 1})})` — reaches here via the
-        // shared projection evaluator, which returns the tagged
-        // intermediate temporal shape (`{"_nexus_temporal_type": ...}`),
-        // not the canonical ISO string. Storage is a durability boundary
-        // the executor's own projection-boundary canonicalization
-        // (`Executor::execute`) never sees: a tagged value written here
-        // would persist as a raw JSON object on disk, corrupt any index
-        // built over it, and read back un-rendered on every later MATCH.
-        // Canonicalize before the value ever reaches `create_node*`.
-        temporal_value::canonicalize_value_in_place(&mut value);
+        // Evaluate + canonicalize through the shared storage boundary (see
+        // [`Self::resolve_persisted_property_value`] for why a tagged temporal
+        // value must never reach `create_node*`), then enforce that a CREATE
+        // property is a primitive or an array of primitives.
+        let value = self.resolve_persisted_property_value(expr, row, params)?;
         reject_non_primitive_property_value(value)
     }
 

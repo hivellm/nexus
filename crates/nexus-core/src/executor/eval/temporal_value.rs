@@ -661,29 +661,43 @@ pub(crate) fn canonicalize_temporal(value: &Value) -> Option<String> {
 /// Non-temporal values are left structurally untouched (only descended
 /// into).
 ///
-/// `pub(crate)`: this is called from **three** independent boundary points,
-/// not one — there is no single funnel a tagged value is guaranteed to
-/// cross before reaching a caller:
+/// `pub(crate)`: called from three boundary points, which fall into two
+/// different kinds — and only one kind could be consolidated.
+///
+/// The **storage** boundary IS a single funnel:
+/// [`super::super::operators::create::Executor::resolve_persisted_property_value`]
+/// evaluates-then-canonicalizes for every write path, `CREATE` and the engine's
+/// `SET`/`MERGE`-`ON …` path alike. Before that funnel existed, `SET` was not
+/// merely missing a canonicalization call — it rejected a temporal constructor
+/// outright as an unsupported expression type.
+///
+/// The **output** boundaries cannot be reduced to one, because two of them build
+/// a `ResultSet` without ever meeting: there is no single funnel a tagged value
+/// is guaranteed to cross on its way back to a caller.
 ///
 /// 1. [`super::super::dispatch::execute::Executor::execute`] — the
 ///    projection boundary for read queries and the plain executor's write
 ///    fallback (standalone `CREATE`, the HTTP layer's read-only lock-free
 ///    fast path, and `Engine::dispatch`'s generic fallback all route
 ///    through here).
-/// 2. [`super::super::operators::create::Executor::resolve_property_expr_for_create`]
-///    — the *storage* boundary: a `CREATE (n {d: duration(...)})` property
-///    value must canonicalize before it is written to a node/relationship
-///    record, or the tagged JSON object persists on disk and is fed to
-///    indexes.
+/// 2. [`super::super::operators::create::Executor::resolve_persisted_property_value`]
+///    — the *storage* boundary, and the one funnel: a property value must
+///    canonicalize before it is written to a node/relationship record, or the
+///    tagged JSON object persists on disk and is fed to indexes. `CREATE`
+///    reaches it via `resolve_property_expr_for_create`; `SET` / `SET +=` /
+///    `SET =` / the relationship variants / `MERGE`'s `ON CREATE` and
+///    `ON MATCH` reach it via `Engine::evaluate_set_expression`, which also
+///    canonicalizes at its own exit so its write-path-specific arms (a
+///    self-property read, an UNWIND row binding, a parameter) are covered
+///    without each having to remember.
 /// 3. `crate::engine::write_exec::return_builder::{build_return_result,
 ///    build_return_result_with_rels}` — the `MERGE`/`SET`/`REMOVE`/
 ///    `FOREACH` write path's own inline `RETURN`. This path reads node/
 ///    relationship properties directly out of storage and builds its
 ///    `ResultSet` without ever calling `Executor::execute`, so point 1
-///    does not cover it — defense in depth alongside point 2, since a
-///    property written before point 2 existed (or by a write path that
-///    does not resolve through `resolve_property_expr_for_create`, e.g.
-///    `SET`) could still carry a stale tag.
+///    does not cover it. Still defense in depth alongside point 2: a property
+///    written to disk by an older version, before that funnel existed, can
+///    carry a stale tag, and reads must keep rendering it.
 pub(crate) fn canonicalize_value_in_place(value: &mut Value) {
     if let Some(rendered) = canonicalize_temporal(value) {
         *value = Value::String(rendered);
