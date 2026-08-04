@@ -30,6 +30,23 @@
       consumed relationship ids on it. Enforce in BOTH `execute_expand` paths — the
       per-source loop and the source-less relationship scan, which is the one a
       fully-anonymous first slot (`()-[]-…`) takes.
+      **A cheaper boundary-operator design was tried and DOES NOT WORK — do not
+      retry it.** Adding `Operator::BeginRelationshipScope` (a positional marker the
+      planner emits once per clause, clearing the accumulator) costs only ~3 sites
+      instead of 11, and it got 5 of the 6 isomorphism tests passing, including both
+      TCK scenarios and the `OPTIONAL MATCH` control. It fails the cross-clause test
+      because the planner **bucket-sorts the operator list** in
+      `planner/queries/cost.rs` (`scans` / `filters` / `expansions` / `joins` /
+      `unwinds` / `others`, recombined in that order) and any new variant falls into
+      `others`, recombined LAST. `EXPLAIN` confirms the emitted order
+      `scan, scan, Expand, Expand, Begin…, Begin…` — both boundaries land after the
+      expansions they were meant to precede. A positional marker cannot survive that
+      pass, so the scope must travel WITH the operator: a field on
+      `Operator::Expand`. That is why the 11-site cost is unavoidable.
+      Second gotcha found: the accumulator survives in `context.variables` as a
+      columnar entry, not only in `result_set.rows` — `result_set_as_rows` and
+      `materialize_rows_from_variables` rebuild rows from it, so any reset must clear
+      both.
       **Done when:** on the one-relationship fixture
       `MATCH (x)-[]-(y)-[]-(z) RETURN count(*)` is 0 and
       `MATCH (x)-[r1]-(y)-[r2]-(z) RETURN count(*)` is 0; TCK
