@@ -22,16 +22,42 @@ Fixture: `CREATE (a:A)-[:T]->(b:B)` (one node pair, one relationship).
 | `MATCH (x)-[r1]->(y) MATCH (p)-[r2]->(q) RETURN count(*)` | **0** | **1** |
 | `MATCH (x)-[r1]->(y), (p)-[r2]->(q) RETURN count(*)` | 1 | 0 (see D2) |
 
-A second `MATCH` whose pattern is node-only works, and the comma form works, but a
-second `MATCH` whose pattern contains a relationship yields nothing. This is a
-cartesian-product / binding-materialization defect in clause composition,
-independent of relationship isomorphism: with a single relationship in the graph
-there is nothing for an isomorphism rule to reject, and openCypher does not apply
-that rule across separate `MATCH` clauses anyway.
+**Root cause (found — item 1.1 is complete).** `EXPLAIN` on the failing query gives:
 
-Likely related: the recorded `Expand` required-partial-binding leak, and
-`phase21_tck-comma-pattern-binding-materialization` (still pending) — read that
-task's write-up first, since the two may share a root cause.
+```
+AllNodesScan { variable: "x" }
+Expand { source_var: "x", target_var: "y", rel_var: "r1" }
+Expand { source_var: "p", target_var: "q", rel_var: "r2" }   <- nothing binds "p"
+Aggregate
+```
+
+No scan is emitted for `p`, so `execute_expand` finds no `source_var` in any
+incoming row, `extract_entity_id` fails, and every row is dropped — hence zero rows.
+
+The omission is in the additional-pattern loop of
+`executor/planner/queries/strategy/pattern_lowering.rs`: the driving scan is emitted
+**only inside `if !node.labels.is_empty()`**, and there is no `else`. An *unlabeled*
+node in a second (or comma) pattern therefore gets no scan at all. The first
+pattern's lowering does emit `AllNodesScan` for an unlabeled node — the two paths
+disagree. That is also why the row-count table above is misleading in one place:
+`MATCH (x)-[r1]->(y) MATCH (p) RETURN count(*)` returns 1 not because it works, but
+because `p` is left **unbound** and projects as `Null`; the correct answer on this
+fixture is 2 rows (the cartesian with both nodes). Verified:
+`MATCH (x)-[r1]->(y) MATCH (p) RETURN x, p` → one row, `p = Null`.
+
+**Why the fix is not just "emit the missing scan".** `Operator::AllNodesScan` does
+apply a cartesian product when `context.variables` is non-empty, but its dispatch
+clears `result_set.rows` and rebuilds them with
+`materialize_rows_from_variables` — a cartesian over *independent per-variable
+lists*. `x`, `y` and `r1` are correlated tuples produced by an `Expand`, so
+rebuilding them from independent lists **decorrelates** them. Emitting the scan
+without fixing that would trade zero rows for wrong rows.
+
+That correlation-preserving materialization is precisely the scope of
+`phase21_tck-comma-pattern-binding-materialization` (still pending), so the
+dependency between the two tasks is now **confirmed, not suspected**: do them
+together, or do the comma task first. Also related: the recorded `Expand`
+required-partial-binding leak.
 
 ### D2 — Relationship isomorphism is not enforced across comma-separated parts
 

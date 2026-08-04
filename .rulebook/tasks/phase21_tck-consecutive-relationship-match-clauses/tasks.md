@@ -5,13 +5,25 @@
 > D3's over-strictness and produce wrong counts). See proposal.md for the
 > reproductions and observed values of D1/D2/D3.
 
-- [ ] 1.1 Root-cause D1: read `phase21_tck-comma-pattern-binding-materialization`'s
-      write-up first, then determine why a second `MATCH` clause whose pattern
-      contains a relationship yields zero rows. Reproduce with the proposal's
-      fixture and record the failing operator and the row contents entering it.
-      **Done when:** the defect is explained at the level of "operator X drops the
-      row because Y", not "clause composition is broken". Do not change code in
-      this item.
+- [x] 1.1 Root-cause D1 (diagnosis only, no code change)
+  - `EXPLAIN` shows no scan is emitted for the second clause's leading variable, so
+    `execute_expand` finds no `source_var` in the row, `extract_entity_id` fails and
+    every row is dropped. Full plan and reasoning in proposal.md § D1.
+  - Precise site: the additional-pattern loop in
+    `executor/planner/queries/strategy/pattern_lowering.rs` emits the driving scan
+    **only inside `if !node.labels.is_empty()`** with no `else`, so an unlabeled node
+    in a second/comma pattern is never bound. The first pattern's lowering does emit
+    `AllNodesScan` for an unlabeled node; the two paths disagree.
+  - Correction to the proposal's original table: `MATCH … MATCH (p)` was recorded as
+    "works" on a `count(*)` of 1. It does not — `p` is unbound and projects as
+    `Null`; the correct result is 2 rows. A `count(*)` probe masked it.
+  - **Confirmed dependency (was a suspicion):** emitting the missing scan is not
+    sufficient. `AllNodesScan`'s dispatch clears `result_set.rows` and rebuilds via
+    `materialize_rows_from_variables`, a cartesian over independent per-variable
+    lists, which decorrelates the `(x, y, r1)` tuples an `Expand` produced. Fixing
+    D1 therefore requires the correlation-preserving materialization owned by
+    `phase21_tck-comma-pattern-binding-materialization`. Do them together, or that
+    one first — otherwise D1 trades zero rows for wrong rows.
 - [ ] 1.2 Implement relationship isomorphism in the `MATCH`/`Expand` chain (D0)
       with an **explicit** pattern scope: add a pattern-scope id to
       `Operator::Expand`, assign it per `MATCH` clause in the planner (comma parts
