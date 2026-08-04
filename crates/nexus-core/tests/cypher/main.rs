@@ -11,6 +11,7 @@ mod cypher_external_id_write_paths;
 mod cypher_groupby_expression_key_test;
 mod cypher_non_ascii_test;
 mod in_operator_tests;
+mod label_colon_whitespace_test;
 mod logical_operators_tests;
 mod mathematical_operators_test;
 mod merge_relationship_anonymous_variable_test;

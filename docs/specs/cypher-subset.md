@@ -73,12 +73,12 @@ Pattern ::= Node | Relationship | QuantifiedGroup | Pattern ',' Pattern
 
 Node ::= '(' Variable? Labels? Properties? ')'
 
-Labels ::= ':' Identifier ( ':' Identifier )*
+Labels ::= SP? ':' SP? Identifier ( SP? ':' SP? Identifier )*
 
 Relationship ::= 
-    '-[' Variable? ':' Type Properties? Quantifier? ']->' |  // directed out
-    '<-[' Variable? ':' Type Properties? Quantifier? ']-'  |  // directed in
-    '-[' Variable? ':' Type Properties? Quantifier? ']-'      // undirected
+    '-[' Variable? ':' SP? Type Properties? Quantifier? ']->' |  // directed out
+    '<-[' Variable? ':' SP? Type Properties? Quantifier? ']-'  |  // directed in
+    '-[' Variable? ':' SP? Type Properties? Quantifier? ']-'      // undirected
 
 QuantifiedGroup ::= PathMode? '(' Pattern ')' Quantifier
     -- Cypher 25 / GQL. Anonymous-body shapes still collapse to
@@ -101,6 +101,13 @@ Quantifier ::= '*' Int? ('..' Int?)?  -- legacy *m..n shorthand
 Variable ::= Identifier
 Type ::= Identifier ( '|' Identifier )*  -- single type or union (e.g. :R, :R1|R2|R3)
 ```
+
+**Label/type colon whitespace.** openCypher permits whitespace around the colon
+in the label and relationship-type positions, so `(dur2: Duration2)`,
+`(v : A : B)` and `-[r: KNOWS]->` are all accepted and equivalent to their
+unspaced forms. The tolerance is scoped to those pattern positions: the
+property-map colon (`{k: v}`) and the expression-level label predicate
+(`WHERE n:Label`) are parsed by separate code paths and are unchanged.
 
 ### WHERE Clause
 

@@ -590,3 +590,109 @@ fn test_parse_relationship_type_alternation_colon_prefixed() {
         _ => panic!("Expected match clause"),
     }
 }
+
+// ── Label/type colon whitespace (openCypher permits `:` SP? Identifier) ──
+
+#[test]
+fn test_parse_node_label_with_whitespace_after_colon() {
+    // `MATCH (dur2: Duration2)` — whitespace between the label colon and
+    // the identifier is legal openCypher and used throughout the TCK.
+    let mut parser = CypherParser::new("MATCH (dur2: Duration2) RETURN dur2".to_string());
+    let query = parser.parse().unwrap();
+    match &query.clauses[0] {
+        Clause::Match(match_clause) => match &match_clause.pattern.elements[0] {
+            PatternElement::Node(node) => {
+                assert_eq!(node.variable, Some("dur2".to_string()));
+                assert_eq!(node.labels, vec!["Duration2"]);
+            }
+            _ => panic!("Expected node pattern"),
+        },
+        _ => panic!("Expected match clause"),
+    }
+}
+
+#[test]
+fn test_parse_relationship_type_with_whitespace_after_colon() {
+    // Same gap, relationship-type position: `-[r: TYPE]->`.
+    let mut parser = CypherParser::new("MATCH (a)-[r: KNOWS]->(b) RETURN a".to_string());
+    let query = parser.parse().unwrap();
+    match &query.clauses[0] {
+        Clause::Match(match_clause) => match &match_clause.pattern.elements[1] {
+            PatternElement::Relationship(rel) => {
+                assert_eq!(rel.variable, Some("r".to_string()));
+                assert_eq!(rel.types, vec!["KNOWS"]);
+            }
+            _ => panic!("Expected relationship pattern"),
+        },
+        _ => panic!("Expected match clause"),
+    }
+}
+
+#[test]
+fn test_parse_multi_label_with_whitespace_around_both_colons() {
+    // `(v : A : B)` — whitespace is permitted on either side of every
+    // label colon, not just the first.
+    let mut parser = CypherParser::new("MATCH (v : A : B) RETURN v".to_string());
+    let query = parser.parse().unwrap();
+    match &query.clauses[0] {
+        Clause::Match(match_clause) => match &match_clause.pattern.elements[0] {
+            PatternElement::Node(node) => {
+                assert_eq!(node.labels, vec!["A", "B"]);
+            }
+            _ => panic!("Expected node pattern"),
+        },
+        _ => panic!("Expected match clause"),
+    }
+}
+
+#[test]
+fn test_parse_property_map_colon_whitespace_unaffected() {
+    // Control: the property-map colon (`{k: v}`) already tolerated
+    // whitespace and must keep doing so — this is a different code path
+    // (`parse_property_map`) from the label colon fix.
+    let mut parser = CypherParser::new("MATCH (n:Label {k: 'v', j:1}) RETURN n".to_string());
+    let query = parser.parse().unwrap();
+    match &query.clauses[0] {
+        Clause::Match(match_clause) => match &match_clause.pattern.elements[0] {
+            PatternElement::Node(node) => {
+                assert_eq!(node.labels, vec!["Label"]);
+                let props = node.properties.as_ref().expect("expected property map");
+                assert_eq!(props.properties.len(), 2);
+            }
+            _ => panic!("Expected node pattern"),
+        },
+        _ => panic!("Expected match clause"),
+    }
+}
+
+#[test]
+fn test_parse_where_label_predicate_unaffected() {
+    // Control: `WHERE n:Label` is a different grammar position
+    // (expression-level label predicate, not the pattern's label list)
+    // and must keep parsing exactly as before.
+    let mut parser = CypherParser::new("MATCH (n) WHERE n:Label RETURN n".to_string());
+    let query = parser.parse().unwrap();
+    assert!(matches!(query.clauses[1], Clause::Where(_)));
+}
+
+#[test]
+fn test_parse_dynamic_label_and_type_with_whitespace_after_colon() {
+    // The `:$param` dynamic-label/type sentinel sits behind the same colon,
+    // so the whitespace tolerance must reach it too — and must still encode
+    // the sentinel verbatim (`"$label"`) for execution-time resolution.
+    let mut parser = CypherParser::new("MATCH (n: $label)-[r: $type]->(m) RETURN n".to_string());
+    let query = parser.parse().unwrap();
+    match &query.clauses[0] {
+        Clause::Match(match_clause) => {
+            match &match_clause.pattern.elements[0] {
+                PatternElement::Node(node) => assert_eq!(node.labels, vec!["$label"]),
+                _ => panic!("Expected node pattern"),
+            }
+            match &match_clause.pattern.elements[1] {
+                PatternElement::Relationship(rel) => assert_eq!(rel.types, vec!["$type"]),
+                _ => panic!("Expected relationship pattern"),
+            }
+        }
+        _ => panic!("Expected match clause"),
+    }
+}

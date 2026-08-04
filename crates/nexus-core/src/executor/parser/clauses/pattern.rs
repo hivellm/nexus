@@ -540,8 +540,25 @@ impl CypherParser {
     pub(super) fn parse_labels(&mut self) -> Result<Vec<String>> {
         let mut labels = Vec::new();
 
-        while self.peek_char() == Some(':') {
+        loop {
+            // openCypher permits whitespace on either side of the label
+            // colon (`(v: Label)`, `(v : A : B)`). Probe past optional
+            // whitespace for the next colon; if none follows, restore
+            // the position so the caller sees the untouched next token
+            // (properties map, closing paren, …).
+            let save_pos = self.pos;
+            let save_line = self.line;
+            let save_column = self.column;
+            self.skip_whitespace();
+            if self.peek_char() != Some(':') {
+                self.pos = save_pos;
+                self.line = save_line;
+                self.column = save_column;
+                break;
+            }
+
             self.consume_char(); // consume ':'
+            self.skip_whitespace();
             if self.peek_char() == Some('$') {
                 self.consume_char(); // consume '$'
                 let param = self.parse_identifier()?;
@@ -567,6 +584,10 @@ impl CypherParser {
         // First type must be preceded by ':'
         if self.peek_char() == Some(':') {
             self.consume_char(); // consume ':'
+            // openCypher permits whitespace between the colon and the
+            // type identifier (`-[r: TYPE]->`), mirroring the label
+            // position in `parse_labels`.
+            self.skip_whitespace();
             types.push(self.parse_type_name()?);
 
             // Additional types can be separated by '|' (e.g., :TYPE1|TYPE2)
