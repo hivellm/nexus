@@ -1035,6 +1035,21 @@ WHERE count > 5
 RETURN city, count
 ```
 
+**An alias a `WITH` mints is a first-class binding for every clause downstream,
+including another `WITH`.** Chained projections compose, and renaming does not
+have to stop at one hop:
+
+```cypher
+UNWIND [5, 1, 4] AS i
+WITH i AS a
+WITH a AS b          -- b carries the value, whatever produced it
+RETURN b             -- [5, 1, 4]
+```
+
+This holds regardless of what the first `WITH` renamed — an `UNWIND` variable, a
+`MATCH` binding, or a property access — and each `WITH`'s own `WHERE` filters
+against the projection it belongs to.
+
 ### OPTIONAL MATCH
 
 ```cypher

@@ -653,6 +653,17 @@ impl<'a> QueryPlanner<'a> {
         // Add WITH operators AFTER MATCH/Filter/UNWIND but BEFORE Project
         // This ensures WITH intermediate projections run and create aliased variables
         // Skip WITH operators that contain aggregation - they are handled by Aggregate operator
+        // Insertion cursor for the no-sink branch below. Each WITH must land
+        // AFTER the one the previous iteration inserted; a fixed
+        // `last_unwind + 1` for every iteration inserts each WITH *before* its
+        // predecessor, which REVERSES the clause order. That is how
+        // `UNWIND [5,1,4] AS i WITH i AS a WITH a RETURN a` returned nulls: the
+        // plan ran `With(a)` first, projecting `a` before anything bound it, and
+        // that projection dropped `i`, so the `With(i AS a)` that followed had
+        // nothing left to read. The sink branch never had the bug — inserting
+        // before a `Project`/`Aggregate` pushes the sink right, so the next
+        // iteration's `sink_pos` is already one further along.
+        let mut next_no_sink_pos: Option<usize> = None;
         for (with_items, with_distinct, where_expr) in with_operators.iter() {
             // Check if WITH has aggregation - if so, skip (Aggregate operator handles it)
             // Note: with_aggregation_where is already set earlier in the WITH clause processing
@@ -701,7 +712,10 @@ impl<'a> QueryPlanner<'a> {
                 let last_unwind_pos = operators
                     .iter()
                     .rposition(|op| matches!(op, Operator::Unwind { .. }));
-                last_unwind_pos.map(|p| p + 1).unwrap_or(operators.len())
+                let base = last_unwind_pos.map(|p| p + 1).unwrap_or(operators.len());
+                // Never before a WITH this loop already placed — see the cursor
+                // comment above.
+                next_no_sink_pos.map_or(base, |cursor| cursor.max(base))
             };
             // A WITH-attached WHERE must see variables that are in scope but
             // not carried forward by the projection itself (e.g. `WITH c
@@ -728,6 +742,9 @@ impl<'a> QueryPlanner<'a> {
                     where_predicate: with_where,
                 },
             );
+            if sink_pos.is_none() {
+                next_no_sink_pos = Some(insert_pos + 1);
+            }
         }
 
         // Add CREATE operators AFTER MATCH/Filter but BEFORE Project OR Aggregate

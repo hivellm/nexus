@@ -8,9 +8,6 @@ Neo4j suite in `scripts/compatibility/`. Regenerate with the entry point below.
 - **Corpus:** `crates/nexus-core/tests/tck/opencypher/features/` (see `VENDOR.md`)
 - **Reproduce:** `NEXUS_TCK=1 cargo +nightly test -p nexus-core --test tck_opencypher --all-features`
   or `scripts/compatibility/run-opencypher-tck.ps1`.
-- **Gap analysis:** every current failure is attributed to a named root cause in
-  [docs/analysis/tck-rebaseline/](../analysis/tck-rebaseline/) (23 causes, 23 tasks,
-  sequenced in `06-execution-plan.md`).
 
 ## Outcome model
 
@@ -21,7 +18,7 @@ exercise) or the scenario was skip-listed. Skips are counted, never hidden.
 
 ## Totals
 
-**3868 scenarios — 1891 passed (48.9%), 1906 failed, 71 skipped.**
+**3868 scenarios — 1892 passed (48.9%), 1905 failed, 71 skipped.**
 
 ## Per-category
 
@@ -34,7 +31,7 @@ exercise) or the scenario was skip-listed. Skips are counted, never hidden.
 | `clauses/match-where` | 28 | 6 | 0 | 34 | 82.4% |
 | `clauses/merge` | 25 | 47 | 3 | 75 | 33.3% |
 | `clauses/remove` | 6 | 27 | 0 | 33 | 18.2% |
-| `clauses/return` | 29 | 33 | 1 | 63 | 46.0% |
+| `clauses/return` | 30 | 32 | 1 | 63 | 47.6% |
 | `clauses/return-orderby` | 21 | 13 | 1 | 35 | 60.0% |
 | `clauses/return-skip-limit` | 18 | 13 | 0 | 31 | 58.1% |
 | `clauses/set` | 17 | 34 | 2 | 53 | 32.1% |
@@ -64,7 +61,7 @@ exercise) or the scenario was skip-listed. Skips are counted, never hidden.
 | `expressions/typeConversion` | 20 | 27 | 0 | 47 | 42.6% |
 | `useCases/countingSubgraphMatches` | 11 | 0 | 0 | 11 | 100.0% |
 | `useCases/triadicSelection` | 19 | 0 | 0 | 19 | 100.0% |
-| **total** | **1891** | **1906** | **71** | **3868** | **48.9%** |
+| **total** | **1892** | **1905** | **71** | **3868** | **48.9%** |
 
 ## Skip-list (deliberately un-evaluated)
 

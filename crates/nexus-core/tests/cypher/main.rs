@@ -3,6 +3,7 @@
 //! former top-level `tests/*.rs` integration file.
 
 mod builtin_functions_test;
+mod chained_with_alias_test;
 mod column_name_fidelity_test;
 mod comma_pattern_binding_test;
 mod count_distinct_tests;
