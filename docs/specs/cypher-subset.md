@@ -1679,6 +1679,36 @@ RETURN relationships(p) AS path_rels
 RETURN length(p) AS path_length
 ```
 
+**Path value representation.** A path binds as the alternating node/relationship
+sequence `[n0, r0, n1, r1, …, nN]`. `nodes()` keeps the node elements,
+`relationships()` keeps the relationship elements, and `length()` is the
+relationship count — so a zero-length path (`(a)-[*0..1]->(b)` matching `a`
+against itself) has one node, no relationships and length `0`.
+
+**Null propagation.** `nodes(null)`, `relationships(null)` and `length(null)`
+all return `null`, not an empty list or `0`. This covers the
+`OPTIONAL MATCH p = …` no-match case, where `p` itself is `null`: an empty list
+would wrongly read as "a real path that happens to be empty".
+
+**`length()` argument type.** `length()` applies to paths, and to strings and
+lists as a size. Applying it to a **node or relationship** is a compile-time
+error (`SyntaxError` / `InvalidArgumentType`), raised by the semantic-validation
+pass before execution rather than answered with `0`:
+
+```cypher
+MATCH (n) RETURN length(n)        -- error: InvalidArgumentType
+MATCH ()-[r]->() RETURN length(r) -- error: InvalidArgumentType
+RETURN length('hello')            -- 5 (character count)
+```
+
+The check judges a directly-named pattern variable, which is where the type is
+statically known; a property access, function result, parameter or `WITH` alias
+is left to runtime, so the pass never rejects a query that might be valid.
+
+> **Known divergence:** `length(string)` counts characters while the sibling
+> `size(string)` counts UTF-8 bytes, so the two disagree on non-ASCII input.
+> `size()` is the one that is wrong; it is not corrected here.
+
 ### Predicate Functions
 
 ```cypher

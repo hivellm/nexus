@@ -18,7 +18,7 @@ exercise) or the scenario was skip-listed. Skips are counted, never hidden.
 
 ## Totals
 
-**3868 scenarios — 1800 passed (46.5%), 1997 failed, 71 skipped.**
+**3868 scenarios — 1817 passed (47.0%), 1980 failed, 71 skipped.**
 
 ## Per-category
 
@@ -29,7 +29,7 @@ exercise) or the scenario was skip-listed. Skips are counted, never hidden.
 | `clauses/delete` | 7 | 34 | 0 | 41 | 17.1% |
 | `clauses/match` | 139 | 212 | 1 | 352 | 39.5% |
 | `clauses/match-where` | 28 | 6 | 0 | 34 | 82.4% |
-| `clauses/merge` | 24 | 48 | 3 | 75 | 32.0% |
+| `clauses/merge` | 25 | 47 | 3 | 75 | 33.3% |
 | `clauses/remove` | 6 | 27 | 0 | 33 | 18.2% |
 | `clauses/return` | 29 | 33 | 1 | 63 | 46.0% |
 | `clauses/return-orderby` | 21 | 13 | 1 | 35 | 60.0% |
@@ -38,7 +38,7 @@ exercise) or the scenario was skip-listed. Skips are counted, never hidden.
 | `clauses/union` | 8 | 4 | 0 | 12 | 66.7% |
 | `clauses/unwind` | 7 | 7 | 0 | 14 | 50.0% |
 | `clauses/with` | 9 | 20 | 0 | 29 | 31.0% |
-| `clauses/with-orderBy` | 89 | 203 | 0 | 292 | 30.5% |
+| `clauses/with-orderBy` | 90 | 202 | 0 | 292 | 30.8% |
 | `clauses/with-skip-limit` | 5 | 4 | 0 | 9 | 55.6% |
 | `clauses/with-where` | 12 | 7 | 0 | 19 | 63.2% |
 | `expressions/aggregation` | 17 | 17 | 1 | 35 | 48.6% |
@@ -46,22 +46,22 @@ exercise) or the scenario was skip-listed. Skips are counted, never hidden.
 | `expressions/comparison` | 44 | 28 | 0 | 72 | 61.1% |
 | `expressions/conditional` | 13 | 0 | 0 | 13 | 100.0% |
 | `expressions/existentialSubqueries` | 9 | 1 | 0 | 10 | 90.0% |
-| `expressions/graph` | 22 | 36 | 3 | 61 | 36.1% |
-| `expressions/list` | 93 | 92 | 0 | 185 | 50.3% |
+| `expressions/graph` | 25 | 33 | 3 | 61 | 41.0% |
+| `expressions/list` | 94 | 91 | 0 | 185 | 50.8% |
 | `expressions/literals` | 102 | 29 | 0 | 131 | 77.9% |
 | `expressions/map` | 18 | 17 | 9 | 44 | 40.9% |
 | `expressions/mathematical` | 3 | 3 | 0 | 6 | 50.0% |
 | `expressions/null` | 42 | 2 | 0 | 44 | 95.5% |
-| `expressions/path` | 0 | 7 | 0 | 7 | 0.0% |
+| `expressions/path` | 7 | 0 | 0 | 7 | 100.0% |
 | `expressions/pattern` | 14 | 36 | 0 | 50 | 28.0% |
 | `expressions/precedence` | 39 | 82 | 0 | 121 | 32.2% |
-| `expressions/quantifier` | 45 | 559 | 0 | 604 | 7.5% |
+| `expressions/quantifier` | 49 | 555 | 0 | 604 | 8.1% |
 | `expressions/string` | 26 | 6 | 0 | 32 | 81.2% |
 | `expressions/temporal` | 670 | 334 | 0 | 1004 | 66.7% |
 | `expressions/typeConversion` | 20 | 27 | 0 | 47 | 42.6% |
 | `useCases/countingSubgraphMatches` | 9 | 2 | 0 | 11 | 81.8% |
 | `useCases/triadicSelection` | 19 | 0 | 0 | 19 | 100.0% |
-| **total** | **1800** | **1997** | **71** | **3868** | **46.5%** |
+| **total** | **1817** | **1980** | **71** | **3868** | **47.0%** |
 
 ## Skip-list (deliberately un-evaluated)
 

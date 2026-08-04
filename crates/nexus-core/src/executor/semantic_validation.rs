@@ -43,6 +43,7 @@ pub fn validate(query: &CypherQuery) -> crate::Result<()> {
     }
 
     check_variable_type_conflicts(query)?;
+    check_length_argument_type(query)?;
     check_variable_already_bound(query)?;
     check_aggregation_placement(query)?;
     check_skip_limit_arguments(query)?;
@@ -176,6 +177,21 @@ fn expr_contains_exists_subquery(expr: &Expression) -> bool {
 /// pattern comprehensions) introduce inner scopes and are left to a later
 /// refinement.
 fn check_variable_type_conflicts(query: &CypherQuery) -> crate::Result<()> {
+    let (node_vars, rel_vars) = typed_pattern_vars(query);
+    for name in &node_vars {
+        if rel_vars.contains(name) {
+            return Err(variable_type_conflict(name));
+        }
+    }
+    Ok(())
+}
+
+/// Collect the query's pattern variables, split into the ones bound as nodes
+/// and the ones bound as relationships. A name can legitimately land in both
+/// sets — that is exactly the conflict [`check_variable_type_conflicts`] looks
+/// for — so callers that need an unambiguous type must treat an overlap as
+/// unknown rather than assume either side.
+fn typed_pattern_vars(query: &CypherQuery) -> (HashSet<String>, HashSet<String>) {
     let mut node_vars = HashSet::new();
     let mut rel_vars = HashSet::new();
     for clause in &query.clauses {
@@ -192,12 +208,7 @@ fn check_variable_type_conflicts(query: &CypherQuery) -> crate::Result<()> {
             _ => {}
         }
     }
-    for name in &node_vars {
-        if rel_vars.contains(name) {
-            return Err(variable_type_conflict(name));
-        }
-    }
-    Ok(())
+    (node_vars, rel_vars)
 }
 
 /// Sort a pattern's variables into node names and relationship names.
@@ -233,6 +244,55 @@ fn collect_typed_element_vars(
             }
         }
     }
+}
+
+// ── length() argument type ─────────────────────────────────────────────
+
+/// Reject `length()` applied to a variable the query binds as a node or a
+/// relationship. openCypher defines `length()` on paths; a node or relationship
+/// argument is a compile-time `SyntaxError`/`InvalidArgumentType`, not a
+/// runtime null or zero.
+///
+/// Only a *directly named pattern variable* is judged, because the pattern is
+/// what makes the type statically known. A property access, function result,
+/// parameter, `WITH` alias or path variable is left to runtime — consistent
+/// with the module's no-false-positive rule, since missing a real error is safe
+/// but inventing one is a user-visible regression. A name that appears as both
+/// a node and a relationship is skipped too: that is its own diagnostic
+/// (`VariableTypeConflict`), and `validate` reports it first anyway.
+fn check_length_argument_type(query: &CypherQuery) -> crate::Result<()> {
+    let (node_vars, rel_vars) = typed_pattern_vars(query);
+    for clause in &query.clauses {
+        for expr in clause_read_exprs(clause) {
+            check_expr_length_args(expr, &node_vars, &rel_vars)?;
+        }
+    }
+    Ok(())
+}
+
+fn check_expr_length_args(
+    expr: &Expression,
+    node_vars: &HashSet<String>,
+    rel_vars: &HashSet<String>,
+) -> crate::Result<()> {
+    if let Expression::FunctionCall { name, args } = expr
+        && name.eq_ignore_ascii_case("length")
+        && let Some(Expression::Variable(v)) = args.first()
+    {
+        let is_node = node_vars.contains(v);
+        let is_rel = rel_vars.contains(v);
+        // `is_node && is_rel` is the VariableTypeConflict case — not ours.
+        if is_node && !is_rel {
+            return Err(invalid_length_argument(v, "node"));
+        }
+        if is_rel && !is_node {
+            return Err(invalid_length_argument(v, "relationship"));
+        }
+    }
+    for child in child_exprs(expr) {
+        check_expr_length_args(child, node_vars, rel_vars)?;
+    }
+    Ok(())
 }
 
 // ── Variable already bound (CREATE re-declaration) ─────────────────────
@@ -967,35 +1027,34 @@ fn check_query_references(query: &CypherQuery, binders: &HashSet<String>) -> cra
 }
 
 fn check_clause_references(clause: &Clause, binders: &HashSet<String>) -> crate::Result<()> {
+    for expr in clause_read_exprs(clause) {
+        check_expr_references(expr, binders)?;
+    }
+    Ok(())
+}
+
+/// A clause's read-position expressions, in source order.
+///
+/// Single source of truth for "where does this clause read expressions from",
+/// shared by [`check_clause_references`] and
+/// [`check_length_argument_type`] so the two cannot drift apart.
+fn clause_read_exprs(clause: &Clause) -> Vec<&Expression> {
     match clause {
         Clause::Match(MatchClause { where_clause, .. }) => {
-            if let Some(w) = where_clause {
-                check_expr_references(&w.expression, binders)?;
-            }
+            where_clause.iter().map(|w| &w.expression).collect()
         }
         Clause::With(w) => {
-            for item in &w.items {
-                check_expr_references(&item.expression, binders)?;
-            }
-            if let Some(cond) = &w.where_clause {
-                check_expr_references(&cond.expression, binders)?;
-            }
+            let mut out: Vec<&Expression> = w.items.iter().map(|i| &i.expression).collect();
+            out.extend(w.where_clause.iter().map(|c| &c.expression));
+            out
         }
-        Clause::Return(r) => {
-            for item in &r.items {
-                check_expr_references(&item.expression, binders)?;
-            }
-        }
-        Clause::Where(w) => check_expr_references(&w.expression, binders)?,
-        Clause::OrderBy(o) => {
-            for item in &o.items {
-                check_expr_references(&item.expression, binders)?;
-            }
-        }
-        Clause::Limit(l) => check_expr_references(&l.count, binders)?,
-        Clause::Skip(s) => check_expr_references(&s.count, binders)?,
-        Clause::Unwind(u) => check_expr_references(&u.expression, binders)?,
-        Clause::Foreach(f) => check_expr_references(&f.list_expression, binders)?,
+        Clause::Return(r) => r.items.iter().map(|i| &i.expression).collect(),
+        Clause::Where(w) => vec![&w.expression],
+        Clause::OrderBy(o) => o.items.iter().map(|i| &i.expression).collect(),
+        Clause::Limit(l) => vec![&l.count],
+        Clause::Skip(s) => vec![&s.count],
+        Clause::Unwind(u) => vec![&u.expression],
+        Clause::Foreach(f) => vec![&f.list_expression],
         // A `CREATE` property map referencing a name bound nowhere in the
         // query (`CREATE (b {name: missing})` — TCK `Create1[20]`,
         // `Create2[24]`) is a `SyntaxError`/`UndefinedVariable` exactly
@@ -1006,17 +1065,12 @@ fn check_clause_references(clause: &Clause, binders: &HashSet<String>) -> crate:
         // every `Clause::Create` during binder collection), so a property
         // value referencing an earlier-bound variable — from this query's
         // own `MATCH`/`UNWIND`/an earlier `CREATE` clause — still passes.
-        Clause::Create(c) => {
-            for expr in pattern_property_exprs(&c.pattern) {
-                check_expr_references(expr, binders)?;
-            }
-        }
+        Clause::Create(c) => pattern_property_exprs(&c.pattern),
         // Write-clause target references (SET/DELETE/REMOVE/MERGE) are
         // validated by a later increment; pattern property maps are not
         // reference-checked here.
-        _ => {}
+        _ => Vec::new(),
     }
-    Ok(())
 }
 
 /// Flag `Variable` / `PropertyAccess` references whose base name is unbound.
@@ -1142,6 +1196,12 @@ fn undefined_variable(name: &str) -> crate::Error {
 fn variable_type_conflict(name: &str) -> crate::Error {
     crate::Error::CypherSyntax(format!(
         "VariableTypeConflict: variable `{name}` is used as both a node and a relationship"
+    ))
+}
+
+fn invalid_length_argument(name: &str, kind: &str) -> crate::Error {
+    crate::Error::CypherSyntax(format!(
+        "InvalidArgumentType: length() requires a path, but `{name}` is a {kind}"
     ))
 }
 

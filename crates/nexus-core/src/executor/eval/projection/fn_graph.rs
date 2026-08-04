@@ -319,26 +319,28 @@ impl Executor {
                         Ok(v) => v,
                         Err(e) => return Some(Err(e)),
                     };
-                    // If value is already an array, treat it as a path of nodes
+                    // `nodes(null)` is null, not an empty list — including the
+                    // `OPTIONAL MATCH p = …` no-match case, where `p` itself is
+                    // null. Without this the fallback below turned a missing
+                    // path into `[]`, which reads as "a path with no nodes".
+                    if value.is_null() {
+                        return Some(Ok(Value::Null));
+                    }
+                    // If value is already an array, treat it as a path of nodes.
+                    // The entity-kind test must be `is_node_value`, not a bare
+                    // `_nexus_id` probe: relationship values carry `_nexus_id`
+                    // too, so a path that interleaves both would count its
+                    // relationships as nodes.
                     if let Value::Array(arr) = value {
-                        // Filter only node objects (objects with _nexus_id)
                         let nodes: Vec<Value> = arr
                             .into_iter()
-                            .filter(|v| {
-                                if let Value::Object(obj) = v {
-                                    obj.contains_key("_nexus_id")
-                                } else {
-                                    false
-                                }
-                            })
+                            .filter(crate::executor::is_node_value)
                             .collect();
                         return Some(Ok(Value::Array(nodes)));
                     }
                     // If it's a single node, return it as array
-                    if let Value::Object(obj) = &value {
-                        if obj.contains_key("_nexus_id") {
-                            return Some(Ok(Value::Array(vec![value])));
-                        }
+                    if crate::executor::is_node_value(&value) {
+                        return Some(Ok(Value::Array(vec![value])));
                     }
                 }
                 Some(Ok(Value::Array(Vec::new())))
@@ -349,28 +351,26 @@ impl Executor {
                         Ok(v) => v,
                         Err(e) => return Some(Err(e)),
                     };
-                    // If value is already an array, extract relationships
+                    // `relationships(null)` is null, not an empty list — same
+                    // reasoning as `nodes()` above.
+                    if value.is_null() {
+                        return Some(Ok(Value::Null));
+                    }
+                    // If value is already an array, extract relationships.
+                    // The old test looked for `_nexus_type` plus `_source`/
+                    // `_target`; none of those keys exist on a relationship
+                    // value (the marker is `_nexus_rel_type`), so it matched
+                    // nothing and every path reported no relationships.
                     if let Value::Array(arr) = value {
-                        // Filter only relationship objects (objects with _nexus_type and source/target)
                         let rels: Vec<Value> = arr
                             .into_iter()
-                            .filter(|v| {
-                                if let Value::Object(obj) = v {
-                                    obj.contains_key("_nexus_type")
-                                        && (obj.contains_key("_source")
-                                            || obj.contains_key("_target"))
-                                } else {
-                                    false
-                                }
-                            })
+                            .filter(crate::executor::is_relationship_value)
                             .collect();
                         return Some(Ok(Value::Array(rels)));
                     }
                     // If it's a single relationship, return it as array
-                    if let Value::Object(obj) = &value {
-                        if obj.contains_key("_nexus_type") {
-                            return Some(Ok(Value::Array(vec![value])));
-                        }
+                    if crate::executor::is_relationship_value(&value) {
+                        return Some(Ok(Value::Array(vec![value])));
                     }
                 }
                 Some(Ok(Value::Array(Vec::new())))
@@ -381,27 +381,34 @@ impl Executor {
                         Ok(v) => v,
                         Err(e) => return Some(Err(e)),
                     };
+                    // `length(null)` is null — same null propagation as
+                    // `nodes()`/`relationships()` above, and as the sibling
+                    // `size()` already does.
+                    if value.is_null() {
+                        return Some(Ok(Value::Null));
+                    }
+                    // `length(string)` is the character count. Documented in
+                    // docs/specs/cypher-subset.md under the string functions but
+                    // never implemented — it fell through to the `0` below.
+                    if let Value::String(s) = &value {
+                        return Some(Ok(Value::Number((s.chars().count() as i64).into())));
+                    }
                     // For arrays representing paths, length is the number of relationships
                     // which is (number of nodes - 1) or number of relationship objects
                     if let Value::Array(arr) = value {
-                        // Count relationship objects in the path
+                        // A path's length is its hop count — the number of
+                        // relationships in it. Same marker correction as
+                        // `relationships()` above: `_nexus_type` never matched,
+                        // so every path measured zero.
                         let rel_count = arr
                             .iter()
-                            .filter(|v| {
-                                if let Value::Object(obj) = v {
-                                    obj.contains_key("_nexus_type")
-                                } else {
-                                    false
-                                }
-                            })
+                            .filter(|v| crate::executor::is_relationship_value(v))
                             .count();
                         return Some(Ok(Value::Number((rel_count as i64).into())));
                     }
                     // For a single relationship, length is 1
-                    if let Value::Object(obj) = &value {
-                        if obj.contains_key("_nexus_type") {
-                            return Some(Ok(Value::Number(1.into())));
-                        }
+                    if crate::executor::is_relationship_value(&value) {
+                        return Some(Ok(Value::Number(1.into())));
                     }
                 }
                 Some(Ok(Value::Number(0.into())))

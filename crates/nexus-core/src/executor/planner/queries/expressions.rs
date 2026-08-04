@@ -128,7 +128,17 @@ impl<'a> QueryPlanner<'a> {
                     }
                 }
                 Literal::Boolean(b) => Ok(b.to_string()),
-                Literal::Null => Ok("NULL".to_string()),
+                // Lower-case, matching how `Literal::Boolean` above renders and
+                // how openCypher writes the literal. The rendering doubles as an
+                // unaliased column name, and the TCK compares that header
+                // against the source text (`RETURN nodes(null)` →
+                // `nodes(null)`), so an upper-cased `NULL` mismatched. Nothing
+                // depends on the old casing: the string is only ever re-parsed
+                // as a WHERE predicate, and the keyword match is
+                // case-insensitive. (The AST carries no source span, so — just
+                // as for booleans — this is canonical lower-case rather than a
+                // true verbatim echo of the author's casing.)
+                Literal::Null => Ok("null".to_string()),
                 Literal::Point(p) => Ok(p.to_string()),
             },
             Expression::BinaryOp { left, op, right } => {

@@ -71,10 +71,11 @@ fn test_expression_to_string_literals() {
     let result = planner.expression_to_string(&expr).unwrap();
     assert_eq!(result, "true");
 
-    // Test null literal
+    // Test null literal — lower-case, matching the boolean literal above and
+    // the source text an unaliased column name is compared against.
     let expr = Expression::Literal(Literal::Null);
     let result = planner.expression_to_string(&expr).unwrap();
-    assert_eq!(result, "NULL");
+    assert_eq!(result, "null");
 }
 
 #[test]

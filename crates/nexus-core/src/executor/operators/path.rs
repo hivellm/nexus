@@ -674,15 +674,43 @@ impl Executor {
                     // the whole `filter_map` is safe.
                     if !path_var.is_empty() {
                         let path_store = self.store();
-                        let path_nodes_values: Vec<Value> = path_nodes
-                            .iter()
-                            .filter_map(|node_id| {
+                        // A path value is the alternating node/relationship
+                        // sequence `[n0, r0, n1, r1, …, nN]`. `nodes()`,
+                        // `relationships()` and `length()` all read a path by
+                        // filtering this list on the entity-kind marker, so
+                        // binding nodes only made `relationships(p)` empty and
+                        // `length(p)` zero for every variable-length match.
+                        // BFS keeps the two vectors aligned as
+                        // `path_nodes[i] -[path_rels[i]]-> path_nodes[i + 1]`,
+                        // so each relationship slots in after its source node.
+                        let mut path_elements: Vec<Value> =
+                            Vec::with_capacity(path_nodes.len() + path_rels.len());
+                        for (i, node_id) in path_nodes.iter().enumerate() {
+                            if let Ok(node) =
                                 self.read_node_as_value_with_store(&path_store, *node_id)
-                                    .ok()
-                            })
-                            .collect();
+                            {
+                                path_elements.push(node);
+                            }
+                            // `_with_store` variants only: `parking_lot`'s
+                            // RwLock is not reentrant, so re-acquiring while
+                            // `path_store` is alive would deadlock.
+                            if let Some(rel_id) = path_rels.get(i)
+                                && let Ok(rel_record) = path_store.read_rel(*rel_id)
+                                && let Ok(rel) = self.read_relationship_as_value_with_store(
+                                    &path_store,
+                                    &RelationshipInfo {
+                                        id: *rel_id,
+                                        source_id: rel_record.src_id,
+                                        target_id: rel_record.dst_id,
+                                        type_id: rel_record.type_id,
+                                    },
+                                )
+                            {
+                                path_elements.push(rel);
+                            }
+                        }
                         drop(path_store);
-                        new_row.insert(path_var.to_string(), Value::Array(path_nodes_values));
+                        new_row.insert(path_var.to_string(), Value::Array(path_elements));
                     }
 
                     push_with_row_cap(&mut expanded_rows, new_row, "VarLengthExpand")?;

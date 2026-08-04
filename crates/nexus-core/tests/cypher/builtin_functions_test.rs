@@ -1082,23 +1082,18 @@ fn test_length_function_empty_array() {
 fn test_path_functions_with_null() {
     let (mut engine, _ctx) = setup_isolated_test_engine().unwrap();
 
-    // Test nodes with null
+    // The path functions propagate null rather than fabricating an empty list
+    // or a zero length: openCypher (and the TCK `expressions/path` feature)
+    // require `null`, and `[]` / `0` would wrongly read as "a real path that
+    // happens to be empty". This previously asserted the opposite.
     let result = execute_query(&mut engine, "RETURN nodes(null) AS node_list");
-    let value = get_single_value(&result);
-    assert!(value.is_array());
-    assert_eq!(value.as_array().unwrap().len(), 0);
+    assert!(get_single_value(&result).is_null());
 
-    // Test relationships with null
     let result = execute_query(&mut engine, "RETURN relationships(null) AS rel_list");
-    let value = get_single_value(&result);
-    assert!(value.is_array());
-    assert_eq!(value.as_array().unwrap().len(), 0);
+    assert!(get_single_value(&result).is_null());
 
-    // Test length with null
     let result = execute_query(&mut engine, "RETURN length(null) AS path_length");
-    let value = get_single_value(&result);
-    assert!(value.is_number());
-    assert_eq!(value.as_i64().unwrap(), 0);
+    assert!(get_single_value(&result).is_null());
 }
 
 #[test]
