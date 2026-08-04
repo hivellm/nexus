@@ -20,6 +20,8 @@
 //! `LOAD CSV`, and every DDL/admin/transaction statement) are skipped
 //! outright rather than risk a false positive.
 
+mod relationship_uniqueness;
+
 use std::collections::HashSet;
 
 use crate::executor::parser::ast::{
@@ -35,6 +37,11 @@ const DISTINCT_MARKER: &str = "__DISTINCT__";
 /// an openCypher CamelCase detail token in the message so the conformance
 /// runner can classify it.
 pub fn validate(query: &CypherQuery) -> crate::Result<()> {
+    // Runs before the modeling gate: a repeated relationship variable is
+    // unsatisfiable per pattern, with no cross-clause scoping involved, so
+    // there is nothing for `UNION` / `CALL {…}` to make ambiguous.
+    relationship_uniqueness::check_relationship_uniqueness(query)?;
+
     // Only queries composed entirely of clause kinds whose scoping this
     // pass fully models are checked; anything else is passed through
     // untouched (see module docs).

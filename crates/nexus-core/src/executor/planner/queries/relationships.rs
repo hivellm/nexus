@@ -4,16 +4,38 @@ use super::qpp::build_quantified_expand_operator;
 use super::*;
 
 impl<'a> QueryPlanner<'a> {
+    /// `clause_scope` identifies the `MATCH` clause these patterns come from.
+    /// It becomes `Operator::Expand::iso_scope` so relationship isomorphism is
+    /// enforced across every hop of one clause — including its comma-separated
+    /// parts, which the parser flattens into a single `Pattern` — and never
+    /// across clauses. See `Operator::Expand`'s `iso_scope` doc for why the
+    /// scope has to travel on the operator.
     pub(super) fn add_relationship_operators(
         &self,
         patterns: &[Pattern],
         is_optional: bool,
         operators: &mut Vec<Operator>,
         previously_bound_vars: &std::collections::HashSet<String>,
+        clause_scope: u32,
     ) -> Result<()> {
         let mut tmp_var_counter = 0;
 
         for pattern in patterns {
+            // Isomorphism is vacuous below two hops, and the bookkeeping it
+            // needs is an extra row entry — so leave the row shape of a
+            // single-hop pattern untouched. Only plain single-hop slots count:
+            // a quantified hop is lowered to `VariableLengthPath` /
+            // `QuantifiedExpand`, which carry their own trail semantics and
+            // never read this scope.
+            let single_hop_slots = pattern
+                .elements
+                .iter()
+                .filter(|el| {
+                    matches!(el, PatternElement::Relationship(rel) if rel.quantifier.is_none())
+                })
+                .count();
+            let iso_scope = (single_hop_slots >= 2).then_some(clause_scope);
+
             // Track previous node variable for relationship expansion
             let mut prev_node_var: Option<String> = None;
             // Inline label(s) declared on the node currently tracked by
@@ -216,6 +238,7 @@ impl<'a> QueryPlanner<'a> {
                                 direction: final_direction,
                                 optional: is_optional,
                                 target_labels: final_target_labels,
+                                iso_scope,
                             });
                         }
                     }

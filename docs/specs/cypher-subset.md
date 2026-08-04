@@ -115,15 +115,45 @@ MATCH (l:Looper)--() RETURN count(*) -- 1
 An ordinary relationship genuinely has two orientations under an undirected slot
 and still yields both, so `MATCH ()-[]-()` over `(a)-[:T]->(b)` counts 2.
 
-> **Known gap: relationship isomorphism is NOT enforced in `MATCH`.** Cypher
-> requires that two relationship slots of one pattern never bind the same
-> relationship. Nexus enforces this inside `EXISTS { … }` and pattern
-> comprehensions, but **not** in the `MATCH` pipeline, so a pattern that walks back
-> over the edge it arrived on is currently matched:
-> `MATCH (x)-[]-(y)-[]-(z)` over a single relationship returns 2 rows where
-> conformant Cypher returns none. Undirected multi-hop counts are inflated
-> accordingly. Tracked by
-> `phase21_tck-consecutive-relationship-match-clauses`.
+**Relationship isomorphism, scoped to the clause.** Two relationship slots of one
+`MATCH` clause never bind the same relationship, so a pattern cannot walk back
+over the edge it arrived on:
+
+```cypher
+CREATE (a:A)-[:T]->(b:B)                            -- one relationship
+MATCH (x)-[]-(y)-[]-(z) RETURN count(*)             -- 0; both slots would need it
+MATCH (x)-[r1]-(y)-[r2]-(z) RETURN count(*)         -- 0; naming changes nothing
+```
+
+The scope is the **clause**, and the boundary matters in both directions:
+
+- It **spans comma-separated parts** of one clause, which openCypher treats as a
+  single pattern: on the graph above, `MATCH (x)-[r1]->(y), (p)-[r2]->(q)`
+  returns 0 rows, and only with two distinct relationships available does it
+  return the pairs of distinct ones.
+- It does **not span separate clauses**: `MATCH (x)-[r1]->(y) MATCH (p)-[r2]->(q)`
+  returns 1 row on the same graph, because each clause binds independently.
+  Re-using a relationship variable in a later clause is likewise legal — it joins
+  on that relationship.
+
+Enforcement lives on the `Expand` operator (each hop carries its clause's scope
+id and refuses a relationship an earlier hop of that scope consumed), so it
+covers anonymous slots as well as named ones. `EXISTS { … }`, pattern
+comprehensions and variable-length segments enforce the same rule through their
+own traversal code.
+
+**Re-using one relationship variable inside a pattern is rejected.** Because the
+two slots must bind different relationships, `MATCH (a)-[r]->()-[r]->(a)` is
+unsatisfiable, and Cypher rejects it instead of quietly returning no rows —
+a `SyntaxError` carrying the openCypher detail token
+`RelationshipUniquenessViolation`, raised at compile time before any traversal.
+The check is scoped to `MATCH` patterns; a rebind in `CREATE`/`MERGE` is a
+different rule and reports `VariableAlreadyBound`.
+
+> **Remaining gap.** Isomorphism is not enforced *between* a single-hop slot and
+> a variable-length or quantified segment of the same clause (e.g.
+> `MATCH (a)-[r]->(b)-[*]->(c)`): each carries its own rule, and the shared scope
+> stops at the operator boundary.
 
 **Label/type colon whitespace.** openCypher permits whitespace around the colon
 in the label and relationship-type positions, so `(dur2: Duration2)`,

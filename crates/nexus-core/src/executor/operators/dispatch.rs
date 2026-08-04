@@ -141,6 +141,7 @@ impl Executor {
                 rel_var,
                 optional,
                 target_labels,
+                iso_scope,
             } => {
                 self.execute_expand(
                     context,
@@ -151,6 +152,7 @@ impl Executor {
                     rel_var,
                     *optional,
                     target_labels,
+                    *iso_scope,
                     None, // Cache not available at this level
                 )?;
             }

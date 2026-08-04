@@ -417,6 +417,24 @@ pub enum Operator {
         /// `dynamic_label_sentinel_in_match_defers_to_a_filter`). Empty
         /// when the target node carries no inline label predicate.
         target_labels: Vec<String>,
+        /// Relationship-isomorphism scope: the id of the `MATCH` clause this
+        /// hop belongs to, or `None` when the rule cannot bind here.
+        ///
+        /// Cypher forbids two relationship slots of ONE clause binding the
+        /// same relationship, and scopes the rule to the clause — it spans
+        /// comma-separated pattern parts (which live in the same `Pattern`)
+        /// and must NOT span separate `MATCH` clauses (separate `Pattern`s).
+        /// Carrying the scope on the operator, rather than deriving it from
+        /// where scans happen to fall, is what makes that boundary explicit:
+        /// `planner/queries/cost.rs` bucket-sorts the operator list, so a
+        /// positional marker operator cannot survive planning.
+        ///
+        /// `None` when the clause has fewer than two single-hop relationship
+        /// slots, i.e. when the rule is vacuous. That keeps the row shape of
+        /// every single-hop pattern byte-identical, which matters: the
+        /// bookkeeping key below is an extra row entry, and
+        /// `execute_optional_filter` groups by every non-optional row key.
+        iso_scope: Option<u32>,
     },
     /// Project columns
     Project {

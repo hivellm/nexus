@@ -23,6 +23,7 @@ mod parser_literals_test;
 mod parser_precedence_test;
 mod path_function_semantics_test;
 mod phase4_cypher_parity_quick_wins_test;
+mod relationship_isomorphism_test;
 mod return_where_tests;
 mod side_effect_counting_test;
 mod skip_pattern_queries_test;

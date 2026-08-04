@@ -22,6 +22,33 @@ use std::collections::HashMap;
 /// output.
 const ANON_REL_IDENTITY_KEY: &str = "__nexus_anon_rel_identity";
 
+/// Row key holding the ids of the relationships one `MATCH` clause's pattern
+/// has already consumed, so a later hop of the SAME clause can refuse to bind
+/// one of them again (Cypher relationship isomorphism).
+///
+/// Keyed by the clause scope carried on `Operator::Expand::iso_scope`, so the
+/// set can never leak into a different clause and no reset step exists to be
+/// missed or reordered by the planner's operator bucket-sort. Internal-only,
+/// like [`ANON_REL_IDENTITY_KEY`]: not a name Cypher can bind, and only
+/// user-declared variables are ever projected.
+///
+/// Every consumer that walks raw row keys must skip `__`-prefixed entries —
+/// `execute_optional_filter` groups by every non-optional row key, so treating
+/// this one as data fragments its groups and turns one NULL-padded row into
+/// one per rejected candidate.
+fn iso_scope_key(scope: u32) -> String {
+    format!("__nexus_iso_rels_{scope}")
+}
+
+/// Relationship ids already consumed by `scope` on this row. Empty when the
+/// row carries no entry for the scope, which is the first hop's case.
+fn iso_consumed_ids(row: &HashMap<String, Value>, scope: u32) -> Vec<u64> {
+    match row.get(&iso_scope_key(scope)) {
+        Some(Value::Array(ids)) => ids.iter().filter_map(Value::as_u64).collect(),
+        _ => Vec::new(),
+    }
+}
+
 impl Executor {
     /// Execute Expand operator
     #[allow(clippy::too_many_arguments)]
@@ -40,6 +67,7 @@ impl Executor {
         rel_var: &str,
         optional: bool,
         target_labels: &[String],
+        iso_scope: Option<u32>,
         cache: Option<&crate::cache::MultiLayerCache>,
     ) -> Result<()> {
         // Resolve the target node's inline label predicate ONCE per Expand
@@ -246,6 +274,19 @@ impl Executor {
                             // ever projected.
                             let relationship_value = self.read_relationship_as_value(&rel_info)?;
                             new_row.insert(ANON_REL_IDENTITY_KEY.to_string(), relationship_value);
+                        }
+
+                        // A source-less scan builds its rows from nothing, so it
+                        // is always its clause's FIRST hop — there is nothing to
+                        // reject against, only a scope to seed for the hops that
+                        // chain off `target_var`. (Every later hop has a bound
+                        // source: the planner names an anonymous intermediate node
+                        // `__tmp_N` rather than leaving `source_var` empty.)
+                        if let Some(scope) = iso_scope {
+                            new_row.insert(
+                                iso_scope_key(scope),
+                                Value::Array(vec![Value::from(rel_info.id)]),
+                            );
                         }
 
                         push_with_row_cap(&mut expanded_rows, new_row, "Expand (source-less)")?;
@@ -491,7 +532,29 @@ impl Executor {
                     // clause and `a` has KNOWS relationships, just not to
                     // that `c`) — openCypher TCK `triadicSelection`.
                     let mut matched_for_this_source = false;
+                    // Relationships an EARLIER hop of this same clause already
+                    // bound on this row. Read once per source: the set is a
+                    // property of the incoming row, not of the candidate.
+                    let iso_consumed: Vec<u64> = match iso_scope {
+                        Some(scope) => iso_consumed_ids(row, scope),
+                        None => Vec::new(),
+                    };
                     for (rel_idx, rel_info) in filtered_relationships.iter().enumerate() {
+                        // Cypher relationship isomorphism: two relationship
+                        // slots of ONE clause never bind the same relationship.
+                        // Rejecting here (rather than post-filtering) keeps
+                        // `matched_for_this_source` honest, so an OPTIONAL
+                        // clause whose every candidate is rejected NULL-pads
+                        // its row exactly like any other no-match.
+                        if !iso_consumed.is_empty() && iso_consumed.contains(&rel_info.id) {
+                            tracing::trace!(
+                                "Expand: skipping relationship {} (rel_id: {}) - already bound by an earlier hop of this MATCH clause",
+                                rel_idx + 1,
+                                rel_info.id
+                            );
+                            continue;
+                        }
+
                         let target_id = match direction {
                             Direction::Outgoing => rel_info.target_id,
                             Direction::Incoming => rel_info.source_id,
@@ -603,6 +666,16 @@ impl Executor {
                             let relationship_value = self
                                 .read_relationship_as_value_with_store(&expand_store, rel_info)?;
                             new_row.insert(rel_var.to_string(), relationship_value);
+                        }
+                        // Record this hop's relationship against the clause
+                        // scope so the NEXT hop of the same clause can reject
+                        // it. Anonymous slots are covered too — the id comes
+                        // from the candidate, not from a bound variable.
+                        if let Some(scope) = iso_scope {
+                            let mut ids: Vec<Value> =
+                                iso_consumed.iter().map(|id| Value::from(*id)).collect();
+                            ids.push(Value::from(rel_info.id));
+                            new_row.insert(iso_scope_key(scope), Value::Array(ids));
                         }
 
                         tracing::trace!(

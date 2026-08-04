@@ -443,7 +443,19 @@ impl Executor {
         let all_vars: std::collections::HashSet<&String> =
             rows.first().map(|r| r.keys().collect()).unwrap_or_default();
         let optional_set: std::collections::HashSet<&String> = optional_vars.iter().collect();
-        let mandatory_vars: Vec<&String> = all_vars.difference(&optional_set).cloned().collect();
+        // `all_vars` is every RAW row key, which includes the executor's own
+        // `__`-prefixed bookkeeping entries (the relationship-isomorphism scope
+        // written by `execute_expand`, the anonymous-relationship identity).
+        // Those are not query variables and must never key a group: their value
+        // varies per candidate row, so grouping by them splits one group into
+        // one-per-candidate, and each singleton group with no passing row emits
+        // its own NULL-padded row — turning the single row OPTIONAL MATCH
+        // promises into one per rejected candidate.
+        let mandatory_vars: Vec<&String> = all_vars
+            .difference(&optional_set)
+            .filter(|var| !var.starts_with("__"))
+            .cloned()
+            .collect();
 
         // Helper to create a group key from mandatory variables
         let make_group_key = |row: &HashMap<String, Value>| -> String {

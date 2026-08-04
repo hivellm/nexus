@@ -404,6 +404,10 @@ impl<'a> QueryPlanner<'a> {
             first_is_optional,
             operators,
             already_bound, // vars carried in from a prior WITH segment anchor the first Expand
+            // `select_start_pattern` always returns `patterns[0]`, and the
+            // additional-pattern loop below skips index 0, so scope 0 is this
+            // clause's and only this clause's.
+            0,
         )?;
 
         // Track variables bound by the first pattern (for OPTIONAL MATCH
@@ -574,6 +578,9 @@ impl<'a> QueryPlanner<'a> {
                 *is_optional,
                 operators,
                 &previously_bound_vars,
+                // One `Pattern` per MATCH clause (the parser flattens comma
+                // parts into one), so the index IS the clause identity.
+                pattern_idx as u32,
             )?;
         }
 
