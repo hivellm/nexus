@@ -503,6 +503,28 @@ CREATE (a)-[:KNOWS]->(b:Person {name: 'Bob'})
 RETURN a, b, c
 ```
 
+**A property written with a `null` value is ABSENT, not present-and-null.** The
+key is never stored, on nodes and relationships alike, and the `+properties`
+counter agrees because it is derived from the same filtered map:
+
+```cypher
+CREATE (n {id: 12, name: null})
+RETURN keys(n)                    -- ['id'] — no 'name' key at all
+                                  -- side effects: +properties 1
+```
+
+Reading it back is indistinguishable from a stored null (`n.name IS NULL` is
+`true` either way) — `keys(n)` / `properties(n)` are what reveal the difference.
+The same rule governs the update paths: `SET n.p = null` and `SET n += {p: null}`
+**remove** an existing key (`-properties 1`) and are a no-op on an absent one, and
+a whole-entity replace (`SET n = {…}`) never stores a null-valued key. Records
+written by earlier versions may still carry a null-valued key on disk; reads
+tolerate them, and nothing rewrites them.
+
+A `null` in a `MERGE` pattern is a different matter — it makes the pattern
+unsatisfiable rather than absent, so `MERGE (n {name: null})` is rejected
+("Cannot merge node using null property value"), matching Neo4j.
+
 **Inline node creation in relationship patterns (MATCH…CREATE).** When a node appears in a relationship
 pattern within a `CREATE` clause following a `MATCH`, it is created inline during the relationship
 write if the node's variable is unbound. The node is written immediately before the relationship,

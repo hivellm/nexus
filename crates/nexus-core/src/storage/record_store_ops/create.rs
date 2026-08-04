@@ -6,6 +6,32 @@ use crate::storage::property_store;
 use crate::storage::record_store::RecordStore;
 use crate::storage::records::{NodeRecord, RelationshipRecord};
 
+/// Drop every top-level key whose value is `null` from an inline property map.
+///
+/// openCypher treats a map key written with a null value as **absent**:
+/// `CREATE (n {id: 12, name: null})` yields a node whose `keys(n)` is `["id"]`
+/// and reports `+properties 1`. Only the counter used to implement that rule —
+/// it filtered nulls for itself while the UNFILTERED map went on to
+/// `store_properties`, so the graph state contradicted the count that reported
+/// it, and `keys(n)` returned a phantom `"name"`.
+///
+/// Applied here, at the storage write, because that is the one point every
+/// inline-property create path crosses (node with or without an external id,
+/// relationship) and the only place the rule is observable. Top-level keys only:
+/// a `null` ELEMENT inside a list-valued property is a different question, and
+/// this rule does not speak to it.
+///
+/// Reads stay tolerant of null-valued keys already on disk from earlier
+/// versions — nothing here rewrites existing records.
+fn strip_null_valued_keys(properties: serde_json::Value) -> serde_json::Value {
+    match properties {
+        serde_json::Value::Object(map) => {
+            serde_json::Value::Object(map.into_iter().filter(|(_, v)| !v.is_null()).collect())
+        }
+        other => other,
+    }
+}
+
 impl RecordStore {
     /// Create a new node
     pub fn create_node(
@@ -119,18 +145,19 @@ impl RecordStore {
         policy: ConflictPolicy,
         catalog: Option<&crate::catalog::Catalog>,
     ) -> Result<u64> {
+        // openCypher: a map key written with a NULL value is ABSENT, not present
+        // and null. Strip those keys from the map itself, before anything can
+        // persist them — see [`strip_null_valued_keys`].
+        let properties = strip_null_valued_keys(properties);
         // Side-effect count (openCypher TCK `+properties`): captured before
         // `properties` may be moved into `store_properties` on either path.
         // Added to `properties_created` only where a record is actually
         // written (never on a `ConflictPolicy::Match`/`Replace` that resolves
-        // to an existing node).
-        // openCypher `+properties` skips null-valued map keys: `CREATE (n
-        // {id: 12, name: null})` is `+properties 1`, because a property set to
-        // null is absent. Count only non-null values.
-        let inline_prop_count = properties
-            .as_object()
-            .map(|m| m.values().filter(|v| !v.is_null()).count() as u64)
-            .unwrap_or(0);
+        // to an existing node). Derived from the already-filtered map, so the
+        // count and the stored bytes cannot disagree — they used to, because
+        // this counter carried its own private null filter while the unfiltered
+        // map went to storage.
+        let inline_prop_count = properties.as_object().map(|m| m.len() as u64).unwrap_or(0);
         // ── External-id path ──────────────────────────────────────────────────
         //
         // peek-then-allocate:
@@ -303,21 +330,17 @@ impl RecordStore {
 
         let mut record = RelationshipRecord::new(from, to, type_id);
 
+        // A null-valued key is absent here exactly as on the node path above.
+        let properties = strip_null_valued_keys(properties);
         // Phase 1 Optimization: Batch property storage check (avoid multiple is_object checks)
         let has_properties = properties.is_object()
             && properties
                 .as_object()
                 .map(|m| !m.is_empty())
                 .unwrap_or(false);
-        // Side-effect count (openCypher TCK `+properties`): captured before
-        // `properties` is moved into `store_properties` below.
-        // openCypher `+properties` skips null-valued map keys: `CREATE (n
-        // {id: 12, name: null})` is `+properties 1`, because a property set to
-        // null is absent. Count only non-null values.
-        let inline_prop_count = properties
-            .as_object()
-            .map(|m| m.values().filter(|v| !v.is_null()).count() as u64)
-            .unwrap_or(0);
+        // Side-effect count (openCypher TCK `+properties`), derived from the
+        // filtered map so it cannot disagree with what is stored.
+        let inline_prop_count = properties.as_object().map(|m| m.len() as u64).unwrap_or(0);
 
         // Store properties first to get property pointer (if needed)
         record.prop_ptr = if has_properties {

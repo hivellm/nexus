@@ -20,6 +20,7 @@ mod merge_relationship_arrow_direction_test;
 mod multi_clause_match_binding_test;
 mod new_functions_test;
 mod null_comparison_tests;
+mod null_property_write_semantics_test;
 mod parser_literals_test;
 mod parser_precedence_test;
 mod path_function_semantics_test;

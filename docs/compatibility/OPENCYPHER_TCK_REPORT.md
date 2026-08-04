@@ -18,7 +18,7 @@ exercise) or the scenario was skip-listed. Skips are counted, never hidden.
 
 ## Totals
 
-**3868 scenarios — 1831 passed (47.3%), 1966 failed, 71 skipped.**
+**3868 scenarios — 1830 passed (47.3%), 1967 failed, 71 skipped.**
 
 ## Per-category
 
@@ -38,7 +38,7 @@ exercise) or the scenario was skip-listed. Skips are counted, never hidden.
 | `clauses/union` | 8 | 4 | 0 | 12 | 66.7% |
 | `clauses/unwind` | 7 | 7 | 0 | 14 | 50.0% |
 | `clauses/with` | 9 | 20 | 0 | 29 | 31.0% |
-| `clauses/with-orderBy` | 92 | 200 | 0 | 292 | 31.5% |
+| `clauses/with-orderBy` | 90 | 202 | 0 | 292 | 30.8% |
 | `clauses/with-skip-limit` | 5 | 4 | 0 | 9 | 55.6% |
 | `clauses/with-where` | 13 | 6 | 0 | 19 | 68.4% |
 | `expressions/aggregation` | 17 | 17 | 1 | 35 | 48.6% |
@@ -46,7 +46,7 @@ exercise) or the scenario was skip-listed. Skips are counted, never hidden.
 | `expressions/comparison` | 44 | 28 | 0 | 72 | 61.1% |
 | `expressions/conditional` | 13 | 0 | 0 | 13 | 100.0% |
 | `expressions/existentialSubqueries` | 9 | 1 | 0 | 10 | 90.0% |
-| `expressions/graph` | 25 | 33 | 3 | 61 | 41.0% |
+| `expressions/graph` | 26 | 32 | 3 | 61 | 42.6% |
 | `expressions/list` | 96 | 89 | 0 | 185 | 51.9% |
 | `expressions/literals` | 102 | 29 | 0 | 131 | 77.9% |
 | `expressions/map` | 18 | 17 | 9 | 44 | 40.9% |
@@ -61,7 +61,7 @@ exercise) or the scenario was skip-listed. Skips are counted, never hidden.
 | `expressions/typeConversion` | 20 | 27 | 0 | 47 | 42.6% |
 | `useCases/countingSubgraphMatches` | 11 | 0 | 0 | 11 | 100.0% |
 | `useCases/triadicSelection` | 19 | 0 | 0 | 19 | 100.0% |
-| **total** | **1831** | **1966** | **71** | **3868** | **47.3%** |
+| **total** | **1830** | **1967** | **71** | **3868** | **47.3%** |
 
 ## Skip-list (deliberately un-evaluated)
 
