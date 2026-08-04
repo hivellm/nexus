@@ -53,15 +53,22 @@
     `clauses/create` +1 and `clauses/match` +1 gained, `clauses/merge` −1 and
     `clauses/return` −1 lost; total 1820 before and after. `clauses/match-where` —
     the category the reverted isomorphism attempt regressed — stayed at 28.
-  - The two −1s are **not confirmed noise and not confirmed regression.** Argument
-    for noise: both categories took both values across earlier builds that lack this
-    change (`merge` 24 in one run, 25 in two others; `return` 29 in three runs, 30 in
-    one). Argument for concern: many failing `merge` scenarios use
-    `MATCH (a), (b)` / `CREATE (a), (b)` with unlabelled nodes — exactly the shape
-    this change newly gives a scan to — and both reproduced across two runs of the
-    new build. **Open item: revert-A/B the lowering change and check whether `merge`
-    returns to 25 and `return` to 30.** That is the test that settled the earlier
-    `match-where` question and it was not run here for budget reasons.
+  - **Both −1s resolved by revert-A/B — neither is a regression. Net: +2, zero
+    regressions.** With the lowering change disabled in place: `create` 46 and
+    `match` 139 (so both +1 are genuinely this change's), `merge` **24 either way**
+    (the −1 was noise), `return` 30 vs 29.
+  - The `return` −1 was then root-caused rather than filed as noise. Diffing the
+    failing scenario names across the two runs identifies exactly one newcomer:
+    `[9] Returning a projected map`, whose query is `RETURN {a: 1, b: 'foo'}` — **no
+    `MATCH` at all**, so this lowering change cannot reach it. It fails on column-name
+    key order: `"{b: 'foo', a: 1}"` vs `"{a: 1, b: 'foo'}"`.
+  - **Newly identified noise source, worth its own fix:** `Expression::Map` is a
+    `HashMap<String, Expression>`, so `expression_to_string` renders a map literal's
+    keys in arbitrary order, and the unaliased column name is nondeterministic
+    run-to-run. That is why `clauses/return` oscillates 29↔30. The map literal's
+    column name should preserve source order — it needs an order-preserving map in
+    the AST (or a sorted render, which would be deterministic but still not match the
+    source). Not fixed here; it is unrelated to this task's subject.
 - [ ] 1.4 Confirm D3 is closed by 1.2 now that D1 no longer masks it: isomorphism
       must NOT apply across separate `MATCH` clauses.
       **Done when:** on the one-relationship fixture,
