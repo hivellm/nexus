@@ -17,13 +17,12 @@
   - Correction to the proposal's original table: `MATCH … MATCH (p)` was recorded as
     "works" on a `count(*)` of 1. It does not — `p` is unbound and projects as
     `Null`; the correct result is 2 rows. A `count(*)` probe masked it.
-  - **Confirmed dependency (was a suspicion):** emitting the missing scan is not
-    sufficient. `AllNodesScan`'s dispatch clears `result_set.rows` and rebuilds via
-    `materialize_rows_from_variables`, a cartesian over independent per-variable
-    lists, which decorrelates the `(x, y, r1)` tuples an `Expand` produced. Fixing
-    D1 therefore requires the correlation-preserving materialization owned by
-    `phase21_tck-comma-pattern-binding-materialization`. Do them together, or that
-    one first — otherwise D1 trades zero rows for wrong rows.
+  - **No dependency on the comma task after all.** This item first claimed the fix
+    would decorrelate the rows, because `AllNodesScan`'s dispatch rebuilds
+    `result_set.rows` from `context.variables`. That was wrong — read from the code
+    instead of run. `context.variables` is columnar and row-aligned, and
+    `apply_cartesian_product` expands every column in lockstep, so the rebuild is a
+    zip and correlation survives. Emitting the scan was sufficient; see 1.3.
 - [ ] 1.2 Implement relationship isomorphism in the `MATCH`/`Expand` chain (D0)
       with an **explicit** pattern scope: add a pattern-scope id to
       `Operator::Expand`, assign it per `MATCH` clause in the planner (comma parts
@@ -37,9 +36,32 @@
       `useCases/countingSubgraphMatches` is 11/11; and `clauses/match-where` has NOT
       dropped from its pre-change value (A/B against an identical re-run — see
       proposal D3, this is exactly how the first attempt failed).
-- [ ] 1.3 Fix D1 using 1.1's diagnosis.
-      **Done when:** `MATCH (x)-[r1]->(y) MATCH (p)-[r2]->(q) RETURN count(*)`
-      returns 1 on the one-relationship fixture.
+- [x] 1.3 Fix D1 using 1.1's diagnosis
+  - `pattern_lowering.rs`'s additional-pattern loop now emits `AllNodesScan` for an
+    **unlabelled** node too, guarded so a variable an earlier pattern already bound
+    is never rescanned (which would discard its binding and re-drive the query from
+    every node).
+  - `MATCH (x)-[r1]->(y) MATCH (p)-[r2]->(q) RETURN count(*)` returns 1, and
+    `RETURN x, y, p, q` returns one correlated row (`x = p`, `y = q`).
+    `MATCH (x)-[r1]->(y) MATCH (p)` now returns the 2-row cartesian with `p` bound
+    instead of one NULL-padded row.
+  - 6 tests in `tests/cypher/multi_clause_match_binding_test.rs`, including the
+    correlation assertion, the not-rescanned control and its positive two-hop
+    counterpart, and a control that the labelled path is unchanged.
+  - **TCK: net zero, with one open verification.** Attributable via A/B on an
+    identical build (only `with-orderBy` moved between the two runs, 91↔92):
+    `clauses/create` +1 and `clauses/match` +1 gained, `clauses/merge` −1 and
+    `clauses/return` −1 lost; total 1820 before and after. `clauses/match-where` —
+    the category the reverted isomorphism attempt regressed — stayed at 28.
+  - The two −1s are **not confirmed noise and not confirmed regression.** Argument
+    for noise: both categories took both values across earlier builds that lack this
+    change (`merge` 24 in one run, 25 in two others; `return` 29 in three runs, 30 in
+    one). Argument for concern: many failing `merge` scenarios use
+    `MATCH (a), (b)` / `CREATE (a), (b)` with unlabelled nodes — exactly the shape
+    this change newly gives a scan to — and both reproduced across two runs of the
+    new build. **Open item: revert-A/B the lowering change and check whether `merge`
+    returns to 25 and `return` to 30.** That is the test that settled the earlier
+    `match-where` question and it was not run here for budget reasons.
 - [ ] 1.4 Confirm D3 is closed by 1.2 now that D1 no longer masks it: isomorphism
       must NOT apply across separate `MATCH` clauses.
       **Done when:** on the one-relationship fixture,

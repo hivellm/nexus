@@ -25,13 +25,13 @@ exercise) or the scenario was skip-listed. Skips are counted, never hidden.
 | Category | Pass | Fail | Skip | Total | Pass % |
 |---|---:|---:|---:|---:|---:|
 | `clauses/call` | 0 | 2 | 50 | 52 | 0.0% |
-| `clauses/create` | 46 | 32 | 0 | 78 | 59.0% |
+| `clauses/create` | 47 | 31 | 0 | 78 | 60.3% |
 | `clauses/delete` | 7 | 34 | 0 | 41 | 17.1% |
-| `clauses/match` | 139 | 212 | 1 | 352 | 39.5% |
+| `clauses/match` | 140 | 211 | 1 | 352 | 39.8% |
 | `clauses/match-where` | 28 | 6 | 0 | 34 | 82.4% |
-| `clauses/merge` | 25 | 47 | 3 | 75 | 33.3% |
+| `clauses/merge` | 24 | 48 | 3 | 75 | 32.0% |
 | `clauses/remove` | 6 | 27 | 0 | 33 | 18.2% |
-| `clauses/return` | 30 | 32 | 1 | 63 | 47.6% |
+| `clauses/return` | 29 | 33 | 1 | 63 | 46.0% |
 | `clauses/return-orderby` | 21 | 13 | 1 | 35 | 60.0% |
 | `clauses/return-skip-limit` | 18 | 13 | 0 | 31 | 58.1% |
 | `clauses/set` | 17 | 34 | 2 | 53 | 32.1% |

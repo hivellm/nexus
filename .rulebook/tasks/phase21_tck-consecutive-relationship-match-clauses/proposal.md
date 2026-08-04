@@ -45,19 +45,26 @@ because `p` is left **unbound** and projects as `Null`; the correct answer on th
 fixture is 2 rows (the cartesian with both nodes). Verified:
 `MATCH (x)-[r1]->(y) MATCH (p) RETURN x, p` → one row, `p = Null`.
 
-**Why the fix is not just "emit the missing scan".** `Operator::AllNodesScan` does
-apply a cartesian product when `context.variables` is non-empty, but its dispatch
-clears `result_set.rows` and rebuilds them with
-`materialize_rows_from_variables` — a cartesian over *independent per-variable
-lists*. `x`, `y` and `r1` are correlated tuples produced by an `Expand`, so
-rebuilding them from independent lists **decorrelates** them. Emitting the scan
-without fixing that would trade zero rows for wrong rows.
+**Fix: emit the missing scan. That was sufficient — CORRECTING an earlier claim in
+this file.** An earlier revision of this proposal asserted that emitting the scan
+would decorrelate the rows, because `AllNodesScan`'s dispatch clears
+`result_set.rows` and rebuilds them via `materialize_rows_from_variables`. That was
+wrong, and it was wrong from reading the code instead of running it.
+`context.variables` is a **columnar, row-aligned** set: `apply_cartesian_product`
+expands every existing column in lockstep with the new one, so materialising rows
+from it is a zip and correlation is preserved.
 
-That correlation-preserving materialization is precisely the scope of
-`phase21_tck-comma-pattern-binding-materialization` (still pending), so the
-dependency between the two tasks is now **confirmed, not suspected**: do them
-together, or do the comma task first. Also related: the recorded `Expand`
-required-partial-binding leak.
+Verified after the fix on the one-relationship fixture:
+`MATCH (x)-[r1]->(y) MATCH (p)-[r2]->(q) RETURN x, y, p, q` returns exactly one row
+with `x = p = :A` and `y = q = :B`; `MATCH (x)-[r1]->(y) MATCH (p) RETURN x, p`
+returns the 2-row cartesian with `x` bound in both. So there was **no dependency on
+`phase21_tck-comma-pattern-binding-materialization`** for D1 — that suspicion, twice
+recorded here, was unfounded. Fixed by adding the missing `AllNodesScan` for an
+unlabelled node in the additional-pattern loop, guarded so a variable an earlier
+pattern already bound is never rescanned.
+
+Still possibly related for the *comma* task's own OPTIONAL-MATCH-rebinding symptom:
+the recorded `Expand` required-partial-binding leak.
 
 ### D2 — Relationship isomorphism is not enforced across comma-separated parts
 

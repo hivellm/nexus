@@ -458,7 +458,28 @@ impl<'a> QueryPlanner<'a> {
                             continue;
                         }
 
-                        if !node.labels.is_empty() {
+                        // An UNLABELLED node in an additional pattern still needs
+                        // a driving scan. Without one nothing ever binds it: as an
+                        // `Expand` source it makes `execute_expand` find no
+                        // `source_var` in the row and drop every row (so
+                        // `MATCH (x)-[r1]->(y) MATCH (p)-[r2]->(q)` returned no
+                        // rows at all), and as a bare node it stays unbound and
+                        // projects as NULL (so `MATCH (x)-[r1]->(y) MATCH (p)`
+                        // returned one NULL-padded row instead of the cartesian).
+                        // The first pattern's lowering already emits `AllNodesScan`
+                        // here; only this loop was missing it.
+                        //
+                        // A variable an earlier pattern already bound must NOT be
+                        // rescanned — that would discard its binding and re-drive
+                        // the query from every node (`MATCH (a)-[r]->(b)
+                        // MATCH (b)-[r2]->(c)` must keep `b`).
+                        if node.labels.is_empty() {
+                            if !previously_bound_vars.contains(variable) {
+                                operators.push(Operator::AllNodesScan {
+                                    variable: variable.clone(),
+                                });
+                            }
+                        } else {
                             let first_label = &node.labels[0];
 
                             if first_label.starts_with('$') {
