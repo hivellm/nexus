@@ -73,6 +73,21 @@
       scopes, since `select_start_pattern` may not return `patterns_local[0]` while the
       loop unconditionally skips index 0.
 
+      **First hypothesis to test — a pattern may be lowered TWICE.**
+      `pattern_lowering.rs` lowers `select_start_pattern(&patterns_only)` as the
+      start pattern, then loops `patterns_local` skipping `pattern_idx == 0`
+      *unconditionally*. If `select_start_pattern` returns anything other than index
+      0 — plausible here, since the relationship-bearing `OPTIONAL MATCH (n)-[r]-(m)`
+      is the better driver over a bare `(n:Single)` — then index 0 is never lowered
+      and the chosen pattern is lowered twice: once as start (scope 0) and once in the
+      loop (scope 1). Two `Expand`s for one clause, in two different scopes, would
+      explain both the duplicate rows AND why per-clause scoping did not help. Verify
+      by dumping `EXPLAIN` for
+      `MATCH (n:Single) OPTIONAL MATCH (n)-[r]-(m) WHERE m:NonExistent RETURN r` and
+      counting the `Expand` operators — if there are two, fix the start-pattern /
+      loop-index mismatch first and re-measure before touching isomorphism at all.
+      This was derived by reading the code, NOT verified — treat it as a lead.
+
       **The next attempt needs a test for these three shapes FIRST.** The
       `OPTIONAL MATCH` control written for attempt three passed while the corpus
       regressed, because it used a one-edge graph and a directed slot; the TCK shapes
