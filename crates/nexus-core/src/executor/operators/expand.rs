@@ -170,8 +170,15 @@ impl Executor {
                     };
 
                     // For bidirectional patterns, return each relationship twice (once for each direction)
+                    // — except a self-loop, whose two orientations are the same
+                    // binding (source and target are the same node), so emitting
+                    // both would count it twice and inflate every undirected
+                    // count over a looping node.
                     let directions_to_emit = match direction {
                         Direction::Outgoing | Direction::Incoming => vec![direction],
+                        Direction::Both if rel_record.src_id == rel_record.dst_id => {
+                            vec![Direction::Outgoing]
+                        }
                         Direction::Both => vec![Direction::Outgoing, Direction::Incoming],
                     };
 

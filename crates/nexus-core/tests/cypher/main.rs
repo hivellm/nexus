@@ -54,6 +54,7 @@ mod test_temporal_arithmetic;
 mod test_where_in;
 mod three_valued_logic_test;
 mod unbounded_alloc_guard_test;
+mod undirected_self_loop_counting_test;
 mod unwind_tests;
 mod where_case_comprehension_predicate_test;
 mod where_in_prefix_param_index_seek_test;

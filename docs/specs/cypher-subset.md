@@ -102,6 +102,29 @@ Variable ::= Identifier
 Type ::= Identifier ( '|' Identifier )*  -- single type or union (e.g. :R, :R1|R2|R3)
 ```
 
+**Undirected matching over a self-loop.** A self-loop's two orientations are the
+same binding — its source and target are the same node — so an undirected slot
+matches it **once**:
+
+```cypher
+CREATE (l:Looper)-[:LOOP]->(l)
+MATCH ()-[]-() RETURN count(*)      -- 1, not 2
+MATCH (l:Looper)--() RETURN count(*) -- 1
+```
+
+An ordinary relationship genuinely has two orientations under an undirected slot
+and still yields both, so `MATCH ()-[]-()` over `(a)-[:T]->(b)` counts 2.
+
+> **Known gap: relationship isomorphism is NOT enforced in `MATCH`.** Cypher
+> requires that two relationship slots of one pattern never bind the same
+> relationship. Nexus enforces this inside `EXISTS { … }` and pattern
+> comprehensions, but **not** in the `MATCH` pipeline, so a pattern that walks back
+> over the edge it arrived on is currently matched:
+> `MATCH (x)-[]-(y)-[]-(z)` over a single relationship returns 2 rows where
+> conformant Cypher returns none. Undirected multi-hop counts are inflated
+> accordingly. Tracked by
+> `phase21_tck-consecutive-relationship-match-clauses`.
+
 **Label/type colon whitespace.** openCypher permits whitespace around the colon
 in the label and relationship-type positions, so `(dur2: Duration2)`,
 `(v : A : B)` and `-[r: KNOWS]->` are all accepted and equivalent to their
