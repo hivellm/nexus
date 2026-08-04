@@ -154,6 +154,31 @@ fn build_normalized(
 /// steps, and `in_months`) actually re-anchors a calendar date against
 /// itself (`add_months_clamped`), where the choice of anchor is not just
 /// a re-labelling.
+///
+/// ## Named-zone donation
+///
+/// An operand with NO offset of its own (`date`/`localtime`/
+/// `localdatetime`) paired against a `datetime` that carries a REAL named
+/// zone (not just a fixed numeric offset — see
+/// [`temporal_value::zone_name`]) does not simply compare bare local
+/// fields the way it does against a fixed-offset partner: it resolves its
+/// OWN effective offset through that SAME zone first (borrowing the
+/// zoned operand's date when the offset-less side itself has none),
+/// exactly the way a bare `LocalDateTime` gains a real, DST-correct
+/// offset the instant it's combined with a `ZoneId` in java.time. This
+/// matters only when the zone's offset actually differs between the two
+/// operands' wall-clock readings (a DST transition falls between them);
+/// donating a FIXED numeric offset instead would always net a zero shift
+/// (donating `X` to a partner and then computing `X - X` cancels
+/// regardless of `X`'s value), which is exactly the pre-existing "compare
+/// bare local fields" behavior already verified against every
+/// non-zoned `Temporal10.feature` fixture — so this is a value-preserving
+/// generalization, not a behavior change, for every pair that doesn't
+/// involve a named zone. Verified against `Temporal10.feature` scenario
+/// [8]'s six-row "daylight saving time day" table (each row donates in a
+/// different direction/shape: `datetime`+`localdatetime`,
+/// `datetime`+`localtime`, `localdatetime`+`datetime`,
+/// `localtime`+`datetime`, `date`+`datetime`, `datetime`+`date`).
 fn normalize_pair(
     a: &Value,
     b: &Value,
@@ -175,8 +200,15 @@ fn normalize_pair(
     let b_date = temporal_value::date_components(&b);
     let a_time = temporal_value::time_components(&a).unwrap_or((0, 0, 0, 0));
     let b_time = temporal_value::time_components(&b).unwrap_or((0, 0, 0, 0));
-    let a_offset = temporal_value::offset_seconds(&a);
-    let b_offset = temporal_value::offset_seconds(&b);
+    let mut a_offset = temporal_value::offset_seconds(&a);
+    let mut b_offset = temporal_value::offset_seconds(&b);
+
+    if a_offset.is_none() {
+        a_offset = donate_offset_via_named_zone(&b, a_date, b_date, a_time);
+    }
+    if b_offset.is_none() {
+        b_offset = donate_offset_via_named_zone(&a, b_date, a_date, b_time);
+    }
 
     let use_offset = a_offset.is_some() && b_offset.is_some();
 
@@ -195,6 +227,46 @@ fn normalize_pair(
     };
 
     Ok(Some((dates, a_norm, b_norm)))
+}
+
+/// If `donor` is a `datetime` carrying a real named zone, resolves
+/// `own_date` (falling back to `donor_date` when the recipient itself has
+/// no date part) and `own_time` through that zone via chrono-tz, returning
+/// the DST-correct effective offset. Returns `None` (no donation — the
+/// recipient then keeps comparing via bare local fields, the pre-existing
+/// behavior) when `donor` doesn't carry a named zone at all, OR when
+/// resolving it fails for any reason — most notably an unresolvable zone
+/// name. That specifically covers a value re-derived from a STORED
+/// property string via [`retag_instant`]/`temporal_retag::retag_canonical_string`:
+/// the retag path's bracket parsing does not validate the zone name is a
+/// real IANA identifier (unlike the map/string CONSTRUCTOR paths — see
+/// `temporal_retag::is_valid_named_zone`'s doc comment for why that
+/// asymmetry exists), so a property already sitting in storage as
+/// `'...Z[Bogus/Zone]'` retags into a tagged `datetime` carrying that
+/// unresolvable name. `duration.between` reading such a value back must
+/// degrade gracefully (comparing bare local fields, exactly as it would
+/// for a fixed-offset partner), never hard-error a query over data that
+/// was already written — a best-effort DST refinement is not something a
+/// stored value's unrelated corruption should be able to break.
+fn donate_offset_via_named_zone(
+    donor: &Value,
+    own_date: Option<(i32, u32, u32)>,
+    donor_date: Option<(i32, u32, u32)>,
+    own_time: (u32, u32, u32, u32),
+) -> Option<i32> {
+    let zone = temporal_value::zone_name(donor)?;
+    // A `datetime` carrying a zone name always has its own date
+    // (`zone_name` only ever returns `Some` for `TemporalKind::DateTime`,
+    // which `date_components` always resolves) — `own_date.or(donor_date)`
+    // borrows it only when the recipient itself lacks a date
+    // (`localtime`/`time`); this fallback is purely defensive.
+    let (year, month, day) = own_date.or(donor_date)?;
+    let (hour, minute, second, nanosecond) = own_time;
+    let (offset, _) = temporal_retag::resolve_timezone_string(
+        zone, year, month, day, hour, minute, second, nanosecond,
+    )
+    .ok()?;
+    Some(offset)
 }
 
 /// `year*12 + (month-1)`, packed with the day-of-month as a tie-breaker
@@ -406,16 +478,16 @@ mod tests {
     //! `Temporal10.feature` (`crates/nexus-core/tests/tck/opencypher/
     //! features/expressions/temporal/Temporal10.feature`), one `#[test]`
     //! per scenario table, asserting the exact canonical ISO-8601 string
-    //! the TCK's `Then` clause pins. Scenario `[1]`/`[8]` rows that
-    //! construct a `datetime({..., timezone: 'Europe/Stockholm'})` (a
-    //! named IANA zone) are intentionally NOT covered here — resolving a
-    //! named zone to a real UTC offset needs a timezone database this
-    //! codebase does not have wired in yet (a separate, pre-existing gap;
-    //! see `fn_temporal.rs::timezone_from_map`'s doc comment). Scenario
-    //! `[9]`/`[10]` (`date('-999999999-01-01')` / `'+999999999-12-31'`)
-    //! are also out of scope: those years are outside `chrono::NaiveDate`'s
-    //! representable range, so the operand itself cannot be constructed
-    //! regardless of this module's own logic.
+    //! the TCK's `Then` clause pins — including scenario `[1]`'s Stockholm
+    //! `datetime(...)` string-literal pair and scenario `[8]`'s full
+    //! "daylight saving time day" table (see
+    //! `named_zone_donation_tests` below), both of which exercise the
+    //! named-zone offset donation [`super::donate_offset_via_named_zone`]
+    //! implements. Scenario `[9]`/`[10]`
+    //! (`date('-999999999-01-01')` / `'+999999999-12-31'`) remain out of
+    //! scope: those years are outside `chrono::NaiveDate`'s representable
+    //! range, so the operand itself cannot be constructed regardless of
+    //! this module's own logic — unrelated to timezone support.
 
     use super::super::super::engine::Executor;
     use super::*;
@@ -830,5 +902,142 @@ mod tests {
         assert_eq!(in_months(&Value::Null, &Value::Null).unwrap(), Value::Null);
         assert_eq!(in_days(&Value::Null, &Value::Null).unwrap(), Value::Null);
         assert_eq!(in_seconds(&Value::Null, &Value::Null).unwrap(), Value::Null);
+    }
+
+    // ── Named-zone offset donation (Temporal10.feature scenarios [1]/[8]) ──
+
+    #[test]
+    fn between_scenario_1_stockholm_pair_splits_at_a_dst_fall_back_boundary() {
+        // Both operands already carry their own explicit offset (this is
+        // the `datetime('...[Zone]')` STRING form, not the map-constructor
+        // named-zone-donation path) — the zone bracket round-trips through
+        // `temporal_retag::strip_zone_bracket`/`fn_temporal.rs`'s string
+        // constructor, and `zone_name` on both operands is set, but
+        // `normalize_pair`'s donation step never fires here since neither
+        // side lacks its own offset. This exercises the same "a datetime
+        // string literal with a `[Zone]` bracket parses and computes
+        // correctly" surface Temporal10 scenario [1]'s Stockholm rows pin.
+        //
+        // Deliberately NOT run through `assert_between_and_invariant`: `a +
+        // between(a, b)` lands on the exact same UTC instant as `b`
+        // (03:00Z either way) but renders with the OTHER side's offset
+        // (`05:00+02:00` vs. `04:00+01:00`) — re-resolving which offset a
+        // `+`/`-` arithmetic result renders with after crossing a DST
+        // transition is explicitly out of scope for this task (see this
+        // crate's `apply_duration_to_tagged_instant`, which keeps the
+        // operand's own pre-arithmetic offset unconditionally).
+        let a = make_datetime(
+            2017,
+            10,
+            28,
+            23,
+            0,
+            0,
+            0,
+            7200,
+            Some("Europe/Stockholm".into()),
+        );
+        let b = make_datetime(
+            2017,
+            10,
+            29,
+            4,
+            0,
+            0,
+            0,
+            3600,
+            Some("Europe/Stockholm".into()),
+        );
+        assert_eq!(rendered(between(&a, &b)), "PT6H");
+        assert_eq!(rendered(between(&b, &a)), "PT-6H");
+    }
+
+    #[test]
+    fn in_seconds_scenario_8_daylight_saving_time_day() {
+        // openCypher TCK `Temporal10.feature` scenario [8]'s full six-row
+        // table — 29 October 2017 is Stockholm's DST fall-back day
+        // (03:00 CEST -> 02:00 CET). Every row pairs a zoned `datetime`
+        // against an offset-less operand (`localdatetime`/`localtime`/
+        // `date`), each exercising `donate_offset_via_named_zone` from a
+        // different direction/shape.
+        let zoned_hour0 = make_datetime(
+            2017,
+            10,
+            29,
+            0,
+            0,
+            0,
+            0,
+            7200,
+            Some("Europe/Stockholm".into()),
+        );
+        let zoned_hour4 = make_datetime(
+            2017,
+            10,
+            29,
+            4,
+            0,
+            0,
+            0,
+            3600,
+            Some("Europe/Stockholm".into()),
+        );
+
+        let cases: [(Value, Value); 6] = [
+            (
+                zoned_hour0.clone(),
+                make_localdatetime(2017, 10, 29, 4, 0, 0, 0),
+            ),
+            (zoned_hour0.clone(), make_localtime(4, 0, 0, 0)),
+            (
+                make_localdatetime(2017, 10, 29, 0, 0, 0, 0),
+                zoned_hour4.clone(),
+            ),
+            (make_localtime(0, 0, 0, 0), zoned_hour4.clone()),
+            (make_date(2017, 10, 29), zoned_hour4),
+            (zoned_hour0, make_date(2017, 10, 30)),
+        ];
+        let expected = ["PT5H", "PT5H", "PT5H", "PT5H", "PT5H", "PT25H"];
+
+        for ((lhs, rhs), expected) in cases.into_iter().zip(expected) {
+            assert_eq!(
+                rendered(in_seconds(&lhs, &rhs)),
+                expected,
+                "inSeconds({lhs:?}, {rhs:?})"
+            );
+        }
+    }
+
+    #[test]
+    fn donation_is_a_no_op_when_the_donor_has_only_a_fixed_numeric_offset() {
+        // A fixed-offset (unnamed) datetime paired with an offset-less
+        // operand must keep comparing via bare local fields — donating a
+        // CONSTANT offset always nets a zero shift (see
+        // `normalize_pair`'s "Named-zone donation" doc section), so this
+        // must reproduce the exact pre-donation answer.
+        let fixed = make_datetime(2014, 7, 21, 21, 40, 36, 143_000_000, 7200, None);
+        let bare = make_localtime(16, 30, 0, 0);
+        assert_eq!(rendered(in_seconds(&fixed, &bare)), "PT-5H-10M-36.143S");
+    }
+
+    #[test]
+    fn donation_degrades_gracefully_for_an_unresolvable_stored_bracket_zone() {
+        // A property already sitting in storage as
+        // `'2020-01-01T12:00Z[Bogus/Zone]'` retags (via `retag_instant`)
+        // into a tagged `datetime` carrying an unresolvable zone name —
+        // the retag path's bracket parsing does not validate it (unlike
+        // the map/string CONSTRUCTOR paths — see
+        // `temporal_retag::is_valid_named_zone`'s doc comment). Pairing it
+        // with an offset-less operand must degrade to the pre-existing
+        // "compare bare local fields" behavior, never hard-error the
+        // whole query over data that was already written.
+        let stored = Value::String("2020-01-01T12:00Z[Bogus/Zone]".to_string());
+        let bare = make_localtime(16, 30, 0, 0);
+        let result = in_seconds(&stored, &bare);
+        assert!(
+            result.is_ok(),
+            "an unresolvable stored bracket zone must not hard-error the query: {result:?}"
+        );
+        assert_eq!(rendered(result), "PT4H30M");
     }
 }

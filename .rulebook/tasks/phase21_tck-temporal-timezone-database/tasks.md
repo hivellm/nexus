@@ -1,9 +1,9 @@
 ## 1. Implementation
-- [ ] 1.1 direct chrono-tz/jiff dep
-- [ ] 1.2 timezone-aware datetime()/time()
-- [ ] 1.3 named zones + DST + historical offsets
+- [x] 1.1 direct chrono-tz/jiff dep — promoted chrono-tz to a direct nexus-core dependency (already transitive via nexus-bench's neo4rs; no lockfile bump).
+- [x] 1.2 timezone-aware datetime()/time() — `datetime`'s map/string constructors and `time`'s map constructor resolve a named IANA zone via chrono-tz (`time` resolves against the current instant, not a wall clock, since TIME has no date of its own).
+- [x] 1.3 named zones + DST + historical offsets — `temporal_retag::resolve_timezone_string` resolves ambiguous (fall-back) and gap (spring-forward) wall-clock readings per java.time parity, including full-day date-line-crossing gaps (Pacific/Apia, Pacific/Kiritimati, Pacific/Kanton) and sub-minute historical LMT transitions (Riga 1926); `<kind>.truncate`'s `timezone` override and `duration.between`-family cross-zone donation both reuse the same resolver.
 
 ## 2. Tail (docs + tests — check or waive with tailWaiver)
-- [ ] 2.1 Update or create documentation covering the implementation
-- [ ] 2.2 Write tests covering the new behavior
-- [ ] 2.3 Run tests and confirm they pass
+- [x] 2.1 Update or create documentation covering the implementation — CHANGELOG.md "Added — Named IANA timezone support (chrono-tz)" entry; doc comments on every new/changed function.
+- [x] 2.2 Write tests covering the new behavior — unit tests in temporal_retag.rs/temporal_truncate.rs/temporal_duration_between.rs/fn_temporal.rs (DST ambiguous/gap edge cases, sub-minute and date-line transitions, unresolvable-zone graceful degradation); integration tests in temporal_store_roundtrip_test.rs/temporal_truncate_test.rs.
+- [x] 2.3 Run tests and confirm they pass — full gates green (cargo check, clippy -D warnings, rustfmt per file, unit + cypher/compatibility/executor/regression integration groups). Two full openCypher TCK runs (release build) confirm `expressions/temporal` moved 609→661 pass (60.7%→65.8%), deterministic across both runs. `clauses/return` (28→27) and `clauses/with-orderBy` (89→90 in run 1, 89→88 in run 2) show a non-deterministic ±1 swap between the two runs of identical code — run-to-run unstable, consistent with this project's documented WithOrderBy/Return flake families (see memory: "project-flaky-*" entries), not caused by this change.

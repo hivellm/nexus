@@ -62,12 +62,20 @@
 //!   the `datetime`/`time` output kinds); resolved through
 //!   [`super::temporal_retag::resolve_timezone_string`], the same helper
 //!   `fn_temporal.rs::timezone_from_map` uses for the `time`/`datetime`
-//!   constructors' own `timezone` key — a named IANA zone (e.g.
-//!   `'Europe/Stockholm'`) is not resolvable without a timezone database
-//!   and errors explicitly. Absent a `timezone` override, the output
-//!   offset is the input's own offset when the input is `time`/`datetime`
-//!   (a `date`/`localtime`/`localdatetime` input carries none, and the
-//!   output default is UTC — rendered `Z`).
+//!   constructors' own `timezone` key. A named IANA zone (e.g.
+//!   `'Europe/Stockholm'`) resolves via chrono-tz's DST-aware lookup
+//!   against the ALREADY-TRUNCATED instant (verified against
+//!   `Temporal9.feature` scenario [2]'s override rows — the offset tracks
+//!   the truncated wall clock, not the source's pre-truncation one), and
+//!   the datetime output carries the zone name through (e.g.
+//!   `'2000-01-01T00:00+01:00[Europe/Stockholm]'`); an unrecognised zone
+//!   name still errors explicitly. Absent a `timezone` override, the
+//!   output offset is the input's own offset when the input is
+//!   `time`/`datetime` (a `date`/`localtime`/`localdatetime` input
+//!   carries none, and the output default is UTC — rendered `Z`) — the
+//!   output never inherits the source's own zone NAME in this no-override
+//!   case (only its numeric offset), a narrower, documented scope no TCK
+//!   row exercises otherwise.
 //!
 //! Every map key above is validated the same way: the key being *absent*
 //! leaves the corresponding field untouched, but the key being *present
@@ -454,28 +462,57 @@ fn apply_overrides(
     )))
 }
 
-/// Resolves the output's UTC offset: the map's `timezone` override if
-/// present, otherwise `fallback` (the input's own offset, or `0`/UTC when
-/// the input carries none — resolved by the caller). A `timezone` key that
-/// isn't a string (e.g. `{timezone: 5}`) is now a hard error — same
-/// "key present but wrong shape is never silently treated as absent" rule
+/// Resolves the output's UTC offset and zone name: the map's `timezone`
+/// override if present, otherwise `fallback_offset`/`None` (the input's
+/// own offset, or `0`/UTC when the input carries none — resolved by the
+/// caller; a truncated instant never inherits the SOURCE's own zone name
+/// when no override is given, only its numeric offset — a documented,
+/// narrower scope than the override path, since no openCypher TCK row
+/// exercises a zone-preserving no-override truncation). A `timezone` key
+/// that isn't a string (e.g. `{timezone: 5}`) is a hard error — same "key
+/// present but wrong shape is never silently treated as absent" rule
 /// [`non_negative_u32_map_key`] applies to `day`/`dayOfWeek` — rather than
-/// silently falling back to `fallback` as if the key had never been
+/// silently falling back to `fallback_offset` as if the key had never been
 /// supplied. A well-formed string resolves through
-/// [`temporal_retag::resolve_timezone_string`], the same helper
-/// `fn_temporal.rs::timezone_from_map` uses for the `time`/`datetime`
-/// constructors' own `timezone` key, so both report identical error text
-/// for the one case they share: an unresolvable named IANA zone.
-fn resolve_offset(map: &Map<String, Value>, fallback: i32) -> Result<i32> {
+/// [`temporal_retag::resolve_timezone_string`] against the ALREADY
+/// TRUNCATED `(year, month, day, hour, minute, second, nanosecond)` — the
+/// same helper `fn_temporal.rs::timezone_from_map` uses for the
+/// `time`/`datetime` constructors' own `timezone` key, so both report
+/// identical error text for the same malformed input and the exact same
+/// DST resolution for a named IANA zone (e.g. `Temporal9.feature`
+/// scenario [2]'s `{timezone: 'Europe/Stockholm'}` override rows, which
+/// pin the offset resolved from the truncated instant, not the source's
+/// pre-truncation one). Returns the (possibly gap-shifted — see
+/// `resolve_timezone_string`'s doc comment) wall clock alongside the
+/// offset/zone name; every caller must build its result from the
+/// RETURNED wall clock, not its own `year`/`month`/... arguments.
+#[allow(clippy::too_many_arguments)]
+fn resolve_offset(
+    map: &Map<String, Value>,
+    fallback_offset: i32,
+    year: i32,
+    month: u32,
+    day: u32,
+    hour: u32,
+    minute: u32,
+    second: u32,
+    nanosecond: u32,
+) -> Result<(i32, Option<String>, temporal_retag::WallClock)> {
+    let wall_clock: temporal_retag::WallClock =
+        (year, month, day, hour, minute, second, nanosecond);
     let Some(raw) = map.get("timezone") else {
-        return Ok(fallback);
+        return Ok((fallback_offset, None, wall_clock));
     };
     let Some(tz) = raw.as_str() else {
         return Err(Error::CypherExecution(format!(
             "InvalidArgumentValue: `timezone` must be a string, got {raw}"
         )));
     };
-    temporal_retag::resolve_timezone_string(tz)
+    let (offset, adjusted_wall_clock) = temporal_retag::resolve_timezone_string(
+        tz, year, month, day, hour, minute, second, nanosecond,
+    )?;
+    let zone_name = temporal_retag::is_named_zone(tz).then(|| tz.to_string());
+    Ok((offset, zone_name, adjusted_wall_clock))
 }
 
 /// Evaluates `<kind>.truncate(unit, other, map)` for the already-evaluated
@@ -567,16 +604,37 @@ pub(in crate::executor) fn truncate(
             year, month, day, hour, minute, second, nanosecond,
         )),
         TemporalKind::DateTime => {
-            let offset = resolve_offset(map, source.offset_seconds.unwrap_or(0))?;
+            let (offset, zone, (year, month, day, hour, minute, second, nanosecond)) =
+                resolve_offset(
+                    map,
+                    source.offset_seconds.unwrap_or(0),
+                    year,
+                    month,
+                    day,
+                    hour,
+                    minute,
+                    second,
+                    nanosecond,
+                )?;
             Ok(temporal_value::make_datetime(
-                year, month, day, hour, minute, second, nanosecond, offset, None,
+                year, month, day, hour, minute, second, nanosecond, offset, zone,
             ))
         }
         TemporalKind::LocalTime => Ok(temporal_value::make_localtime(
             hour, minute, second, nanosecond,
         )),
         TemporalKind::Time => {
-            let offset = resolve_offset(map, source.offset_seconds.unwrap_or(0))?;
+            let (offset, _zone, (_, _, _, hour, minute, second, nanosecond)) = resolve_offset(
+                map,
+                source.offset_seconds.unwrap_or(0),
+                year,
+                month,
+                day,
+                hour,
+                minute,
+                second,
+                nanosecond,
+            )?;
             Ok(temporal_value::make_time(
                 hour, minute, second, nanosecond, offset,
             ))
@@ -694,10 +752,38 @@ mod tests {
     }
 
     #[test]
-    fn named_timezone_override_errors_explicitly() {
+    fn named_timezone_override_resolves_via_chrono_tz() {
+        // openCypher TCK `Temporal9.feature` scenario [2], row 2:
+        // `datetime.truncate('millennium', date({year: 2017, month: 10,
+        // day: 11}), {timezone: 'Europe/Stockholm'})` ->
+        // `'2000-01-01T00:00+01:00[Europe/Stockholm]'` — 1 January 2000 is
+        // Stockholm winter time (`+01:00`), and the zone name persists
+        // through to the result.
         let source = make_date(2017, 10, 11);
         let unit = Value::String("millennium".to_string());
         let map = obj(&[("timezone", Value::from("Europe/Stockholm"))]);
+        let result = truncate(TemporalKind::DateTime, &unit, &source, Some(&map)).unwrap();
+        assert_eq!(
+            result,
+            make_datetime(
+                2000,
+                1,
+                1,
+                0,
+                0,
+                0,
+                0,
+                3600,
+                Some("Europe/Stockholm".to_string())
+            )
+        );
+    }
+
+    #[test]
+    fn unknown_timezone_override_still_errors_explicitly() {
+        let source = make_date(2017, 10, 11);
+        let unit = Value::String("millennium".to_string());
+        let map = obj(&[("timezone", Value::from("Not/AZone"))]);
         let err = truncate(TemporalKind::DateTime, &unit, &source, Some(&map)).unwrap_err();
         assert!(matches!(err, Error::CypherExecution(_)));
     }

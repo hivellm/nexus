@@ -223,15 +223,28 @@ fn datetime_truncate_hour_minute_second_zero_the_remainder() {
 }
 
 #[test]
-fn datetime_truncate_with_a_named_timezone_override_is_a_hard_error() {
-    // Same gap as every other `timezone` map key in this codebase (no
-    // timezone database wired in yet) — a numeric override still works,
-    // a named IANA zone errors explicitly rather than silently falling
-    // back to UTC.
+fn datetime_truncate_with_a_named_timezone_override_resolves_via_chrono_tz() {
+    // openCypher TCK `Temporal9.feature` scenario [2]: the override's
+    // offset resolves via chrono-tz against the TRUNCATED instant (1
+    // January 1984, Stockholm winter time -> `+01:00`), and the zone name
+    // persists through to the canonical rendering.
+    let (mut engine, _ctx) = setup_isolated_test_engine().unwrap();
+    assert_eq!(
+        single_string(
+            &mut engine,
+            "RETURN datetime.truncate('year', date({year: 1984, month: 10, day: 11}), \
+             {timezone: 'Europe/Stockholm'}) AS result"
+        ),
+        Some("1984-01-01T00:00+01:00[Europe/Stockholm]".to_string())
+    );
+}
+
+#[test]
+fn datetime_truncate_with_an_unknown_timezone_override_is_a_hard_error() {
     let (mut engine, _ctx) = setup_isolated_test_engine().unwrap();
     let result = engine.execute_cypher(
         "RETURN datetime.truncate('year', date({year: 1984, month: 10, day: 11}), {timezone: \
-         'Europe/Stockholm'}) AS result",
+         'Not/AZone'}) AS result",
     );
     assert!(result.is_err(), "got: {result:?}");
 }

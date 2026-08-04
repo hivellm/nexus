@@ -77,33 +77,52 @@ fn nanosecond_from_map(map: &Map<String, Value>) -> Result<u32> {
 }
 
 /// Resolves a map constructor's `timezone` key into `(offset_seconds,
-/// zone_name)` for the `time`/`datetime` map constructors — defaulting to
-/// UTC (`(0, None)`) when the key is absent, matching real Neo4j's
-/// default (NOT the executing machine's local offset, a since-fixed
-/// constructor gap; see `Temporal4.feature`'s `datetime({year: 1912})` ->
-/// `'1912-01-01T00:00Z'`). A fixed-offset string (`'+01:00'`, `'Z'`, …) or
-/// the literal `'UTC'` resolves directly to `(offset, None)`.
+/// zone_name, wall_clock)` for the `datetime` map constructor —
+/// defaulting to UTC (`(0, None, wall_clock unchanged)`) when the key is
+/// absent, matching real Neo4j's default (NOT the executing machine's
+/// local offset, a since-fixed constructor gap; see `Temporal4.feature`'s
+/// `datetime({year: 1912})` -> `'1912-01-01T00:00Z'`). A fixed-offset
+/// string (`'+01:00'`, `'Z'`, …) or the literal `'UTC'` resolves directly
+/// to `(offset, None, wall_clock unchanged)`.
 ///
-/// Anything else — a named IANA zone like `'Europe/Stockholm'` — cannot
-/// be resolved to a real offset without a timezone database, which isn't
-/// wired into this codebase (see `temporal_value::make_datetime`'s doc
-/// comment). Previously this silently fell back to UTC while still
-/// carrying the unresolved name through as `zone_name`, which rendered a
-/// self-contradictory `...Z[Europe/Stockholm]` (the `Z` asserts UTC, the
-/// bracket asserts it isn't). Until a real timezone database lands, an
-/// unresolvable name is a hard error instead — the `Option<String>` in
-/// this function's return type stays `None` on every success path today,
-/// and only starts carrying a real resolved zone name once that database
-/// exists.
-fn timezone_from_map(map: &Map<String, Value>) -> Result<(i32, Option<String>)> {
+/// Anything else — a named IANA zone like `'Europe/Stockholm'` — resolves
+/// through `temporal_retag::resolve_timezone_string`'s DST-aware
+/// chrono-tz lookup against `wall_clock` (the caller's own already-parsed
+/// `year`/`month`/`day`/`hour`/`minute`/`second`/`nanosecond`, since a
+/// named zone's offset is date-dependent), and carries the zone name
+/// through as `zone_name` so the constructed value renders `...+01:00
+/// [Europe/Stockholm]`, not a bare offset (see
+/// `temporal_value::make_datetime`'s `tz_name` parameter). The returned
+/// `wall_clock` differs from the input only in the rare "spring-forward
+/// gap" case (see `resolve_timezone_string`'s doc comment) — every caller
+/// must use the RETURNED wall clock for the value it constructs, not its
+/// own original fields, since a gap can shift them forward.
+///
+/// `time`'s own map constructor does NOT use this — `TIME` has no
+/// calendar date of its own, so it resolves a named zone against the
+/// CURRENT INSTANT instead (see
+/// `temporal_retag::resolve_timezone_string_at_current_instant`'s doc
+/// comment for why combining an unrelated "current date" with the
+/// caller's own requested hour, as this function's wall-clock approach
+/// would require, is the wrong anchor for a dateless value).
+fn timezone_from_map(
+    map: &Map<String, Value>,
+    wall_clock: temporal_retag::WallClock,
+) -> Result<(i32, Option<String>, temporal_retag::WallClock)> {
     let Some(tz) = map.get("timezone").and_then(Value::as_str) else {
-        return Ok((0, None));
+        return Ok((0, None, wall_clock));
     };
-    // Delegates the "UTC"/`strict_parse_offset`/named-zone-error resolution
-    // to `temporal_retag::resolve_timezone_string`, shared with
+    let (year, month, day, hour, minute, second, nanosecond) = wall_clock;
+    // Delegates the "UTC"/`strict_parse_offset`/named-zone resolution to
+    // `temporal_retag::resolve_timezone_string`, shared with
     // `temporal_truncate.rs`'s own `timezone` override so both report
-    // byte-for-byte identical error text for a named IANA zone.
-    temporal_retag::resolve_timezone_string(tz).map(|offset| (offset, None))
+    // byte-for-byte identical error text for a malformed input and the
+    // exact same DST resolution for a named IANA zone.
+    let (offset, adjusted_wall_clock) = temporal_retag::resolve_timezone_string(
+        tz, year, month, day, hour, minute, second, nanosecond,
+    )?;
+    let zone_name = temporal_retag::is_named_zone(tz).then(|| tz.to_string());
+    Ok((offset, zone_name, adjusted_wall_clock))
 }
 
 /// True when `v` is either absent or a JSON integer (`is_i64`/`is_u64` —
@@ -452,23 +471,80 @@ impl Executor {
                     };
                     match value {
                         Value::String(s) => {
-                            // Full ISO-8601 `date'T'time[offset]` parsing
-                            // (extended/compact notation, fractional
-                            // seconds, the compact `+HHMM` offset form) —
-                            // see `temporal_parse::parse_iso_datetime`. No
-                            // offset present in the literal defaults to
-                            // `0` (UTC) — matching the `time()` string
-                            // constructor's own no-offset default just
-                            // above, and deliberately NOT the executing
-                            // machine's local offset (that would make an
-                            // identical query return a different value
-                            // depending on which host runs the server).
+                            // Full ISO-8601 `date'T'time[offset][[Zone]]`
+                            // parsing (extended/compact notation,
+                            // fractional seconds, the compact `+HHMM`
+                            // offset form, and an optional trailing
+                            // `[Zone/Name]` bracket — the same shape
+                            // `toString()` on a zoned `datetime` renders,
+                            // e.g. `'2017-10-28T23:00+02:00
+                            // [Europe/Stockholm]'`) — see
+                            // `temporal_parse::parse_iso_datetime`. No
+                            // offset AND no zone bracket present in the
+                            // literal defaults to `0` (UTC), deliberately
+                            // NOT the executing machine's local offset
+                            // (that would make an identical query return a
+                            // different value depending on which host runs
+                            // the server).
+                            //
+                            // An offset that IS written in the literal is
+                            // always trusted exactly as written, even
+                            // alongside a `[Zone]` bracket — Neo4j parity
+                            // for a deliberately contradictory pair (e.g.
+                            // `'...+05:00[Europe/Stockholm]'`, where the
+                            // written offset disagrees with what the zone
+                            // would itself resolve to) is unconfirmed (no
+                            // TCK row exercises it, no Neo4j instance to
+                            // check against); this accepts the pair
+                            // verbatim rather than erroring or silently
+                            // overriding one side — a documented, narrow
+                            // hazard, not a bug fix target here.
+                            //
+                            // A bracket with NO written offset (`'...
+                            // [Europe/London]'`) DOES need the offset
+                            // resolved from the zone — see the openCypher
+                            // TCK's `Temporal2.feature` scenario [6] rows
+                            // for `Europe/London` (`+01:00`) and
+                            // `Europe/Stockholm` in 1818 (a sub-minute LMT
+                            // offset, `+00:53:28`, before any standardized
+                            // zone existed). Every bracket is also
+                            // validated as a real chrono-tz zone at this
+                            // point (`temporal_retag::is_valid_named_zone`)
+                            // — an unrecognised name is `Null`, the
+                            // established convention for any other
+                            // unparseable temporal string literal, NOT a
+                            // hard error (unlike the map constructor's
+                            // `timezone` key, whose "always error on a bad
+                            // value" convention is unrelated to this
+                            // string-literal grammar).
+                            let (base, zone) = temporal_retag::strip_zone_bracket(&s);
                             if let Some((
                                 (year, month, day),
                                 (hour, minute, second, nanosecond),
                                 offset,
-                            )) = temporal_parse::parse_iso_datetime(&s)
+                            )) = temporal_parse::parse_iso_datetime(base)
                             {
+                                if let Some(zone_name) = zone {
+                                    if !temporal_retag::is_valid_named_zone(zone_name) {
+                                        return Some(Ok(Value::Null));
+                                    }
+                                }
+                                let wall_clock =
+                                    (year, month, day, hour, minute, second, nanosecond);
+                                let (offset, (year, month, day, hour, minute, second, nanosecond)) =
+                                    match (offset, zone) {
+                                        (Some(offset), _) => (offset, wall_clock),
+                                        (None, Some(zone_name)) => {
+                                            match temporal_retag::resolve_timezone_string(
+                                                zone_name, year, month, day, hour, minute, second,
+                                                nanosecond,
+                                            ) {
+                                                Ok(resolved) => resolved,
+                                                Err(e) => return Some(Err(e)),
+                                            }
+                                        }
+                                        (None, None) => (0, wall_clock),
+                                    };
                                 return Some(Ok(temporal_value::make_datetime(
                                     year,
                                     month,
@@ -477,8 +553,8 @@ impl Executor {
                                     minute,
                                     second,
                                     nanosecond,
-                                    offset.unwrap_or(0),
-                                    None,
+                                    offset,
+                                    zone.map(str::to_string),
                                 )));
                             }
                         }
@@ -501,14 +577,27 @@ impl Executor {
                                 Ok(n) => n,
                                 Err(e) => return Some(Err(e)),
                             };
-                            let (offset_seconds, zone_name) = match timezone_from_map(&map) {
-                                Ok(pair) => pair,
-                                Err(e) => return Some(Err(e)),
-                            };
 
                             if chrono::NaiveDate::from_ymd_opt(year, month, day).is_some()
                                 && chrono::NaiveTime::from_hms_opt(hour, minute, second).is_some()
                             {
+                                // `timezone_from_map` resolves the map's
+                                // `timezone` key against THIS wall clock
+                                // (a named zone's offset is date-dependent)
+                                // and returns the wall clock possibly
+                                // shifted forward past a spring-forward
+                                // gap — the fields actually used to
+                                // construct the result must be the
+                                // RETURNED ones, not the map's raw values.
+                                let wall_clock =
+                                    (year, month, day, hour, minute, second, nanosecond);
+                                let (offset_seconds, zone_name, wall_clock) =
+                                    match timezone_from_map(&map, wall_clock) {
+                                        Ok(v) => v,
+                                        Err(e) => return Some(Err(e)),
+                                    };
+                                let (year, month, day, hour, minute, second, nanosecond) =
+                                    wall_clock;
                                 return Some(Ok(temporal_value::make_datetime(
                                     year,
                                     month,
@@ -576,12 +665,34 @@ impl Executor {
                                 Ok(n) => n,
                                 Err(e) => return Some(Err(e)),
                             };
-                            let (offset_seconds, _zone_name) = match timezone_from_map(&map) {
-                                Ok(pair) => pair,
-                                Err(e) => return Some(Err(e)),
-                            };
 
                             if chrono::NaiveTime::from_hms_opt(hour, minute, second).is_some() {
+                                // `TIME` has no calendar date of its own,
+                                // so a named zone resolves against the
+                                // CURRENT INSTANT — host-timezone-
+                                // independent (`chrono::Utc::now()`, never
+                                // the executing machine's local date) and
+                                // never mutating the caller's requested
+                                // hour/minute/second — matching java.time's
+                                // `ZoneRules.getOffset(Instant.now())`.
+                                // Deliberately NOT `today's date combined
+                                // with the caller's own hour` (this
+                                // function's previous approach): mixing an
+                                // unrelated calendar date with the
+                                // caller's requested time-of-day to run a
+                                // wall-clock DST lookup risked a spurious
+                                // ambiguous/gap resolution tied to nothing
+                                // the caller actually asked for, and gave
+                                // the wrong answer whenever the server's
+                                // current date and the semantic "now" the
+                                // caller means diverge.
+                                let offset_seconds = match map.get("timezone").and_then(Value::as_str) {
+                                    None => 0,
+                                    Some(tz) => match temporal_retag::resolve_timezone_string_at_current_instant(tz) {
+                                        Ok(offset) => offset,
+                                        Err(e) => return Some(Err(e)),
+                                    },
+                                };
                                 return Some(Ok(temporal_value::make_time(
                                     hour,
                                     minute,
@@ -1123,40 +1234,58 @@ mod tests {
         assert!(matches!(err, crate::Error::CypherExecution(_)));
     }
 
+    /// The TCK `Temporal1.feature` scenario [10] wall clock
+    /// (`1984-10-11T12:31:14`, October -> Stockholm winter/`+01:00`).
+    const OCT_1984: temporal_retag::WallClock = (1984, 10, 11, 12, 31, 14, 0);
+
     #[test]
     fn timezone_from_map_defaults_to_utc_when_absent() {
-        assert_eq!(timezone_from_map(&map(&[])).unwrap(), (0, None));
+        assert_eq!(
+            timezone_from_map(&map(&[]), OCT_1984).unwrap(),
+            (0, None, OCT_1984)
+        );
     }
 
     #[test]
     fn timezone_from_map_accepts_a_numeric_offset() {
         assert_eq!(
-            timezone_from_map(&map(&[("timezone", Value::from("+02:00"))])).unwrap(),
-            (7200, None)
+            timezone_from_map(&map(&[("timezone", Value::from("+02:00"))]), OCT_1984).unwrap(),
+            (7200, None, OCT_1984)
         );
     }
 
     #[test]
     fn timezone_from_map_accepts_utc_and_z() {
         assert_eq!(
-            timezone_from_map(&map(&[("timezone", Value::from("UTC"))])).unwrap(),
-            (0, None)
+            timezone_from_map(&map(&[("timezone", Value::from("UTC"))]), OCT_1984).unwrap(),
+            (0, None, OCT_1984)
         );
         assert_eq!(
-            timezone_from_map(&map(&[("timezone", Value::from("Z"))])).unwrap(),
-            (0, None)
+            timezone_from_map(&map(&[("timezone", Value::from("Z"))]), OCT_1984).unwrap(),
+            (0, None, OCT_1984)
         );
     }
 
     #[test]
-    fn timezone_from_map_rejects_an_unresolvable_named_zone() {
-        // MAJOR 1: a named IANA zone can't be resolved to a real offset
-        // without a timezone database — must error explicitly instead of
-        // silently falling back to UTC while still carrying the
-        // unresolved name (the old behaviour rendered the
-        // self-contradictory `...Z[Europe/Stockholm]`).
-        let err =
-            timezone_from_map(&map(&[("timezone", Value::from("Europe/Stockholm"))])).unwrap_err();
+    fn timezone_from_map_resolves_a_named_zone_and_carries_the_name_through() {
+        // openCypher TCK `Temporal1.feature` scenario [10]: Stockholm is
+        // `+01:00` on 11 October, and the zone name persists alongside the
+        // resolved offset (unlike a numeric offset or `'UTC'`/`'Z'`, which
+        // never set a zone name — see the two tests above).
+        let (offset, zone_name, wall_clock) = timezone_from_map(
+            &map(&[("timezone", Value::from("Europe/Stockholm"))]),
+            OCT_1984,
+        )
+        .unwrap();
+        assert_eq!(offset, 3600);
+        assert_eq!(zone_name.as_deref(), Some("Europe/Stockholm"));
+        assert_eq!(wall_clock, OCT_1984);
+    }
+
+    #[test]
+    fn timezone_from_map_rejects_an_unknown_zone_name() {
+        let err = timezone_from_map(&map(&[("timezone", Value::from("Not/AZone"))]), OCT_1984)
+            .unwrap_err();
         assert!(matches!(err, crate::Error::CypherExecution(_)));
     }
 }

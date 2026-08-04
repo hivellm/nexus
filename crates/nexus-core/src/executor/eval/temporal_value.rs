@@ -187,9 +187,13 @@ pub(in crate::executor) fn make_time(
 }
 
 /// Builds a tagged `datetime` value with a UTC offset (in seconds) and an
-/// optional IANA zone name (rendered as a `[Zone/Name]` suffix once a
-/// timezone database is wired in; `None` today for every construction
-/// path, since none currently resolves a real zone).
+/// optional IANA zone name, rendered as a `[Zone/Name]` suffix
+/// (`canonicalize_temporal`'s `DateTime` arm) whenever `tz_name` is
+/// `Some` — set by a `datetime({..., timezone: 'Europe/Stockholm'})` map
+/// constructor or a `datetime('...[Zone]')` string literal that names a
+/// real IANA zone (resolved via `temporal_retag::resolve_timezone_string`,
+/// chrono-tz's bundled tzdata); `None` for a fixed numeric offset or
+/// `'UTC'`/`'Z'`.
 #[allow(clippy::too_many_arguments)]
 pub(in crate::executor) fn make_datetime(
     year: i32,

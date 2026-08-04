@@ -713,29 +713,127 @@ fn negative_nanosecond_is_a_hard_error() {
 }
 
 // ============================================================================
-// MAJOR 1 — an unresolvable named `timezone` map value is a hard error
-// until a real timezone database is wired in; a numeric offset or
-// `'Z'`/`'UTC'` still works.
+// A named `timezone` map value resolves via chrono-tz's bundled IANA
+// database, honoring the zone's real historical DST rules; a numeric
+// offset or `'Z'`/`'UTC'` continues to work exactly as before. An
+// unrecognised zone name is still a hard error.
 // ============================================================================
 
 #[test]
-fn datetime_with_an_unresolvable_named_zone_is_a_hard_error() {
+fn datetime_with_a_named_timezone_resolves_via_chrono_tz() {
     let (mut engine, _ctx) = setup_isolated_test_engine().unwrap();
-    let result =
-        engine.execute_cypher("RETURN datetime({year: 1984, timezone: 'Europe/Stockholm'}) AS d");
-    assert!(
-        result.is_err(),
-        "an unresolvable named zone must error, not silently fall back to UTC \
-         while still rendering the unresolved name; got: {result:?}"
+    let result = execute_query(
+        &mut engine,
+        "RETURN datetime({year: 1984, timezone: 'Europe/Stockholm'}) AS d",
+    );
+    // 1 January 1984 is Stockholm winter time (`+01:00`, CET); the zone
+    // name persists through to the canonical rendering.
+    assert_eq!(
+        get_single_value(&result),
+        "1984-01-01T00:00+01:00[Europe/Stockholm]"
     );
 }
 
 #[test]
-fn time_with_an_unresolvable_named_zone_is_a_hard_error() {
+fn time_with_a_named_timezone_resolves_via_chrono_tz() {
+    // `TIME` has no calendar date of its own, so a named zone resolves
+    // against the CURRENT INSTANT (see
+    // `temporal_retag::resolve_timezone_string_at_current_instant`'s doc
+    // comment) — Stockholm is only ever `+01:00` (CET) or `+02:00` (CEST),
+    // so assert one of those two rather than hard-coding whichever is
+    // correct at the moment this test happens to run.
     let (mut engine, _ctx) = setup_isolated_test_engine().unwrap();
-    let result =
-        engine.execute_cypher("RETURN time({hour: 12, timezone: 'Europe/Stockholm'}) AS d");
-    assert!(result.is_err(), "got: {result:?}");
+    let result = execute_query(
+        &mut engine,
+        "RETURN time({hour: 12, timezone: 'Europe/Stockholm'}) AS d",
+    );
+    let rendered = get_single_value(&result).as_str().unwrap().to_string();
+    assert!(
+        rendered == "12:00+01:00" || rendered == "12:00+02:00",
+        "expected Stockholm's standard or daylight-saving offset, got {rendered:?}"
+    );
+}
+
+#[test]
+fn datetime_with_an_unknown_zone_name_is_a_hard_error() {
+    let (mut engine, _ctx) = setup_isolated_test_engine().unwrap();
+    let result = engine.execute_cypher("RETURN datetime({year: 1984, timezone: 'Not/AZone'}) AS d");
+    assert!(
+        result.is_err(),
+        "an unrecognised IANA zone name must still error explicitly; got: {result:?}"
+    );
+}
+
+// ============================================================================
+// A `datetime('...[Zone]')` STRING literal with NO written offset resolves
+// the offset from the zone itself (openCypher TCK `Temporal2.feature`
+// scenario [6]); an unrecognised bracket zone name is `Null`, not an error
+// (the established convention for any other unparseable string literal).
+// ============================================================================
+
+#[test]
+fn datetime_string_with_a_zone_bracket_and_no_written_offset_resolves_from_the_zone() {
+    let (mut engine, _ctx) = setup_isolated_test_engine().unwrap();
+    assert_eq!(
+        get_single_value(&execute_query(
+            &mut engine,
+            "RETURN datetime('2015-07-21T21:40:32.142[Europe/London]') AS d",
+        )),
+        "2015-07-21T21:40:32.142+01:00[Europe/London]"
+    );
+    // 1818 predates any standardized zone — chrono-tz's bundled tzdata
+    // resolves Stockholm's Local Mean Time, a sub-minute UTC offset.
+    assert_eq!(
+        get_single_value(&execute_query(
+            &mut engine,
+            "RETURN datetime('1818-07-21T21:40:32.142[Europe/Stockholm]') AS d",
+        )),
+        "1818-07-21T21:40:32.142+00:53:28[Europe/Stockholm]"
+    );
+}
+
+#[test]
+fn datetime_string_with_a_written_offset_and_a_zone_bracket_trusts_the_written_offset() {
+    // openCypher TCK `Temporal2.feature` scenario [6]'s other three rows:
+    // an offset that IS written in the literal is always trusted exactly
+    // as written, never re-derived from the zone.
+    let (mut engine, _ctx) = setup_isolated_test_engine().unwrap();
+    assert_eq!(
+        get_single_value(&execute_query(
+            &mut engine,
+            "RETURN datetime('2015-07-21T21:40:32.142+02:00[Europe/Stockholm]') AS d",
+        )),
+        "2015-07-21T21:40:32.142+02:00[Europe/Stockholm]"
+    );
+    assert_eq!(
+        get_single_value(&execute_query(
+            &mut engine,
+            "RETURN datetime('2015-07-21T21:40:32.142+0845[Australia/Eucla]') AS d",
+        )),
+        "2015-07-21T21:40:32.142+08:45[Australia/Eucla]"
+    );
+    assert_eq!(
+        get_single_value(&execute_query(
+            &mut engine,
+            "RETURN datetime('2015-07-21T21:40:32.142-04[America/New_York]') AS d",
+        )),
+        "2015-07-21T21:40:32.142-04:00[America/New_York]"
+    );
+}
+
+#[test]
+fn datetime_string_with_an_unknown_bracket_zone_is_null_not_an_error() {
+    // Distinct from the map constructor's `timezone` key (always a hard
+    // error for an unresolvable value) — an unrecognised zone bracket in
+    // a STRING literal follows this grammar's established "can't parse it,
+    // return Null" convention (see `date_string_invalid_form_returns_null_not_error`
+    // in `temporal_iso_parse_test.rs` for the sibling `date('...')` case).
+    let (mut engine, _ctx) = setup_isolated_test_engine().unwrap();
+    let result = execute_query(
+        &mut engine,
+        "RETURN datetime('2015-07-21T21:40:32.142[Not/AZone]') AS d",
+    );
+    assert_eq!(get_single_value(&result), &serde_json::Value::Null);
 }
 
 #[test]

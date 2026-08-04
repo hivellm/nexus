@@ -68,6 +68,14 @@ anyhow.workspace = true
 # Utilities
 uuid.workspace = true
 chrono.workspace = true
+# Named IANA timezone resolution — already an indirect dep via
+# `nexus-bench`'s `neo4rs` (see Cargo.lock); promoted to a direct
+# dependency here since `datetime({..., timezone:
+# 'Europe/Stockholm'})`/`<kind>.truncate(..., {timezone: ...})` need real
+# DST-aware offset resolution, not just a fixed numeric offset. Pinned to
+# the same `0.8` line already resolved in the lockfile (0.8.6) to avoid a
+# second copy in the dependency tree.
+chrono-tz = "0.8"
 xxhash-rust = { version = "0.8", features = ["xxh3"] }
 crc32fast = "1.4"
 crc32c = "0.6"  # hardware-accelerated CRC32C (Castagnoli) via SSE4.2 / ARMv8 CRC
