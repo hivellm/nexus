@@ -47,6 +47,37 @@
       columnar entry, not only in `result_set.rows` — `result_set_as_rows` and
       `materialize_rows_from_variables` rebuild rows from it, so any reset must clear
       both.
+
+      **THIRD ATTEMPT — the field design works and is still not shippable. Read
+      this before writing code.** `clause_scope: u32` on `Operator::Expand`, with the
+      accumulator key *including* the scope (`__nexus_clause_rel_ids_<scope>`) so no
+      reset step exists to be missed or reordered. Cost was far below the estimate:
+      only ONE construction site (`queries/relationships.rs`) plus two dispatch
+      destructures — `cost.rs` and the planner tests all use `{ .. }`. Scope 0 for the
+      start pattern, `pattern_idx` for additional clauses.
+
+      Result: all 6 isomorphism tests green, **`useCases/countingSubgraphMatches`
+      9/11 → 11/11 (100%)**, `clauses/match` 140 → 143, total 1819 → 1821. AND
+      `clauses/match-where` 28 → 25 again — the *same three* scenarios as attempt one:
+
+      - `MATCH (a)-->(b) WHERE b:B OPTIONAL MATCH (a)-->(c) WHERE c:C` → 9 rows, want 1
+      - `MATCH (n:Single) OPTIONAL MATCH (n)-[r]-(m) WHERE m:NonExistent` → 2, want 1
+      - `MATCH (n:Single) OPTIONAL MATCH (n)-[r]-(m) WHERE m.num = 42` → 2, want 1
+
+      Counts go UP, so it is the `OPTIONAL MATCH` padding branch again
+      (`!matched_for_this_source && optional` in `execute_expand`): once isomorphism
+      rejects every candidate for a source, that branch reads it as "no match" and
+      appends an all-null row. Per-clause scoping did NOT remove this, which means the
+      interaction is not (only) cross-clause leakage — investigate whether the start
+      pattern and the additional-pattern loop can assign the same clause two different
+      scopes, since `select_start_pattern` may not return `patterns_local[0]` while the
+      loop unconditionally skips index 0.
+
+      **The next attempt needs a test for these three shapes FIRST.** The
+      `OPTIONAL MATCH` control written for attempt three passed while the corpus
+      regressed, because it used a one-edge graph and a directed slot; the TCK shapes
+      use an undirected `-[r]-` over a node with several edges. Reproduce those exact
+      counts locally before touching the operator.
       **Done when:** on the one-relationship fixture
       `MATCH (x)-[]-(y)-[]-(z) RETURN count(*)` is 0 and
       `MATCH (x)-[r1]-(y)-[r2]-(z) RETURN count(*)` is 0; TCK
