@@ -155,6 +155,33 @@ different rule and reports `VariableAlreadyBound`.
 > `MATCH (a)-[r]->(b)-[*]->(c)`): each carries its own rule, and the shared scope
 > stops at the operator boundary.
 
+**Comma-separated parts bind independently, and a later clause cannot unbind
+them.** Each part of `MATCH (a:A), (z:Z)` gets its own driving scan, and the rows
+are the cartesian product of the parts. A variable bound that way stays bound for
+every later clause — including one that uses it as a relationship target:
+
+```cypher
+CREATE (a:A {n: 'a'}), (z:Z {n: 'z'}), (b:B), (a)-[:T]->(b)   -- a has a :T edge, not to z
+MATCH (a:A), (z:Z)
+OPTIONAL MATCH (a)-[r:T]->(z)
+RETURN a.n, z.n, r IS NULL                                    -- 'a', 'z', true
+```
+
+`z` keeps its binding and only `r` is `NULL`, because the optional hop closes over
+an already-bound target rather than producing it. The same rule drives
+`OPTIONAL MATCH … WITH other WHERE r IS NULL`, the standard "rows with no such
+edge" idiom.
+
+**A label predicate on an already-bound variable is enforced as a filter.** When a
+later required clause re-states a variable with a label —
+`MATCH (a)-[:T]->(b) MATCH (b:B)` — the binding is kept (it is not re-scanned,
+which would discard the traversal result) and `:B` is checked against the bound
+node, so a `b` without that label yields no rows.
+
+> **Remaining gap.** In an `OPTIONAL MATCH`, a label re-stated on an already-bound
+> variable is not enforced: expressing it would have to leave the row NULL-padded
+> rather than drop it, which a filter cannot do.
+
 **Label/type colon whitespace.** openCypher permits whitespace around the colon
 in the label and relationship-type positions, so `(dur2: Duration2)`,
 `(v : A : B)` and `-[r: KNOWS]->` are all accepted and equivalent to their

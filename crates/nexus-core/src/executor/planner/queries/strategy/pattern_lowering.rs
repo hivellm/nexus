@@ -85,34 +85,21 @@ impl<'a> QueryPlanner<'a> {
             })
             .collect();
 
-        // Process ALL patterns, not just the first one
-        // Multiple patterns need Cartesian product (Join)
-        let mut all_target_nodes = std::collections::HashSet::new();
-
-        // Identify target nodes across all patterns
-        // CRITICAL FIX: Include ALL nodes that are targets of relationships (Expand),
-        // not just nodes without labels. Nodes that are targets of Expand will be populated
-        // by the Expand operator and don't need a separate NodeByLabel.
-        for (pattern, _is_optional) in &patterns_local {
-            for (idx, element) in pattern.elements.iter().enumerate() {
-                if let PatternElement::Relationship(_) = element {
-                    if idx + 1 < pattern.elements.len() {
-                        if let PatternElement::Node(node) = &pattern.elements[idx + 1] {
-                            if let Some(var) = &node.variable {
-                                // CRITICAL: Add ALL target nodes, regardless of labels
-                                // Nodes that are targets of Expand will be populated by Expand,
-                                // so we shouldn't create NodeByLabel for them
-                                all_target_nodes.insert(var.clone());
-                            }
-                        }
-                    }
-                }
-            }
-        }
-
         // Process the first pattern (extract pattern from tuple)
         let patterns_only: Vec<Pattern> = patterns_local.iter().map(|(p, _)| p.clone()).collect();
         let start_pattern = self.select_start_pattern(&patterns_only)?;
+
+        // Nodes this pattern's OWN relationship hops will populate, so it must
+        // not also emit a driving scan for them (the `Expand` binds them).
+        //
+        // Scoped to one pattern, never across all of them. A variable a LATER
+        // clause happens to use as a relationship target is still bound by the
+        // clause it is written in, and suppressing that clause's scan left it
+        // bound nowhere: `MATCH (a:A), (z:Z) OPTIONAL MATCH (a)-[r:T]->(z)`
+        // emitted no scan for `z` at all, so the optional hop treated `z` as its
+        // own output slot and NULL-padded it, instead of keeping `z` bound and
+        // nulling only `r`.
+        let start_target_nodes = Self::relationship_target_vars(start_pattern);
 
         // Add NodeByLabel operators for nodes in first pattern
         // CRITICAL FIX: For cyclic patterns (e.g., (a)->(b)->(c)->(a)),
@@ -144,7 +131,7 @@ impl<'a> QueryPlanner<'a> {
 
                     // Skip if this node is a pure target without labels (will be populated by Expand)
                     // EXCEPTION: Always create NodeByLabel for the first node, even in cyclic patterns
-                    if !is_first_node && all_target_nodes.contains(variable) {
+                    if !is_first_node && start_target_nodes.contains(variable) {
                         continue;
                     }
 
@@ -447,10 +434,11 @@ impl<'a> QueryPlanner<'a> {
             });
 
             // Add NodeByLabel operators for nodes in this additional pattern
+            let pattern_target_nodes = Self::relationship_target_vars(pattern);
             for element in &pattern.elements {
                 if let PatternElement::Node(node) = element {
                     if let Some(variable) = &node.variable {
-                        if all_target_nodes.contains(variable) {
+                        if pattern_target_nodes.contains(variable) {
                             continue;
                         }
 
@@ -477,12 +465,34 @@ impl<'a> QueryPlanner<'a> {
                         // rescanned — that would discard its binding and re-drive
                         // the query from every node (`MATCH (a)-[r]->(b)
                         // MATCH (b)-[r2]->(c)` must keep `b`).
-                        if node.labels.is_empty() {
-                            if !previously_bound_vars.contains(variable) {
-                                operators.push(Operator::AllNodesScan {
-                                    variable: variable.clone(),
-                                });
+                        if previously_bound_vars.contains(variable) {
+                            // Keep the binding, but still enforce this pattern's
+                            // label predicate — as a Filter, which the planner's
+                            // operator sort recombines AFTER every Expand, so it
+                            // sees the variable bound. Skipping the node outright
+                            // (which the old cross-pattern target set caused for
+                            // this shape) dropped the predicate silently:
+                            // `MATCH (a)-[:T]->(b) MATCH (b:B)` matched a `b`
+                            // carrying no `:B` label at all.
+                            //
+                            // Only for a required pattern. In an OPTIONAL one a
+                            // contradictory label should leave the row padded
+                            // rather than drop it, and a Filter cannot express
+                            // that — so the predicate stays dropped there, as
+                            // before, rather than trading one wrong answer for
+                            // another.
+                            if !*is_optional {
+                                for label in &node.labels {
+                                    operators.push(Operator::Filter {
+                                        predicate: format!("{}:{}", variable, label),
+                                        predicate_ast: None,
+                                    });
+                                }
                             }
+                        } else if node.labels.is_empty() {
+                            operators.push(Operator::AllNodesScan {
+                                variable: variable.clone(),
+                            });
                         } else {
                             let first_label = &node.labels[0];
 
@@ -582,6 +592,25 @@ impl<'a> QueryPlanner<'a> {
                 // parts into one), so the index IS the clause identity.
                 pattern_idx as u32,
             )?;
+
+            // This pattern's variables are bound from here on, so the NEXT
+            // pattern's guards see them. The set was previously seeded from the
+            // start pattern only and never grown, which made every guard that
+            // asks "did an earlier pattern already bind this?" answer no from the
+            // third pattern onward. That went unnoticed because the scan
+            // suppression used to consult a target set pooled across all
+            // patterns, which masked it: in
+            // `MATCH (a) OPTIONAL MATCH (a)-->(b) OPTIONAL MATCH (b)-->(c)`,
+            // `b` was suppressed in the third clause only because it was a
+            // relationship target in the second. Scoping that set per pattern
+            // removed the mask, so the real binding order has to be tracked.
+            for element in &pattern.elements {
+                if let PatternElement::Node(node) = element
+                    && let Some(var) = &node.variable
+                {
+                    previously_bound_vars.insert(var.clone());
+                }
+            }
         }
 
         // Add filter operators for WHERE clauses. Rebuild each entry's
@@ -1436,5 +1465,27 @@ impl<'a> QueryPlanner<'a> {
         }
 
         Ok(())
+    }
+
+    /// Node variables ONE pattern's own relationship hops will populate: the node
+    /// written immediately after each relationship element. The `Expand` those
+    /// hops lower to binds them, so the pattern must not also emit a driving scan
+    /// for them — that would discard the traversal's result and re-drive the
+    /// query from every node.
+    ///
+    /// Deliberately per-pattern. Computed across every pattern of the query, it
+    /// suppressed the scan of a variable that a DIFFERENT clause binds
+    /// independently — see the call site for the shape that broke.
+    fn relationship_target_vars(pattern: &Pattern) -> std::collections::HashSet<String> {
+        let mut targets = std::collections::HashSet::new();
+        for (idx, element) in pattern.elements.iter().enumerate() {
+            if matches!(element, PatternElement::Relationship(_))
+                && let Some(PatternElement::Node(node)) = pattern.elements.get(idx + 1)
+                && let Some(var) = &node.variable
+            {
+                targets.insert(var.clone());
+            }
+        }
+        targets
     }
 }
