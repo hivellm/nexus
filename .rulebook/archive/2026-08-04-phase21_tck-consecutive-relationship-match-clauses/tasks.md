@@ -154,9 +154,10 @@
     check lives in its own submodule rather than growing the offender.
 
 ## 2. Tail (docs + tests — check or waive with tailWaiver)
-- [x] 2.1 Update `docs/specs/cypher-subset.md`: replace the implicit-scope
-      isomorphism note with the explicit per-clause scope, state that the rule spans
-      comma parts but not separate `MATCH` clauses, and document 1.6's contract.
+- [x] 2.1 Update or create documentation covering the implementation
+  - `docs/specs/cypher-subset.md`: replace the implicit-scope isomorphism note with
+    the explicit per-clause scope, state that the rule spans comma parts but not
+    separate `MATCH` clauses, and document 1.6's contract.
   - The "Known gap: relationship isomorphism is NOT enforced in `MATCH`" block is
     gone, replaced by the enforced rule with worked examples for both sides of the
     clause boundary, the `RelationshipUniquenessViolation` contract with its source,
@@ -164,8 +165,10 @@
     single-hop slot and a variable-length/quantified segment of the same clause,
     because each carries its own rule and the shared scope stops at the operator
     boundary.
-- [x] 2.2 Write tests covering the new behavior in a new
-      `tests/cypher/relationship_isomorphism_test.rs`.
+- [x] 2.2 Write tests covering the new behavior
+  - New `tests/cypher/relationship_isomorphism_test.rs`; the sibling
+    `undirected_self_loop_counting_test.rs` already covers the shipped self-loop fix
+    and is not duplicated.
   - 12 tests. D0's single-pattern counts, named and anonymous; the over-rejection
     control (a genuine two-hop path over two DIFFERENT relationships still matches,
     directed and undirected); both TCK `countingSubgraphMatches` fixtures

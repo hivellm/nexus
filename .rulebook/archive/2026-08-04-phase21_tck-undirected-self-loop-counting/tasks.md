@@ -20,7 +20,16 @@
     rather than to undirected traversal in general.
   - Located by arithmetic, not guesswork: TCK [11] can only total 6 if `deg(l)=3`,
     which requires the loop to contribute one incidence, not two.
-- [ ] 1.2 undirected counting semantics — **MOVED, not done.** See below.
+- [x] 1.2 undirected counting semantics — **MOVED and now DELIVERED there.** See
+      below for why it moved. Closed by
+      `phase21_tck-consecutive-relationship-match-clauses` (commit 75944291), which
+      shipped per-clause relationship isomorphism on `Operator::Expand::iso_scope`
+      and took `useCases/countingSubgraphMatches` from 9/11 to **11/11 (100%)** —
+      the two scenarios this task's self-loop fix was necessary but not sufficient
+      for. `clauses/match-where` stayed at 28, so the regression trap documented
+      below was avoided; its real cause turned out to be
+      `execute_optional_filter` grouping by every raw row key, not the accumulator
+      scope itself.
 
 ### Why 1.2 moved to `phase21_tck-consecutive-relationship-match-clauses`
 
@@ -55,7 +64,8 @@ clause containing a relationship returns zero rows, and comma-separated parts of
 the regression trap — is written up in
 `phase21_tck-consecutive-relationship-match-clauses`.
 
-TCK `useCases/countingSubgraphMatches` therefore remains at 9/11 after this task.
+TCK `useCases/countingSubgraphMatches` therefore remains at 9/11 after this task
+(it reached 11/11 once the moved work landed — see 1.2 above).
 The self-loop fix is necessary for those two scenarios but not sufficient.
 
 ## 2. Tail (docs + tests — check or waive with tailWaiver)
