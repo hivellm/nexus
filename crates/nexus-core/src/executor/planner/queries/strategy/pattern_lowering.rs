@@ -1409,27 +1409,11 @@ impl<'a> QueryPlanner<'a> {
 
         if !order_by_added {
             if let Some((columns, ascending)) = order_by_clause_ref {
-                // Build a map of expression -> alias from return_items for resolution
-                let mut expression_to_alias = std::collections::HashMap::new();
-                for item in return_items.iter() {
-                    let expr_str = self
-                        .expression_to_string(&item.expression)
-                        .unwrap_or_default();
-                    let alias = item.alias.clone().unwrap_or_else(|| expr_str.clone());
-                    expression_to_alias.insert(expr_str, alias);
-                }
-
-                // Resolve ORDER BY column names to aliases
-                let resolved_columns: Vec<String> = columns
-                    .iter()
-                    .map(|col| {
-                        // Try to resolve to alias, otherwise use as-is
-                        expression_to_alias
-                            .get(col)
-                            .cloned()
-                            .unwrap_or_else(|| col.clone())
-                    })
-                    .collect();
+                // Resolve to projected aliases, projecting a hidden column for any
+                // key the RETURN does not produce — see
+                // `resolve_order_by_columns`.
+                let resolved_columns =
+                    self.resolve_order_by_columns(columns, return_items, operators, distinct);
 
                 // Find where to insert Sort (before Limit if exists)
                 let limit_pos = operators
@@ -1465,6 +1449,101 @@ impl<'a> QueryPlanner<'a> {
         }
 
         Ok(())
+    }
+
+    /// Resolve each `ORDER BY` key to a column the `Sort` operator can actually
+    /// read, projecting a HIDDEN column for any key the `RETURN` does not already
+    /// produce.
+    ///
+    /// `Sort` runs AFTER the projection and reads `result_set` columns, so a key
+    /// the projection drops is simply not there at sort time —
+    /// `RETURN n.name ORDER BY n.age` had no `n` left to read `age` from, and
+    /// `execute_sort` skipped the unresolved key silently, returning rows in
+    /// whatever order they arrived. Re-evaluating the expression at sort time
+    /// cannot fix that: the data is already gone. The key has to be CARRIED
+    /// through the projection, which is what the hidden column does; `Sort` drops
+    /// it again once the rows are ordered (see `execute_sort`).
+    ///
+    /// The key's expression is recovered by re-parsing the string the planner
+    /// produced with `expression_to_string` — the same round-trip
+    /// `Operator::Filter` relies on when it carries no AST. A key that does not
+    /// re-parse keeps today's behaviour (used as-is, and skipped at execution)
+    /// rather than failing the query.
+    ///
+    /// Skipped entirely for `DISTINCT` and for aggregating projections: Cypher
+    /// does not allow `ORDER BY` on a value the projection did not produce there
+    /// (the pre-projection variables are out of scope), and a hidden column would
+    /// silently change what `DISTINCT` dedups on or what the aggregation groups
+    /// by.
+    pub(in crate::executor::planner::queries) fn resolve_order_by_columns(
+        &self,
+        columns: &[String],
+        return_items: &[ReturnItem],
+        operators: &mut [Operator],
+        distinct: bool,
+    ) -> Vec<String> {
+        let mut expression_to_alias = std::collections::HashMap::new();
+        for item in return_items.iter() {
+            let expr_str = self
+                .expression_to_string(&item.expression)
+                .unwrap_or_default();
+            let alias = item.alias.clone().unwrap_or_else(|| expr_str.clone());
+            expression_to_alias.insert(expr_str, alias);
+        }
+        // An alias may also be named directly (`RETURN n.age AS a ORDER BY a`).
+        let projected_aliases: std::collections::HashSet<&String> =
+            expression_to_alias.values().collect();
+
+        let has_aggregate = operators
+            .iter()
+            .any(|op| matches!(op, Operator::Aggregate { .. }));
+        let may_project_hidden = !distinct && !has_aggregate;
+
+        let mut hidden: Vec<(String, ProjectionItem)> = Vec::new();
+        let resolved: Vec<String> = columns
+            .iter()
+            .enumerate()
+            .map(|(idx, col)| {
+                if let Some(alias) = expression_to_alias.get(col) {
+                    return alias.clone();
+                }
+                if projected_aliases.contains(col) {
+                    return col.clone();
+                }
+                if may_project_hidden {
+                    let mut parser = crate::executor::parser::CypherParser::new(col.clone());
+                    if let Ok(expression) = parser.parse_expression() {
+                        let alias = format!(
+                            "{}{idx}",
+                            crate::executor::operators::project::ORDER_BY_HIDDEN_KEY_PREFIX
+                        );
+                        hidden.push((
+                            alias.clone(),
+                            ProjectionItem {
+                                expression,
+                                alias: alias.clone(),
+                            },
+                        ));
+                        return alias;
+                    }
+                }
+                col.clone()
+            })
+            .collect();
+
+        if !hidden.is_empty() {
+            // Attach to the LAST projection in the pipeline — the one whose
+            // columns the Sort will read.
+            if let Some(Operator::Project { items }) = operators
+                .iter_mut()
+                .rev()
+                .find(|op| matches!(op, Operator::Project { .. }))
+            {
+                items.extend(hidden.into_iter().map(|(_, item)| item));
+            }
+        }
+
+        resolved
     }
 
     /// Node variables ONE pattern's own relationship hops will populate: the node

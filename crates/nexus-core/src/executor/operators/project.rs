@@ -12,6 +12,13 @@ use crate::{Error, Result};
 use serde_json::{Map, Value};
 use std::collections::HashMap;
 
+/// Alias prefix for a column the planner projects only so `Sort` can read an
+/// `ORDER BY` key the `RETURN` itself does not produce
+/// (`RETURN n.name ORDER BY n.age`). `execute_sort` drops these columns once the
+/// rows are ordered, so they never reach the client. Same
+/// internal-name convention as `__collect_arg_*`.
+pub(in crate::executor) const ORDER_BY_HIDDEN_KEY_PREFIX: &str = "__order_by_key_";
+
 impl Executor {
     pub(in crate::executor) fn execute_project(
         &self,
@@ -648,6 +655,7 @@ impl Executor {
 
         // Don't rebuild rows after sort - it breaks the column order!
         // The rows are already sorted in place.
+        drop_hidden_order_by_columns(context);
         Ok(())
     }
 
@@ -747,8 +755,91 @@ where
             }
         }
         (false, false) => {
-            let base = base_cmp(left, right);
+            // Two values of DIFFERENT types are ordered by type, not by content.
+            // Same-type pairs fall through to the base comparator.
+            let (left_rank, right_rank) = (order_by_type_rank(left), order_by_type_rank(right));
+            let base = if left_rank != right_rank {
+                left_rank.cmp(&right_rank)
+            } else {
+                base_cmp(left, right)
+            };
             if ascending { base } else { base.reverse() }
         }
+    }
+}
+
+/// Remove every [`ORDER_BY_HIDDEN_KEY_PREFIX`] column from the result set, once
+/// the rows have been ordered by it. The planner adds such a column so `Sort` can
+/// see a key the `RETURN` does not project; it is bookkeeping, not output, so it
+/// must not reach the client. A no-op — not even a row walk — for the ordinary
+/// case where no hidden key was needed.
+fn drop_hidden_order_by_columns(context: &mut ExecutionContext) {
+    let hidden: Vec<usize> = context
+        .result_set
+        .columns
+        .iter()
+        .enumerate()
+        .filter(|(_, name)| name.starts_with(ORDER_BY_HIDDEN_KEY_PREFIX))
+        .map(|(idx, _)| idx)
+        .collect();
+    if hidden.is_empty() {
+        return;
+    }
+    // Descending so each removal cannot shift a later index.
+    for &idx in hidden.iter().rev() {
+        context.result_set.columns.remove(idx);
+        for row in &mut context.result_set.rows {
+            if idx < row.values.len() {
+                row.values.remove(idx);
+            }
+        }
+    }
+    // The columnar variable map keeps its own copy of each projected column.
+    context
+        .variables
+        .retain(|name, _| !name.starts_with(ORDER_BY_HIDDEN_KEY_PREFIX));
+}
+
+/// Position of a value's TYPE in openCypher's ORDER BY total order, ascending.
+///
+/// Source: openCypher TCK `clauses/return-orderby/ReturnOrderBy1.feature`
+/// scenarios [11] and [12], which pin the order as
+/// `MAP < NODE < RELATIONSHIP < LIST < PATH < STRING < BOOLEAN < NUMBER < NaN <
+/// null` and require `DESC` to be its exact reverse (so `null` comes FIRST
+/// descending — the wrapper above already implements that half).
+///
+/// Kept on the sort path rather than in `compare_values_for_sort`, for the same
+/// reason the null rule is: that comparator is shared with the comparison
+/// OPERATORS (`<`, `<=`, `>`, `>=`), and Cypher's total order is not their
+/// semantics — `1 < 'text'` is `null` (incomparable), not a verdict derived from
+/// this ranking. Before this ranking existed, mixed-type pairs fell through to a
+/// stringified comparison, which put `1.5` before `'text'` (the spec wants
+/// `'text'` first) and ordered `false` against numbers by the spelling of
+/// `"false"`.
+///
+/// `NaN`'s slot between NUMBER and null is unreachable today: the value
+/// representation is `serde_json::Number`, which cannot hold a non-finite float
+/// (tracked by `phase21_tck-non-finite-floats`).
+fn order_by_type_rank(value: &Value) -> u8 {
+    match value {
+        Value::Object(map) => {
+            if crate::executor::is_node_value(value) {
+                1
+            } else if crate::executor::is_relationship_value(value) {
+                2
+            } else if map.contains_key("nodes") && map.contains_key("relationships") {
+                // The path shape produced by `shortestPath` / a path-bound
+                // pattern comprehension (`{nodes: [...], relationships: [...]}`).
+                4
+            } else {
+                0
+            }
+        }
+        Value::Array(_) => 3,
+        Value::String(_) => 5,
+        Value::Bool(_) => 6,
+        Value::Number(_) => 7,
+        // Unreachable in practice: the wrapper resolves null before ranking.
+        Value::Null => 9,
     }
 }

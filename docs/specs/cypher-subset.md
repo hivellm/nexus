@@ -319,6 +319,36 @@ OrderBy ::= 'ORDER' 'BY' OrderItem (',' OrderItem)*
 OrderItem ::= Expr ('ASC' | 'DESC')?
 ```
 
+**A sort key does not have to be projected.** `ORDER BY` sees the scope the
+projection consumed, not only the columns it produced, so both of these sort:
+
+```cypher
+MATCH (n:Person) RETURN n.name ORDER BY n.age      -- key not in the output
+UNWIND [3, 1, 2] AS v RETURN v ORDER BY v * -1     -- key is an expression
+```
+
+Such a key is carried through the projection as an internal column and dropped
+again once the rows are ordered, so it never appears in the result. It is not
+available after `DISTINCT` or an aggregating projection — Cypher puts the
+pre-projection variables out of scope there, and those forms sort only by what
+they project.
+
+**Ordering across types is a total order, not a value comparison.** When a sort
+key holds values of different types, they are ordered by type first, ascending:
+
+```
+MAP < NODE < RELATIONSHIP < LIST < PATH < STRING < BOOLEAN < NUMBER < NaN < null
+```
+
+`DESC` is the exact reverse of that sequence, which puts `null` **first**
+descending. Within one type the ordering is the type's own (numeric,
+lexicographic, element-wise for lists). This total order belongs to `ORDER BY`
+alone: the comparison operators do not derive from it, so `1 < 'text'` is not a
+verdict from this table.
+
+> **Note.** `NaN`'s slot between `NUMBER` and `null` is currently unreachable —
+> the value representation cannot hold a non-finite float. Tracked separately.
+
 ### LIMIT Clause
 
 ```cypher

@@ -1211,6 +1211,16 @@ impl<'a> QueryPlanner<'a> {
             // Standard openCypher pipeline order: ORDER BY, then SKIP,
             // then LIMIT.
             if let Some((columns, ascending)) = order_by_clause.clone() {
+                // Same resolution the MATCH path uses: a key the RETURN does not
+                // project is carried through as a hidden column instead of being
+                // silently skipped at sort time (`UNWIND [3,1,2] AS v RETURN v
+                // ORDER BY v * -1` returned its input order).
+                let columns = self.resolve_order_by_columns(
+                    &columns,
+                    &return_items,
+                    &mut operators,
+                    return_distinct,
+                );
                 operators.push(Operator::Sort { columns, ascending });
             }
             if let Some(skip) = skip_count {
