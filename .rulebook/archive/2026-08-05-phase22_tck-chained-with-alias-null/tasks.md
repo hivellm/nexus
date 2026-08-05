@@ -48,16 +48,24 @@
   - **5829 passed, 3 failed** — the 3 being the documented flakes
     (`property_index_survives_restart` and the two `exists_` var-length tests),
     which pass in isolation and are unrelated to planning.
-- [ ] 3.3 Neo4j differential suite still 300/300 (`scripts/compatibility/test-neo4j-nexus-compatibility-200.ps1`)
-  - **NOT RUN — not runnable in this environment, and deliberately left
-    unchecked rather than assumed.** The suite is differential: it needs a live
-    Neo4j on `localhost:7474` AND Nexus on `localhost:15474`. Probed both: neither
-    is up, and provisioning a Neo4j instance is outside what this change should
-    reach for. Nexus alone would not help — with no Neo4j there is nothing to
-    compare against.
-  - Available proxy, reported as such: the workspace suite includes
-    `--test compatibility` (245, 0 failures). Someone with the differential
-    environment should run 3.3 before this is treated as released.
+- [x] 3.3 Neo4j differential suite still 300/300 (`scripts/compatibility/test-neo4j-nexus-compatibility-200.ps1`)
+  - **RUN, and the gate's own number was stale.** Provisioned the missing half of
+    the environment (`docker run -d -p 7474:7474 -p 7687:7687
+    -e NEO4J_AUTH=neo4j/password neo4j:2025.09.0` — the exact version the suite
+    targets, so a version skew cannot be mistaken for a Nexus divergence) plus the
+    release server on :15474.
+  - Result: **308 passed / 2 failed / 15 skipped of 325 (99.35%)**. There is no
+    "300/300" to hold: the suite carries 325 cases, and 308/2/15 is its documented
+    baseline (`project-merge-write-path-executor-gaps`).
+  - The 2 failures are exactly the pre-existing MERGE write-path gaps that memory
+    records by number — `15.08 Multiple MERGE` ("Multiple different variables in
+    RETURN not supported for write queries") and `15.12 MERGE verify single node`
+    ("Unsupported clause in write query", the same `WITH`-between-writes limit
+    probed independently earlier in this session). Neither involves chained `WITH`
+    projection ordering, and both predate this change.
+  - So: no differential regression from A1, at the suite's real baseline. The
+    "still 300/300" wording in this checklist (and the same claim in
+    `AGENTS.override.md`, now corrected) should read 308/325.
 - [x] 3.4 TCK re-run: this task's categories improved, no category regressed against an identical re-run
   - Total unchanged at 1891, exactly as the proposal predicted ("near zero
     directly"). The scenario diff shows one fix (`clauses/return [9]`, the
