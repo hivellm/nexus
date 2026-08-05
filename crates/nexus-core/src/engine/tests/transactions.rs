@@ -81,7 +81,14 @@ fn property_index_survives_restart() {
 
     // First engine: seed data + create index, then flush + drop (= restart).
     {
-        let mut engine = Engine::with_data_dir(&path).expect("open engine");
+        // ISOLATED catalog on this test's own directory. `Engine::with_data_dir`
+        // routes through the shared per-process test catalog, whose single label-id
+        // sequence runs past the 64-bit `label_bits` cap partway through a full
+        // suite run; the label this test registers is then silently dropped and the
+        // rebuilt index below finds nothing. Isolating keeps the restart semantics
+        // the test exists to check — same directory, reopened — while giving it its
+        // own id space.
+        let mut engine = Engine::with_isolated_catalog(&path).expect("open engine");
         engine
             .execute_cypher("CREATE (:Restart {id: 'r1'}), (:Restart {id: 'r2'})")
             .expect("seed CREATE");
@@ -92,7 +99,7 @@ fn property_index_survives_restart() {
     }
 
     // Reopen on the same directory — simulates a server restart.
-    let mut engine = Engine::with_data_dir(&path).expect("reopen engine");
+    let mut engine = Engine::with_isolated_catalog(&path).expect("reopen engine");
     let label_id = engine
         .catalog
         .get_label_id("Restart")

@@ -11,7 +11,7 @@
 use super::super::super::context::ExecutionContext;
 use crate::Error;
 use crate::executor::Query;
-use crate::testing::create_test_executor;
+use crate::testing::{create_isolated_test_executor, create_test_executor};
 use serde_json::Value;
 use serde_json::json;
 use std::collections::HashMap;
@@ -855,7 +855,15 @@ fn exists_exact_var_length_requires_the_exact_hop_count() {
 
 #[test]
 fn exists_zero_length_var_length_matches_the_anchor_itself() {
-    let (mut executor, _ctx) = create_test_executor();
+    // ISOLATED catalog, deliberately: the shared per-process test catalog
+    // hands out one label-id sequence to all ~2770 lib tests, and a node
+    // stores its labels in a 64-bit `label_bits` bitmap. Past id 64 the
+    // label is silently dropped and every label-scoped match over it
+    // returns zero rows — measured: this test's label was getting id 77 in
+    // a full run. That is not a parallelism flake (a `--test-threads=1`
+    // run fails it identically); it is deterministic given how many labels
+    // are registered ahead of it.
+    let (mut executor, _ctx) = create_isolated_test_executor();
 
     let create = Query {
         cypher: "CREATE (a:ExistsProbeZ {name: 'a'})".to_string(),
@@ -881,7 +889,15 @@ fn exists_zero_length_var_length_matches_the_anchor_itself() {
 
 #[test]
 fn exists_undirected_var_length_traverses_both_ways() {
-    let (mut executor, _ctx) = create_test_executor();
+    // ISOLATED catalog, deliberately: the shared per-process test catalog
+    // hands out one label-id sequence to all ~2770 lib tests, and a node
+    // stores its labels in a 64-bit `label_bits` bitmap. Past id 64 the
+    // label is silently dropped and every label-scoped match over it
+    // returns zero rows — measured: this test's label was getting id 77 in
+    // a full run. That is not a parallelism flake (a `--test-threads=1`
+    // run fails it identically); it is deterministic given how many labels
+    // are registered ahead of it.
+    let (mut executor, _ctx) = create_isolated_test_executor();
 
     // Both edges are stored Outgoing (a -> b -> c); probing
     // undirected from `c` must still walk them backwards to `a`.

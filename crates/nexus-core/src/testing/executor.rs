@@ -18,6 +18,26 @@ use std::path::Path;
 /// The directory is guaranteed to exist before any component is initialized,
 /// preventing race conditions in parallel test execution.
 ///
+/// # The catalog is SHARED, and that has a hard limit
+///
+/// The `Catalog` this builds is redirected to one shared LMDB directory per
+/// process (`catalog::store`, to avoid the Windows `TlsFull` error from hundreds
+/// of environments), so **every test in the binary draws from a single label-id
+/// sequence**. A node stores its labels in a 64-bit `label_bits` bitmap: once the
+/// running id passes 64, `get_or_create_label` allocates an id the bitmap cannot
+/// represent, the label is **silently dropped**, and every label-scoped match over
+/// it returns zero rows.
+///
+/// The failure is deterministic given how many labels are registered ahead of the
+/// test — not a parallelism flake. A `--test-threads=1` run reproduces it, and
+/// merely adding a label elsewhere in the suite can push an unrelated test over
+/// the line. Measured example: a test's label was receiving id 77.
+///
+/// **Use [`create_isolated_test_executor`] instead whenever the test asserts on
+/// label-scoped results** (a `MATCH (n:Label)`, an `EXISTS { }` over a labelled
+/// pattern, a label-filtered index probe). This function is fine for tests that
+/// never depend on a label resolving.
+///
 /// # Returns
 ///
 /// A tuple of `(Executor, TestContext)` where:
