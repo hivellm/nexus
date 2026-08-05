@@ -803,7 +803,27 @@ impl Executor {
                 // Can evaluate if operand can be evaluated
                 self.can_evaluate_without_variables(operand)
             }
-            parser::Expression::FunctionCall { args, .. } => {
+            parser::Expression::FunctionCall { name, args } => {
+                // A list-predicate quantifier binds its own variable, so its
+                // predicate is NOT a reference to the enclosing scope — exactly
+                // the rule the `ListComprehension` arm below already applies.
+                //
+                // The parser lowers `all(x IN list WHERE pred)` to three discrete
+                // args — the variable name as a STRING LITERAL, the list, the
+                // predicate (`parser/expressions/identifier.rs`) — rather than to a
+                // `ListComprehension` node. So the generic "every argument must be
+                // evaluable" rule below saw a free `Variable("x")` in the predicate
+                // and answered false, `execute_project`/`execute_with` then refused
+                // to seed the synthetic unit row a standalone projection needs, and
+                // `RETURN all(x IN [1,2] WHERE x > 0)` returned ZERO ROWS instead of
+                // `true`. Only the list has to be evaluable here; the predicate is
+                // evaluated once per item with `x` bound (`eval/projection/fn_list.rs`).
+                //
+                // `filter(x IN list WHERE pred)` is unaffected — the parser folds it
+                // into a real `ListComprehension`, which the arm below covers.
+                if let Some(list) = quantifier_list_arg(name, args) {
+                    return self.can_evaluate_without_variables(list);
+                }
                 // Can evaluate if all arguments can be evaluated
                 args.iter()
                     .all(|arg| self.can_evaluate_without_variables(arg))
@@ -857,6 +877,37 @@ impl Executor {
                 self.can_evaluate_without_variables(list_expression)
             }
         }
+    }
+}
+
+/// The LIST argument of a list-predicate quantifier call, when `name`/`args` have
+/// the shape the parser produces for `all | any | none | single (x IN list WHERE
+/// pred)`: `args[0]` is the bound variable's name as a string literal, `args[1]`
+/// is the list, `args[2]` is the predicate.
+///
+/// `None` for anything else, including a call that merely shares one of those
+/// names without the shape — the caller then falls back to its generic rule
+/// rather than trusting the name alone.
+///
+/// Deliberately not extended to `extract` / `reduce`: they use the same
+/// name-as-literal convention in the evaluator, but neither parses in the
+/// `x IN list | expr` form today (verified: both raise a syntax error), so there
+/// is no shape here to recognise and no behaviour to preserve.
+fn quantifier_list_arg<'a>(
+    name: &str,
+    args: &'a [parser::Expression],
+) -> Option<&'a parser::Expression> {
+    if !matches!(
+        name.to_lowercase().as_str(),
+        "all" | "any" | "none" | "single"
+    ) {
+        return None;
+    }
+    // The bound-variable-as-string-literal first arg is what distinguishes the
+    // quantifier form from an ordinary call.
+    match args.first() {
+        Some(parser::Expression::Literal(parser::Literal::String(_))) => args.get(1),
+        _ => None,
     }
 }
 

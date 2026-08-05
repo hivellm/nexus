@@ -1916,6 +1916,28 @@ RETURN none(x IN [1, 2, 3] WHERE x < 0) AS none_negative
 RETURN single(x IN [1, 2, 3] WHERE x = 2) AS single_match
 ```
 
+**The bound variable is local to the quantifier.** `x` above is introduced by the
+quantifier and bound per list item; it is not a reference to the enclosing scope,
+so it neither needs a preceding clause to define it nor contributes a query-level
+filter. That makes the four predicates valid in a **standalone** projection — a
+bare `RETURN` or `WITH` with no reading clause before it, which is how they are
+most often written — and equally valid nested inside a larger expression:
+
+```cypher
+RETURN all(x IN [1,2] WHERE x > 0) AND any(y IN [3] WHERE y > 2) AS both
+WITH all(x IN [1,2] WHERE x > 0) AS ok RETURN ok
+```
+
+Over an **empty list** the vacuous-quantification rules apply: `all` and `none`
+return `true`, `any` and `single` return `false`.
+
+`filter(x IN list WHERE pred)` (the deprecated form) and the list comprehension
+`[x IN list WHERE pred]` scope their variable the same way.
+
+> **Known gap:** `extract(x IN list | expr)` and `reduce(acc = init, x IN list |
+> expr)` are not parseable in that syntax — both raise a syntax error. The
+> evaluator implements them; only the surface form is missing.
+
 ### Additional Aggregations
 
 ```cypher
