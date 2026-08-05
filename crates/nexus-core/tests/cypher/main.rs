@@ -19,6 +19,7 @@ mod logical_operators_tests;
 mod mathematical_operators_test;
 mod merge_relationship_anonymous_variable_test;
 mod merge_relationship_arrow_direction_test;
+mod merge_write_path_return_and_with_test;
 mod multi_clause_match_binding_test;
 mod new_functions_test;
 mod null_comparison_tests;

@@ -674,7 +674,28 @@ constraint be built over a temporal column). Values written by older versions in
 the executor's internal tagged form still read back correctly: reads render the
 tag, only writes changed.
 
+**A write query may RETURN several variables, and may carry a `WITH` between
+writes.** Both were rejected outright until recently:
+
+```cypher
+MERGE (a:Product {name: 'A'}) MERGE (b:Product {name: 'B'})
+RETURN a.name, b.name            -- one row, both bound
+
+MERGE (n:Product {name: 'U'}) WITH n
+MERGE (n2:Product {name: 'U'})   -- matches n, does not duplicate
+RETURN count(DISTINCT n)
+```
+
+A multi-variable `RETURN` is answered by materialising the write's bindings into a
+read query and letting the normal executor build the rows, so its row semantics
+are the executor's rather than a second model. A `WITH` between write clauses acts
+as a **scope cut**: it keeps the variables it projects (optionally renaming them)
+and drops the rest.
+
 **Current limitations:**
+- A `WITH` in a write query may project **bare variables only** (`WITH n`,
+  `WITH n AS m`). A projected property, expression or aggregation has no binding
+  to carry forward and is rejected with a message saying so.
 - Whole-entity replace (`SET x = {...}`) and the parenthetical target form
   are implemented for **node** variables only; `SET r = {map}` on a
   relationship variable is not yet supported (only the `+=` merge form is —

@@ -198,10 +198,15 @@ impl Engine {
             if var_for_iteration.is_none() {
                 var_for_iteration = Some(var.clone());
             } else if var_for_iteration.as_ref() != Some(&var) {
-                return Err(Error::CypherExecution(
-                    "Multiple different variables in RETURN not supported for write queries"
-                        .to_string(),
-                ));
+                // This fast path walks ONE variable's id list, so a RETURN
+                // spanning two of them (`MERGE (a…) MERGE (b…) RETURN a.name,
+                // b.name`) is not something it can build — it used to error out
+                // here. Hand it to the executor instead, exactly as a complex
+                // expression is handed over above: the write path's per-variable
+                // lists are independent rather than row-aligned, so reconstructing
+                // the rows here would mean inventing a row model the rest of the
+                // engine does not use.
+                return self.build_return_result_with_executor(context, return_clause);
             }
             columns.push(col_name);
         }
@@ -271,37 +276,86 @@ impl Engine {
         Ok(executor::ResultSet::new(columns, rows))
     }
 
+    /// Materialise the write path's bindings into a read query and let the real
+    /// executor build the RETURN.
+    ///
+    /// The write path models bindings as `variable -> Vec<node_id>`, which is NOT
+    /// a row-aligned column set — the per-variable lists are independent (see
+    /// `process_match_clause_multi`, and why relationship `MERGE` takes their
+    /// cartesian while `CREATE` zips aligned executor columns). So it cannot
+    /// reconstruct multi-variable rows itself without inventing a second row
+    /// model. It hands the ids to the executor instead, as
+    /// `MATCH (a), (b) WHERE id(a) IN [...] AND id(b) IN [...] RETURN ...`, and
+    /// the executor applies the row semantics it already has.
+    ///
+    /// Every variable the RETURN actually references contributes a pattern and an
+    /// id filter. Selecting them from the RETURN rather than from the context is
+    /// what makes this deterministic: the previous version took
+    /// `context.keys().next()` — an arbitrary key out of a `HashMap` — which
+    /// happened to be right only while exactly one variable was ever bound.
     pub(super) fn build_return_result_with_executor(
         &mut self,
         context: &HashMap<String, Vec<u64>>,
         return_clause: &executor::parser::ReturnClause,
     ) -> Result<executor::ResultSet> {
-        // For complex expressions, convert the context into a MATCH query
-        // and let the full executor handle it
+        let mut referenced = Self::context_vars_referenced_by(context, return_clause);
+        if referenced.is_empty() {
+            // A RETURN that names no variable at all — `count(*)`, a literal — still
+            // needs the write's rows to count. Materialise every binding, sorted so
+            // the generated query does not depend on `HashMap` iteration order.
+            // (The previous version reached for `context.keys().next()` here, which
+            // was right only because exactly one variable was ever bound.)
+            referenced = {
+                let mut all: Vec<String> = context.keys().cloned().collect();
+                all.sort();
+                all
+            };
+        }
 
-        // Find the variable name from context
-        let var_name = context.keys().next().ok_or_else(|| {
-            Error::CypherExecution("No context variable for complex RETURN".to_string())
-        })?;
-
-        let node_ids = context.get(var_name).cloned().unwrap_or_default();
-
-        if node_ids.is_empty() {
-            // Build empty result with correct columns
-            let columns = return_clause
+        let empty_columns = || -> Vec<String> {
+            return_clause
                 .items
                 .iter()
                 .map(|item| item.alias.clone().unwrap_or_else(|| "?column?".to_string()))
-                .collect();
-            return Ok(executor::ResultSet::new(columns, vec![]));
+                .collect()
+        };
+
+        if referenced.is_empty() {
+            return Err(Error::CypherExecution(
+                "No context variable for complex RETURN".to_string(),
+            ));
         }
 
-        // Build a query like: MATCH (var) WHERE id(var) IN [ids] RETURN ...
-        let ids_str = node_ids
+        // Any referenced variable bound to nothing collapses the whole row set —
+        // the patterns below are conjunctive.
+        if referenced
             .iter()
-            .map(|id| id.to_string())
+            .any(|var| context.get(var).is_none_or(|ids| ids.is_empty()))
+        {
+            return Ok(executor::ResultSet::new(empty_columns(), vec![]));
+        }
+
+        let patterns = referenced
+            .iter()
+            .map(|var| format!("({})", var))
             .collect::<Vec<_>>()
             .join(", ");
+        let filters = referenced
+            .iter()
+            .map(|var| {
+                let ids = context
+                    .get(var)
+                    .map(|ids| {
+                        ids.iter()
+                            .map(|id| id.to_string())
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    })
+                    .unwrap_or_default();
+                format!("id({}) IN [{}]", var, ids)
+            })
+            .collect::<Vec<_>>()
+            .join(" AND ");
 
         let return_str = return_clause
             .items
@@ -317,10 +371,7 @@ impl Engine {
             .collect::<Vec<_>>()
             .join(", ");
 
-        let query_str = format!(
-            "MATCH ({}) WHERE id({}) IN [{}] RETURN {}",
-            var_name, var_name, ids_str, return_str
-        );
+        let query_str = format!("MATCH {} WHERE {} RETURN {}", patterns, filters, return_str);
 
         // Execute through the full executor
         let query_obj = executor::Query {
@@ -329,5 +380,45 @@ impl Engine {
         };
 
         self.executor.execute(&query_obj)
+    }
+
+    /// The context variables this RETURN refers to, in first-appearance order so
+    /// the generated query is stable across runs (a `HashMap`'s iteration order is
+    /// not). Walks the whole expression tree, so a variable mentioned only inside
+    /// a function call or arithmetic still contributes its id filter.
+    fn context_vars_referenced_by(
+        context: &HashMap<String, Vec<u64>>,
+        return_clause: &executor::parser::ReturnClause,
+    ) -> Vec<String> {
+        let mut out: Vec<String> = Vec::new();
+        for item in &return_clause.items {
+            Self::collect_context_refs(context, &item.expression, &mut out);
+        }
+        out
+    }
+
+    /// Depth-first walk collecting every referenced name that the write context
+    /// actually binds. Names it does not bind are ignored rather than rejected —
+    /// a comprehension's own loop variable, for instance, is a reference here but
+    /// is bound by the comprehension, not by the write path.
+    fn collect_context_refs(
+        context: &HashMap<String, Vec<u64>>,
+        expr: &executor::parser::Expression,
+        out: &mut Vec<String>,
+    ) {
+        let referenced = match expr {
+            executor::parser::Expression::Variable(name) => Some(name),
+            executor::parser::Expression::PropertyAccess { variable, .. } => Some(variable),
+            _ => None,
+        };
+        if let Some(name) = referenced
+            && context.contains_key(name)
+            && !out.contains(name)
+        {
+            out.push(name.clone());
+        }
+        for child in crate::executor::semantic_validation::child_exprs(expr) {
+            Self::collect_context_refs(context, child, out);
+        }
     }
 }

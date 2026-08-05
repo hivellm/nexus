@@ -573,7 +573,7 @@ fn expr_contains_aggregate(expr: &Expression) -> bool {
 /// this exact "does not descend into EXISTS/COLLECT" traversal — those
 /// are full inner queries validated on their own, not CREATE property-map
 /// surface — instead of re-deriving its own copy.
-pub(in crate::executor) fn child_exprs(expr: &Expression) -> Vec<&Expression> {
+pub(crate) fn child_exprs(expr: &Expression) -> Vec<&Expression> {
     match expr {
         Expression::BinaryOp { left, right, .. } => vec![left, right],
         Expression::UnaryOp { operand, .. } => vec![operand],

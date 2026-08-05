@@ -359,8 +359,40 @@ impl Engine {
                         &mut rel_context,
                     )?;
                 }
-                executor::parser::Clause::With(_)
-                | executor::parser::Clause::Unwind(_)
+                executor::parser::Clause::With(with_clause) => {
+                    // A `WITH` between write clauses is a SCOPE CUT: keep the
+                    // variables it projects, drop the rest, optionally under a new
+                    // name. For the write path's `variable -> ids` model that is
+                    // directly representable — but only for a BARE variable
+                    // projection. A projected property, expression or aggregation
+                    // has no id list to carry forward, so it keeps erroring rather
+                    // than silently dropping the projection.
+                    //
+                    // Before this, `With` sat in the catch-all below and made the
+                    // whole query unexecutable: `MERGE (n…) WITH n MERGE (n2…)
+                    // RETURN …` and `MATCH … WITH n, duration(…) AS d SET n.d = d`
+                    // both died on "Unsupported clause in write query".
+                    let mut kept: HashMap<String, Vec<u64>> = HashMap::new();
+                    let mut kept_rels: HashMap<String, Vec<(u64, String)>> = HashMap::new();
+                    for item in &with_clause.items {
+                        let executor::parser::Expression::Variable(name) = &item.expression else {
+                            return Err(Error::CypherExecution(format!(
+                                "WITH in a write query supports bare variable projections only                                  (`WITH n`, `WITH n AS m`); `{}` projects an expression, which                                  has no binding to carry forward",
+                                item.alias.clone().unwrap_or_else(|| "<expr>".to_string())
+                            )));
+                        };
+                        let out_name = item.alias.clone().unwrap_or_else(|| name.clone());
+                        if let Some(ids) = context.get(name) {
+                            kept.insert(out_name.clone(), ids.clone());
+                        }
+                        if let Some(rels) = rel_context.get(name) {
+                            kept_rels.insert(out_name, rels.clone());
+                        }
+                    }
+                    context = kept;
+                    rel_context = kept_rels;
+                }
+                executor::parser::Clause::Unwind(_)
                 | executor::parser::Clause::Union(_)
                 | executor::parser::Clause::OrderBy(_)
                 | executor::parser::Clause::Limit(_)
