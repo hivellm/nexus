@@ -168,13 +168,25 @@ impl CypherParser {
         })
     }
 
-    /// Parse comparison expressions (=, <>, <, <=, >, >=, IS NULL, IS NOT NULL, STARTS WITH, ENDS WITH, CONTAINS, =~)
+    /// Parse a comparison, then apply any trailing `IS [NOT] NULL` to the WHOLE
+    /// comparison.
+    ///
+    /// `IS NULL` binds looser than a comparison operator in openCypher, so
+    /// `false = true IS NULL` is `(false = true) IS NULL`. This used to be checked
+    /// BEFORE the comparison operators, against the left operand alone: `false`
+    /// was tested for `IS`, the `= true` was then consumed as a comparison, and
+    /// the trailing `IS NULL` was left unread — which the projection-list parser
+    /// silently truncated at. Applying it here, to the finished comparison, is
+    /// both the correct precedence and what makes the whole item consumable.
+    ///
+    /// Looping allows the (rare, legal) `x IS NULL IS NOT NULL`.
     pub(super) fn parse_comparison_expression(&mut self) -> Result<Expression> {
-        let left = self.parse_additive_expression()?;
-
-        // Check for IS NULL / IS NOT NULL
-        self.skip_whitespace();
-        if self.peek_keyword("IS") {
+        let mut expr = self.parse_comparison_core()?;
+        loop {
+            self.skip_whitespace();
+            if !self.peek_keyword("IS") {
+                break;
+            }
             self.parse_keyword()?;
             self.skip_whitespace();
 
@@ -186,16 +198,23 @@ impl CypherParser {
                 false
             };
 
-            if self.peek_keyword("NULL") {
-                self.parse_keyword()?;
-                return Ok(Expression::IsNull {
-                    expr: Box::new(left),
-                    negated,
-                });
-            } else {
+            if !self.peek_keyword("NULL") {
                 return Err(self.error("Expected NULL after IS [NOT]"));
             }
+            self.parse_keyword()?;
+            expr = Expression::IsNull {
+                expr: Box::new(expr),
+                negated,
+            };
         }
+        Ok(expr)
+    }
+
+    /// The comparison level itself (`=`, `<>`, `<`, `<=`, `>`, `>=`, `STARTS
+    /// WITH`, `ENDS WITH`, `CONTAINS`, `IN`, `=~`), without the trailing
+    /// `IS [NOT] NULL` its caller applies.
+    fn parse_comparison_core(&mut self) -> Result<Expression> {
+        let left = self.parse_additive_expression()?;
 
         // Check for string operators (STARTS WITH, ENDS WITH, CONTAINS)
         self.skip_whitespace();

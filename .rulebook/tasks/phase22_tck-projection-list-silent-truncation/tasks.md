@@ -33,9 +33,36 @@
     the category's measured band today spans 145–148, so the −2 sits inside it —
     at the low end, which is stated rather than rounded away.
   - Workspace gate: **5853 passed, 0 failed** (exit 0).
-- [ ] 1.2 Support `IS NULL` / `IS NOT NULL` as a postfix operator inside a larger expression, not only as a whole predicate
+- [x] 1.2 Support `IS NULL` / `IS NOT NULL` as a postfix operator inside a larger expression, not only as a whole predicate
+  - The check ran BEFORE the comparison operators, against the LEFT operand alone:
+    in `false = true IS NULL`, `false` was tested for `IS`, `= true` was then
+    consumed as a comparison, and the trailing `IS NULL` was left unread. Moved to
+    after the comparison level (`parse_comparison_core` + a wrapper that loops
+    trailing `IS [NOT] NULL`), which is both the correct openCypher precedence —
+    `IS NULL` binds LOOSER than comparison — and what makes the item consumable.
+  - 5 tests: the TCK three-spelling case asserting `a == c` and `b` differing (so
+    the unparenthesised form reads as `(false = true) IS NULL`); the bare-operand
+    control the old early check handled; `IS NOT NULL` over a comparison; the
+    `IS` -without-`NULL` error; and comparison chaining, pinned because it shares
+    this precedence level.
+  - **TCK: neutral.** Total 2355 either way; only the two documented oscillators
+    moved (`clauses/return` 29↔30, `with-orderBy` 145↔146). `expressions/precedence`
+    did NOT move, which says its ~55 scenarios need 1.3's forms as well — worth
+    knowing before that item is sized.
 - [ ] 1.3 Support `.prop` after a call result and after a parenthesised expression (`f(x).p`, `(expr).p`)
-- [ ] 1.4 Support comparison chaining at the precedence the spec requires
+  - **BLOCKED on an AST change, discovered by attempting it.** `Expression::PropertyAccess`
+    holds `{ variable: String, property: String }` — the base is a variable NAME,
+    not an expression — so `(list[1]).existing` has nothing to be represented as.
+    It needs either a new variant (`base: Box<Expression>`) or widening
+    `PropertyAccess.variable` to an expression, and then every match site across
+    planner, evaluators and the write path. A half-implementation was written and
+    REVERTED rather than left in: erroring at a new place is no better than the
+    guard's existing error, and worse than an honest gap.
+- [x] 1.4 Support comparison chaining at the precedence the spec requires
+  - **Already implemented** before this task: `parse_comparison_expression` desugars
+    `a < b < c` to `a < b AND b < c` and extends to further links. Verified
+    (`1 < 2 < 3` is true, `1 < 2 < 1` is false) and pinned by test so the 1.2 move
+    could not disturb it. Nothing to write.
 - [ ] 1.5 Re-measure and record the new counts for RC18 and RC19 so their tasks can be sized
 
 ## 2. Tail (docs + tests — check or waive with tailWaiver)

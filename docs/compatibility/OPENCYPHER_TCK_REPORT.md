@@ -31,14 +31,14 @@ exercise) or the scenario was skip-listed. Skips are counted, never hidden.
 | `clauses/match-where` | 28 | 6 | 0 | 34 | 82.4% |
 | `clauses/merge` | 29 | 43 | 3 | 75 | 38.7% |
 | `clauses/remove` | 6 | 27 | 0 | 33 | 18.2% |
-| `clauses/return` | 29 | 33 | 1 | 63 | 46.0% |
+| `clauses/return` | 30 | 32 | 1 | 63 | 47.6% |
 | `clauses/return-orderby` | 21 | 13 | 1 | 35 | 60.0% |
 | `clauses/return-skip-limit` | 18 | 13 | 0 | 31 | 58.1% |
 | `clauses/set` | 17 | 34 | 2 | 53 | 32.1% |
 | `clauses/union` | 8 | 4 | 0 | 12 | 66.7% |
 | `clauses/unwind` | 7 | 7 | 0 | 14 | 50.0% |
 | `clauses/with` | 9 | 20 | 0 | 29 | 31.0% |
-| `clauses/with-orderBy` | 146 | 146 | 0 | 292 | 50.0% |
+| `clauses/with-orderBy` | 145 | 147 | 0 | 292 | 49.7% |
 | `clauses/with-skip-limit` | 5 | 4 | 0 | 9 | 55.6% |
 | `clauses/with-where` | 13 | 6 | 0 | 19 | 68.4% |
 | `expressions/aggregation` | 17 | 17 | 1 | 35 | 48.6% |
