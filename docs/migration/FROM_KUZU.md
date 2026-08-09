@@ -8,14 +8,14 @@
 > **Audience:** users running Kùzu v0.6.x – v0.10.x in production.
 > Multiple community forks (Bighorn, Ladybug, RyuGraph) exist as of
 > the time of writing; they are early. Nexus is feature-complete for
-> the Kùzu use case today: 300/300 Neo4j compatibility, native HNSW
+> the Kùzu use case today: 310/325 on the Neo4j differential suite, native HNSW
 > vector search, Tantivy-backed full-text search, ACID transactions.
 
 ## TL;DR
 
 | Concern | Kùzu | Nexus | Effort |
 |---|---|---|---|
-| Cypher dialect | Subset (~70%) | Neo4j 300/300 — strict superset of Kùzu | Low (Kùzu queries usually port unchanged) |
+| Cypher dialect | Subset (~70%) | Neo4j diff suite 310/325 — strict superset of Kùzu | Low (Kùzu queries usually port unchanged) |
 | Schema model | Strict typed (`CREATE NODE TABLE`) | Schema-flexible with optional unique/range indexes | Low (DDL maps 1:1) |
 | Embedding | In-process (Python / C++ / Node) | Single-binary server + native binary RPC | Medium (RPC client replaces in-proc handle) |
 | Vector index | `hnsw` index per table | `KnnIndex` per label | Low (DDL + data load via `LOAD CSV` + `CALL` proc) |
@@ -135,7 +135,7 @@ Identical semantics. No translation.
 
 Kùzu has a built-in `MATCH p = (a)-[*SHORTEST 1..N]->(b)` shorthand.
 Nexus exposes the same capability via the `algo.shortestPath`
-procedure (300/300 Neo4j compat ships this) plus the
+procedure (the Neo4j diff suite covers this) plus the
 `shortestPath()` Cypher function.
 
 ```cypher

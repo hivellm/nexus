@@ -122,7 +122,7 @@ cargo +nightly run --release -p nexus-core --example call_graph_filtering_exampl
 
 - **Neo4j wire-format compatibility.** `rows` are always Neo4j-style
   arrays (`[[v1, v2]]`), never object maps. SDKs add `RowsAsMap()`
-  helpers — do not change the server format. (300/300 on the
+  helpers — do not change the server format. (310/325 on the
   Neo4j 2025.09.0 diff suite.)
 - **No `unwrap()` in non-test code** outside of obvious invariants.
   Use `?` + `thiserror` (this crate is a library).

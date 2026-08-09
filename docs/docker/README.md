@@ -153,7 +153,7 @@ curl -sf http://localhost:15474/health | jq .status
 
 ## Features
 
-- **openCypher**: ~55 % of the openCypher surface (300/300 Neo4j
+- **openCypher**: ~55 % of the openCypher surface (310/325 Neo4j
   2025.09.0 diff suite passing; the full `cargo +nightly test
   --workspace` suite is green).
 - **External node IDs (`_id`)**: caller-supplied stable identifiers on

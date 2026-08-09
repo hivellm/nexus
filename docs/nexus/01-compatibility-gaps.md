@@ -105,7 +105,7 @@ INDEX/SCAN/JOIN), LRU plan cache (xxh3 canonicalization), GRAPH[name] scoping.
 ## What the 300-test diff suite actually covers
 
 The `scripts/compatibility/test-neo4j-nexus-compatibility-200.ps1` suite
-(300/300 green) covers basic queries, pattern matching, aggregation, string /
+(310/325, 0 failed) covers basic queries, pattern matching, aggregation, string /
 math / temporal functions, NULL handling, CASE, UNION, MERGE — **all through
 the paths that work**. It does not exercise: HTTP MERGE-relationship, SET on
 rel variables over HTTP, GraphQL mutations, RPC parameterized writes — which

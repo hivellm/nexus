@@ -554,7 +554,7 @@ cd sdks/typescript && npx tsx test-sdk-comprehensive.ts
 
 ### Neo4j Compatibility Testing
 
-**CRITICAL**: We maintain 100% Neo4j compatibility (300/300 tests passing).
+**CRITICAL**: The Neo4j differential suite is at 310/325 (0 failed, 15 skipped).
 
 ```bash
 # Run full compatibility suite
@@ -772,7 +772,7 @@ curl -X DELETE http://localhost:15474/databases/mydb
 {"rows": [["Alice", 30]]}  // Array format
 ```
 
-**Why**: We maintain 100% Neo4j compatibility (300/300 tests passing). Changing server format would break all SDKs and compatibility tests.
+**Why**: The Neo4j differential suite is at 310/325 (0 failed, 15 skipped). Changing server format would break all SDKs and compatibility tests.
 
 **Solution**: If SDKs need different formats, add helper methods in SDKs (like `RowsAsMap()`), never change server.
 

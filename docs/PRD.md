@@ -21,8 +21,8 @@ first-class HNSW KNN indexes into the same transactional substrate, so a
 single query can combine vector similarity with multi-hop graph traversal
 without round-tripping between two separate systems.
 
-v1.0.0 ships the single-node engine with 300/300 Neo4j differential-suite tests
-passing (array row format, distinct from openCypher TCK conformance ~13%), six official SDKs, SIMD
+v1.0.0 ships the single-node engine with 310/325 Neo4j differential-suite tests
+passing (array row format, distinct from openCypher TCK conformance 60.9%), six official SDKs, SIMD
 kernels (AVX-512 / AVX2 / NEON) runtime-dispatched, and production
 hardening (auth, audit, replication primitives, Prometheus metrics).
 
@@ -66,7 +66,7 @@ can start from vector similarity and expand through graph relationships
 | # | Goal | Signal of success |
 |---|------|-------------------|
 | G1 | **Hybrid-query performance** — make `KNN + graph expand` competitive with or faster than dedicated vector DBs for ≤10M-node corpora | ≥10K KNN queries/sec @ dim=768, p95 < 2 ms |
-| G2 | **Neo4j compatibility** — let Neo4j users migrate without rewriting queries or clients | 300/300 Neo4j differential-suite tests passing |
+| G2 | **Neo4j compatibility** — let Neo4j users migrate without rewriting queries or clients | 310/325 Neo4j differential-suite tests passing |
 | G3 | **Developer ergonomics** — 5-minute "pip install → running query" on every major language | 6 official SDKs, each with ≥30-test comprehensive suite passing |
 | G4 | **Production readiness** — authentication, audit, metrics, replication, Docker-ready deploys | Auth, RBAC, Prometheus metrics, replication (async/sync), Helm/Docker docs, SECURITY_AUDIT signed off |
 | G5 | **Ops predictability** — no surprise latency spikes from GC pauses or unbounded caches | Input hardcaps, capped page cache, bounded WAL, documented memory tuning guide |
@@ -74,7 +74,7 @@ can start from vector similarity and expand through graph relationships
 ### Non-goals (v1.0)
 
 - **Write-heavy OLTP.** Single-writer by design; we optimize for mixed read + bulk ingest, not per-row TPS.
-- **Full openCypher parity.** We target the Neo4j-compatible subset (300/300 differential tests) that serves graph-plus-vector workloads; `CALL {}` subqueries, advanced constraints, and the full procedure catalog stay in V2. openCypher TCK conformance is measured at ~13% (see OPENCYPHER_TCK_REPORT.md).
+- **Full openCypher parity.** We target the Neo4j-compatible subset (310/325 differential tests) that serves graph-plus-vector workloads; `CALL {}` subqueries, advanced constraints, and the full procedure catalog stay in V2. openCypher TCK conformance is measured at 60.9% (see OPENCYPHER_TCK_REPORT.md).
 - **Distributed writes / sharding.** Horizontal scaling is V2 (Phase 3). v1.0 is a replicated single master.
 - **Simple key-value storage.** Use Redis/RocksDB; Nexus is overkill.
 - **General-purpose analytics engine.** We expose a graph-algorithm catalog (GDS-style), but OLAP scan performance is not a v1.0 commitment.
@@ -141,7 +141,7 @@ can start from vector similarity and expand through graph relationships
 - **MUST** support `UNWIND / WITH / UNION / UNION ALL / CALL <procedure>`.
 - **MUST** support parameterized queries via `$name` binding.
 - **MUST** expose ~60 functions across string, numeric, list, map, date/time, spatial, and aggregation categories.
-- **MUST** pass 300/300 Neo4j differential-suite tests (array row format).
+- **MUST** pass the Neo4j differential suite with zero failures (array row format); currently 310/325 with 15 skipped.
 - **SHOULD** expose an `EXPLAIN` / query-plan inspection path.
 - Detailed spec: [docs/specs/cypher-subset.md](../specs/cypher-subset.md).
 
@@ -229,7 +229,7 @@ can start from vector similarity and expand through graph relationships
 - Horizontal write-scale via shards (V2, not v1.0).
 
 ### 7.4 Compatibility
-- **Cypher**: 300/300 Neo4j compatibility tests (openCypher subset).
+- **Cypher**: 310/325 Neo4j differential tests (openCypher subset; TCK conformance is a separate, stricter metric).
 - **Wire**: Neo4j-shaped JSON response `{"columns": [...], "rows": [[v1, v2]], "execution_time_ms": N, "stats": {...}}`.
 - **Server format is frozen**: any per-SDK ergonomic transformation lives in the SDK (e.g. Go's `RowsAsMap()`), never in the server.
 
@@ -279,7 +279,7 @@ Full detail: [ARCHITECTURE.md](../ARCHITECTURE.md). Module dependency ordering: 
 ### v1.0.0 (current release candidate) — Single-node production
 
 - Full MVP (Phase 1) + V1 hardening (Phase 2 subset): advanced indexes, replication primitives, query optimizer, bulk loader, Prometheus, auth, audit, all six SDKs.
-- **Exit criteria**: all targets in §7.1 met on the reference hardware; 300/300 Neo4j tests; zero critical bugs open; SECURITY_AUDIT signed off; deployment + memory-tuning + replication docs published.
+- **Exit criteria**: all targets in §7.1 met on the reference hardware; zero failures on the Neo4j differential suite; zero critical bugs open; SECURITY_AUDIT signed off; deployment + memory-tuning + replication docs published.
 
 ### v1.1 (post-1.0, candidate features)
 
