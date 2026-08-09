@@ -15,6 +15,78 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > carry these fixes. The remediation is tracked across 27 `phase0_fix-*`
 > tasks and will land incrementally under this release.
 
+### Changed — A query the parser cannot read in full is now rejected
+
+- **Silent truncation of a projection list is gone.** The parser used to stop at
+  the first expression form it could not continue, keep what it had, and discard
+  the rest of the list — and any clause after it — while reporting success:
+  `RETURN false = true IS NULL AS a, … AS b, … AS c` returned ONE column, and
+  `UNWIND … WITH collect(a) AS eq RETURN all(…) AND any(…)` dropped the `RETURN`
+  entirely. Leftover input is now an error naming what was left unread. A single
+  trailing `;` is accepted as a statement terminator.
+- **BREAKING, deliberately:** queries that were previously answered as a shorter,
+  different query now fail. Two shapes worth calling out because they looked
+  valid: `MATCH (a)(b) RETURN a` (juxtaposed node patterns are not Cypher — Neo4j
+  rejects them too) and any query ending in `GROUP BY …` (Cypher has no `GROUP
+  BY`; grouping is implicit in the non-aggregated projection items).
+
+### Fixed — Expression forms that caused those truncations
+
+- **`IS NULL` / `IS NOT NULL` now bind looser than a comparison**, which is the
+  openCypher precedence: `false = true IS NULL` is `(false = true) IS NULL`. The
+  check previously ran before the comparison operators and against the left
+  operand alone, so the trailing `IS NULL` was left unread.
+- **Property access on a computed base** — `(list[1]).existing`,
+  `startNode(r).id`, `(m.a).b` — is supported, and composes with a call's own
+  indexing (`f(x)[0].p`). A property read off a non-container or `NULL` base
+  yields `NULL`, matching `null.prop`.
+- Comparison chaining (`a < b < c` ≡ `a < b AND b < c`) was already implemented
+  and is now covered by tests.
+- **Known gaps, both of which now fail loudly instead of truncating:** a slice on
+  a bare variable (`l[1..3]`) and indexing a parenthesised expression (`(l)[1]`).
+
+### Fixed — List quantifiers in a standalone projection
+
+- `RETURN all(x IN [1,2] WHERE x > 0)` returned **zero rows**. A standalone
+  projection seeds one synthetic row only when every item is evaluable without
+  variables, and the parser encodes a quantifier's bound variable as a string
+  literal — so the predicate's `x` looked like a free variable and the row was
+  never seeded. All four quantifiers (`all`, `any`, `none`, `single`) are fixed;
+  `filter()` and list comprehensions were never affected. This was the single
+  largest conformance defect in the corpus: `expressions/quantifier` moved from
+  8.1% to 84.3%.
+
+### Fixed — Relationship isomorphism is enforced per `MATCH` clause
+
+- Two relationship slots of one clause never bind the same relationship, so a
+  pattern cannot walk back over the edge it arrived on: `MATCH (x)-[]-(y)-[]-(z)`
+  over a single relationship now returns 0 rows, not 2. The rule spans a clause's
+  comma-separated parts and does **not** span separate `MATCH` clauses.
+- **BREAKING for queries that relied on the inflated counts** — undirected
+  multi-hop counts drop to their conformant values.
+- Re-using one relationship variable inside a pattern
+  (`MATCH (a)-[r]->()-[r]->(a)`) is rejected at compile time with openCypher's
+  `RelationshipUniquenessViolation`, rather than silently returning no rows.
+
+### Fixed — Write-path `RETURN` and `WITH`
+
+- A write query may now `RETURN` **several variables**
+  (`MERGE (a…) MERGE (b…) RETURN a.name, b.name`) and may carry a **`WITH`
+  between writes** (`MERGE (n…) WITH n MERGE (n2…) RETURN …`). Both previously
+  failed outright ("Multiple different variables in RETURN not supported for
+  write queries" / "Unsupported clause in write query"). `WITH` in a write query
+  is a scope cut over bare variable projections; a projected expression is
+  rejected with a message saying so.
+- These were the last two failures on the Neo4j differential suite, which now
+  reports **310/325 with zero failures**.
+
+### Fixed — A `WITH`-minted alias survives a second `WITH`
+
+- `UNWIND [5,1,4] AS i WITH i AS a WITH a RETURN a` returned `[null, null, null]`
+  — silent data loss. The planner emitted the `WITH` operators in reverse order
+  when no `Project`/`Aggregate` sink existed yet, so the second clause's
+  projection ran first, against variables nothing had bound.
+
 ### Added — Temporal store round-trip (accessors, comparisons, and arithmetic on stored values)
 
 - **Property access, comparisons, and arithmetic now work on temporal values read back from storage**, not only on freshly-constructed ones. A temporal property always persists as a plain canonical ISO-8601 `STRING` (storage has no type discriminator beyond the JSON shape, and the tagged in-memory representation must never reach disk — see `executor::eval::temporal_retag`'s module doc for the full design rationale); `d.year`/`d.month`/… component access and datetime/duration arithmetic (`+`, `-`, `*`, `/`) now strictly re-derive the typed value from that string at the point of use, verified by round-tripping the parsed value back through the same renderer before accepting it; `WHERE v.date = date('...')` equality and `ORDER BY` work because both sides are canonical strings (ISO-8601 sorts chronologically as text), which is also why values stored in the old rendering no longer compare equal — see the breaking note below. `RETURN v.date` is unaffected — it still yields the plain ISO string, never the internal representation.
