@@ -1927,6 +1927,48 @@ is left to runtime, so the pass never rejects a query that might be valid.
 > `size(string)` counts UTF-8 bytes, so the two disagree on non-ASCII input.
 > `size()` is the one that is wrong; it is not corrected here.
 
+### Expression Forms and Parse Strictness
+
+**A query that cannot be read in full is rejected.** The parser used to stop at
+the first expression form it could not continue, keep what it had, and drop the
+rest of the projection list — and any clause after it — while reporting success.
+That is gone: leftover input is an error naming what was left unread. A single
+trailing `;` is accepted as a statement terminator.
+
+```cypher
+MATCH (a)(b) RETURN a     -- error: juxtaposed node patterns are not Cypher
+RETURN 1 AS a GROUP BY a  -- error: Cypher has no GROUP BY (grouping is implicit)
+```
+
+**`IS NULL` / `IS NOT NULL` bind looser than a comparison**, so they apply to the
+whole comparison:
+
+```cypher
+RETURN false = true IS NULL      -- (false = true) IS NULL  -> false
+RETURN false = (true IS NULL)    -- the other reading       -> true
+```
+
+**Property access on a computed base** — a parenthesised expression or a call
+result — is supported, and composes with a call's own indexing:
+
+```cypher
+WITH [123, {existing: 42}] AS list RETURN (list[1]).existing   -- 42
+MATCH ()-[r]->() RETURN startNode(r).id, endNode(r).id
+WITH {a: {b: 7}} AS m RETURN (m.a).b                           -- 7
+```
+
+A property read off a non-container or `NULL` base yields `NULL` rather than an
+error, matching `null.prop`.
+
+**Comparison chaining** works: `a < b < c` means `a < b AND b < c`, and extends
+to further links.
+
+> **Known gaps, both of which now fail loudly rather than truncating:** a slice on
+> a bare variable (`l[1..3]`) is rejected by the index parser, and indexing a
+> parenthesised expression (`(l)[1]`) is not supported — the parenthesised form
+> accepts `.property` suffixes only. Sharing one index/slice loop across every
+> postfix position is the follow-up.
+
 ### Predicate Functions
 
 ```cypher
