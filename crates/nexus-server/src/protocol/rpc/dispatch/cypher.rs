@@ -679,11 +679,25 @@ mod tests {
 
     #[tokio::test]
     async fn cypher_wraps_executor_error() {
+        // Must be a query the PARSER accepts, so the error genuinely comes from
+        // execution — which is what this test is named for. `NOT CYPHER` used to
+        // serve here only because the parser silently accepted it as a
+        // zero-clause query and left the failure to the executor; it is now
+        // rejected up front, and its path is covered by the sibling test below.
+        let s = session();
+        let err = run(&s, "CYPHER", &[NexusValue::Str("RETURN 1 / 0".into())])
+            .await
+            .unwrap_err();
+        assert!(err.contains("Cypher error"), "got: {err}");
+    }
+
+    #[tokio::test]
+    async fn cypher_wraps_parse_error() {
         let s = session();
         let err = run(&s, "CYPHER", &[NexusValue::Str("NOT CYPHER".into())])
             .await
             .unwrap_err();
-        assert!(err.contains("Cypher error"));
+        assert!(err.contains("Parse error"), "got: {err}");
     }
 
     #[tokio::test]

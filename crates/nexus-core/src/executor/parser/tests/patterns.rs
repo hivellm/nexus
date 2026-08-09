@@ -445,21 +445,29 @@ fn qpp_lowering_preserves_relationship_variable_and_direction() {
 }
 
 #[test]
-fn qpp_bare_parens_without_quantifier_is_not_qpp() {
+fn qpp_bare_parens_without_quantifier_is_rejected() {
     // `(a)(b)` without a trailing quantifier must NOT produce a
-    // QuantifiedGroup — the backtracker restores position and the
-    // outer pattern ends at `(a)`.
+    // QuantifiedGroup — the backtracker restores position, and the outer
+    // pattern then ends at `(a)`.
+    //
+    // That used to leave `(b) RETURN a` unconsumed and the query was accepted
+    // anyway: a MATCH over `(a)` alone, with the RETURN clause silently DROPPED.
+    // Juxtaposed node patterns are not valid Cypher (Neo4j rejects them too), so
+    // the query is now rejected rather than answered as a different one. The
+    // original intent — no QPP misparse — is unchanged and is what the error
+    // proves: a QuantifiedGroup would have consumed `(b)`.
     let mut parser = CypherParser::new("MATCH (a)(b) RETURN a".to_string());
-    let q = parser.parse().unwrap();
-    let Clause::Match(mc) = &q.clauses[0] else {
-        panic!("expected MATCH");
-    };
+    let err = parser
+        .parse()
+        .expect_err("juxtaposed node patterns must be rejected");
+    let msg = err.to_string();
     assert!(
-        mc.pattern
-            .elements
-            .iter()
-            .all(|e| !matches!(e, PatternElement::QuantifiedGroup(_))),
-        "no QPP should be emitted for `(a)(b)` without a quantifier"
+        msg.contains("unexpected input after the last clause"),
+        "expected the leftover-input error, got: {msg}"
+    );
+    assert!(
+        msg.contains("(b) RETURN a"),
+        "the error must point at what was left unread, got: {msg}"
     );
 }
 

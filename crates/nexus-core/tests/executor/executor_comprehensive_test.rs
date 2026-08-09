@@ -296,14 +296,33 @@ fn test_group_by() {
     let (mut executor, _ctx) = create_test_executor();
     setup_test_data(&mut executor);
 
+    // Cypher has NO `GROUP BY`: grouping is implicit in the non-aggregated
+    // projection items. This test used to pass a `GROUP BY a.name` tail and assert
+    // two columns — which only held because the parser silently TRUNCATED the
+    // query there and answered the prefix. Both halves are asserted now: the
+    // implicit form works, and the invalid form is rejected instead of quietly
+    // answering something else.
     let query = Query {
-        cypher: "MATCH (a:Person) RETURN a.name, count(*) AS count GROUP BY a.name".to_string(),
+        cypher: "MATCH (a:Person) RETURN a.name, count(*) AS count".to_string(),
         params: HashMap::new(),
     };
 
     let result = executor.execute(&query).unwrap();
     // Result rows can be empty or have data - both are valid
     assert_eq!(result.columns.len(), 2);
+
+    let invalid = Query {
+        cypher: "MATCH (a:Person) RETURN a.name, count(*) AS count GROUP BY a.name".to_string(),
+        params: HashMap::new(),
+    };
+    let err = executor
+        .execute(&invalid)
+        .expect_err("GROUP BY is not Cypher and must be rejected");
+    assert!(
+        err.to_string()
+            .contains("unexpected input after the last clause"),
+        "expected the leftover-input error, got: {err}"
+    );
 }
 
 // ============================================================================

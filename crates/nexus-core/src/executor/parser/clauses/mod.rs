@@ -141,6 +141,33 @@ impl CypherParser {
             }
         }
 
+        // Whatever is left must be nothing. Breaking out of the loop with input
+        // remaining used to be silent, and that is how a projection list could be
+        // TRUNCATED without anyone noticing: `RETURN false = true IS NULL AS a, …`
+        // parses one item, stops at `IS`, finds no clause boundary, and returns a
+        // one-column query — a different question, answered successfully. Same for
+        // `(list[1]).missing` stopping at `.` and `f(x).p` stopping after the call.
+        //
+        // Erroring here does not, by itself, make those queries work; the missing
+        // postfix forms are separate items. It makes them FAIL instead of silently
+        // returning something else, which is the difference between a gap and a
+        // wrong answer.
+        self.skip_whitespace();
+        // A single trailing `;` is a statement terminator, not leftover input.
+        if self.peek_char() == Some(';') {
+            self.consume_char();
+            self.skip_whitespace();
+        }
+        if self.pos < self.input.len() {
+            let rest = &self.input[self.pos..];
+            let shown: String = rest.chars().take(40).collect();
+            return Err(self.error(&format!(
+                "unexpected input after the last clause: `{}{}` — the query was                  parsed only up to that point",
+                shown,
+                if rest.chars().count() > 40 { "…" } else { "" }
+            )));
+        }
+
         // Allow empty queries (for EXPLAIN/PROFILE nested queries)
         // The planner will validate if needed
         Ok(CypherQuery {
