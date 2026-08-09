@@ -30,6 +30,7 @@ mod parser_literals_test;
 mod parser_precedence_test;
 mod path_function_semantics_test;
 mod phase4_cypher_parity_quick_wins_test;
+mod property_of_computed_base_test;
 mod quantifier_standalone_projection_test;
 mod relationship_isomorphism_test;
 mod return_where_tests;

@@ -24,6 +24,18 @@ impl Executor {
         expr: &parser::Expression,
     ) -> Result<Value> {
         match expr {
+            // `(expr).prop` / `f(x).prop` — read a property off a COMPUTED base.
+            // `Executor::extract_property` is the same accessor the variable form
+            // uses once it has the entity value in hand, so a node, relationship
+            // and plain map all behave identically here; a non-container base
+            // yields NULL rather than an error, matching Cypher's `null.prop`.
+            parser::Expression::PropertyOf { base, property } => {
+                let base_value = self.evaluate_projection_expression(row, context, base)?;
+                if base_value.is_null() {
+                    return Ok(Value::Null);
+                }
+                Ok(Self::extract_property(&base_value, property))
+            }
             parser::Expression::Variable(name) => {
                 let result = row.get(name).cloned().unwrap_or(Value::Null);
                 tracing::debug!(

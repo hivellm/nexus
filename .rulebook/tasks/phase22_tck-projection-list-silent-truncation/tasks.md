@@ -49,15 +49,36 @@
     moved (`clauses/return` 29↔30, `with-orderBy` 145↔146). `expressions/precedence`
     did NOT move, which says its ~55 scenarios need 1.3's forms as well — worth
     knowing before that item is sized.
-- [ ] 1.3 Support `.prop` after a call result and after a parenthesised expression (`f(x).p`, `(expr).p`)
-  - **BLOCKED on an AST change, discovered by attempting it.** `Expression::PropertyAccess`
-    holds `{ variable: String, property: String }` — the base is a variable NAME,
-    not an expression — so `(list[1]).existing` has nothing to be represented as.
-    It needs either a new variant (`base: Box<Expression>`) or widening
-    `PropertyAccess.variable` to an expression, and then every match site across
-    planner, evaluators and the write path. A half-implementation was written and
-    REVERTED rather than left in: erroring at a new place is no better than the
-    guard's existing error, and worse than an honest gap.
+- [x] 1.3 Support `.prop` after a call result and after a parenthesised expression (`f(x).p`, `(expr).p`)
+  - **The AST blocker was real and is resolved additively.**
+    `Expression::PropertyAccess` holds `{ variable: String, property: String }` —
+    the base is a NAME — and 75 call sites across 20 files read that field
+    directly, so widening it was never the cheap option. Added a sibling variant
+    `PropertyOf { base: Box<Expression>, property: String }` instead; the common
+    `n.prop` form is untouched.
+  - The compiler found every exhaustive match — **five**, not seventy-five:
+    `can_evaluate_without_variables` (evaluable iff the base is), the projection
+    evaluator (evaluate base, then `extract_property`, NULL base short-circuits to
+    NULL), and three semantic-validation walkers (`child_exprs`,
+    `collect_expr_binders`, `check_expr_references` — the property NAME is not a
+    reference, the base is).
+  - Parser emits it from one shared suffix loop used after `)` and after a
+    function call's own index loop, so `f(x)[0].p` composes. `..` is never
+    consumed as a property.
+  - 8 tests: the proposal's `(list[1]).missing, (list[1]).existing` two-column
+    shape; `startNode(r).id, endNode(r).id`; map literal; nested `(m.a).b`;
+    non-container and NULL bases reading as NULL; the untouched `n.prop` control;
+    and the two adjacent gaps below.
+  - **Two adjacent parser gaps found while testing, pinned as KNOWN gaps rather
+    than asserted as desired:** a slice on a bare variable (`l[1..3]`) is rejected
+    by the index parser, and indexing a PARENTHESISED expression (`(l)[1]`) has no
+    index loop at all. Both now fail loudly through 1.1's guard instead of
+    truncating. Sharing the index/slice loop across postfix positions is the
+    follow-up; the tests say to delete themselves when that lands.
+  - **TCK: neutral.** 2353/2354 across two runs of this build; the only category
+    that moves between identical runs is `clauses/with-orderBy` (144↔145), and
+    `clauses/return` oscillates 29↔30 as always. **No other category moved at
+    all**, which is the signal that matters for an AST change.
 - [x] 1.4 Support comparison chaining at the precedence the spec requires
   - **Already implemented** before this task: `parse_comparison_expression` desugars
     `a < b < c` to `a < b AND b < c` and extends to further links. Verified

@@ -284,6 +284,10 @@ impl CypherParser {
                 }
             }
 
+            // `.prop` on the CALL's result — `startNode(r).id`, `f(x)[0].p`.
+            // Runs after the index loop so both suffix kinds compose.
+            let expr = self.parse_dot_property_suffixes(expr)?;
+
             Ok(expr)
         }
         // Check for map projection: n {.name, .age}

@@ -1101,6 +1101,23 @@ pub enum Expression {
         /// Property name
         property: String,
     },
+    /// Property access on a COMPUTED base (`(expr).prop`, `f(x).prop`).
+    ///
+    /// [`Expression::PropertyAccess`] names its base by VARIABLE, which is the
+    /// overwhelmingly common `n.prop` case and stays as it is — 75 call sites
+    /// across the planner, evaluators and write path read that field directly.
+    /// A base that is itself an expression has no name to put there, so it gets
+    /// its own variant rather than widening the shared one.
+    ///
+    /// Without it the parser had nowhere to put `(list[1]).existing`: it stopped
+    /// after the parentheses and the projection list was silently truncated
+    /// there.
+    PropertyOf {
+        /// Expression whose value the property is read from.
+        base: Box<Expression>,
+        /// Property name
+        property: String,
+    },
     /// Array index access (expression[index])
     ArrayIndex {
         /// Base expression (array or property)

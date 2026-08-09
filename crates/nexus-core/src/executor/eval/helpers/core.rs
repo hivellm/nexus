@@ -777,6 +777,11 @@ impl Executor {
             parser::Expression::Parameter(_) => true, // Parameters can be evaluated
             parser::Expression::Variable(_) => false, // Variables need context
             parser::Expression::PropertyAccess { .. } => false, // Property access needs variables
+            // A property read on a COMPUTED base needs no variables when the base
+            // itself does not: `({a: 1}).a` is a constant.
+            parser::Expression::PropertyOf { base, .. } => {
+                self.can_evaluate_without_variables(base)
+            }
             parser::Expression::ArrayIndex { base, index } => {
                 // Can evaluate if both base and index can be evaluated without variables
                 self.can_evaluate_without_variables(base)

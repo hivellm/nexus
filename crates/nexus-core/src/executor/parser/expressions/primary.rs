@@ -111,11 +111,36 @@ impl CypherParser {
         }
     }
 
-    /// Parse parenthesized expression
+    /// Parse parenthesized expression, plus any `.property` read off its result.
     pub(super) fn parse_parenthesized_expression(&mut self) -> Result<Expression> {
         self.expect_char('(')?;
         let expr = self.parse_expression()?;
         self.expect_char(')')?;
+        self.parse_dot_property_suffixes(expr)
+    }
+
+    /// Consume a chain of `.property` suffixes applied to an already-parsed base
+    /// expression, producing [`Expression::PropertyOf`].
+    ///
+    /// `Expression::PropertyAccess` names its base by VARIABLE, so it can only
+    /// spell `n.prop`. A base that is itself an expression — `(list[1]).existing`,
+    /// `startNode(r).id` — had nowhere to go, and the parser simply stopped at the
+    /// `.`; the projection list was then silently truncated there.
+    ///
+    /// `..` is never consumed: that is a slice range, not a property.
+    pub(in super::super) fn parse_dot_property_suffixes(
+        &mut self,
+        base: Expression,
+    ) -> Result<Expression> {
+        let mut expr = base;
+        while self.peek_char() == Some('.') && self.peek_char_at(1) != Some('.') {
+            self.consume_char();
+            let property = self.parse_identifier()?;
+            expr = Expression::PropertyOf {
+                base: Box::new(expr),
+                property,
+            };
+        }
         Ok(expr)
     }
 

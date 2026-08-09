@@ -577,6 +577,7 @@ pub(crate) fn child_exprs(expr: &Expression) -> Vec<&Expression> {
     match expr {
         Expression::BinaryOp { left, right, .. } => vec![left, right],
         Expression::UnaryOp { operand, .. } => vec![operand],
+        Expression::PropertyOf { base, .. } => vec![base],
         Expression::FunctionCall { args, .. } => args.iter().collect(),
         Expression::ArrayIndex { base, index } => vec![base, index],
         Expression::ArraySlice { base, start, end } => {
@@ -899,6 +900,8 @@ fn collect_pattern_element_binders(element: &PatternElement, binders: &mut HashS
 /// comprehension it's nested inside legitimately bound it.
 pub(in crate::executor) fn collect_expr_binders(expr: &Expression, binders: &mut HashSet<String>) {
     match expr {
+        // Binds nothing itself; its base may.
+        Expression::PropertyOf { base, .. } => collect_expr_binders(base, binders),
         Expression::ListComprehension {
             variable,
             list_expression,
@@ -1092,6 +1095,8 @@ pub(in crate::executor) fn check_expr_references(
     binders: &HashSet<String>,
 ) -> crate::Result<()> {
     match expr {
+        // The property NAME is not a reference; the base is.
+        Expression::PropertyOf { base, .. } => check_expr_references(base, binders)?,
         Expression::Variable(name) => {
             // `__DISTINCT__` is an in-band marker the parser injects as the
             // first argument of an aggregate call (`count(DISTINCT n)`), not a
