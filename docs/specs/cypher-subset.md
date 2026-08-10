@@ -463,6 +463,33 @@ for multi-hop relationship patterns too: `count(*)` over
 `MATCH (a)-[:R1]->(b)-[:R2]->(c)` reports the true number of matching paths — `0`
 when any hop is absent — never a phantom count.
 
+**Grouping keys.** In an aggregating projection every non-aggregate item is a
+grouping key, whatever its expression shape — a variable, a literal, an
+arithmetic expression or a function call, not only a property access on a graph
+variable — and each keeps its column in the result:
+
+```cypher
+UNWIND [1, 1, 2] AS v WITH v AS k, count(*) AS c RETURN k, c  -- k,c = 1:2, 2:1
+UNWIND [1, 1, 2] AS v WITH 9 AS k, count(*) AS c RETURN k, c  -- k,c = 9:3
+MATCH (p:Person) RETURN p.city AS city, count(*) AS n         -- one row per city
+```
+
+**Aggregates nested in an expression.** An aggregate may sit anywhere inside a
+larger expression. It is evaluated once per group and the enclosing expression is
+computed afterwards, over the aggregated value:
+
+```cypher
+MATCH (n:P) RETURN count(*) + 1                             -- one row
+MATCH (n:P) RETURN sum(n.x) * 2
+MATCH (n:P) RETURN [count(*)]
+MATCH (n:P) RETURN CASE WHEN count(*) > 0 THEN 'yes' ELSE 'no' END
+MATCH (n:P) RETURN n.x AS k, head(collect(n.x)) AS h        -- k stays a column
+```
+
+This holds over empty input too: the aggregate still yields its identity value
+and the wrapping expression is computed over it, so `MATCH (a:Absent) RETURN
+count(a) > 0` returns one row containing `false` — never zero rows.
+
 **Fully-anonymous relationships.** A fully-anonymous relationship pattern with no
 node or relationship variables — `MATCH ()-[:TYPE]->() RETURN count(*)` — counts
 every matching relationship, not just the unique target nodes. Prior behavior under-counted by deduplicating rows incorrectly; the fix ensures each relationship is counted exactly once.

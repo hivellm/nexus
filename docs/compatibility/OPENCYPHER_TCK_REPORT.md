@@ -18,7 +18,7 @@ exercise) or the scenario was skip-listed. Skips are counted, never hidden.
 
 ## Totals
 
-**3868 scenarios — 2355 passed (60.9%), 1442 failed, 71 skipped.**
+**3868 scenarios — 2364 passed (61.1%), 1433 failed, 71 skipped.**
 
 ## Per-category
 
@@ -31,14 +31,14 @@ exercise) or the scenario was skip-listed. Skips are counted, never hidden.
 | `clauses/match-where` | 28 | 6 | 0 | 34 | 82.4% |
 | `clauses/merge` | 29 | 43 | 3 | 75 | 38.7% |
 | `clauses/remove` | 6 | 27 | 0 | 33 | 18.2% |
-| `clauses/return` | 29 | 33 | 1 | 63 | 46.0% |
-| `clauses/return-orderby` | 21 | 13 | 1 | 35 | 60.0% |
+| `clauses/return` | 37 | 25 | 1 | 63 | 58.7% |
+| `clauses/return-orderby` | 22 | 12 | 1 | 35 | 62.9% |
 | `clauses/return-skip-limit` | 18 | 13 | 0 | 31 | 58.1% |
 | `clauses/set` | 17 | 34 | 2 | 53 | 32.1% |
 | `clauses/union` | 8 | 4 | 0 | 12 | 66.7% |
 | `clauses/unwind` | 7 | 7 | 0 | 14 | 50.0% |
 | `clauses/with` | 9 | 20 | 0 | 29 | 31.0% |
-| `clauses/with-orderBy` | 146 | 146 | 0 | 292 | 50.0% |
+| `clauses/with-orderBy` | 145 | 147 | 0 | 292 | 49.7% |
 | `clauses/with-skip-limit` | 5 | 4 | 0 | 9 | 55.6% |
 | `clauses/with-where` | 13 | 6 | 0 | 19 | 68.4% |
 | `expressions/aggregation` | 17 | 17 | 1 | 35 | 48.6% |
@@ -47,7 +47,7 @@ exercise) or the scenario was skip-listed. Skips are counted, never hidden.
 | `expressions/conditional` | 13 | 0 | 0 | 13 | 100.0% |
 | `expressions/existentialSubqueries` | 9 | 1 | 0 | 10 | 90.0% |
 | `expressions/graph` | 26 | 32 | 3 | 61 | 42.6% |
-| `expressions/list` | 96 | 89 | 0 | 185 | 51.9% |
+| `expressions/list` | 97 | 88 | 0 | 185 | 52.4% |
 | `expressions/literals` | 102 | 29 | 0 | 131 | 77.9% |
 | `expressions/map` | 18 | 17 | 9 | 44 | 40.9% |
 | `expressions/mathematical` | 3 | 3 | 0 | 6 | 50.0% |
@@ -61,7 +61,7 @@ exercise) or the scenario was skip-listed. Skips are counted, never hidden.
 | `expressions/typeConversion` | 20 | 27 | 0 | 47 | 42.6% |
 | `useCases/countingSubgraphMatches` | 11 | 0 | 0 | 11 | 100.0% |
 | `useCases/triadicSelection` | 19 | 0 | 0 | 19 | 100.0% |
-| **total** | **2355** | **1442** | **71** | **3868** | **60.9%** |
+| **total** | **2364** | **1433** | **71** | **3868** | **61.1%** |
 
 ## Skip-list (deliberately un-evaluated)
 

@@ -87,6 +87,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   when no `Project`/`Aggregate` sink existed yet, so the second clause's
   projection ran first, against variables nothing had bound.
 
+### Fixed — Grouping keys, and aggregates nested inside an expression
+
+- **Every non-aggregate projection item is a grouping key again, whatever its
+  expression shape.** Only the pattern-driven planner path promoted them; the
+  path taken by `UNWIND`, a bare `RETURN`, and `WITH` declared its grouping-key
+  list `let … = Vec::new()` and never filled it. So
+  `UNWIND [1,1,2] AS v WITH v AS k, count(*) AS c RETURN k, c` answered with the
+  single column `c` and one collapsed row `[3]` — both the column and the count
+  were wrong — while the same query over a `MATCH` was correct.
+- **An aggregate may now sit inside a larger expression.** `count(*) > 0`,
+  `count(*) + 1`, `sum(n.x) * 2`, `[count(*)]` and `CASE WHEN count(*) > 0 …`
+  all evaluated to `null`, on any input — an aggregate was only ever planned as
+  one when it was the entire projection item. Each aggregate call is now lifted
+  into its own aggregation and the enclosing expression is computed afterwards,
+  over the aggregated value. Over empty input the row survives, so
+  `MATCH (a:Absent) RETURN count(a) > 0` returns one row containing `false`
+  rather than no rows at all.
+- **A grouping key survives a post-aggregation projection.**
+  `MATCH (n:P) RETURN n.x AS k, head(collect(n.x)) AS h` returned only column
+  `h`; the projection that computes the wrapping expression now reproduces the
+  written `RETURN` list position by position, so key columns and column order
+  are preserved.
+- The narrow, `collect`-only nested-aggregate rewrite this generalises has been
+  removed rather than left beside it. openCypher TCK conformance 60.9% → 61.1%
+  (2364 of 3868, `+8` against a same-machine baseline re-measured at 2356);
+  `clauses/return` 46.0% → 58.7%.
+
 ### Added — Temporal store round-trip (accessors, comparisons, and arithmetic on stored values)
 
 - **Property access, comparisons, and arithmetic now work on temporal values read back from storage**, not only on freshly-constructed ones. A temporal property always persists as a plain canonical ISO-8601 `STRING` (storage has no type discriminator beyond the JSON shape, and the tagged in-memory representation must never reach disk — see `executor::eval::temporal_retag`'s module doc for the full design rationale); `d.year`/`d.month`/… component access and datetime/duration arithmetic (`+`, `-`, `*`, `/`) now strictly re-derive the typed value from that string at the point of use, verified by round-tripping the parsed value back through the same renderer before accepting it; `WHERE v.date = date('...')` equality and `ORDER BY` work because both sides are canonical strings (ISO-8601 sorts chronologically as text), which is also why values stored in the old rendering no longer compare equal — see the breaking note below. `RETURN v.date` is unaffected — it still yields the plain ISO string, never the internal representation.

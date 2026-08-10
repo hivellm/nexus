@@ -1,6 +1,7 @@
 //! Expression/pattern serialisation and aggregation detection helpers.
 
 use super::*;
+use crate::executor::parser::WhenClause;
 
 impl<'a> QueryPlanner<'a> {
     /// Convert expression to string representation
@@ -375,34 +376,43 @@ impl<'a> QueryPlanner<'a> {
         Ok(result)
     }
 
+    /// True when `name` (assumed already lower-cased) names one of the
+    /// aggregate functions the planner recognises. This is the single
+    /// source of truth for that list — factored out so
+    /// [`Self::contains_aggregation`] and [`Self::lift_aggregations`] can
+    /// never drift apart on which function names collapse row
+    /// cardinality.
+    pub(super) fn is_aggregate_function_name(name: &str) -> bool {
+        // phase6 §9 — statistical aggregations must trigger the same
+        // row-collapse path as count/sum/avg. Before adding these,
+        // `MATCH (n:A) RETURN stdev(n.score)` returned 20 rows (one per
+        // matched :A node) instead of one aggregated row because the
+        // planner didn't treat stdev/variance/percentile* as
+        // aggregations and so never introduced the Aggregate operator.
+        matches!(
+            name,
+            "count"
+                | "sum"
+                | "avg"
+                | "min"
+                | "max"
+                | "collect"
+                | "stdev"
+                | "stdevp"
+                | "variance"
+                | "variancep"
+                | "percentilecont"
+                | "percentiledisc"
+        )
+    }
+
     /// Check if an expression contains an aggregation function (recursively)
     pub(super) fn contains_aggregation(&self, expr: &Expression) -> bool {
         match expr {
             Expression::FunctionCall { name, args } => {
                 let func_name = name.to_lowercase();
                 // Check if this is an aggregation function
-                // phase6 §9 — statistical aggregations must trigger the
-                // same row-collapse path as count/sum/avg. Before adding
-                // these, `MATCH (n:A) RETURN stdev(n.score)` returned
-                // 20 rows (one per matched :A node) instead of one
-                // aggregated row because the planner didn't treat
-                // stdev/variance/percentile* as aggregations and so
-                // never introduced the Aggregate operator.
-                if matches!(
-                    func_name.as_str(),
-                    "count"
-                        | "sum"
-                        | "avg"
-                        | "min"
-                        | "max"
-                        | "collect"
-                        | "stdev"
-                        | "stdevp"
-                        | "variance"
-                        | "variancep"
-                        | "percentilecont"
-                        | "percentiledisc"
-                ) {
+                if Self::is_aggregate_function_name(&func_name) {
                     return true;
                 }
                 // Recursively check arguments
@@ -451,60 +461,420 @@ impl<'a> QueryPlanner<'a> {
         }
     }
 
-    /// Replace nested aggregations in an expression with variable references
-    pub(super) fn replace_nested_aggregations(
+    /// Lift every aggregate call out of `expr`, replacing each in place with a
+    /// reference to a synthetic column, so the enclosing expression can be
+    /// computed *after* the aggregation.
+    ///
+    /// Returns the rewritten expression and the lifted calls paired with the
+    /// synthetic alias each was replaced by. `next_index` is threaded across
+    /// calls so aliases stay unique across a whole projection list.
+    pub(super) fn lift_aggregations(
         &self,
         expr: &Expression,
-        aggregations: &[Aggregation],
-    ) -> Expression {
+        next_index: &mut usize,
+    ) -> (Expression, Vec<(String, Expression)>) {
+        // A bare aggregate call — anywhere, including at the top level —
+        // lifts whole: an aggregate nested inside an aggregate is invalid
+        // Cypher and rejected elsewhere, so its arguments are never
+        // recursed into.
+        if let Expression::FunctionCall { name, .. } = expr {
+            if Self::is_aggregate_function_name(&name.to_lowercase()) {
+                let alias = format!("__agg_lift_{}", *next_index);
+                *next_index += 1;
+                return (
+                    Expression::Variable(alias.clone()),
+                    vec![(alias, expr.clone())],
+                );
+            }
+        }
+
         match expr {
             Expression::FunctionCall { name, args } => {
-                let func_name = name.to_lowercase();
-                // Check if this is a nested aggregation function
-                if func_name == "collect" {
-                    // Find matching aggregation by checking if the arguments match
-                    for (idx, agg) in aggregations.iter().enumerate() {
-                        if let Aggregation::Collect { column, .. } = agg {
-                            // Check if this collect() matches the aggregation
-                            if let Some(arg) = args.first() {
-                                let matches = match arg {
-                                    Expression::Variable(var) => var == column,
-                                    Expression::PropertyAccess { variable, property } => {
-                                        format!("{}.{}", variable, property) == *column
-                                    }
-                                    _ => false,
-                                };
-                                if matches {
-                                    // Replace with variable reference to aggregation result
-                                    let temp_alias = format!("__agg_{}", idx);
-                                    return Expression::Variable(temp_alias);
-                                }
-                            }
-                        }
-                    }
-                }
-
-                // Recursively replace nested aggregations in arguments
-                let new_args: Vec<Expression> = args
+                let mut lifted = Vec::new();
+                let new_args = args
                     .iter()
-                    .map(|arg| self.replace_nested_aggregations(arg, aggregations))
+                    .map(|arg| {
+                        let (new_arg, arg_lifted) = self.lift_aggregations(arg, next_index);
+                        lifted.extend(arg_lifted);
+                        new_arg
+                    })
                     .collect();
-
-                Expression::FunctionCall {
-                    name: name.clone(),
-                    args: new_args,
-                }
+                (
+                    Expression::FunctionCall {
+                        name: name.clone(),
+                        args: new_args,
+                    },
+                    lifted,
+                )
             }
-            Expression::BinaryOp { left, right, op } => Expression::BinaryOp {
-                left: Box::new(self.replace_nested_aggregations(left, aggregations)),
-                right: Box::new(self.replace_nested_aggregations(right, aggregations)),
-                op: *op,
-            },
-            Expression::UnaryOp { op, operand } => Expression::UnaryOp {
-                op: *op,
-                operand: Box::new(self.replace_nested_aggregations(operand, aggregations)),
-            },
-            _ => expr.clone(),
+            Expression::BinaryOp { left, op, right } => {
+                let (new_left, mut lifted) = self.lift_aggregations(left, next_index);
+                let (new_right, right_lifted) = self.lift_aggregations(right, next_index);
+                lifted.extend(right_lifted);
+                (
+                    Expression::BinaryOp {
+                        left: Box::new(new_left),
+                        right: Box::new(new_right),
+                        op: *op,
+                    },
+                    lifted,
+                )
+            }
+            Expression::UnaryOp { op, operand } => {
+                let (new_operand, lifted) = self.lift_aggregations(operand, next_index);
+                (
+                    Expression::UnaryOp {
+                        op: *op,
+                        operand: Box::new(new_operand),
+                    },
+                    lifted,
+                )
+            }
+            Expression::List(elements) => {
+                let mut lifted = Vec::new();
+                let new_elements = elements
+                    .iter()
+                    .map(|element| {
+                        let (new_element, element_lifted) =
+                            self.lift_aggregations(element, next_index);
+                        lifted.extend(element_lifted);
+                        new_element
+                    })
+                    .collect();
+                (Expression::List(new_elements), lifted)
+            }
+            Expression::Map(map) => {
+                let mut lifted = Vec::new();
+                let new_map = map
+                    .iter()
+                    .map(|(key, value)| {
+                        let (new_value, value_lifted) = self.lift_aggregations(value, next_index);
+                        lifted.extend(value_lifted);
+                        (key.clone(), new_value)
+                    })
+                    .collect();
+                (Expression::Map(new_map), lifted)
+            }
+            Expression::Case {
+                input,
+                when_clauses,
+                else_clause,
+            } => {
+                let mut lifted = Vec::new();
+                let new_input = input.as_ref().map(|input_expr| {
+                    let (new_input_expr, input_lifted) =
+                        self.lift_aggregations(input_expr, next_index);
+                    lifted.extend(input_lifted);
+                    Box::new(new_input_expr)
+                });
+                let new_when_clauses = when_clauses
+                    .iter()
+                    .map(|when| {
+                        let (new_condition, condition_lifted) =
+                            self.lift_aggregations(&when.condition, next_index);
+                        lifted.extend(condition_lifted);
+                        let (new_result, result_lifted) =
+                            self.lift_aggregations(&when.result, next_index);
+                        lifted.extend(result_lifted);
+                        WhenClause {
+                            condition: new_condition,
+                            result: new_result,
+                        }
+                    })
+                    .collect();
+                let new_else_clause = else_clause.as_ref().map(|else_expr| {
+                    let (new_else_expr, else_lifted) =
+                        self.lift_aggregations(else_expr, next_index);
+                    lifted.extend(else_lifted);
+                    Box::new(new_else_expr)
+                });
+                (
+                    Expression::Case {
+                        input: new_input,
+                        when_clauses: new_when_clauses,
+                        else_clause: new_else_clause,
+                    },
+                    lifted,
+                )
+            }
+            Expression::IsNull { expr, negated } => {
+                let (new_expr, lifted) = self.lift_aggregations(expr, next_index);
+                (
+                    Expression::IsNull {
+                        expr: Box::new(new_expr),
+                        negated: *negated,
+                    },
+                    lifted,
+                )
+            }
+            Expression::ArrayIndex { base, index } => {
+                let (new_base, mut lifted) = self.lift_aggregations(base, next_index);
+                let (new_index, index_lifted) = self.lift_aggregations(index, next_index);
+                lifted.extend(index_lifted);
+                (
+                    Expression::ArrayIndex {
+                        base: Box::new(new_base),
+                        index: Box::new(new_index),
+                    },
+                    lifted,
+                )
+            }
+            _ => (expr.clone(), vec![]),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::catalog::CATALOG_MMAP_INITIAL_SIZE;
+    use crate::testing::TestContext;
+
+    /// Builds an isolated `Catalog` + `TestContext` pair, mirroring
+    /// `planner::tests::create_test_catalog` (that helper is `pub(super)`
+    /// to the sibling `planner::tests` module and unreachable from here).
+    fn create_test_catalog() -> (Catalog, TestContext) {
+        let ctx = TestContext::new();
+        let catalog =
+            Catalog::with_isolated_path(ctx.path().join("catalog.mdb"), CATALOG_MMAP_INITIAL_SIZE)
+                .expect("failed to create isolated test catalog");
+        (catalog, ctx)
+    }
+
+    fn function_call(name: &str, args: Vec<Expression>) -> Expression {
+        Expression::FunctionCall {
+            name: name.to_string(),
+            args,
+        }
+    }
+
+    fn property(variable: &str, property: &str) -> Expression {
+        Expression::PropertyAccess {
+            variable: variable.to_string(),
+            property: property.to_string(),
+        }
+    }
+
+    /// `Expression` does not implement `PartialEq` — nothing in production
+    /// code compares two expression trees — so these tests compare the
+    /// derived `Debug` rendering instead, which distinguishes every variant
+    /// and field used here.
+    fn assert_expr_eq(actual: &Expression, expected: &Expression) {
+        assert_eq!(format!("{:?}", actual), format!("{:?}", expected));
+    }
+
+    /// Same, for the `(synthetic alias, lifted call)` pairs.
+    fn assert_lifted_eq(actual: &[(String, Expression)], expected: &[(String, Expression)]) {
+        assert_eq!(format!("{:?}", actual), format!("{:?}", expected));
+    }
+
+    #[test]
+    fn bare_aggregate_call_lifts_to_variable_and_one_pair() {
+        let (catalog, _ctx) = create_test_catalog();
+        let label_index = LabelIndex::new();
+        let knn_index = KnnIndex::new(crate::index::DEFAULT_VECTORIZER_DIMENSION).unwrap();
+        let planner = QueryPlanner::new(&catalog, &label_index, &knn_index);
+
+        let count_star = function_call("count", vec![]);
+        let mut next_index = 0usize;
+        let (rewritten, lifted) = planner.lift_aggregations(&count_star, &mut next_index);
+
+        assert_expr_eq(
+            &rewritten,
+            &Expression::Variable("__agg_lift_0".to_string()),
+        );
+        assert_eq!(lifted.len(), 1);
+        assert_eq!(lifted[0].0, "__agg_lift_0");
+        assert_expr_eq(&lifted[0].1, &count_star);
+        assert_eq!(next_index, 1);
+    }
+
+    #[test]
+    fn count_star_greater_than_zero_lifts_the_count_call() {
+        let (catalog, _ctx) = create_test_catalog();
+        let label_index = LabelIndex::new();
+        let knn_index = KnnIndex::new(crate::index::DEFAULT_VECTORIZER_DIMENSION).unwrap();
+        let planner = QueryPlanner::new(&catalog, &label_index, &knn_index);
+
+        let count_star = function_call("count", vec![]);
+        let expr = Expression::BinaryOp {
+            left: Box::new(count_star.clone()),
+            op: BinaryOperator::GreaterThan,
+            right: Box::new(Expression::Literal(Literal::Integer(0))),
+        };
+        let mut next_index = 0usize;
+        let (rewritten, lifted) = planner.lift_aggregations(&expr, &mut next_index);
+
+        assert_expr_eq(
+            &rewritten,
+            &Expression::BinaryOp {
+                left: Box::new(Expression::Variable("__agg_lift_0".to_string())),
+                op: BinaryOperator::GreaterThan,
+                right: Box::new(Expression::Literal(Literal::Integer(0))),
+            },
+        );
+        assert_lifted_eq(&lifted, &[("__agg_lift_0".to_string(), count_star)]);
+        assert_eq!(next_index, 1);
+    }
+
+    #[test]
+    fn count_star_plus_one_threads_a_non_zero_starting_index() {
+        let (catalog, _ctx) = create_test_catalog();
+        let label_index = LabelIndex::new();
+        let knn_index = KnnIndex::new(crate::index::DEFAULT_VECTORIZER_DIMENSION).unwrap();
+        let planner = QueryPlanner::new(&catalog, &label_index, &knn_index);
+
+        let count_star = function_call("count", vec![]);
+        let expr = Expression::BinaryOp {
+            left: Box::new(count_star.clone()),
+            op: BinaryOperator::Add,
+            right: Box::new(Expression::Literal(Literal::Integer(1))),
+        };
+        let mut next_index = 5usize;
+        let (rewritten, lifted) = planner.lift_aggregations(&expr, &mut next_index);
+
+        assert_expr_eq(
+            &rewritten,
+            &Expression::BinaryOp {
+                left: Box::new(Expression::Variable("__agg_lift_5".to_string())),
+                op: BinaryOperator::Add,
+                right: Box::new(Expression::Literal(Literal::Integer(1))),
+            },
+        );
+        assert_lifted_eq(&lifted, &[("__agg_lift_5".to_string(), count_star)]);
+        // `next_index` must advance past the index it just handed out so a
+        // caller threading it across a whole projection list never reuses
+        // an alias.
+        assert_eq!(next_index, 6);
+    }
+
+    #[test]
+    fn list_of_two_bare_aggregates_yields_two_distinct_aliases() {
+        let (catalog, _ctx) = create_test_catalog();
+        let label_index = LabelIndex::new();
+        let knn_index = KnnIndex::new(crate::index::DEFAULT_VECTORIZER_DIMENSION).unwrap();
+        let planner = QueryPlanner::new(&catalog, &label_index, &knn_index);
+
+        let count_star = function_call("count", vec![]);
+        let expr = Expression::List(vec![count_star.clone(), count_star.clone()]);
+        let mut next_index = 0usize;
+        let (rewritten, lifted) = planner.lift_aggregations(&expr, &mut next_index);
+
+        assert_expr_eq(
+            &rewritten,
+            &Expression::List(vec![
+                Expression::Variable("__agg_lift_0".to_string()),
+                Expression::Variable("__agg_lift_1".to_string()),
+            ]),
+        );
+        assert_lifted_eq(
+            &lifted,
+            &[
+                ("__agg_lift_0".to_string(), count_star.clone()),
+                ("__agg_lift_1".to_string(), count_star),
+            ],
+        );
+        assert_eq!(next_index, 2);
+    }
+
+    #[test]
+    fn case_when_result_aggregate_is_lifted() {
+        let (catalog, _ctx) = create_test_catalog();
+        let label_index = LabelIndex::new();
+        let knn_index = KnnIndex::new(crate::index::DEFAULT_VECTORIZER_DIMENSION).unwrap();
+        let planner = QueryPlanner::new(&catalog, &label_index, &knn_index);
+
+        let sum_call = function_call("sum", vec![property("n", "age")]);
+        let expr = Expression::Case {
+            input: None,
+            when_clauses: vec![WhenClause {
+                condition: Expression::Literal(Literal::Boolean(true)),
+                result: sum_call.clone(),
+            }],
+            else_clause: Some(Box::new(Expression::Literal(Literal::Integer(0)))),
+        };
+        let mut next_index = 0usize;
+        let (rewritten, lifted) = planner.lift_aggregations(&expr, &mut next_index);
+
+        assert_expr_eq(
+            &rewritten,
+            &Expression::Case {
+                input: None,
+                when_clauses: vec![WhenClause {
+                    condition: Expression::Literal(Literal::Boolean(true)),
+                    result: Expression::Variable("__agg_lift_0".to_string()),
+                }],
+                else_clause: Some(Box::new(Expression::Literal(Literal::Integer(0)))),
+            },
+        );
+        assert_lifted_eq(&lifted, &[("__agg_lift_0".to_string(), sum_call)]);
+        assert_eq!(next_index, 1);
+    }
+
+    #[test]
+    fn map_value_aggregate_is_lifted() {
+        let (catalog, _ctx) = create_test_catalog();
+        let label_index = LabelIndex::new();
+        let knn_index = KnnIndex::new(crate::index::DEFAULT_VECTORIZER_DIMENSION).unwrap();
+        let planner = QueryPlanner::new(&catalog, &label_index, &knn_index);
+
+        let count_star = function_call("count", vec![]);
+        let mut map = HashMap::new();
+        map.insert("total".to_string(), count_star.clone());
+        let expr = Expression::Map(map);
+        let mut next_index = 0usize;
+        let (rewritten, lifted) = planner.lift_aggregations(&expr, &mut next_index);
+
+        let mut expected_map = HashMap::new();
+        expected_map.insert(
+            "total".to_string(),
+            Expression::Variable("__agg_lift_0".to_string()),
+        );
+        assert_expr_eq(&rewritten, &Expression::Map(expected_map));
+        assert_lifted_eq(&lifted, &[("__agg_lift_0".to_string(), count_star)]);
+        assert_eq!(next_index, 1);
+    }
+
+    #[test]
+    fn expression_without_aggregate_is_returned_unchanged_with_empty_vec() {
+        let (catalog, _ctx) = create_test_catalog();
+        let label_index = LabelIndex::new();
+        let knn_index = KnnIndex::new(crate::index::DEFAULT_VECTORIZER_DIMENSION).unwrap();
+        let planner = QueryPlanner::new(&catalog, &label_index, &knn_index);
+
+        let expr = Expression::BinaryOp {
+            left: Box::new(property("n", "age")),
+            op: BinaryOperator::GreaterThan,
+            right: Box::new(Expression::Literal(Literal::Integer(18))),
+        };
+        let mut next_index = 0usize;
+        let (rewritten, lifted) = planner.lift_aggregations(&expr, &mut next_index);
+
+        assert_expr_eq(&rewritten, &expr);
+        assert!(lifted.is_empty());
+        assert_eq!(next_index, 0);
+    }
+
+    #[test]
+    fn head_of_collect_lifts_only_the_inner_collect_call() {
+        let (catalog, _ctx) = create_test_catalog();
+        let label_index = LabelIndex::new();
+        let knn_index = KnnIndex::new(crate::index::DEFAULT_VECTORIZER_DIMENSION).unwrap();
+        let planner = QueryPlanner::new(&catalog, &label_index, &knn_index);
+
+        let collect_call = function_call("collect", vec![property("n", "x")]);
+        let expr = function_call("head", vec![collect_call.clone()]);
+        let mut next_index = 0usize;
+        let (rewritten, lifted) = planner.lift_aggregations(&expr, &mut next_index);
+
+        assert_expr_eq(
+            &rewritten,
+            &function_call(
+                "head",
+                vec![Expression::Variable("__agg_lift_0".to_string())],
+            ),
+        );
+        assert_lifted_eq(&lifted, &[("__agg_lift_0".to_string(), collect_call)]);
+        assert_eq!(next_index, 1);
     }
 }

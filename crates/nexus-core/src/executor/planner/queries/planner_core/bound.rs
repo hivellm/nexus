@@ -805,13 +805,65 @@ impl<'a> QueryPlanner<'a> {
             }
 
             if !return_items.is_empty() {
+                // Lift aggregates nested inside a larger expression
+                // (`count(*) > 0`, `count(*) + 1`, `[count(*)]`, `head(collect(v))`)
+                // out into their own synthetic bare-aggregate `ReturnItem`s, so
+                // the classification loop below — which only recognises a
+                // *bare* aggregate call — sees every aggregation the query
+                // actually asks for. The enclosing expression (`> 0`, `+ 1`,
+                // `head(...)`, ...) is deferred to a post-aggregation `Project`
+                // pushed after `Operator::Aggregate` below, which evaluates it
+                // against the synthetic alias the Aggregate operator produced.
+                // Items that are already a bare aggregate call, or that carry
+                // no aggregation at all, pass through unchanged; `post_agg_items`
+                // stays index-aligned with `return_items` (`None` for a
+                // pass-through item) so the original clause order/shape can be
+                // reproduced exactly.
+                let mut effective_return_items: Vec<ReturnItem> = Vec::new();
+                let mut post_agg_items: Vec<Option<ProjectionItem>> =
+                    Vec::with_capacity(return_items.len());
+                let mut lift_index = 0usize;
+                for item in &return_items {
+                    let is_bare_aggregate = matches!(
+                        &item.expression,
+                        Expression::FunctionCall { name, .. }
+                            if Self::is_aggregate_function_name(&name.to_lowercase())
+                    );
+                    if is_bare_aggregate || !self.contains_aggregation(&item.expression) {
+                        effective_return_items.push(item.clone());
+                        post_agg_items.push(None);
+                        continue;
+                    }
+
+                    let alias = item.alias.clone().unwrap_or_else(|| {
+                        self.expression_to_string(&item.expression)
+                            .unwrap_or_default()
+                    });
+                    let (rewritten, lifted) =
+                        self.lift_aggregations(&item.expression, &mut lift_index);
+                    for (synthetic_alias, aggregate_call) in lifted {
+                        effective_return_items.push(ReturnItem {
+                            expression: aggregate_call,
+                            alias: Some(synthetic_alias),
+                        });
+                    }
+                    post_agg_items.push(Some(ProjectionItem {
+                        alias,
+                        expression: rewritten,
+                    }));
+                }
+
                 // Check if any return items contain aggregate functions
                 let mut has_aggregation = false;
                 let mut aggregations = Vec::new();
-                let group_by_columns = Vec::new();
+                let mut group_by_columns: Vec<String> = Vec::new();
+                // Every non-aggregate item in an aggregating projection is a
+                // grouping key, whatever its expression shape. Collected here
+                // and promoted below once we know the projection aggregates.
+                let mut non_aggregate_aliases: Vec<String> = Vec::new();
                 let mut projection_items: Vec<ProjectionItem> = Vec::new();
 
-                for item in &return_items {
+                for item in &effective_return_items {
                     match &item.expression {
                         Expression::FunctionCall { name, args } => {
                             let func_name = name.to_lowercase();
@@ -1114,11 +1166,15 @@ impl<'a> QueryPlanner<'a> {
                                 }
                                 _ => {
                                     // Not an aggregate function, treat as regular projection
+                                    let alias = item.alias.clone().unwrap_or_else(|| {
+                                        self.expression_to_string(&item.expression)
+                                            .unwrap_or_default()
+                                    });
+                                    if !self.contains_aggregation(&item.expression) {
+                                        non_aggregate_aliases.push(alias.clone());
+                                    }
                                     projection_items.push(ProjectionItem {
-                                        alias: item.alias.clone().unwrap_or_else(|| {
-                                            self.expression_to_string(&item.expression)
-                                                .unwrap_or_default()
-                                        }),
+                                        alias,
                                         expression: item.expression.clone(),
                                     });
                                 }
@@ -1126,11 +1182,18 @@ impl<'a> QueryPlanner<'a> {
                         }
                         _ => {
                             // Non-aggregate expression
+                            let alias = item.alias.clone().unwrap_or_else(|| {
+                                self.expression_to_string(&item.expression)
+                                    .unwrap_or_default()
+                            });
+                            // An expression that merely *wraps* an aggregate
+                            // (`count(*) + 1`) is not a grouping key — it is
+                            // computed after the aggregation.
+                            if !self.contains_aggregation(&item.expression) {
+                                non_aggregate_aliases.push(alias.clone());
+                            }
                             projection_items.push(ProjectionItem {
-                                alias: item.alias.clone().unwrap_or_else(|| {
-                                    self.expression_to_string(&item.expression)
-                                        .unwrap_or_default()
-                                }),
+                                alias,
                                 expression: item.expression.clone(),
                             });
                         }
@@ -1138,6 +1201,14 @@ impl<'a> QueryPlanner<'a> {
                 }
 
                 if has_aggregation {
+                    // Promote every non-aggregate item to a grouping key. The
+                    // projection items above already materialize these columns,
+                    // so Aggregate can look them up by alias.
+                    for alias in &non_aggregate_aliases {
+                        if !group_by_columns.contains(alias) {
+                            group_by_columns.push(alias.clone());
+                        }
+                    }
                     // Add Project operator if needed (for literals in aggregations)
                     if !projection_items.is_empty() {
                         operators.push(Operator::Project {
@@ -1147,7 +1218,11 @@ impl<'a> QueryPlanner<'a> {
                     // Preserve the written clause order across the
                     // aggregate's `[group keys..., aggs...]` assembly (G4);
                     // same alias derivation as the projection items above.
-                    let output_order: Vec<String> = return_items
+                    // Derived from the *effective* items so it names the
+                    // synthetic columns the aggregate actually emits; the
+                    // post-aggregation projection below restores the written
+                    // column list.
+                    let output_order: Vec<String> = effective_return_items
                         .iter()
                         .map(|item| {
                             item.alias.clone().unwrap_or_else(|| {
@@ -1170,6 +1245,34 @@ impl<'a> QueryPlanner<'a> {
                         streaming_optimized: false,
                         push_down_optimized: false,
                     });
+
+                    // Post-aggregation projection: evaluate any expression that
+                    // merely *wraps* an aggregate against the synthetic column
+                    // the Aggregate produced, and pass every other item through
+                    // by name. Reproducing `return_items` position by position
+                    // is what keeps the grouping-key columns — and the written
+                    // column order — in the output. It precedes the Filter
+                    // below because a `WITH ... WHERE` may reference an alias
+                    // that only this projection produces.
+                    if post_agg_items.iter().any(|item| item.is_some()) {
+                        let items: Vec<ProjectionItem> = return_items
+                            .iter()
+                            .zip(post_agg_items)
+                            .map(|(item, post_item)| {
+                                post_item.unwrap_or_else(|| {
+                                    let alias = item.alias.clone().unwrap_or_else(|| {
+                                        self.expression_to_string(&item.expression)
+                                            .unwrap_or_default()
+                                    });
+                                    ProjectionItem {
+                                        expression: Expression::Variable(alias.clone()),
+                                        alias,
+                                    }
+                                })
+                            })
+                            .collect();
+                        operators.push(Operator::Project { items });
+                    }
 
                     // If WITH had a WHERE clause with aggregation, add Filter after Aggregate
                     if let Some(ref where_expression) = with_aggregation_where {
