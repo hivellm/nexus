@@ -1842,6 +1842,36 @@ RETURN localtime({hour: 10, minute: 30, second: 0}) AS lt
 RETURN localdatetime({year: 2025, month: 1, day: 15, hour: 10}) AS ldt
 ```
 
+**Sub-second components are additive.** `millisecond`, `microsecond` and
+`nanosecond` each occupy their own decimal slot of the nine-digit fraction and
+sum into it — `millisecond * 1_000_000 + microsecond * 1_000 + nanosecond`. A
+component given on its own spans every digit below it, so `{microsecond: 645876}`
+is `.645876`, not `.000645876`. This applies to all four instant constructors
+(`localtime`, `time`, `localdatetime`, `datetime`); `duration({...})` uses its own
+plural keys and is unrelated.
+
+```cypher
+RETURN localtime({hour: 12, minute: 31, second: 14, millisecond: 123,
+                  microsecond: 456, nanosecond: 789})     -- 12:31:14.123456789
+RETURN localtime({hour: 12, minute: 31, second: 14, microsecond: 645876})
+                                                          -- 12:31:14.645876
+RETURN localtime({hour: 12, minute: 31, second: 14, millisecond: 645,
+                  nanosecond: 2})                         -- 12:31:14.645000002
+RETURN localtime({hour: 12, minute: 31, second: 14})      -- 12:31:14, no fraction
+```
+
+A component's permitted range depends on which coarser components are present,
+because a coarser neighbour has already claimed the leading digits: `millisecond`
+is always `[0, 999]`; `microsecond` is `[0, 999]` when `millisecond` is given and
+`[0, 999999]` otherwise; `nanosecond` is `[0, 999]` when `microsecond` is given,
+`[0, 999999]` when only `millisecond` is, and `[0, 999999999]` when it stands
+alone. Out of range, negative, or fractional is an `InvalidArgumentValue` error
+naming the key and its bound — never a silent fold into a different quantity.
+
+The rendered fraction carries only as many digits as the value needs, with
+trailing zeros dropped, which is why the three examples above render 9, 6 and 9
+digits respectively and a whole second renders no fraction at all.
+
 **Temporal Component Functions Summary:**
 
 | Function | Description |

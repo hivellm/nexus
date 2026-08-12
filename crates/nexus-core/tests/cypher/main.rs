@@ -14,6 +14,7 @@ mod cypher_external_id_write_paths;
 mod cypher_groupby_expression_key_test;
 mod cypher_nested_aggregate_expression_test;
 mod cypher_non_ascii_test;
+mod cypher_temporal_subsecond_components_test;
 mod in_operator_tests;
 mod is_null_precedence_test;
 mod label_colon_whitespace_test;

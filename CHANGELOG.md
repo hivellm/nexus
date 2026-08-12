@@ -87,6 +87,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   when no `Project`/`Aggregate` sink existed yet, so the second clause's
   projection ran first, against variables nothing had bound.
 
+### Fixed — `millisecond` and `microsecond` in an instant map constructor
+
+- The four instant map constructors (`localtime`, `time`, `localdatetime`,
+  `datetime`) honoured only the `nanosecond` key and **silently discarded**
+  `millisecond` and `microsecond`, so
+  `datetime({… second: 14, microsecond: 645876, timezone: '+01:00'})` produced
+  `1984-10-11T12:31:14+01:00` — the requested precision was simply gone, with no
+  error. The three keys are now composed additively into the nanosecond-of-second
+  field, `millisecond * 1_000_000 + microsecond * 1_000 + nanosecond`, so a
+  component given on its own spans every digit below it (`{microsecond: 645876}`
+  is `.645876`, not `.000645876`).
+- Each component is bounded by the slot its coarser neighbours leave it —
+  `millisecond` `[0, 999]`; `microsecond` `[0, 999]` when `millisecond` is given
+  and `[0, 999999]` otherwise; `nanosecond` `[0, 999]`, `[0, 999999]` or
+  `[0, 999999999]` by the same rule — so `{millisecond: 1, nanosecond: 999999999}`
+  is an `InvalidArgumentValue` error naming the key and its bound rather than a
+  value that quietly sums past a whole second.
+- openCypher TCK conformance 61.1% → 61.6% (2364 → 2384 of 3868);
+  `expressions/temporal` 66.7% → 68.8%.
+
 ### Fixed — Grouping keys, and aggregates nested inside an expression
 
 - **Every non-aggregate projection item is a grouping key again, whatever its

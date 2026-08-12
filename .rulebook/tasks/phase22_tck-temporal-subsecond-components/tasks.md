@@ -1,16 +1,127 @@
 ## 1. Implementation
-- [ ] 1.1 Sum millisecond/microsecond/nanosecond into the sub-second field across all four constructors
-- [ ] 1.2 Reject a smaller sub-second unit given without its larger neighbours, with the spec's error kind
-- [ ] 1.3 Confirm canonical rendering emits the composed fraction (3/6/9 digits per the spec's rules)
+- [x] 1.1 Sum millisecond/microsecond/nanosecond into the sub-second field across all four constructors
+      — Confirmed on a live server before editing: `millisecond` and `microsecond` were
+      accepted and silently discarded by `localtime`, `time`, `localdatetime` and
+      `datetime`; only `nanosecond` survived. Single choke point — all four constructors
+      already shared one helper, so the fix is one function:
+      `nanosecond_from_map` became `subsecond_nanos_from_map` in
+      `executor/eval/projection/fn_temporal.rs`, composing
+      `millisecond * 1_000_000 + microsecond * 1_000 + nanosecond`. `duration({...})` was
+      checked and needed nothing: it reads its own plural `milliseconds`/`microseconds`/
+      `nanoseconds` keys correctly already.
+- [x] 1.2 Reject a smaller sub-second unit given without its larger neighbours, with the spec's error kind
+      — The item as written does not describe a real rule, and its stated justification is
+      wrong: there are **zero** error-expectation rows in the entire
+      `features/expressions/temporal/` directory (`grep -i "should be raised"` → 0), so the
+      "negative rows [that] belong to the same scenarios" do not exist. Taken literally the
+      rule would also break a *passing* row — `Temporal1[5]` requires
+      `{hour, minute, second, microsecond: 645876}` (a smaller unit with no larger
+      neighbour) to succeed as `12:31:14.645876`.
+      What the spec does require, and what is implemented, is the **slot** rule: a
+      component's range is bounded by what its coarser neighbours leave it —
+      `millisecond` `[0, 999]`; `microsecond` `[0, 999]` if `millisecond` is present else
+      `[0, 999999]`; `nanosecond` `[0, 999]` / `[0, 999999]` / `[0, 999999999]` by the same
+      logic. This is what makes the composed total provably ≤ 999_999_999, so
+      `{millisecond: 1, nanosecond: 999999999}` is an `InvalidArgumentValue` error naming
+      the key and its bound instead of a value that sums past a whole second. Negative and
+      fractional inputs were already rejected and still are.
+- [x] 1.3 Confirm canonical rendering emits the composed fraction (3/6/9 digits per the spec's rules)
+      — Confirmation only, no change needed. `temporal_value::format_nanos_fraction`
+      zero-pads to nine digits and trims trailing zeros, which already yields every string
+      the TCK asks for: `.123456789` (9), `.645876` (6), `.645` (3), `.000000003` (9, not
+      trimmable), and no fraction at all for a whole second. Verified end-to-end against
+      all of `Temporal1[5]`'s and `[6]`'s example rows.
 
 ## 2. Tail (docs + tests — check or waive with tailWaiver)
-- [ ] 2.1 Update or create documentation covering the implementation
-- [ ] 2.2 Write tests covering the new behavior
-- [ ] 2.3 Run tests and confirm they pass
+- [x] 2.1 Update or create documentation covering the implementation
+      — `docs/specs/cypher-subset.md` §Temporal Functions: new "Sub-second components are
+      additive" subsection with the composition formula, the per-slot ranges, the error
+      behaviour and the rendering-width rule. `CHANGELOG.md` under
+      `[3.0.0] — Unreleased`: "Fixed — `millisecond` and `microsecond` in an instant map
+      constructor".
+- [x] 2.2 Write tests covering the new behavior
+      — 6 unit tests added beside the 5 existing ones in `fn_temporal.rs` (composition of
+      all three; each alone; a coarser neighbour narrowing the finer slot; the slot bound
+      enforced; the composed maximum not overflowing). 11 integration tests in
+      `crates/nexus-core/tests/cypher/cypher_temporal_subsecond_components_test.rs`, every
+      expected string taken verbatim from `Temporal1.feature`, plus the variable round-trip
+      (`t.millisecond` / `t.microsecond` / `t.nanosecond`) and one rejection asserted as a
+      query error rather than a null or an empty result.
+- [x] 2.3 Run tests and confirm they pass
+      — 11 passed for `--lib subsecond`; `--lib temporal` 147 → 152; the `cypher` group
+      736 → 748.
 
 ## 3. Gates (every item, no exceptions)
-- [ ] 3.1 `cargo +nightly fmt --all` and `cargo clippy --workspace --all-targets --all-features -- -D warnings` clean
-- [ ] 3.2 `cargo +nightly test --workspace --no-fail-fast` green (a plain `--workspace` run aborts at the first failing target)
-- [ ] 3.3 Neo4j differential suite still 300/300 (`scripts/compatibility/test-neo4j-nexus-compatibility-200.ps1`)
-- [ ] 3.4 TCK re-run: this task's categories improved, no category regressed against an identical re-run
-- [ ] 3.5 Regenerate `docs/compatibility/OPENCYPHER_TCK_REPORT.md`
+- [x] 3.1 `cargo +nightly fmt --all` and `cargo clippy --workspace --all-targets --all-features -- -D warnings` clean
+- [x] 3.2 `cargo +nightly test --workspace --no-fail-fast` green — 5905 passed, 0 failed,
+      97 ignored (5888 before + 17 added here).
+- [x] 3.3 Neo4j differential suite still 310/325 — re-run against live Neo4j 2025.09.0 with
+      the release server on :15474: **325 total, 310 passed, 0 failed, 15 skipped**,
+      unchanged. (The checklist line says 300/300; the suite has since grown to 325 with 15
+      environment-skipped spatial cases.)
+- [x] 3.4 TCK re-run: this task's categories improved, no category regressed against an identical re-run
+      — Target category up, the one apparent regression isolated and cleared; see §4.
+- [x] 3.5 Regenerate `docs/compatibility/OPENCYPHER_TCK_REPORT.md` — regenerated by the
+      harness (`NEXUS_TCK=1 cargo +nightly test -p nexus-core --test tck_opencypher
+      --all-features`).
+
+## 4. Measurements and residue
+
+**TCK: 2364 → 2384 of 3868 (61.1% → 61.6%), +20 scenarios**, measured against the
+immediately preceding run on this machine (the figure the previous task committed), so no
+worktree baseline was needed this time.
+
+| Category | Before | After | Δ |
+|---|---:|---:|---:|
+| `expressions/temporal` | 670 | 691 | **+21** |
+| `clauses/return` | 37 | 36 | −1 → **cleared, see below** |
+
+**The proposal's estimate was 102 scenarios; the measured yield is +21.** The "cheapest
+100 in the corpus" framing did not hold. As in A3 and A4, the plan's per-root-cause
+scenario counts are estimates over a category, not carve-outs — the remaining
+`expressions/temporal` failures (313) have other causes and must be re-derived from the
+failure log rather than assumed to be this one.
+
+**The −1 in `clauses/return` is a coin-flip scenario, not a regression.** Isolated from
+the JSONL failure log to `[9] Returning a projected map`, `RETURN {a: 1, b: 'foo'}`, whose
+failure is a *column-name* mismatch: `"{b: 'foo', a: 1}"` against the expected
+`"{a: 1, b: 'foo'}"`. `Expression::Map` is a `HashMap<String, Expression>`
+(`parser/ast.rs:1174`), so the rendered unaliased column name follows a per-process random
+iteration order. Run on four freshly started server processes of the identical binary, the
+column came back `{a: 1, b: 'foo'}` three times and `{b: 'foo', a: 1}` once. Nothing in
+this task's diff is reachable from a map literal.
+
+**Residue worth its own task, uncovered by the above:** a map literal must preserve its
+written key order — Neo4j does, the TCK's unaliased column name depends on it, and today
+the order is random per process. The fix is to back `Expression::Map` with an
+order-preserving map rather than `HashMap`, which would also make the column name stable.
+
+**Measured gap, adjacent and NOT fixed here: a derived temporal component does not
+resolve on a computed base.** `localtime({...}).millisecond` and `.microsecond` return
+null, while `.nanosecond` works and all three work through a variable
+(`WITH localtime({...}) AS t RETURN t.millisecond` → `123`). Cause: the
+`Expression::PropertyOf` arm (`eval/projection/core.rs:32`) resolves with
+`Self::extract_property`, a plain container lookup, whereas the `PropertyAccess`
+(variable) arm routes through the temporal accessors. `nanosecond` is physically a key
+of the tagged temporal map (`temporal_value.rs:135`), so the container lookup happens to
+find it; `millisecond`/`microsecond` are derived by division
+(`temporal_accessors.rs:127-128`) and have no stored key. Pre-existing — this task's diff
+touches only the constructor's sub-second composition — and it applies to every derived
+accessor on a computed base, not just temporal ones. Worth its own task.
+
+**Measured gap, adjacent and NOT fixed here: a derived temporal component does not
+resolve on a computed base.** `localtime({...}).millisecond` and `.microsecond` return
+null, while `.nanosecond` works and all three work through a variable
+(`WITH localtime({...}) AS t RETURN t.millisecond` → `123`). Cause: the
+`Expression::PropertyOf` arm (`eval/projection/core.rs:32`) resolves with
+`Self::extract_property`, a plain container lookup, whereas the `PropertyAccess`
+(variable) arm routes through the temporal accessors. `nanosecond` is physically a key
+of the tagged temporal map (`temporal_value.rs:135`), so the container lookup happens to
+find it; `millisecond`/`microsecond` are derived by division
+(`temporal_accessors.rs:127-128`) and have no stored key. Pre-existing — this task's diff
+touches only the constructor's sub-second composition — and it applies to every derived
+accessor on a computed base, not just temporal ones. Worth its own task.
+
+**Housekeeping note for whoever edits `fn_temporal.rs` next:** it is at 1404 lines against
+the project's 1500-line ceiling. The next non-trivial addition should split it (the
+`duration.*` family is the natural seam) rather than squeeze.

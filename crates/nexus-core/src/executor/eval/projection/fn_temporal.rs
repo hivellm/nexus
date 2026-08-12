@@ -42,38 +42,73 @@ fn coerce_temporal_arg(value: Value) -> Value {
     }
 }
 
-/// Reads and validates a map constructor's `nanosecond` key (defaults to
-/// `0` when absent) — shared by every instant map constructor
-/// (`localtime`/`time`/`localdatetime`/`datetime`). The openCypher TCK's
-/// `Temporal4.feature`/`Temporal5.feature` map literals all use this
-/// singular key (distinct from `duration({...})`'s own plural
-/// `nanoseconds` convention, which `"duration"`'s branch below reads
-/// separately).
+/// Reads one sub-second component key, bounded by `max` — absent yields
+/// `None` so the caller can tell "not given" from an explicit `0`.
 ///
-/// Must be a non-negative integer strictly less than `1_000_000_000` (a
-/// whole second is exactly `1_000_000_000` nanoseconds) — anything else
-/// is rejected with an explicit error rather than silently reinterpreted
-/// as a smaller in-range quantity. `Value::Number::as_u64()` already
-/// returns `None` for a negative value AND for any float-backed value
-/// (whole or fractional), so the single `.filter()` below covers all
-/// three reject shapes (negative, fractional, `>= 1_000_000_000`) — e.g.
-/// `nanosecond: 1500000000` must be a hard error, not silently rendered
-/// as `.15` seconds (1.5 * 10^9 truncated into the `[0, 10^9)` window is
-/// a completely different quantity than the caller wrote).
-fn nanosecond_from_map(map: &Map<String, Value>) -> Result<u32> {
-    let Some(value) = map.get("nanosecond") else {
-        return Ok(0);
+/// `Value::Number::as_u64()` already returns `None` for a negative value
+/// AND for any float-backed value (whole or fractional), so the single
+/// `.filter()` covers all three reject shapes (negative, fractional,
+/// out of range). Out-of-range is a hard error rather than a silent
+/// reinterpretation: `nanosecond: 1500000000` must not be rendered as
+/// `.15` seconds, because 1.5 * 10^9 folded into the `[0, 10^9)` window
+/// is a completely different quantity than the caller wrote.
+fn subsecond_component(map: &Map<String, Value>, key: &str, max: u32) -> Result<Option<u32>> {
+    let Some(value) = map.get(key) else {
+        return Ok(None);
     };
     value
         .as_u64()
-        .filter(|n| *n < 1_000_000_000)
-        .map(|n| n as u32)
+        .filter(|n| *n <= u64::from(max))
+        .map(|n| Some(n as u32))
         .ok_or_else(|| {
             crate::Error::CypherExecution(format!(
-                "InvalidArgumentValue: `nanosecond` must be a non-negative integer in \
-                 [0, 999999999], got {value}"
+                "InvalidArgumentValue: `{key}` must be a non-negative integer in [0, {max}], \
+                 got {value}"
             ))
         })
+}
+
+/// Composes a map constructor's sub-second keys — `millisecond`,
+/// `microsecond` and `nanosecond` — into the single nanosecond-of-second
+/// field, defaulting to `0` when none is given. Shared by every instant
+/// map constructor (`localtime`/`time`/`localdatetime`/`datetime`). These
+/// singular keys are distinct from `duration({...})`'s own plural
+/// `nanoseconds` convention, which `"duration"`'s branch below reads
+/// separately.
+///
+/// The three are **additive**, each occupying its own decimal slot of the
+/// nine-digit fraction:
+/// `millisecond * 1_000_000 + microsecond * 1_000 + nanosecond`. So
+/// `{millisecond: 123, microsecond: 456, nanosecond: 789}` is
+/// `.123456789`, and a component given on its own spans every digit below
+/// it — `{microsecond: 645876}` is `.645876`, not `.000645876`.
+///
+/// A component's permitted range therefore depends on which coarser
+/// components are present: given on its own, `microsecond` may reach
+/// 999_999 and `nanosecond` 999_999_999, but once a coarser neighbour has
+/// claimed the leading digits, the finer one is confined to what is left
+/// (`{millisecond: 1, nanosecond: 999999999}` would otherwise sum past a
+/// whole second). Because each slot is bounded this way, the composed
+/// total can never exceed 999_999_999.
+fn subsecond_nanos_from_map(map: &Map<String, Value>) -> Result<u32> {
+    let millisecond = subsecond_component(map, "millisecond", 999)?;
+    let microsecond = subsecond_component(
+        map,
+        "microsecond",
+        if millisecond.is_some() { 999 } else { 999_999 },
+    )?;
+    let nanosecond = subsecond_component(
+        map,
+        "nanosecond",
+        match (millisecond.is_some(), microsecond.is_some()) {
+            (_, true) => 999,
+            (true, false) => 999_999,
+            (false, false) => 999_999_999,
+        },
+    )?;
+    Ok(millisecond.unwrap_or(0) * 1_000_000
+        + microsecond.unwrap_or(0) * 1_000
+        + nanosecond.unwrap_or(0))
 }
 
 /// Resolves a map constructor's `timezone` key into `(offset_seconds,
@@ -573,7 +608,7 @@ impl Executor {
                                 map.get("minute").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
                             let second =
                                 map.get("second").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
-                            let nanosecond = match nanosecond_from_map(&map) {
+                            let nanosecond = match subsecond_nanos_from_map(&map) {
                                 Ok(n) => n,
                                 Err(e) => return Some(Err(e)),
                             };
@@ -661,7 +696,7 @@ impl Executor {
                                 map.get("minute").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
                             let second =
                                 map.get("second").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
-                            let nanosecond = match nanosecond_from_map(&map) {
+                            let nanosecond = match subsecond_nanos_from_map(&map) {
                                 Ok(n) => n,
                                 Err(e) => return Some(Err(e)),
                             };
@@ -904,7 +939,7 @@ impl Executor {
                                 map.get("minute").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
                             let second =
                                 map.get("second").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
-                            let nanosecond = match nanosecond_from_map(&map) {
+                            let nanosecond = match subsecond_nanos_from_map(&map) {
                                 Ok(n) => n,
                                 Err(e) => return Some(Err(e)),
                             };
@@ -978,7 +1013,7 @@ impl Executor {
                                 map.get("minute").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
                             let second =
                                 map.get("second").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
-                            let nanosecond = match nanosecond_from_map(&map) {
+                            let nanosecond = match subsecond_nanos_from_map(&map) {
                                 Ok(n) => n,
                                 Err(e) => return Some(Err(e)),
                             };
@@ -1189,49 +1224,127 @@ mod tests {
     }
 
     #[test]
-    fn nanosecond_from_map_defaults_to_zero_when_absent() {
-        assert_eq!(nanosecond_from_map(&map(&[])).unwrap(), 0);
+    fn subsecond_nanos_from_map_defaults_to_zero_when_absent() {
+        assert_eq!(subsecond_nanos_from_map(&map(&[])).unwrap(), 0);
     }
 
     #[test]
-    fn nanosecond_from_map_accepts_an_in_range_value() {
+    fn subsecond_nanos_from_map_accepts_an_in_range_value() {
         assert_eq!(
-            nanosecond_from_map(&map(&[("nanosecond", Value::from(645_876_123u64))])).unwrap(),
+            subsecond_nanos_from_map(&map(&[("nanosecond", Value::from(645_876_123u64))])).unwrap(),
             645_876_123
         );
     }
 
     #[test]
-    fn nanosecond_from_map_rejects_a_value_of_exactly_one_billion() {
+    fn subsecond_nanos_from_map_rejects_a_value_of_exactly_one_billion() {
         // BLOCKER 2 probe case: 1_500_000_000 must not silently become
         // "1.5 seconds" (0.15s after a naive mod-1e9/zero-pad) — it is a
         // flatly invalid nanosecond-of-second value.
-        let err = nanosecond_from_map(&map(&[("nanosecond", Value::from(1_500_000_000u64))]))
+        let err = subsecond_nanos_from_map(&map(&[("nanosecond", Value::from(1_500_000_000u64))]))
             .unwrap_err();
         assert!(matches!(err, crate::Error::CypherExecution(_)));
     }
 
     #[test]
-    fn nanosecond_from_map_rejects_a_value_far_beyond_u32() {
+    fn subsecond_nanos_from_map_rejects_a_value_far_beyond_u32() {
         // BLOCKER 2 probe case: 4_294_967_297 (u32::MAX + 2) must error,
         // not silently wrap into a small in-range u32.
-        let err = nanosecond_from_map(&map(&[("nanosecond", Value::from(4_294_967_297u64))]))
+        let err = subsecond_nanos_from_map(&map(&[("nanosecond", Value::from(4_294_967_297u64))]))
             .unwrap_err();
         assert!(matches!(err, crate::Error::CypherExecution(_)));
     }
 
     #[test]
-    fn nanosecond_from_map_rejects_a_negative_value() {
+    fn subsecond_nanos_from_map_rejects_a_negative_value() {
         // BLOCKER 2 probe case: -1 must error, not silently become 0 (or
         // wrap into a huge positive value).
-        let err = nanosecond_from_map(&map(&[("nanosecond", Value::from(-1i64))])).unwrap_err();
+        let err =
+            subsecond_nanos_from_map(&map(&[("nanosecond", Value::from(-1i64))])).unwrap_err();
         assert!(matches!(err, crate::Error::CypherExecution(_)));
     }
 
     #[test]
-    fn nanosecond_from_map_rejects_a_fractional_value() {
-        let err = nanosecond_from_map(&map(&[("nanosecond", Value::from(1.5))])).unwrap_err();
+    fn subsecond_nanos_from_map_rejects_a_fractional_value() {
+        let err = subsecond_nanos_from_map(&map(&[("nanosecond", Value::from(1.5))])).unwrap_err();
         assert!(matches!(err, crate::Error::CypherExecution(_)));
+    }
+
+    #[test]
+    fn subsecond_nanos_from_map_composes_all_three_components() {
+        assert_eq!(
+            subsecond_nanos_from_map(&map(&[
+                ("millisecond", Value::from(123u64)),
+                ("microsecond", Value::from(456u64)),
+                ("nanosecond", Value::from(789u64)),
+            ]))
+            .unwrap(),
+            123_456_789
+        );
+        // The composed maximum in every slot must not overflow.
+        assert_eq!(
+            subsecond_nanos_from_map(&map(&[
+                ("millisecond", Value::from(999u64)),
+                ("microsecond", Value::from(999u64)),
+                ("nanosecond", Value::from(999u64)),
+            ]))
+            .unwrap(),
+            999_999_999
+        );
+    }
+
+    #[test]
+    fn subsecond_nanos_from_map_a_component_given_alone_spans_every_digit_below_it() {
+        assert_eq!(
+            subsecond_nanos_from_map(&map(&[("millisecond", Value::from(645u64))])).unwrap(),
+            645_000_000
+        );
+        assert_eq!(
+            subsecond_nanos_from_map(&map(&[("microsecond", Value::from(645_876u64))])).unwrap(),
+            645_876_000
+        );
+    }
+
+    #[test]
+    fn subsecond_nanos_from_map_a_coarser_neighbour_narrows_the_finer_slot() {
+        assert_eq!(
+            subsecond_nanos_from_map(&map(&[
+                ("millisecond", Value::from(645u64)),
+                ("nanosecond", Value::from(2u64)),
+            ]))
+            .unwrap(),
+            645_000_002
+        );
+        assert_eq!(
+            subsecond_nanos_from_map(&map(&[
+                ("microsecond", Value::from(645_876u64)),
+                ("nanosecond", Value::from(2u64)),
+            ]))
+            .unwrap(),
+            645_876_002
+        );
+    }
+
+    #[test]
+    fn subsecond_nanos_from_map_rejects_nanosecond_beyond_the_slot_narrowed_by_millisecond() {
+        // Once `millisecond` claims the top three digits, `nanosecond`'s
+        // slot narrows to [0, 999_999] — the full nine-digit range it would
+        // have on its own is no longer available.
+        let err = subsecond_nanos_from_map(&map(&[
+            ("millisecond", Value::from(1u64)),
+            ("nanosecond", Value::from(999_999_999u64)),
+        ]))
+        .unwrap_err();
+        assert!(matches!(err, crate::Error::CypherExecution(_)));
+        assert!(err.to_string().contains("nanosecond"));
+    }
+
+    #[test]
+    fn subsecond_nanos_from_map_rejects_microsecond_beyond_one_million() {
+        let err = subsecond_nanos_from_map(&map(&[("microsecond", Value::from(1_000_000u64))]))
+            .unwrap_err();
+        assert!(matches!(err, crate::Error::CypherExecution(_)));
+        assert!(err.to_string().contains("microsecond"));
     }
 
     /// The TCK `Temporal1.feature` scenario [10] wall clock
