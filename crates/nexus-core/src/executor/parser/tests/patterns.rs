@@ -704,3 +704,160 @@ fn test_parse_dynamic_label_and_type_with_whitespace_after_colon() {
         _ => panic!("Expected match clause"),
     }
 }
+
+// ---------------------------------------------------------------
+// Path-variable assignment on comma-separated pattern parts —
+// `try_parse_path_variable_prefix` is now shared by every
+// clause that can open a pattern (MATCH, OPTIONAL MATCH, MERGE)
+// and by the comma branch of `parse_pattern`, so an assignment
+// like `r = ()-[]-()` can appear on any part of the list, not
+// just the head.
+// ---------------------------------------------------------------
+
+#[test]
+fn path_variable_assignment_on_second_comma_part_after_bare_node() {
+    // `MATCH (), r = ()-[]-() RETURN r` — the head part carries no
+    // assignment, so `path_variable` stays None; the second part's
+    // assignment lands in `extra_path_variables`, indexed at the
+    // element where that part's leading node begins.
+    let mut parser = CypherParser::new("MATCH (), r = ()-[]-() RETURN r".to_string());
+    let query = parser.parse().unwrap();
+    match &query.clauses[0] {
+        Clause::Match(match_clause) => {
+            let pattern = &match_clause.pattern;
+            assert_eq!(pattern.path_variable, None);
+            assert_eq!(
+                pattern.extra_path_variables,
+                vec![(1, "r".to_string())],
+                "expected exactly one extra path variable naming `r` at index 1, got {:?}",
+                pattern.extra_path_variables
+            );
+            // Element 1 must be the node that opens the second part.
+            match &pattern.elements[1] {
+                PatternElement::Node(_) => {}
+                other => panic!("expected Node at index 1, got {other:?}"),
+            }
+        }
+        other => panic!("Expected match clause, got {other:?}"),
+    }
+}
+
+#[test]
+fn path_variable_assignment_on_head_and_second_comma_part() {
+    // `MATCH p = ()-[]-(), q = ()-[]-() RETURN p, q` — both parts carry
+    // an assignment; `path_variable` holds the head's, `extra_path_variables`
+    // holds the rest, and `path_variables()` yields both, in order.
+    let mut parser = CypherParser::new("MATCH p = ()-[]-(), q = ()-[]-() RETURN p, q".to_string());
+    let query = parser.parse().unwrap();
+    match &query.clauses[0] {
+        Clause::Match(match_clause) => {
+            let pattern = &match_clause.pattern;
+            assert_eq!(pattern.path_variable, Some("p".to_string()));
+            assert_eq!(
+                pattern.extra_path_variables,
+                vec![(3, "q".to_string())],
+                "expected exactly one extra path variable naming `q` at index 3, got {:?}",
+                pattern.extra_path_variables
+            );
+            let names: Vec<&String> = pattern.path_variables().collect();
+            assert_eq!(names, vec![&"p".to_string(), &"q".to_string()]);
+        }
+        other => panic!("Expected match clause, got {other:?}"),
+    }
+}
+
+#[test]
+fn path_variable_assignment_after_relationship_part_indexes_the_new_node() {
+    // `MATCH ()-[]-(), r = ()-[]-() RETURN r` — the first part contains a
+    // relationship (node, rel, node = 3 elements), so the second part's
+    // assignment must be indexed at element 3 (the node opening the
+    // second part), not at the first part's start.
+    let mut parser = CypherParser::new("MATCH ()-[]-(), r = ()-[]-() RETURN r".to_string());
+    let query = parser.parse().unwrap();
+    match &query.clauses[0] {
+        Clause::Match(match_clause) => {
+            let pattern = &match_clause.pattern;
+            assert_eq!(pattern.path_variable, None);
+            assert_eq!(
+                pattern.extra_path_variables,
+                vec![(3, "r".to_string())],
+                "expected exactly one extra path variable naming `r` at index 3, got {:?}",
+                pattern.extra_path_variables
+            );
+            match &pattern.elements[3] {
+                PatternElement::Node(_) => {}
+                other => panic!("expected Node at index 3, got {other:?}"),
+            }
+        }
+        other => panic!("Expected match clause, got {other:?}"),
+    }
+}
+
+#[test]
+fn plain_comma_separated_nodes_record_no_path_variables() {
+    // `MATCH (a), (b) RETURN a, b` — guards against the shared lookahead
+    // consuming a plain node variable as if it were a path assignment:
+    // neither part carries `=`, so both `path_variable` and
+    // `extra_path_variables` must stay empty/None.
+    let mut parser = CypherParser::new("MATCH (a), (b) RETURN a, b".to_string());
+    let query = parser.parse().unwrap();
+    match &query.clauses[0] {
+        Clause::Match(match_clause) => {
+            let pattern = &match_clause.pattern;
+            assert_eq!(pattern.path_variable, None);
+            assert!(
+                pattern.extra_path_variables.is_empty(),
+                "expected no extra path variables, got {:?}",
+                pattern.extra_path_variables
+            );
+        }
+        other => panic!("Expected match clause, got {other:?}"),
+    }
+}
+
+#[test]
+fn merge_accepts_head_path_variable_assignment() {
+    // `MERGE p = (:A)-[:R]->(:B)` — MERGE previously accepted no path
+    // assignment at all; it now shares the same head lookahead MATCH uses.
+    let mut parser = CypherParser::new("MERGE p = (:A)-[:R]->(:B)".to_string());
+    let query = parser.parse().unwrap();
+    match &query.clauses[0] {
+        Clause::Merge(merge_clause) => {
+            assert_eq!(merge_clause.pattern.path_variable, Some("p".to_string()));
+            assert!(merge_clause.pattern.extra_path_variables.is_empty());
+        }
+        other => panic!("Expected merge clause, got {other:?}"),
+    }
+}
+
+#[test]
+fn match_head_only_path_variable_assignment_unchanged() {
+    // `MATCH p = ()-[]-() RETURN p` — the original head-only behaviour
+    // (pre-dating comma-part and MERGE support) must still record `p` in
+    // `path_variable` with an empty `extra_path_variables`.
+    let mut parser = CypherParser::new("MATCH p = ()-[]-() RETURN p".to_string());
+    let query = parser.parse().unwrap();
+    match &query.clauses[0] {
+        Clause::Match(match_clause) => {
+            let pattern = &match_clause.pattern;
+            assert_eq!(pattern.path_variable, Some("p".to_string()));
+            assert!(pattern.extra_path_variables.is_empty());
+        }
+        other => panic!("Expected match clause, got {other:?}"),
+    }
+}
+
+#[test]
+fn where_clause_equality_is_not_misread_as_path_assignment() {
+    // `MATCH (a) WHERE a = a RETURN count(a)` — `try_parse_path_variable_prefix`
+    // only runs at pattern-opening positions (MATCH/OPTIONAL MATCH/MERGE heads
+    // and the comma branch of `parse_pattern`); the `a =` inside WHERE is a
+    // plain comparison expression. A miss there must not corrupt the parser
+    // cursor — the query must still parse without error.
+    let mut parser = CypherParser::new("MATCH (a) WHERE a = a RETURN count(a)".to_string());
+    let query = parser
+        .parse()
+        .expect("WHERE a = a must parse as a comparison, not a path assignment");
+    assert!(matches!(query.clauses[0], Clause::Match(_)));
+    assert!(matches!(query.clauses[1], Clause::Where(_)));
+}

@@ -45,7 +45,15 @@ impl CypherParser {
     /// Parse MERGE clause
     pub(super) fn parse_merge_clause(&mut self) -> Result<MergeClause> {
         self.skip_whitespace();
-        let pattern = self.parse_pattern()?;
+
+        // `MERGE p = (a)-[:R]->(b)` — MERGE takes a path assignment on the
+        // head of its pattern exactly as MATCH does; parts after a comma are
+        // handled inside `parse_pattern`.
+        let path_variable = self.try_parse_path_variable_prefix()?;
+        let mut pattern = self.parse_pattern()?;
+        if let Some(path_var) = path_variable {
+            pattern.path_variable = Some(path_var);
+        }
 
         // Check for ON CREATE clause
         let on_create = if self.peek_keyword("ON") && self.peek_keyword_at(1, "CREATE") {

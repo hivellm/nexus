@@ -346,7 +346,7 @@ fn check_create_pattern_rebind(
     pattern: &Pattern,
     bound: &mut HashSet<String>,
 ) -> crate::Result<()> {
-    if let Some(path) = &pattern.path_variable {
+    for path in pattern.path_variables() {
         bound.insert(path.clone());
     }
     for element in &pattern.elements {
@@ -387,7 +387,7 @@ fn check_create_element_rebind(
 /// Record every node/relationship/path variable a pattern binds (used to seed
 /// the "already bound" set from `MATCH`/`MERGE` clauses; no checking).
 fn add_pattern_vars(pattern: &Pattern, bound: &mut HashSet<String>) {
-    if let Some(path) = &pattern.path_variable {
+    for path in pattern.path_variables() {
         bound.insert(path.clone());
     }
     for element in &pattern.elements {
@@ -857,7 +857,7 @@ fn collect_set_item_binders(
 /// Add the variables bound by a pattern: every node/relationship variable,
 /// the variables inside a quantified group, and the named-path variable.
 fn collect_pattern_binders(pattern: &Pattern, binders: &mut HashSet<String>) {
-    if let Some(path) = &pattern.path_variable {
+    for path in pattern.path_variables() {
         binders.insert(path.clone());
     }
     for element in &pattern.elements {

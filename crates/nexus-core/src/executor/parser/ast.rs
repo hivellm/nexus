@@ -320,9 +320,27 @@ pub struct Pattern {
     pub elements: Vec<PatternElement>,
     /// Optional path variable assignment (e.g., p = (a)-[*]-(b))
     pub path_variable: Option<String>,
+    /// Path variables assigned to comma-separated parts other than the first,
+    /// each paired with the index in `elements` at which its part begins.
+    /// The first part's variable stays in `path_variable`, so every existing
+    /// reader keeps working unchanged.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub extra_path_variables: Vec<(usize, String)>,
 }
 
 impl Pattern {
+    /// Every path variable this pattern binds — the first part's, held in
+    /// [`Self::path_variable`], followed by each later comma-separated part's.
+    ///
+    /// Callers that only need the *names* should use this rather than reading
+    /// the two fields separately, so a pattern with `p = …, q = …` can never
+    /// be seen as binding only `p`.
+    pub fn path_variables(&self) -> impl Iterator<Item = &String> {
+        self.path_variable
+            .iter()
+            .chain(self.extra_path_variables.iter().map(|(_, name)| name))
+    }
+
     /// Walk `elements` and replace every `QuantifiedGroup` that
     /// `QuantifiedGroup::try_lower_to_var_length_rel` can lower with
     /// the resulting `RelationshipPattern`, leaving the rest in place.
@@ -354,6 +372,7 @@ impl Pattern {
         Self {
             elements,
             path_variable: self.path_variable.clone(),
+            extra_path_variables: self.extra_path_variables.clone(),
         }
     }
 }

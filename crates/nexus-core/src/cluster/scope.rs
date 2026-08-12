@@ -156,6 +156,7 @@ fn scope_pattern(pattern: &mut Pattern, ns: &UserNamespace) {
                 let mut inner = Pattern {
                     elements: std::mem::take(&mut group.inner),
                     path_variable: None,
+                    extra_path_variables: Vec::new(),
                 };
                 scope_pattern(&mut inner, ns);
                 group.inner = inner.elements;

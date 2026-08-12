@@ -87,6 +87,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   when no `Project`/`Aggregate` sink existed yet, so the second clause's
   projection ran first, against variables nothing had bound.
 
+### Fixed — A named path may be assigned to any part of a pattern list
+
+- `variable = pattern` parsed only as the **first** element of a pattern list;
+  after a comma the parser demanded `(` and rejected the query outright, so
+  `MATCH (), r = ()-[]-() RETURN r` was a syntax error at column 12. The prefix
+  is now accepted on any part of the list, in `MATCH`, `OPTIONAL MATCH` and
+  `MERGE`. `MERGE` gained it at the head as well — it had no path assignment at
+  all before, so even `MERGE p = (:A)-[:R]->(:B)` was rejected.
+- `Pattern` carries the later parts' variables in a new `extra_path_variables`,
+  each paired with the element index its part begins at; the first part's stays
+  in `path_variable`, so existing readers are untouched. `Pattern::path_variables()`
+  yields all of them, and the semantic pass uses it, so a variable bound on a
+  later part is no longer reported as undefined.
+- The lookahead now exists in exactly one place rather than being copied into
+  each clause parser.
+- **Known incomplete:** the value bound to such a variable is still `null` over a
+  fixed-length pattern — only a variable-length segment materialises a path at
+  execution time. Multi-part patterns are separately incomplete
+  (`MATCH ()-[]-(), ()-[]-() RETURN count(*)` under-counts), which predates this
+  change and is reachable without a path assignment.
+
 ### Fixed — `millisecond` and `microsecond` in an instant map constructor
 
 - The four instant map constructors (`localtime`, `time`, `localdatetime`,

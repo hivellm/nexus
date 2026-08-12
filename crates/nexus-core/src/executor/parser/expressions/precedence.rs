@@ -165,6 +165,7 @@ impl CypherParser {
         Ok(Pattern {
             elements,
             path_variable: None,
+            extra_path_variables: Vec::new(),
         })
     }
 

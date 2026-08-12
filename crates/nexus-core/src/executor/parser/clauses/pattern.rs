@@ -12,8 +12,50 @@ impl CypherParser {
     // `expressions.rs` calls this method directly. Original was `pub(super)` in
     // `clauses.rs` where `super` == `parser`; now that the code lives one level
     // deeper, the equivalent is `pub(in super::super)`.
+    /// Consumes a `variable =` path-assignment prefix if one is present,
+    /// leaving the cursor untouched when it is not.
+    ///
+    /// An identifier at this position is only a path assignment when an `=`
+    /// follows it; otherwise it is the start of something else entirely (a
+    /// node pattern's variable, a keyword, …), so a miss must restore the
+    /// cursor completely — line and column included, since the caller may
+    /// have skipped whitespace to get here and a later error would otherwise
+    /// point at the wrong place.
+    ///
+    /// Shared by every clause that can open a pattern (`MATCH`,
+    /// `OPTIONAL MATCH`, `MERGE`) and by the comma branch of
+    /// [`Self::parse_pattern`], so the lookahead exists exactly once.
+    pub(in super::super) fn try_parse_path_variable_prefix(&mut self) -> Result<Option<String>> {
+        if !self.is_identifier_start() {
+            return Ok(None);
+        }
+        let saved_pos = self.pos;
+        let saved_line = self.line;
+        let saved_column = self.column;
+
+        let var_name = self.parse_identifier()?;
+        self.skip_whitespace();
+
+        // `==` is a comparison, never an assignment; only a lone `=` opens a
+        // path assignment.
+        if self.peek_char() == Some('=') && self.peek_char_at(1) != Some('=') {
+            self.consume_char();
+            self.skip_whitespace();
+            Ok(Some(var_name))
+        } else {
+            self.pos = saved_pos;
+            self.line = saved_line;
+            self.column = saved_column;
+            Ok(None)
+        }
+    }
+
     pub(in super::super) fn parse_pattern(&mut self) -> Result<Pattern> {
         let mut elements = Vec::new();
+        // Path variables on comma-separated parts after the first. The first
+        // part's variable is consumed by the clause parser before it calls
+        // us, and lands in `Pattern::path_variable`.
+        let mut extra_path_variables: Vec<(usize, String)> = Vec::new();
 
         // Parse first node
         let node = self.parse_node_pattern()?;
@@ -33,6 +75,13 @@ impl CypherParser {
             if self.peek_char() == Some(',') {
                 self.consume_char(); // consume ','
                 self.skip_whitespace();
+
+                // A part after the first may carry its own path assignment
+                // (`MATCH (), r = ()-[]-()`); record it against the element
+                // index the part begins at.
+                if let Some(path_var) = self.try_parse_path_variable_prefix()? {
+                    extra_path_variables.push((elements.len(), path_var));
+                }
 
                 // Parse next node pattern as independent node
                 let node = self.parse_node_pattern()?;
@@ -145,6 +194,7 @@ impl CypherParser {
         Ok(Pattern {
             elements,
             path_variable: None, // Set by caller if path variable assignment detected
+            extra_path_variables,
         })
     }
 

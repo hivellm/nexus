@@ -1,16 +1,98 @@
 ## 1. Implementation
-- [ ] 1.1 Accept the `var =` path-assignment prefix on any element of a comma-separated pattern list (MATCH, OPTIONAL MATCH, MERGE)
-- [ ] 1.2 Confirm each assigned path variable reaches `Pattern::path_variable` for every element, not only the first
-- [ ] 1.3 Verify the queries now parse and reach the validator (they will still fail their assertion until the validation task lands — record that explicitly)
+- [x] 1.1 Accept a `variable =` path-assignment prefix on any element of a comma-separated pattern list, in MATCH, OPTIONAL MATCH, and MERGE alike
+      — Measured on a live server before editing, which corrected the proposal on two
+      points. (a) `MATCH p = ()-[]-(), (x) RETURN p, x` **already parsed**: the defect was
+      never "only the first element may carry an assignment", it was that the prefix is not
+      recognised on a part **after a comma**. (b) `MERGE p = (:A)-[:R]->(:B)` failed at
+      column 8 — MERGE had no path assignment at all, not even at the head, so it needed
+      more than the comma fix the proposal describes.
+      The lookahead was inline in `parse_match_clause` (`parser/clauses/read.rs`); it is now
+      `CypherParser::try_parse_path_variable_prefix` in `parser/clauses/pattern.rs`, used by
+      MATCH, by MERGE, and by `parse_pattern`'s comma branch — one copy, not three. It
+      restores line and column as well as position on a miss (the old inline version
+      restored only position, which would have mis-positioned a later error now that the
+      lookahead runs mid-pattern), and it requires a lone `=`, so `WHERE a = a` and a plain
+      node variable are never mistaken for an assignment.
+      AST: `Pattern::path_variable` keeps its meaning (the first part's), and
+      `extra_path_variables: Vec<(usize, String)>` carries each later part's, paired with
+      the element index its part begins at. Additive on purpose — retyping the existing
+      field would have touched 19 read sites in 11 files; adding one made the compiler
+      enumerate the construction sites instead, the same move that worked for `PropertyOf`.
+      `Pattern::path_variables()` yields first + extras so no caller can see only half.
+- [x] 1.2 Semantic pass recognises the new variables
+      — NOT in the proposal, but the task is incoherent without it: after the parse fix
+      these queries stopped failing with `Expected '('` and started failing with
+      `UndefinedVariable: variable 'r' is not defined in this scope`, because the three
+      binder-collection sites in `semantic_validation/mod.rs` (349, 390, 860) read only
+      `path_variable`. All three now iterate `path_variables()`. This is also what the
+      dependent task needs: it can only raise `VariableTypeConflict` for `r` if something
+      records that `r` is a *path* variable.
 
 ## 2. Tail (docs + tests — check or waive with tailWaiver)
-- [ ] 2.1 Update or create documentation covering the implementation
-- [ ] 2.2 Write tests covering the new behavior
-- [ ] 2.3 Run tests and confirm they pass
+- [x] 2.1 Update or create documentation covering the implementation
+      — `docs/specs/cypher-subset.md` §Named Paths: where an assignment may appear, the
+      lone-`=` disambiguation, and an explicit note that binding is not yet complete.
+      `CHANGELOG.md` under `[3.0.0] — Unreleased`, including the known-incomplete note.
+- [x] 2.2 Write tests covering the new behavior
+      — 7 parser unit tests in `parser/tests/patterns.rs`, asserting on the parsed AST (the
+      recorded `(index, name)` pairs and `path_variable`), not merely that parsing
+      succeeded: assignment on a second bare-node part; head + second part together;
+      assignment on a part following a relationship part (index must point at the node that
+      begins the new part); a plain `(a), (b)` list recording nothing; MERGE head
+      assignment; unchanged head-only MATCH; and `WHERE a = a` still parsing, which guards
+      the backtrack.
+- [x] 2.3 Run tests and confirm they pass — `--lib parser` 175 passed; `--test cypher` 748
+      passed, 0 failed.
 
 ## 3. Gates (every item, no exceptions)
-- [ ] 3.1 `cargo +nightly fmt --all` and `cargo clippy --workspace --all-targets --all-features -- -D warnings` clean
-- [ ] 3.2 `cargo +nightly test --workspace --no-fail-fast` green (a plain `--workspace` run aborts at the first failing target)
-- [ ] 3.3 Neo4j differential suite still 300/300 (`scripts/compatibility/test-neo4j-nexus-compatibility-200.ps1`)
-- [ ] 3.4 TCK re-run: this task's categories improved, no category regressed against an identical re-run
-- [ ] 3.5 Regenerate `docs/compatibility/OPENCYPHER_TCK_REPORT.md`
+- [x] 3.1 `cargo +nightly fmt --all` and `cargo clippy --workspace --all-targets --all-features -- -D warnings` clean
+- [x] 3.2 `cargo +nightly test --workspace --no-fail-fast` green — 5912 passed, 0 failed
+      (5905 before + the 7 parser tests added here).
+- [x] 3.3 Neo4j differential suite still 310/325 — **325 total, 310 passed, 0 failed, 15
+      skipped**, unchanged. (The checklist line says 300/300; the suite has since grown to
+      325 with 15 environment-skipped spatial cases.)
+- [x] 3.4 TCK re-run: no category regressed. 2384 → 2385; the only category that moved is
+      `clauses/with-orderBy` 145 → 146, which is the coin-flip scenario isolated during
+      `phase22_tck-aggregation-grouping-key` landing on its other side — a clean
+      confirmation of that analysis, not a gain from this task. `clauses/match` is
+      unchanged, exactly as §4 predicts.
+- [x] 3.5 Regenerate `docs/compatibility/OPENCYPHER_TCK_REPORT.md` — regenerated by the
+      harness.
+
+## 4. Measurements and residue
+
+**Expect roughly zero TCK movement from this task alone, by design.** The proposal is
+explicit and correct here: 64 of the 66 attributed rows are the negative outlines
+`Match1[8]` and `Match1[10]`, which assert
+`SyntaxError ... VariableTypeConflict`. They previously failed with a *parse* error and now
+fail with a different wrong error; they flip only when
+`phase22_tck-validate-variable-reuse` lands. This task's deliverable is that the
+information that task needs — which variable is a path variable, on which part — now
+exists in the AST and in the binder sets.
+
+Before → after, measured on a live server:
+
+| Query | Before | After |
+|---|---|---|
+| `MATCH (), r = ()-[]-() RETURN r` | parse error col 12 | parses, column `r` |
+| `MATCH p = ()-[]-(), q = ()-[]-() RETURN p, q` | parse error col 22 | parses, columns `p, q` |
+| `MATCH ()-[]-(), r = ()-[]-() RETURN r` | parse error col 18 | parses, column `r` |
+| `OPTIONAL MATCH (), r = ()-[]-() RETURN r` | parse error col 21 | parses, column `r` |
+| `MERGE p = (:M1)-[:R]->(:M2) RETURN p` | parse error col 8 | parses, column `p` |
+
+**Stated plainly: for the positive shapes this converts a parse error into an empty or
+null answer, and that is worth knowing before the next reader trusts it.** Two
+pre-existing gaps are responsible, neither created here:
+
+1. *A named path binds to null over a fixed-length pattern.* `path_variable` is consumed
+   in exactly one place in the planner (`planner/queries/relationships.rs:220`, feeding
+   `Operator::VariableLengthPath`); a single-hop `Expand` ignores it, so `MATCH r = ()-[]-()
+   RETURN r` yields rows of `null`. That is true of the head assignment that has always
+   parsed, so it is not a consequence of accepting the prefix on later parts. Deliberately
+   not fixed here: it is a planner change, and this is a parser task. Wants its own task.
+2. *Multi-part patterns are independently incomplete.* `MATCH ()-[]-(), ()-[]-() RETURN
+   count(*)` returns 1 where a cartesian under per-clause relationship isomorphism should
+   give 8. This spelling has always parsed, so the defect is reachable without any path
+   assignment. Checked and NOT a defect, for the record: `MATCH (a)-[]-(b), (c)-[]-(d)
+   RETURN count(*)` returns 8, which is correct — 16 pairings minus the 8 that reuse the
+   same relationship within one clause.

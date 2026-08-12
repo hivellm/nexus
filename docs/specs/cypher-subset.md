@@ -1641,6 +1641,28 @@ MATCH p = (a:Person)-[*]-(b:Person)
 RETURN p, nodes(p), relationships(p), length(p)
 ```
 
+**Where the assignment may appear.** A `variable =` prefix binds the
+comma-separated pattern part that follows it, and may sit on **any** part of the
+list — not only the first — in `MATCH`, `OPTIONAL MATCH` and `MERGE` alike:
+
+```cypher
+MATCH (), r = ()-[]-()                    -- assignment on the second part
+MATCH p = (a)-[]-(b), q = (c)-[]-(d)      -- one per part
+MATCH ()-[]-(), r = ()-[]-()              -- after a relationship part
+MERGE p = (:A)-[:R]->(:B)                 -- MERGE takes one too
+```
+
+An identifier is read as a path assignment only when a single `=` follows it, so
+a node variable (`MATCH (a), (b)`) and a comparison (`WHERE a = a`) are never
+mistaken for one.
+
+> **Binding is not yet complete.** The parser records each part's path variable
+> and the semantic pass counts it as bound, but only a variable-length segment
+> currently materialises a path value at execution time; over a fixed-length
+> pattern the variable evaluates to `null`. Multi-part patterns are also
+> independently incomplete — `MATCH ()-[]-(), ()-[]-() RETURN count(*)`
+> under-counts — and that predates path assignment on later parts.
+
 ### Shortest Path Functions
 
 ```cypher

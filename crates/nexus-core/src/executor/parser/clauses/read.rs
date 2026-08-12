@@ -11,24 +11,7 @@ impl CypherParser {
         self.skip_whitespace();
 
         // Check for path variable assignment: p = (pattern)
-        let path_variable = if self.is_identifier_start() {
-            let saved_pos = self.pos;
-            let var_name = self.parse_identifier()?;
-            self.skip_whitespace();
-
-            if self.peek_char() == Some('=') {
-                // This is a path variable assignment
-                self.consume_char(); // consume '='
-                self.skip_whitespace();
-                Some(var_name)
-            } else {
-                // Not a path variable, restore position
-                self.pos = saved_pos;
-                None
-            }
-        } else {
-            None
-        };
+        let path_variable = self.try_parse_path_variable_prefix()?;
 
         let mut pattern = self.parse_pattern()?;
 

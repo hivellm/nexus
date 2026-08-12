@@ -355,6 +355,7 @@ impl<'a> QueryPlanner<'a> {
                     let inner = Pattern {
                         elements: group.inner.clone(),
                         path_variable: None,
+                        extra_path_variables: Vec::new(),
                     };
                     let inner_str = self.pattern_to_string(&inner)?;
                     let quant = match &group.quantifier {

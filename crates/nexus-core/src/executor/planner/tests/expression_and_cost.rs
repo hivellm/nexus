@@ -235,6 +235,7 @@ fn test_plan_query_with_return_alias() {
             Clause::Match(MatchClause {
                 pattern: Pattern {
                     path_variable: None,
+                    extra_path_variables: Vec::new(),
                     elements: vec![PatternElement::Node(NodePattern {
                         variable: Some("n".to_string()),
                         labels: vec!["Person".to_string()],

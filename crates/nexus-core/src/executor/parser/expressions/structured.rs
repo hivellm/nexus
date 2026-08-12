@@ -356,6 +356,7 @@ impl CypherParser {
         Ok(Pattern {
             elements,
             path_variable: None, // Set by caller if path variable assignment detected
+            extra_path_variables: Vec::new(),
         })
     }
 }

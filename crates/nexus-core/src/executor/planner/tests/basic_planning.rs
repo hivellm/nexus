@@ -12,6 +12,7 @@ fn test_plan_simple_query() {
             Clause::Match(MatchClause {
                 pattern: Pattern {
                     path_variable: None,
+                    extra_path_variables: Vec::new(),
                     elements: vec![PatternElement::Node(NodePattern {
                         variable: Some("n".to_string()),
                         labels: vec!["Person".to_string()],
@@ -94,6 +95,7 @@ fn test_plan_query_with_where_clause() {
             Clause::Match(MatchClause {
                 pattern: Pattern {
                     path_variable: None,
+                    extra_path_variables: Vec::new(),
                     elements: vec![PatternElement::Node(NodePattern {
                         variable: Some("n".to_string()),
                         labels: vec!["Person".to_string()],
@@ -166,6 +168,7 @@ fn test_plan_query_with_limit() {
             Clause::Match(MatchClause {
                 pattern: Pattern {
                     path_variable: None,
+                    extra_path_variables: Vec::new(),
                     elements: vec![PatternElement::Node(NodePattern {
                         variable: Some("n".to_string()),
                         labels: vec!["Person".to_string()],
@@ -215,6 +218,7 @@ fn test_plan_query_with_relationship() {
             Clause::Match(MatchClause {
                 pattern: Pattern {
                     path_variable: None,
+                    extra_path_variables: Vec::new(),
                     elements: vec![
                         PatternElement::Node(NodePattern {
                             variable: Some("a".to_string()),
@@ -275,6 +279,7 @@ fn test_plan_query_with_variable_length_path() {
             Clause::Match(MatchClause {
                 pattern: Pattern {
                     path_variable: None,
+                    extra_path_variables: Vec::new(),
                     elements: vec![
                         PatternElement::Node(NodePattern {
                             variable: Some("a".to_string()),
@@ -346,6 +351,7 @@ fn test_plan_query_with_range_quantifier() {
             Clause::Match(MatchClause {
                 pattern: Pattern {
                     path_variable: None,
+                    extra_path_variables: Vec::new(),
                     elements: vec![
                         PatternElement::Node(NodePattern {
                             variable: Some("a".to_string()),
