@@ -1209,6 +1209,28 @@ FOREACH (x IN [1, 2, 3] |
 )
 ```
 
+### Pattern Predicates
+
+A relationship pattern is a boolean expression on its own — true when at least
+one match exists — and may be written wherever an expression is legal, not only
+after `NOT`:
+
+```cypher
+MATCH (n:Person) WHERE (n)-[:KNOWS]->()                RETURN n
+MATCH (n:Person) WHERE NOT (n)-[:KNOWS]->()            RETURN n
+MATCH (n:Person) WHERE exists((n)-[:KNOWS]->())        RETURN n
+MATCH (n:Person) WHERE (n)-[:KNOWS]->() AND n.age > 30 RETURN n
+MATCH (n:Person) RETURN n.name, (n)-[:KNOWS]->() AS knows_someone
+```
+
+All of these are equivalent to the `EXISTS { … }` subquery below and run through
+the same evaluation.
+
+A pattern predicate is recognised only when a relationship follows the first
+node, so an ordinary parenthesized expression is never reinterpreted: `WHERE (a)`
+is the variable `a`, and `WHERE (n.age) > 30` and `RETURN (1 + 2) = 3` mean what
+they say.
+
 ### EXISTS Subqueries
 
 ```cypher

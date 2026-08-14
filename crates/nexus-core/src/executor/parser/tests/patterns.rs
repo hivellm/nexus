@@ -847,6 +847,206 @@ fn match_head_only_path_variable_assignment_unchanged() {
     }
 }
 
+// ---------------------------------------------------------------
+// Relationship pattern as a boolean predicate — a pattern is now
+// accepted wherever an expression is legal (not just after `NOT` or
+// inside `exists { … }`). Every accepted form desugars to
+// `Expression::Exists { inner: ExistsInner::Pattern { where_clause: None, .. } }`,
+// the same machinery the pre-existing `NOT (pattern)` form already used.
+// The guard that keeps this from misfiring on an ordinary parenthesized
+// expression is `try_parse_pattern_predicate` requiring a `-`/`<` right
+// after the first node — covered by the negative tests at the end of
+// this block.
+// ---------------------------------------------------------------
+
+#[test]
+fn pattern_predicate_bare_form_in_where_parses_as_exists() {
+    let mut parser = CypherParser::new("MATCH (n:A) WHERE (n)-[:T]->() RETURN n.n".to_string());
+    let query = parser.parse().unwrap();
+    match &query.clauses[1] {
+        Clause::Where(w) => {
+            assert!(
+                matches!(
+                    &w.expression,
+                    Expression::Exists {
+                        inner: ExistsInner::Pattern {
+                            where_clause: None,
+                            ..
+                        }
+                    }
+                ),
+                "expected Exists{{Pattern}}, got {:?}",
+                w.expression
+            );
+        }
+        other => panic!("Expected WHERE clause, got {other:?}"),
+    }
+}
+
+#[test]
+fn pattern_predicate_on_left_of_and_parses_as_exists() {
+    let mut parser =
+        CypherParser::new("MATCH (n:A) WHERE (n)-[:T]->() AND n.n = 1 RETURN n.n".to_string());
+    let query = parser.parse().unwrap();
+    match &query.clauses[1] {
+        Clause::Where(w) => match &w.expression {
+            Expression::BinaryOp { left, op, right } => {
+                assert_eq!(*op, BinaryOperator::And);
+                assert!(
+                    matches!(
+                        left.as_ref(),
+                        Expression::Exists {
+                            inner: ExistsInner::Pattern {
+                                where_clause: None,
+                                ..
+                            }
+                        }
+                    ),
+                    "expected the AND's left operand to be Exists{{Pattern}}, got {left:?}"
+                );
+                assert!(
+                    matches!(right.as_ref(), Expression::BinaryOp { op, .. } if *op == BinaryOperator::Equal),
+                    "expected the AND's right operand to be `n.n = 1`, got {right:?}"
+                );
+            }
+            other => panic!("Expected an AND BinaryOp, got {other:?}"),
+        },
+        other => panic!("Expected WHERE clause, got {other:?}"),
+    }
+}
+
+#[test]
+fn pattern_predicate_on_right_of_and_parses_as_exists() {
+    let mut parser =
+        CypherParser::new("MATCH (n:A) WHERE n.n = 1 AND (n)-[:T]->() RETURN n.n".to_string());
+    let query = parser.parse().unwrap();
+    match &query.clauses[1] {
+        Clause::Where(w) => match &w.expression {
+            Expression::BinaryOp { left, op, right } => {
+                assert_eq!(*op, BinaryOperator::And);
+                assert!(
+                    matches!(left.as_ref(), Expression::BinaryOp { op, .. } if *op == BinaryOperator::Equal),
+                    "expected the AND's left operand to be `n.n = 1`, got {left:?}"
+                );
+                assert!(
+                    matches!(
+                        right.as_ref(),
+                        Expression::Exists {
+                            inner: ExistsInner::Pattern {
+                                where_clause: None,
+                                ..
+                            }
+                        }
+                    ),
+                    "expected the AND's right operand to be Exists{{Pattern}}, got {right:?}"
+                );
+            }
+            other => panic!("Expected an AND BinaryOp, got {other:?}"),
+        },
+        other => panic!("Expected WHERE clause, got {other:?}"),
+    }
+}
+
+#[test]
+fn pattern_predicate_function_call_form_parses_as_exists() {
+    let mut parser =
+        CypherParser::new("MATCH (n:A) WHERE exists((n)-[:T]->()) RETURN n.n".to_string());
+    let query = parser.parse().unwrap();
+    match &query.clauses[1] {
+        Clause::Where(w) => {
+            assert!(
+                matches!(
+                    &w.expression,
+                    Expression::Exists {
+                        inner: ExistsInner::Pattern {
+                            where_clause: None,
+                            ..
+                        }
+                    }
+                ),
+                "expected Exists{{Pattern}}, got {:?}",
+                w.expression
+            );
+        }
+        other => panic!("Expected WHERE clause, got {other:?}"),
+    }
+}
+
+#[test]
+fn pattern_predicate_projection_form_parses_as_exists() {
+    let mut parser = CypherParser::new("MATCH (n:A) RETURN (n)-[:T]->() AS has".to_string());
+    let query = parser.parse().unwrap();
+    match &query.clauses[1] {
+        Clause::Return(r) => {
+            assert_eq!(r.items.len(), 1);
+            assert_eq!(r.items[0].alias.as_deref(), Some("has"));
+            assert!(
+                matches!(
+                    &r.items[0].expression,
+                    Expression::Exists {
+                        inner: ExistsInner::Pattern {
+                            where_clause: None,
+                            ..
+                        }
+                    }
+                ),
+                "expected Exists{{Pattern}}, got {:?}",
+                r.items[0].expression
+            );
+        }
+        other => panic!("Expected RETURN clause, got {other:?}"),
+    }
+}
+
+// ── Negative guards: ordinary parenthesized expressions must NOT be
+// misread as a pattern predicate. `try_parse_pattern_predicate` requires
+// a `-`/`<` right after the first node — `(a)` and `(1 + 2)` never
+// satisfy that, so both must fall through to a plain expression. ──
+
+#[test]
+fn parenthesized_bare_variable_is_not_a_pattern_predicate() {
+    let mut parser = CypherParser::new("MATCH (a) WHERE (a) RETURN a".to_string());
+    let query = parser.parse().unwrap();
+    match &query.clauses[1] {
+        Clause::Where(w) => {
+            assert!(
+                matches!(&w.expression, Expression::Variable(name) if name == "a"),
+                "expected `(a)` to parse as a plain Variable, got {:?}",
+                w.expression
+            );
+            assert!(
+                !matches!(&w.expression, Expression::Exists { .. }),
+                "`(a)` must never parse as Exists, got {:?}",
+                w.expression
+            );
+        }
+        other => panic!("Expected WHERE clause, got {other:?}"),
+    }
+}
+
+#[test]
+fn parenthesized_arithmetic_expression_is_not_a_pattern_predicate() {
+    let mut parser = CypherParser::new("MATCH (n) WHERE (1 + 2) = 3 RETURN n".to_string());
+    let query = parser.parse().unwrap();
+    match &query.clauses[1] {
+        Clause::Where(w) => match &w.expression {
+            Expression::BinaryOp { left, op, .. } => {
+                assert_eq!(*op, BinaryOperator::Equal);
+                assert!(
+                    matches!(left.as_ref(), Expression::BinaryOp { op, .. } if *op == BinaryOperator::Add),
+                    "expected `(1 + 2)` to parse as a plain addition, got {left:?}"
+                );
+                assert!(
+                    !matches!(left.as_ref(), Expression::Exists { .. }),
+                    "`(1 + 2)` must never parse as Exists, got {left:?}"
+                );
+            }
+            other => panic!("Expected `(1 + 2) = 3` to parse as an Equal BinaryOp, got {other:?}"),
+        },
+        other => panic!("Expected WHERE clause, got {other:?}"),
+    }
+}
+
 #[test]
 fn where_clause_equality_is_not_misread_as_path_assignment() {
     // `MATCH (a) WHERE a = a RETURN count(a)` — `try_parse_path_variable_prefix`

@@ -12,7 +12,7 @@ impl CypherParser {
         self.skip_whitespace();
 
         match self.peek_char() {
-            Some('(') => self.parse_parenthesized_expression(),
+            Some('(') => self.parse_parenthesized_expression_or_pattern_predicate(),
             Some('$') => self.parse_parameter(),
             Some('"') | Some('\'') => self.parse_string_literal(),
             Some(c) if c.is_ascii_digit() => self.parse_numeric_literal(),
@@ -117,6 +117,45 @@ impl CypherParser {
         let expr = self.parse_expression()?;
         self.expect_char(')')?;
         self.parse_dot_property_suffixes(expr)
+    }
+
+    /// Parse a leading `(` as either a bare pattern-existence predicate —
+    /// `(n)-[:REL]->()`, openCypher's shorthand for `EXISTS { (n)-[:REL]->() }`
+    /// — or, when the tentative pattern parse fails, an ordinary
+    /// parenthesized expression.
+    ///
+    /// The pattern parse is tried first via [`Self::try_parse_pattern_predicate`],
+    /// which requires a relationship after the first node, so it can never
+    /// misfire on a genuine parenthesized expression like `(a)` or `(1 + 2)`.
+    /// On failure all three cursor fields (`pos`/`line`/`column`) are
+    /// restored before falling through, so later error messages stay
+    /// correctly positioned.
+    ///
+    /// Living at this (primary) level of the precedence chain is what lets
+    /// `AND`/`OR`/`XOR` composition (`WHERE (n)-[:T]->() AND n.p = 1`) and
+    /// the projection form (`RETURN (n)-[:T]->() AS has`) work without any
+    /// dedicated handling of their own.
+    pub(super) fn parse_parenthesized_expression_or_pattern_predicate(
+        &mut self,
+    ) -> Result<Expression> {
+        let saved_pos = self.pos;
+        let saved_line = self.line;
+        let saved_column = self.column;
+
+        if let Ok(pattern) = self.try_parse_pattern_predicate() {
+            return Ok(Expression::Exists {
+                inner: ExistsInner::Pattern {
+                    pattern,
+                    where_clause: None,
+                },
+            });
+        }
+
+        self.pos = saved_pos;
+        self.line = saved_line;
+        self.column = saved_column;
+
+        self.parse_parenthesized_expression()
     }
 
     /// Consume a chain of `.property` suffixes applied to an already-parsed base

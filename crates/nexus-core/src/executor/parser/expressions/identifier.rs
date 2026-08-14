@@ -47,6 +47,43 @@ impl CypherParser {
                 return self.parse_point_literal();
             }
 
+            // Special case: exists(<pattern>) — mirrors the bare
+            // `(n)-[:T]->()` predicate and the `EXISTS { … }` subquery
+            // form: the whole call desugars to `Expression::Exists`
+            // rather than a `FunctionCall`/`PatternComprehension`. Tried
+            // tentatively (via the same `try_parse_pattern_predicate`
+            // used for the bare form) so `exists(n.prop)` — property
+            // existence — still falls through unchanged to the ordinary
+            // argument parser below when the pattern parse fails.
+            if identifier.to_lowercase() == "exists" {
+                let saved_pos = self.pos;
+                let saved_line = self.line;
+                let saved_column = self.column;
+
+                self.consume_char(); // consume '('
+                self.skip_whitespace();
+
+                if let Ok(pattern) = self.try_parse_pattern_predicate() {
+                    self.skip_whitespace();
+                    if self.peek_char() == Some(')') {
+                        self.consume_char(); // consume ')'
+                        return Ok(Expression::Exists {
+                            inner: ExistsInner::Pattern {
+                                pattern,
+                                where_clause: None,
+                            },
+                        });
+                    }
+                }
+
+                // Not a pattern (or trailing content followed it) —
+                // restore and fall through to ordinary function-call
+                // argument parsing.
+                self.pos = saved_pos;
+                self.line = saved_line;
+                self.column = saved_column;
+            }
+
             self.consume_char(); // consume '('
             let mut args = Vec::new();
 

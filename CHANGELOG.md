@@ -87,6 +87,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   when no `Project`/`Aggregate` sink existed yet, so the second clause's
   projection ran first, against variables nothing had bound.
 
+### Fixed — A pattern is a boolean predicate wherever an expression is legal
+
+- A relationship pattern was accepted as a predicate only after `NOT`, or inside
+  `exists { … }`. The bare positive form was a syntax error —
+  `MATCH (n) WHERE (n)-[:T]->() RETURN n` failed at the `-` — as were
+  `exists((n)-[:T]->())`, either side of an `AND`/`OR`/`XOR`, and the projection
+  form `RETURN (n)-[:T]->() AS has`. Since the `NOT` form worked, the evaluation
+  machinery was already in place; only the grammar entry point was missing.
+- Every form now produces the same `Exists`-over-pattern the `NOT` form produced,
+  so nothing downstream changed. The attempt sits at the primary-expression
+  level, which is why boolean composition and the projection form work without
+  a special case for each.
+- A parenthesized expression is still exactly that: the pattern attempt requires
+  a relationship after the first node, so `WHERE (a)`, `WHERE (n.n) = 1` and
+  `RETURN (1 + 2) = 3` are untouched.
+- openCypher TCK conformance 61.7% → 62.2% (2385 → 2404 of 3868);
+  `expressions/pattern` 28.0% → 62.0%, `expressions/existentialSubqueries` now 100%.
+
 ### Fixed — A named path may be assigned to any part of a pattern list
 
 - `variable = pattern` parsed only as the **first** element of a pattern list;

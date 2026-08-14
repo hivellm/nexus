@@ -78,7 +78,7 @@ impl CypherParser {
                 let saved_column = self.column;
 
                 // Try to parse as a pattern (NOT (n)-[:REL]->() is shorthand for NOT EXISTS { pattern })
-                if let Ok(pattern) = self.try_parse_not_pattern() {
+                if let Ok(pattern) = self.try_parse_pattern_predicate() {
                     // This is NOT pattern, convert to NOT EXISTS
                     return Ok(Expression::UnaryOp {
                         op: UnaryOperator::Not,
@@ -114,9 +114,16 @@ impl CypherParser {
         self.parse_comparison_expression()
     }
 
-    /// Try to parse a pattern for NOT (pattern) syntax
-    /// Returns Ok(Pattern) if successful, Err if not a pattern
-    pub(super) fn try_parse_not_pattern(&mut self) -> Result<Pattern> {
+    /// Try to parse a pattern-existence predicate — `(n)-[:REL]->()` — the
+    /// shared tentative-parse used by every surface that desugars a bare
+    /// pattern to `EXISTS { pattern }`: `NOT (pattern)`, the bare positive
+    /// form (`WHERE (pattern)`, `RETURN (pattern) AS …`), and the
+    /// function-call form `exists(pattern)`.
+    ///
+    /// Returns `Ok(Pattern)` if successful, `Err` if not a pattern. Callers
+    /// are responsible for restoring `pos`/`line`/`column` on `Err` — this
+    /// method consumes input as it probes and does not roll back itself.
+    pub(super) fn try_parse_pattern_predicate(&mut self) -> Result<Pattern> {
         // We need to parse something like: (n)-[:REL]->()
         // The key indicator that this is a pattern is the relationship after the first node
 

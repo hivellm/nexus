@@ -1,7 +1,8 @@
 //! Expression parsing: precedence climbing from OR down through comparison,
 //! arithmetic, unary, and primary. Also hosts property access,
-//! function-call, list/map/parenthesis forms, and the `try_parse_not_pattern`
-//! fallback for negated patterns inside WHERE.
+//! function-call, list/map/parenthesis forms, and the
+//! `try_parse_pattern_predicate` fallback shared by `NOT (pattern)`, the
+//! bare `(pattern)` predicate, and `exists(pattern)`.
 //!
 //! Sub-modules:
 //! - `precedence` — OR/AND/NOT/comparison/arithmetic precedence chain + operators.
