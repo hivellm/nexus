@@ -20,7 +20,9 @@
 //! `LOAD CSV`, and every DDL/admin/transaction statement) are skipped
 //! outright rather than risk a false positive.
 
+mod order_by_scope;
 mod relationship_uniqueness;
+mod variable_kinds;
 
 use std::collections::HashSet;
 
@@ -49,7 +51,8 @@ pub fn validate(query: &CypherQuery) -> crate::Result<()> {
         return Ok(());
     }
 
-    check_variable_type_conflicts(query)?;
+    variable_kinds::check_variable_kind_conflicts(query)?;
+    order_by_scope::check_order_by_scope(query)?;
     check_length_argument_type(query)?;
     check_variable_already_bound(query)?;
     check_aggregation_placement(query)?;
@@ -173,31 +176,18 @@ fn expr_contains_exists_subquery(expr: &Expression) -> bool {
 }
 
 // ── Variable type conflicts ────────────────────────────────────────────
-
-/// Reject a variable bound as a node in one place and as a relationship in
-/// another (`MATCH (a) MATCH ()-[a]-()`). A Cypher variable has exactly one
-/// entity type, so a name appearing in both the node-var and relationship-var
-/// sets of a query's top-level patterns is always a genuine conflict — this
-/// cannot false-positive on any valid query (`(a)-[r]->(a)` reuses `a` as the
-/// same node, never as a relationship). Only top-level `MATCH`/`CREATE`/`MERGE`
-/// patterns are inspected; expression-embedded patterns (`EXISTS { … }`,
-/// pattern comprehensions) introduce inner scopes and are left to a later
-/// refinement.
-fn check_variable_type_conflicts(query: &CypherQuery) -> crate::Result<()> {
-    let (node_vars, rel_vars) = typed_pattern_vars(query);
-    for name in &node_vars {
-        if rel_vars.contains(name) {
-            return Err(variable_type_conflict(name));
-        }
-    }
-    Ok(())
-}
+//
+// The rule itself lives in `variable_kinds`, which tracks all four kinds a
+// variable can take (node, relationship, path, value). `typed_pattern_vars`
+// below stays because a second caller needs the node/relationship split for
+// its own reasons.
 
 /// Collect the query's pattern variables, split into the ones bound as nodes
 /// and the ones bound as relationships. A name can legitimately land in both
-/// sets — that is exactly the conflict [`check_variable_type_conflicts`] looks
-/// for — so callers that need an unambiguous type must treat an overlap as
-/// unknown rather than assume either side.
+/// sets — that is exactly the conflict
+/// [`variable_kinds::check_variable_kind_conflicts`] looks for — so callers
+/// that need an unambiguous type must treat an overlap as unknown rather than
+/// assume either side.
 fn typed_pattern_vars(query: &CypherQuery) -> (HashSet<String>, HashSet<String>) {
     let mut node_vars = HashSet::new();
     let mut rel_vars = HashSet::new();
@@ -1215,7 +1205,8 @@ fn undefined_variable(name: &str) -> crate::Error {
 
 fn variable_type_conflict(name: &str) -> crate::Error {
     crate::Error::CypherSyntax(format!(
-        "VariableTypeConflict: variable `{name}` is used as both a node and a relationship"
+        "VariableTypeConflict: variable `{name}` is bound to more than one kind of value \
+         (node, relationship, path, or plain value)"
     ))
 }
 

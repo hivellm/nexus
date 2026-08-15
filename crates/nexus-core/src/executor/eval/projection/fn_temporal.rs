@@ -415,23 +415,20 @@ impl Executor {
                             }
                         }
                         Value::Object(map) => {
-                            // Support {year, month, day} format — also covers a
-                            // tagged date/datetime argument, whose map carries
-                            // the same `year`/`month`/`day` keys alongside the
-                            // `_nexus_temporal_type` tag (harmlessly ignored).
-                            let year = map
-                                .get("year")
-                                .and_then(|v| v.as_i64())
-                                .unwrap_or_else(|| chrono::Local::now().year() as i64)
-                                as i32;
-                            let month =
-                                map.get("month").and_then(|v| v.as_u64()).unwrap_or(1) as u32;
-                            let day = map.get("day").and_then(|v| v.as_u64()).unwrap_or(1) as u32;
-
-                            if let Some(date) = chrono::NaiveDate::from_ymd_opt(year, month, day) {
-                                return Some(Ok(Value::String(
-                                    date.format("%Y-%m-%d").to_string(),
-                                )));
+                            // Calendar, ISO week, quarter or ordinal fields —
+                            // also covers a tagged date/datetime argument,
+                            // whose map carries `year`/`month`/`day` alongside
+                            // the `_nexus_temporal_type` tag (ignored here).
+                            if let Some((year, month, day)) =
+                                super::calendar_fields::date_from_map(&map)
+                            {
+                                if let Some(date) =
+                                    chrono::NaiveDate::from_ymd_opt(year, month, day)
+                                {
+                                    return Some(Ok(Value::String(
+                                        date.format("%Y-%m-%d").to_string(),
+                                    )));
+                                }
                             }
                         }
                         _ => {}
@@ -464,17 +461,10 @@ impl Executor {
                             }
                         }
                         Value::Object(map) => {
-                            // Support {year, month, day} format
-                            let year = map
-                                .get("year")
-                                .and_then(|v| v.as_i64())
-                                .unwrap_or_else(|| chrono::Local::now().year() as i64)
-                                as i32;
-                            let month =
-                                map.get("month").and_then(|v| v.as_u64()).unwrap_or(1) as u32;
-                            let day = map.get("day").and_then(|v| v.as_u64()).unwrap_or(1) as u32;
-
-                            if chrono::NaiveDate::from_ymd_opt(year, month, day).is_some() {
+                            // Calendar, ISO week, quarter or ordinal fields.
+                            if let Some((year, month, day)) =
+                                super::calendar_fields::date_from_map(&map)
+                            {
                                 return Some(Ok(temporal_value::make_date(year, month, day)));
                             }
                         }
@@ -594,15 +584,14 @@ impl Executor {
                             }
                         }
                         Value::Object(map) => {
-                            // Support {year, month, day, hour, minute, second, nanosecond, timezone} format
-                            let year = map
-                                .get("year")
-                                .and_then(|v| v.as_i64())
-                                .unwrap_or_else(|| chrono::Local::now().year() as i64)
-                                as i32;
-                            let month =
-                                map.get("month").and_then(|v| v.as_u64()).unwrap_or(1) as u32;
-                            let day = map.get("day").and_then(|v| v.as_u64()).unwrap_or(1) as u32;
+                            // {year, month, day, hour, minute, second, nanosecond, timezone},
+                            // with the date half also accepting ISO week,
+                            // quarter or ordinal fields.
+                            let Some((year, month, day)) =
+                                super::calendar_fields::date_from_map(&map)
+                            else {
+                                return Some(Ok(Value::Null));
+                            };
                             let hour = map.get("hour").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
                             let minute =
                                 map.get("minute").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
@@ -1000,14 +989,13 @@ impl Executor {
                             }
                         }
                         Value::Object(map) => {
-                            let year = map
-                                .get("year")
-                                .and_then(|v| v.as_i64())
-                                .unwrap_or_else(|| chrono::Local::now().year() as i64)
-                                as i32;
-                            let month =
-                                map.get("month").and_then(|v| v.as_u64()).unwrap_or(1) as u32;
-                            let day = map.get("day").and_then(|v| v.as_u64()).unwrap_or(1) as u32;
+                            // Date half accepts calendar, ISO week, quarter or
+                            // ordinal fields.
+                            let Some((year, month, day)) =
+                                super::calendar_fields::date_from_map(&map)
+                            else {
+                                return Some(Ok(Value::Null));
+                            };
                             let hour = map.get("hour").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
                             let minute =
                                 map.get("minute").and_then(|v| v.as_u64()).unwrap_or(0) as u32;

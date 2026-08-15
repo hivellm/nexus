@@ -146,10 +146,17 @@ impl CypherParser {
         loop {
             let expression = self.parse_expression()?;
 
-            let direction = if self.peek_keyword("ASC") {
+            // openCypher spells the sort direction either way: `ASC` /
+            // `ASCENDING`, `DESC` / `DESCENDING`. `peek_keyword` requires a
+            // non-alphanumeric boundary, so `ASC` does NOT match the head of
+            // `ASCENDING` — the long forms have to be listed in their own
+            // right. Without them the direction word was left unconsumed and
+            // the whole rest of the query became "unexpected input after the
+            // last clause".
+            let direction = if self.peek_keyword("ASCENDING") || self.peek_keyword("ASC") {
                 self.parse_keyword()?;
                 SortDirection::Ascending
-            } else if self.peek_keyword("DESC") {
+            } else if self.peek_keyword("DESCENDING") || self.peek_keyword("DESC") {
                 self.parse_keyword()?;
                 SortDirection::Descending
             } else {

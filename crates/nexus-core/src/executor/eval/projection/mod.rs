@@ -9,6 +9,7 @@
 //! - [`Executor::evaluate_collect_subquery`]      — in `core`
 
 // ── submodules ───────────────────────────────────────────────────────────────
+mod calendar_fields;
 mod core;
 mod fn_geo;
 mod fn_graph;
