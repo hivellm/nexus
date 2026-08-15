@@ -687,6 +687,14 @@ fn check_skip_limit_count(count: &Expression) -> crate::Result<()> {
         return Ok(());
     }
 
+    // A literal of any other type can never be a row count. Caught here
+    // rather than at runtime because it is provable from the source: without
+    // this, `SKIP 1.5` was accepted and then silently ignored by the planner,
+    // which reads only an integer literal.
+    if matches!(count, Expression::Literal(_)) {
+        return Err(invalid_argument_type());
+    }
+
     // Anything that reads a row variable cannot be a constant limit.
     if expr_references_variable(count) {
         return Err(non_constant_expression());
@@ -1250,6 +1258,10 @@ fn negative_integer_argument() -> crate::Error {
     crate::Error::CypherSyntax(
         "NegativeIntegerArgument: SKIP/LIMIT requires a non-negative integer".to_string(),
     )
+}
+
+fn invalid_argument_type() -> crate::Error {
+    crate::Error::CypherSyntax("InvalidArgumentType: SKIP/LIMIT requires an integer".to_string())
 }
 
 fn non_constant_expression() -> crate::Error {

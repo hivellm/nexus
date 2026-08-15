@@ -392,12 +392,33 @@ LIMIT 10
 
 -- Combined with ORDER BY
 ORDER BY n.score DESC LIMIT 100
+
+-- Zero is a legal count and returns nothing
+LIMIT 0
 ```
 
 **Limit Syntax**:
 ```
-Limit ::= 'LIMIT' Number
+Limit ::= 'LIMIT' (Integer | Parameter)
 ```
+
+**Arguments.** The count is a non-negative integer literal or a `$param`
+bound to one; both `SKIP` and `LIMIT` accept the same forms. `LIMIT 0`
+returns zero rows, and a `SKIP` past the last row leaves nothing — an empty
+result is the answer, not a signal that the clause was ignored.
+
+Anything that cannot be a row count is rejected before execution, with the
+openCypher error kind in the message:
+
+| Written | Error kind |
+|---|---|
+| `LIMIT -1`, `SKIP -1` | `NegativeIntegerArgument` |
+| `LIMIT 1.5`, `LIMIT 'x'`, `LIMIT true` | `InvalidArgumentType` |
+| `LIMIT n.age`, `SKIP size(n.list)` | `NonConstantExpression` |
+
+A parameter's value is only known at request time, so a `$param` bound to a
+negative number or a non-integer is not a static error; it resolves to no
+count and the clause does not restrict the stream.
 
 ### SKIP Clause (V1)
 
@@ -419,6 +440,22 @@ SKIP 20 LIMIT 10  -- page 3, size 10
 - ✅ `MATCH ... RETURN v UNION MATCH ... RETURN v ORDER BY v SKIP 2` — SKIP applies to the merged result
 
 Pair `SKIP` with `ORDER BY` for deterministic pagination — without an explicit ordering the rows dropped are implementation-defined. On a post-`UNION` projection, a `SKIP`/`LIMIT` written *without* an accompanying `ORDER BY` binds to the nearest `RETURN` (the right-hand UNION arm) rather than the merged result, matching openCypher clause attachment; add `ORDER BY` after the final `UNION` to page the combined output.
+
+**Attachment to `WITH`.** `ORDER BY` / `SKIP` / `LIMIT` bind to the
+projecting clause they are written after, and a tail on a `WITH` cuts the
+stream *at that point* — every later clause, aggregations included, sees
+only the surviving rows:
+
+- ✅ `UNWIND [1, 2, 3, 4, 5] AS x WITH x LIMIT 2 RETURN count(x)` → `2`
+- ✅ `UNWIND [1, 2, 3, 4, 5] AS x WITH x SKIP 3 RETURN sum(x)` → `9`
+- ✅ `MATCH (p:Person) WITH p ORDER BY p.age LIMIT 2 RETURN p.name` — the two youngest
+- ✅ `UNWIND [1, 2, 3, 4, 5] AS x WITH x LIMIT 2 RETURN x LIMIT 4` → `1, 2` — each tail applies in turn, the tighter one wins
+
+A `WITH` tail may sort by a key the `WITH` does not project (`WITH p ORDER BY
+p.age`); the key is carried across the projection as an internal column and
+dropped once the rows are ordered. The one exception is `WITH DISTINCT`,
+where an extra column would change which rows count as duplicates — sort
+there by a projected alias (`WITH DISTINCT p.age AS age ORDER BY age`).
 
 ### Aggregations
 

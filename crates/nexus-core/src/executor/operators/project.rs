@@ -502,8 +502,37 @@ impl Executor {
             // This properly handles PropertyAccess (e.g., n.name) by looking up
             // the entity from the row HashMap first
             for item in items {
+                if item.alias.starts_with(ORDER_BY_HIDDEN_KEY_PREFIX) {
+                    continue;
+                }
                 let value = self.evaluate_projection_expression(row, context, &item.expression)?;
                 new_row.insert(item.alias.clone(), value);
+            }
+
+            // A hidden ORDER BY key carries a `WITH ... ORDER BY <expr>` sort
+            // key across the projection so the following `Sort` can read it as
+            // a column. It must see the scope the sort key is written
+            // against — the one AFTER the projection, where an alias shadows
+            // the same-named upstream variable. `WITH x % 3 AS x ORDER BY
+            // x * -1` sorts by the new `x`, not the one the WITH consumed.
+            // Same merge rule the WHERE below uses, for the same reason.
+            if items
+                .iter()
+                .any(|item| item.alias.starts_with(ORDER_BY_HIDDEN_KEY_PREFIX))
+            {
+                let mut projected_scope = row.clone();
+                projected_scope.extend(new_row.iter().map(|(k, v)| (k.clone(), v.clone())));
+                for item in items
+                    .iter()
+                    .filter(|item| item.alias.starts_with(ORDER_BY_HIDDEN_KEY_PREFIX))
+                {
+                    let value = self.evaluate_projection_expression(
+                        &projected_scope,
+                        context,
+                        &item.expression,
+                    )?;
+                    new_row.insert(item.alias.clone(), value);
+                }
             }
 
             if let Some(predicate) = where_predicate {

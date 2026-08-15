@@ -407,6 +407,34 @@ impl<'a> QueryPlanner<'a> {
         )
     }
 
+    /// Resolve a `SKIP`/`LIMIT` argument to a row count.
+    ///
+    /// Accepts an integer literal or a `$param` bound to an integer. Returns
+    /// `None` for anything else, which the caller treats as "no clause" —
+    /// `semantic_validation::check_skip_limit_arguments` has already rejected
+    /// the statically-provable bad forms (negative, non-integer literal,
+    /// variable-dependent), so what reaches here and fails to resolve is a
+    /// parameter that is absent or not an integer.
+    ///
+    /// Before this existed, every call site matched `Expression::Literal(
+    /// Literal::Integer(_))` inline with no `else`, so `SKIP $n` was dropped
+    /// in silence and the query answered as if the clause had not been
+    /// written.
+    pub(super) fn resolve_row_count(
+        &self,
+        expr: &Expression,
+        params: &std::collections::HashMap<String, serde_json::Value>,
+    ) -> Option<usize> {
+        match expr {
+            Expression::Literal(Literal::Integer(n)) if *n >= 0 => Some(*n as usize),
+            Expression::Parameter(name) => params
+                .get(name)
+                .and_then(serde_json::Value::as_u64)
+                .map(|n| n as usize),
+            _ => None,
+        }
+    }
+
     /// Check if an expression contains an aggregation function (recursively)
     pub(super) fn contains_aggregation(&self, expr: &Expression) -> bool {
         match expr {

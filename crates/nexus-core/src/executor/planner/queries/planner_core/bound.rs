@@ -6,6 +6,7 @@
 //! — so it stays whole in its own file rather than being split further.
 
 use super::super::*;
+use super::with_tail::WithTail;
 
 impl<'a> QueryPlanner<'a> {
     /// Core of [`Self::plan_query`], parameterised by the set of variables
@@ -129,17 +130,12 @@ impl<'a> QueryPlanner<'a> {
                             post_union_order_by = Some((columns, ascending));
                         }
                         Clause::Limit(limit_clause) => {
-                            if let Expression::Literal(Literal::Integer(count)) =
-                                &limit_clause.count
-                            {
-                                post_union_limit = Some(*count as usize);
-                            }
+                            post_union_limit =
+                                self.resolve_row_count(&limit_clause.count, &query.params);
                         }
                         Clause::Skip(skip_clause) => {
-                            if let Expression::Literal(Literal::Integer(count)) = &skip_clause.count
-                            {
-                                post_union_skip = Some(*count as usize);
-                            }
+                            post_union_skip =
+                                self.resolve_row_count(&skip_clause.count, &query.params);
                         }
                         _ => {
                             // Other clauses after UNION are not supported (e.g., another UNION)
@@ -263,7 +259,16 @@ impl<'a> QueryPlanner<'a> {
             Option<crate::executor::parser::Expression>,
             crate::executor::parser::AstConflictPolicy,
         )> = Vec::new(); // Collect CREATE to insert after MATCH
-        let mut with_operators: Vec<(Vec<ReturnItem>, bool, Option<Expression>)> = Vec::new(); // Collect WITH clauses with optional WHERE
+        // Collect WITH clauses with their optional WHERE and their own
+        // ORDER BY/SKIP/LIMIT tail. The tail belongs to the WITH, not to the
+        // query: it has to cut the stream where it is written so the next
+        // clause only ever sees the surviving rows (see `with_tail`).
+        let mut with_operators: Vec<(Vec<ReturnItem>, bool, Option<Expression>, WithTail)> =
+            Vec::new();
+        // Index into `with_operators` of the WITH currently accepting a tail.
+        // Cleared by the first clause that is not part of one (below), so a
+        // trailing `RETURN ... LIMIT` still reaches the query-wide slots.
+        let mut open_with_tail: Option<usize> = None;
         let mut with_has_aggregation = false; // Track if WITH clause has aggregation
         let mut with_aggregation_where: Option<Expression> = None; // Track WHERE from WITH with aggregation
         // phase6 §5 — When WITH carries the aggregation and RETURN only
@@ -298,6 +303,18 @@ impl<'a> QueryPlanner<'a> {
         }
 
         for clause in &query.clauses {
+            // `ORDER BY`/`SKIP`/`LIMIT` bind to whatever projecting clause
+            // precedes them. Any other clause closes the WITH that was
+            // collecting them, so the next such run lands on the query-wide
+            // slots (i.e. belongs to the final RETURN) instead of being
+            // retro-attached to a WITH several clauses back.
+            if !matches!(
+                clause,
+                Clause::With(_) | Clause::OrderBy(_) | Clause::Skip(_) | Clause::Limit(_)
+            ) {
+                open_with_tail = None;
+            }
+
             match clause {
                 Clause::Match(match_clause) => {
                     // Store pattern with optional flag for LEFT OUTER JOIN semantics
@@ -398,7 +415,9 @@ impl<'a> QueryPlanner<'a> {
                         with_clause.items.clone(),
                         with_clause.distinct,
                         where_expr,
+                        WithTail::default(),
                     ));
+                    open_with_tail = Some(with_operators.len() - 1);
 
                     // Check if WITH clause has aggregation
                     for item in &with_clause.items {
@@ -460,13 +479,17 @@ impl<'a> QueryPlanner<'a> {
                     }
                 }
                 Clause::Limit(limit_clause) => {
-                    if let Expression::Literal(Literal::Integer(count)) = &limit_clause.count {
-                        limit_count = Some(*count as usize);
+                    let count = self.resolve_row_count(&limit_clause.count, &query.params);
+                    match open_with_tail {
+                        Some(idx) => with_operators[idx].3.limit = count,
+                        None => limit_count = count,
                     }
                 }
                 Clause::Skip(skip_clause) => {
-                    if let Expression::Literal(Literal::Integer(count)) = &skip_clause.count {
-                        skip_count = Some(*count as usize);
+                    let count = self.resolve_row_count(&skip_clause.count, &query.params);
+                    match open_with_tail {
+                        Some(idx) => with_operators[idx].3.skip = count,
+                        None => skip_count = count,
                     }
                 }
                 Clause::OrderBy(order_by_clause_parsed) => {
@@ -487,7 +510,10 @@ impl<'a> QueryPlanner<'a> {
                     }
 
                     // Store for later addition and resolution
-                    order_by_clause = Some((columns, ascending));
+                    match open_with_tail {
+                        Some(idx) => with_operators[idx].3.order_by = Some((columns, ascending)),
+                        None => order_by_clause = Some((columns, ascending)),
+                    }
                 }
                 Clause::Union(_) => {
                     // Should have been handled above
@@ -664,21 +690,19 @@ impl<'a> QueryPlanner<'a> {
         // before a `Project`/`Aggregate` pushes the sink right, so the next
         // iteration's `sink_pos` is already one further along.
         let mut next_no_sink_pos: Option<usize> = None;
-        for (with_items, with_distinct, where_expr) in with_operators.iter() {
+        for (with_items, with_distinct, where_expr, tail) in with_operators.iter() {
             // Check if WITH has aggregation - if so, skip (Aggregate operator handles it)
             // Note: with_aggregation_where is already set earlier in the WITH clause processing
             let has_agg = with_items
                 .iter()
                 .any(|item| self.contains_aggregation(&item.expression));
-            if has_agg {
-                tracing::debug!(
-                    "Skipping WITH operator generation - has aggregation (handled by Aggregate)"
-                );
-                continue;
-            }
 
-            // Convert ReturnItems to ProjectionItems
-            let projection_items: Vec<ProjectionItem> = with_items
+            // Convert ReturnItems to ProjectionItems. Built even on the
+            // aggregating path, where it is not the projection that runs but
+            // is still the name map the tail's sort keys resolve against:
+            // `WITH a.name AS name, count(*) AS c ORDER BY a.name` has to
+            // find that `a.name` is the column the Aggregate calls `name`.
+            let mut projection_items: Vec<ProjectionItem> = with_items
                 .iter()
                 .map(|item| {
                     let alias = item.alias.clone().unwrap_or_else(|| {
@@ -691,6 +715,39 @@ impl<'a> QueryPlanner<'a> {
                     }
                 })
                 .collect();
+
+            if has_agg {
+                tracing::debug!(
+                    "Skipping WITH operator generation - has aggregation (handled by Aggregate)"
+                );
+                // The projection is the Aggregate's job, but the tail is
+                // still this WITH's: `WITH count(*) AS c ORDER BY c LIMIT 1`
+                // has to cut the aggregated stream, so lower it directly
+                // after the Aggregate that stands in for this WITH.
+                if !tail.is_empty() {
+                    let agg_pos = operators
+                        .iter()
+                        .position(|op| matches!(op, Operator::Aggregate { .. }));
+                    if let Some(pos) = agg_pos {
+                        // No hidden sort key here: the Aggregate emits its own
+                        // columns and this vector is never executed, so a key
+                        // appended to it would name a column that never
+                        // exists. Sorting is limited to what the aggregation
+                        // exposes — which is what openCypher allows anyway.
+                        let lowered = self.lower_with_tail(tail, false, &mut projection_items);
+                        for (offset, op) in lowered.into_iter().enumerate() {
+                            operators.insert(pos + 1 + offset, op);
+                        }
+                    }
+                }
+                continue;
+            }
+
+            // Lower this WITH's own ORDER BY/SKIP/LIMIT. Done before the
+            // insert because resolving a sort key may append a hidden column
+            // to `projection_items` — which DISTINCT forbids, since an extra
+            // column changes which rows are duplicates.
+            let tail_operators = self.lower_with_tail(tail, !*with_distinct, &mut projection_items);
 
             // Find the position to insert WITH:
             // - Before Project OR Aggregate if either exists — WITH's projection
@@ -742,8 +799,14 @@ impl<'a> QueryPlanner<'a> {
                     where_predicate: with_where,
                 },
             );
+            // Sort/Skip/Limit go directly after their WITH, so the clause
+            // that follows reads the already-cut stream.
+            let tail_len = tail_operators.len();
+            for (offset, op) in tail_operators.into_iter().enumerate() {
+                operators.insert(insert_pos + 1 + offset, op);
+            }
             if sink_pos.is_none() {
-                next_no_sink_pos = Some(insert_pos + 1);
+                next_no_sink_pos = Some(insert_pos + 1 + tail_len);
             }
         }
 

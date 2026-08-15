@@ -6,7 +6,9 @@
 //! - `bound`    — `plan_query_bound` (the core single-segment planning pass)
 //! - `segments` — `WITH → MATCH` segmented planning + pattern-variable
 //!   collection
+//! - `with_tail` — `ORDER BY`/`SKIP`/`LIMIT` attached to a `WITH`
 
 mod bound;
 mod builder;
 mod segments;
+mod with_tail;

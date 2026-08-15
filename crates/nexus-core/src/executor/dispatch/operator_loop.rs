@@ -41,7 +41,7 @@ impl Executor {
         let preparsed = self.shared.preparsed_ast_override.lock().take();
         let operators = match preparsed {
             Some(ast) => self.plan_ast(&ast)?,
-            None => self.parse_and_plan(&cleaned_cypher)?,
+            None => self.parse_and_plan_with_params(&cleaned_cypher, &query.params)?,
         };
 
         // TODO: JIT and Parallel execution - implement after core optimizations
@@ -143,6 +143,13 @@ impl Executor {
         );
         let mut results = Vec::new();
         let mut projection_columns: Vec<String> = Vec::new();
+        // Set once a `Limit`/`Skip` has fixed the row count. The final
+        // assembly below falls back to `results` when the result set is
+        // empty, on the assumption that an empty set means "no operator
+        // produced rows" — but `LIMIT 0` (or a `SKIP` past the end) empties
+        // it *deliberately*, and without this flag that fallback resurrects
+        // the pre-limit rows and the limit appears to be ignored entirely.
+        let mut row_count_is_final = false;
 
         // Check if first operator is CREATE standalone (no MATCH before)
         // If so, execute it directly and populate result_set
@@ -329,6 +336,7 @@ impl Executor {
                         }
                         Operator::Limit { count } => {
                             self.execute_limit(&mut context, *count)?;
+                            row_count_is_final = true;
                         }
                         Operator::Sort { columns, ascending } => {
                             self.execute_sort(&mut context, columns, ascending)?;
@@ -595,9 +603,11 @@ impl Executor {
                 }
                 Operator::Limit { count } => {
                     self.execute_limit(&mut context, *count)?;
+                    row_count_is_final = true;
                 }
                 Operator::Skip { count } => {
                     self.execute_skip(&mut context, *count)?;
+                    row_count_is_final = true;
                 }
                 Operator::Sort { columns, ascending } => {
                     self.execute_sort(&mut context, columns, ascending)?;
@@ -1004,6 +1014,10 @@ impl Executor {
 
         let final_rows = if !context.result_set.rows.is_empty() {
             context.result_set.rows.clone()
+        } else if row_count_is_final {
+            // A `Limit`/`Skip` emptied the result set on purpose — that empty
+            // set is the answer, not evidence that nothing ran.
+            vec![]
         } else if !results.is_empty() {
             results
         } else {

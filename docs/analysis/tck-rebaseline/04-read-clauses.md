@@ -99,6 +99,35 @@ collapses the row count) — **verify against RC02 before sizing.** Negative row
 **Owning task:** `phase22_tck-skip-limit-semantics`.
 **Confidence.** High on the reproductions; medium on the 89 (shared with RC02/RC17).
 
+**Measured after the fix (2026-08-14, RC02 already landed).** All four defects
+fixed; +11 scenarios, no category regressed against the same-run baseline.
+
+| Category | Before | After |
+|---|---|---|
+| `clauses/return-skip-limit` | 18/31 (58.1%) | 24/31 (77.4%) |
+| `clauses/with-skip-limit` | 5/9 (55.6%) | 6/9 (66.7%) |
+| `clauses/with-orderBy` | 144/292 (49.3%) | 147/292 (50.3%) |
+| `expressions/aggregation` | 17/35 (48.6%) | 18/35 (51.4%) |
+| **total** | 2404 (62.2%) | 2415 (62.4%) |
+
+The **58 with-orderBy rows attributed here were not this defect** — with RC02
+already fixed, SKIP/LIMIT owned only 3 of them. The estimate double-counted a
+category whose failures are dominated by unrelated causes; the remaining 145
+with-orderBy failure rows break down as:
+
+| Rows | Share | Cause |
+|---:|---:|---|
+| 64 | 44% | parser rejects `ASCENDING`/`DESCENDING` spelled out |
+| 23 | 16% | no validation for `ORDER BY` over an aggregation (F-134) |
+| 16 | 11% | no validation for `ORDER BY` on an out-of-scope variable (F-134) |
+| 19 | 13% | ordering semantics (cross-type / temporal / boolean keys) |
+| 23 | 16% | other |
+
+**Lesson for sizing.** A category is a directory, not a defect. Attributing a
+category's full failure count to one root cause inflates every estimate that
+shares it — size against a per-scenario faillog diff, never against a category
+total.
+
 ---
 
 ## F-134 — RC12: no validation for ORDER BY on an aggregate or an out-of-scope variable · **46 fails** · S

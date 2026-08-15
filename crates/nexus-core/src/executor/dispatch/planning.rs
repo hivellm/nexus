@@ -9,9 +9,28 @@ use planner::QueryPlanner;
 impl Executor {
     /// Parse Cypher into physical plan
     pub fn parse_and_plan(&self, cypher: &str) -> Result<Vec<Operator>> {
+        self.parse_and_plan_with_params(cypher, &std::collections::HashMap::new())
+    }
+
+    /// Same, with the request's parameters attached to the AST before
+    /// planning.
+    ///
+    /// `CypherQuery::params` is declared by the parser but the parser has
+    /// nothing to put in it — the request's parameters only ever reached the
+    /// *execution* context. Any planner decision that needs a parameter value
+    /// therefore saw an empty map, which is why `SKIP $n` / `LIMIT $n` were
+    /// silently dropped at plan time. Callers that have the parameters should
+    /// use this; `parse_and_plan` keeps the old behaviour for callers that do
+    /// not.
+    pub fn parse_and_plan_with_params(
+        &self,
+        cypher: &str,
+        params: &std::collections::HashMap<String, serde_json::Value>,
+    ) -> Result<Vec<Operator>> {
         // Use the parser to parse the query
         let mut parser = parser::CypherParser::new(cypher.to_string());
-        let ast = parser.parse()?;
+        let mut ast = parser.parse()?;
+        ast.params = params.clone();
         // Semantic validation, on the AST this call just parsed — so it costs no
         // extra parse. This is the choke point for every query that reaches the
         // executor WITHOUT passing through `Engine`: both transports carve a pure
