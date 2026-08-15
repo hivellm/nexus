@@ -164,6 +164,26 @@ fn a_return_order_by_may_still_name_a_dropped_variable() {
 }
 
 #[test]
+fn an_aggregating_with_sorts_by_an_expression_over_its_grouping_key() {
+    // After the Aggregate only `name` and `cnt` exist, so `n.num1 + 100` has
+    // to be rewritten over the grouping key it was projected as. Without that
+    // the sort silently does nothing and the LIMIT takes an arbitrary row.
+    let mut engine = engine();
+    let rs = engine
+        .execute_cypher(
+            "MATCH (n:OrderScope) WITH n.num1 AS name, count(*) AS cnt \
+             ORDER BY n.num1 + 100 DESC LIMIT 1 RETURN name",
+        )
+        .unwrap();
+    assert_eq!(rs.rows.len(), 1);
+    assert_eq!(
+        rs.rows[0].values[0],
+        serde_json::json!(2),
+        "descending by num1 + 100 puts num1 = 2 first"
+    );
+}
+
+#[test]
 fn a_literal_sort_key_is_legal() {
     assert_accepted("MATCH (n:OrderScope) WITH n.num1 AS foo ORDER BY 1 RETURN foo");
 }

@@ -592,14 +592,21 @@ impl Executor {
                             else {
                                 return Some(Ok(Value::Null));
                             };
-                            let hour = map.get("hour").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
-                            let minute =
-                                map.get("minute").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
-                            let second =
-                                map.get("second").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
-                            let nanosecond = match subsecond_nanos_from_map(&map) {
-                                Ok(n) => n,
-                                Err(e) => return Some(Err(e)),
+                            // Clock components, with a `time`/`datetime`
+                            // selector key supplying whichever the map does
+                            // not override.
+                            let Some((hour, minute, second, selected_nanos)) =
+                                super::calendar_fields::time_from_map(&map)
+                            else {
+                                return Some(Ok(Value::Null));
+                            };
+                            let nanosecond = if super::calendar_fields::inherits_subsecond(&map) {
+                                selected_nanos
+                            } else {
+                                match subsecond_nanos_from_map(&map) {
+                                    Ok(n) => n,
+                                    Err(e) => return Some(Err(e)),
+                                }
                             };
 
                             if chrono::NaiveDate::from_ymd_opt(year, month, day).is_some()
@@ -680,14 +687,21 @@ impl Executor {
                         }
                         Value::Object(map) => {
                             // Support {hour, minute, second, nanosecond, timezone} format
-                            let hour = map.get("hour").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
-                            let minute =
-                                map.get("minute").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
-                            let second =
-                                map.get("second").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
-                            let nanosecond = match subsecond_nanos_from_map(&map) {
-                                Ok(n) => n,
-                                Err(e) => return Some(Err(e)),
+                            // Clock components, with a `time`/`datetime`
+                            // selector key supplying whichever the map does
+                            // not override.
+                            let Some((hour, minute, second, selected_nanos)) =
+                                super::calendar_fields::time_from_map(&map)
+                            else {
+                                return Some(Ok(Value::Null));
+                            };
+                            let nanosecond = if super::calendar_fields::inherits_subsecond(&map) {
+                                selected_nanos
+                            } else {
+                                match subsecond_nanos_from_map(&map) {
+                                    Ok(n) => n,
+                                    Err(e) => return Some(Err(e)),
+                                }
                             };
 
                             if chrono::NaiveTime::from_hms_opt(hour, minute, second).is_some() {
@@ -923,14 +937,21 @@ impl Executor {
                             }
                         }
                         Value::Object(map) => {
-                            let hour = map.get("hour").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
-                            let minute =
-                                map.get("minute").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
-                            let second =
-                                map.get("second").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
-                            let nanosecond = match subsecond_nanos_from_map(&map) {
-                                Ok(n) => n,
-                                Err(e) => return Some(Err(e)),
+                            // Clock components, with a `time`/`datetime`
+                            // selector key supplying whichever the map does
+                            // not override.
+                            let Some((hour, minute, second, selected_nanos)) =
+                                super::calendar_fields::time_from_map(&map)
+                            else {
+                                return Some(Ok(Value::Null));
+                            };
+                            let nanosecond = if super::calendar_fields::inherits_subsecond(&map) {
+                                selected_nanos
+                            } else {
+                                match subsecond_nanos_from_map(&map) {
+                                    Ok(n) => n,
+                                    Err(e) => return Some(Err(e)),
+                                }
                             };
 
                             if chrono::NaiveTime::from_hms_opt(hour, minute, second).is_some() {
@@ -996,14 +1017,21 @@ impl Executor {
                             else {
                                 return Some(Ok(Value::Null));
                             };
-                            let hour = map.get("hour").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
-                            let minute =
-                                map.get("minute").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
-                            let second =
-                                map.get("second").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
-                            let nanosecond = match subsecond_nanos_from_map(&map) {
-                                Ok(n) => n,
-                                Err(e) => return Some(Err(e)),
+                            // Clock components, with a `time`/`datetime`
+                            // selector key supplying whichever the map does
+                            // not override.
+                            let Some((hour, minute, second, selected_nanos)) =
+                                super::calendar_fields::time_from_map(&map)
+                            else {
+                                return Some(Ok(Value::Null));
+                            };
+                            let nanosecond = if super::calendar_fields::inherits_subsecond(&map) {
+                                selected_nanos
+                            } else {
+                                match subsecond_nanos_from_map(&map) {
+                                    Ok(n) => n,
+                                    Err(e) => return Some(Err(e)),
+                                }
                             };
 
                             if chrono::NaiveDate::from_ymd_opt(year, month, day).is_some()

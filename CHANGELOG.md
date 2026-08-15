@@ -15,6 +15,77 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > carry these fixes. The remediation is tracked across 27 `phase0_fix-*`
 > tasks and will land incrementally under this release.
 
+### Fixed — `SKIP` and `LIMIT` mean what they say
+
+- **`LIMIT 0` returned every row.** The dispatcher's final assembly read an empty
+  result set as "no operator produced rows" and fell back to the pre-projection
+  rows, resurrecting exactly what the limit had discarded. A `SKIP` past the last
+  row had the same shape.
+- **`SKIP $n` / `LIMIT $n` were ignored.** The request's parameters never reached
+  the planner at all, and the planner matched an integer literal with no `else`
+  branch — so a parameterised count was dropped in silence and the query answered
+  as if the clause had not been written.
+- **An illegal count is now rejected** with the openCypher error kind:
+  `NegativeIntegerArgument` for `LIMIT -1`, `InvalidArgumentType` for `LIMIT 1.5`
+  (previously accepted, then ignored), `NonConstantExpression` for `LIMIT n.age`.
+- **A `SKIP`/`LIMIT` on a `WITH` now cuts the stream where it is written**, so the
+  next clause — an aggregation above all — sees only the surviving rows:
+  `UNWIND [1,2,3,4,5] AS x WITH x LIMIT 2 RETURN count(x)` is `2`, not `5`. The
+  tail used to be folded into the same query-wide slots the final `RETURN` writes
+  to, which both moved it to the end of the pipeline and let the later clause
+  overwrite the earlier one.
+
+### Fixed — A variable is bound to one kind of thing
+
+- **`VariableTypeConflict` now covers paths and plain values**, not just node vs
+  relationship: `MATCH p = (p)-[]-()`, `MATCH r = ()-[]-() MATCH ()-[r]-()` and
+  `WITH true AS n MATCH (n)` all used to run and answer. A `WITH` still ends the
+  previous scope, so `MATCH (n) WITH n.name AS n` remains a legitimate rename, and
+  `null` deliberately does not pin a kind — it inhabits every type, so
+  `WITH null AS a OPTIONAL MATCH (a)` stays legal.
+
+### Fixed — `ORDER BY` after a `WITH` is scope-checked
+
+- **An aggregation the projection did not compute is rejected** —
+  `WITH n.p AS foo ORDER BY count(1)` → `InvalidAggregation`. Judged per
+  sub-expression, so wrapping a projected aggregate in more arithmetic
+  (`ORDER BY $x + avg(p.age) - 1000`) stays legal.
+- **A variable that is out of scope is rejected** → `UndefinedVariable`. The
+  visible set is the `WITH`'s output *plus* its input, so sorting by a name the
+  `WITH` consumed but did not forward remains legal.
+- **A sort key over a grouping key now sorts.** After an aggregating `WITH`, a key
+  written against the pre-aggregation row (`WITH a.name AS name, count(*) AS cnt
+  ORDER BY a.name + 'C'`) named nothing that existed, so the sort silently did
+  nothing and a following `LIMIT` returned an arbitrary row.
+
+### Fixed — `ASCENDING` / `DESCENDING` spelled out
+
+- The keyword matcher requires a non-alphanumeric boundary, so `ASC` never matched
+  the head of `ASCENDING`. The direction word was left unconsumed and the entire
+  rest of the query became "unexpected input after the last clause" — a whole
+  query lost to one unlisted spelling.
+
+### Fixed — Temporal maps accept every calendar notation, and select from a value
+
+- **ISO week, quarter and ordinal dates are read.** Every constructor looked at
+  `year`/`month`/`day` and nothing else, so `date({year: 1816, week: 52})`
+  answered `1816-01-01` — a wrong answer reported as success, across `date`,
+  `datetime` and `localdatetime`. Note that `{year, week}`'s year is the ISO
+  *week-year*, not the calendar year: `{year: 2019, week: 1, dayOfWeek: 1}` is
+  `2018-12-31`.
+- **A `date` / `time` / `datetime` key selects from an existing value**, which the
+  map's own components then override: `date({date: d})` copies it,
+  `date({date: d, day: 1})` moves to the first of its month,
+  `localtime({time: t, second: 42})` replaces the seconds. These keys were
+  ignored entirely, so the constructor fell back to the current year.
+
+### Fixed — A projection mixing grouping keys and aggregates keeps its shape
+
+- `WITH x AS result, count(*) AS cnt RETURN result` answered with **two** columns:
+  the `RETURN` was dropped and the `WITH`'s shape leaked out as the result. The
+  post-aggregation projection ran before the no-pattern planning branch had
+  emitted its `Aggregate`, so it landed ahead of it and did nothing.
+
 ### Changed — A query the parser cannot read in full is now rejected
 
 - **Silent truncation of a projection list is gone.** The parser used to stop at

@@ -637,38 +637,6 @@ impl<'a> QueryPlanner<'a> {
         // subquery.size_of_collect, and subquery.with_filter_count
         // scenarios returned the raw aggregation shape instead of the
         // projected RETURN shape.
-        if let Some(ref final_items) = post_aggregation_return_items {
-            let projection_items: Vec<ProjectionItem> = final_items
-                .iter()
-                .map(|item| {
-                    let alias = item.alias.clone().unwrap_or_else(|| {
-                        self.expression_to_string(&item.expression)
-                            .unwrap_or_else(|_| "expr".to_string())
-                    });
-                    ProjectionItem {
-                        alias,
-                        expression: item.expression.clone(),
-                    }
-                })
-                .collect();
-
-            // Insert before LIMIT if it exists, otherwise append.
-            // Also keep it AFTER any ORDER BY Sort so sorting happens on
-            // pre-projection values (openCypher allows ORDER BY
-            // referencing WITH aliases that the RETURN projection might
-            // rename away).
-            let insert_pos = operators
-                .iter()
-                .position(|op| matches!(op, Operator::Limit { .. }))
-                .unwrap_or(operators.len());
-            operators.insert(
-                insert_pos,
-                Operator::Project {
-                    items: projection_items,
-                },
-            );
-        }
-
         // Add UNWIND operators BEFORE WITH when there are no patterns AND there are WITH operators
         // This ensures UNWIND generates rows before WITH transforms them
         // Only add here if WITH operators exist (otherwise UNWIND is added later in the no-patterns block)
@@ -729,12 +697,11 @@ impl<'a> QueryPlanner<'a> {
                         .iter()
                         .position(|op| matches!(op, Operator::Aggregate { .. }));
                     if let Some(pos) = agg_pos {
-                        // No hidden sort key here: the Aggregate emits its own
-                        // columns and this vector is never executed, so a key
-                        // appended to it would name a column that never
-                        // exists. Sorting is limited to what the aggregation
-                        // exposes — which is what openCypher allows anyway.
-                        let lowered = self.lower_with_tail(tail, false, &mut projection_items);
+                        // Its own lowering: after an Aggregate only the
+                        // aggregation's output columns exist, so a sort key
+                        // written against the pre-aggregation row has to be
+                        // rewritten over them first.
+                        let lowered = self.lower_aggregating_with_tail(tail, &projection_items);
                         for (offset, op) in lowered.into_iter().enumerate() {
                             operators.insert(pos + 1 + offset, op);
                         }
@@ -1439,6 +1406,53 @@ impl<'a> QueryPlanner<'a> {
             if let Some(limit) = limit_count {
                 operators.push(Operator::Limit { count: limit });
             }
+        }
+
+        // When WITH carried the aggregation, the RETURN's own items still have
+        // to run on top of the aggregate's output — both to evaluate
+        // expressions over the aggregated aliases (`hi > 0.99 AS any_high`)
+        // and to cut the shape back to what the RETURN actually asks for. A
+        // WITH that aggregates usually projects more than the RETURN keeps
+        // (`WITH x AS result, count(*) AS cnt RETURN result`), and without
+        // this the extra column leaks out as part of the answer.
+        //
+        // Deliberately the LAST step that appends operators: both branches
+        // that build an aggregation — the pattern-driven planner and the
+        // no-pattern tail below — must already have emitted their Aggregate,
+        // or this Project lands ahead of it and does nothing. That is exactly
+        // what happened while this block sat earlier in the function: with no
+        // pattern in the query `operators` was still empty here, the Project
+        // went in at index 0, and the no-pattern branch then pushed its own
+        // Aggregate after it.
+        if let Some(ref final_items) = post_aggregation_return_items {
+            let projection_items: Vec<ProjectionItem> = final_items
+                .iter()
+                .map(|item| {
+                    let alias = item.alias.clone().unwrap_or_else(|| {
+                        self.expression_to_string(&item.expression)
+                            .unwrap_or_else(|_| "expr".to_string())
+                    });
+                    ProjectionItem {
+                        alias,
+                        expression: item.expression.clone(),
+                    }
+                })
+                .collect();
+
+            // Before a LIMIT if there is one, so the limit applies to the
+            // projected rows; after any ORDER BY Sort, so sorting still reads
+            // the pre-projection values (openCypher lets ORDER BY name a WITH
+            // alias the RETURN renames away).
+            let insert_pos = operators
+                .iter()
+                .position(|op| matches!(op, Operator::Limit { .. }))
+                .unwrap_or(operators.len());
+            operators.insert(
+                insert_pos,
+                Operator::Project {
+                    items: projection_items,
+                },
+            );
         }
 
         // phase6_spatial-planner-seek §2 + §3 — try to rewrite the

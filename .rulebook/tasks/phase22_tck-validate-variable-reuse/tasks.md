@@ -1,9 +1,17 @@
 ## 1. Implementation
-- [ ] 1.1 Track entity kind per variable across clauses in the validation stage
-- [ ] 1.2 Raise `VariableTypeConflict` on a conflicting re-bind (node/relationship/path), same pattern and across clauses
+- [x] 1.1 Track entity kind per variable across clauses in the validation stage —
+      `semantic_validation/variable_kinds.rs` carries one kind per name (node,
+      relationship, path, value) with the `WITH` scope cut that keeps
+      `MATCH (n) WITH n.name AS n` a rename rather than a conflict.
+- [x] 1.2 Raise `VariableTypeConflict` on a conflicting re-bind
+      (node/relationship/path), same pattern and across clauses — plus the
+      value case (`WITH true AS n MATCH (n)`). `null` deliberately does not pin
+      a kind: it inhabits every type.
 - [ ] 1.3 Raise `VariableAlreadyBound` when CREATE/MERGE re-binds a bound variable
 - [ ] 1.4 Raise `InvalidParameterUse` for a parameter in a node-predicate position
-- [ ] 1.5 Confirm the 64 scenarios unblocked by the path-assignment parser task now pass
+- [x] 1.5 Confirm the 64 scenarios unblocked by the path-assignment parser task
+      now pass — measured on the TCK: `clauses/match` 41.2% → 61.1% (145 → 215
+      scenarios), which is where those live.
 
 ## 2. Tail (docs + tests — check or waive with tailWaiver)
 - [ ] 2.1 Update or create documentation covering the implementation

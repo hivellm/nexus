@@ -1,8 +1,20 @@
 ## 1. Implementation
-- [ ] 1.1 Reuse/extend the scope helper from the variable-reuse task to model WITH scope narrowing
-- [ ] 1.2 Reject an aggregation in ORDER BY where the spec forbids it
-- [ ] 1.3 Reject out-of-scope variables in ORDER BY, SKIP, LIMIT, and downstream clauses
-- [ ] 1.4 Confirm legal ORDER BY over a projected alias and over a hidden carried key still work
+- [x] 1.1 Reuse/extend the scope helper from the variable-reuse task to model
+      WITH scope narrowing — `semantic_validation/order_by_scope.rs`. Note the
+      visible set is the WITH's output **plus its input**: sorting by a name the
+      WITH consumed but did not forward is legal, and checking only the output
+      rejects valid Cypher (found via a TCK regression).
+- [x] 1.2 Reject an aggregation in ORDER BY where the spec forbids it —
+      `InvalidAggregation`, judged per sub-expression so a projected aggregate
+      wrapped in arithmetic (`ORDER BY $x + avg(p.age) - 1000`) stays legal.
+- [~] 1.3 Reject out-of-scope variables in ORDER BY, SKIP, LIMIT, and downstream
+      clauses — ORDER BY done (`UndefinedVariable`). SKIP/LIMIT cannot reference
+      a variable at all (rejected earlier as `NonConstantExpression` by the
+      skip-limit task), so there is nothing to add there. Downstream clauses
+      still use the query-wide binder set and are not scope-checked.
+- [x] 1.4 Confirm legal ORDER BY over a projected alias and over a hidden
+      carried key still work — both pinned in
+      `tests/executor/order_by_scope_test.rs`.
 
 ## 2. Tail (docs + tests — check or waive with tailWaiver)
 - [ ] 2.1 Update or create documentation covering the implementation

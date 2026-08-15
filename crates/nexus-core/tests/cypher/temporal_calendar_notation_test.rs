@@ -118,6 +118,58 @@ fn calendar_fields_are_unaffected() {
     );
 }
 
+// ── selecting from an existing temporal value ──────────────────────────
+
+#[test]
+fn a_date_selector_copies_the_selected_date() {
+    assert_text(
+        "WITH date({year: 1984, month: 11, day: 11}) AS other RETURN date({date: other})",
+        "1984-11-11",
+    );
+}
+
+#[test]
+fn a_time_selector_copies_the_selected_time() {
+    assert_text(
+        "WITH localtime({hour: 12, minute: 31, second: 14, nanosecond: 645876123}) AS other \
+         RETURN localtime({time: other})",
+        "12:31:14.645876123",
+    );
+}
+
+#[test]
+fn map_components_override_the_selected_value() {
+    assert_text(
+        "WITH date({year: 1984, month: 11, day: 11}) AS other RETURN date({date: other, day: 1})",
+        "1984-11-01",
+    );
+    assert_text(
+        "WITH localtime({hour: 12, minute: 31, second: 14}) AS other \
+         RETURN localtime({time: other, second: 42})",
+        "12:31:42",
+    );
+}
+
+#[test]
+fn a_week_override_counts_in_the_selected_values_week_year() {
+    // 1816-12-30 already belongs to ISO week-year 1817, so week 2 of it is in
+    // January 1817 — reading the selector's *calendar* year would land a year
+    // earlier.
+    assert_text(
+        "RETURN date({date: date('1816-12-30'), week: 2, dayOfWeek: 3})",
+        "1817-01-08",
+    );
+}
+
+#[test]
+fn a_datetime_selector_supplies_both_halves() {
+    assert_text(
+        "WITH localdatetime({year: 1984, month: 3, day: 7, hour: 12, minute: 31}) AS other \
+         RETURN localdatetime({datetime: other})",
+        "1984-03-07T12:31",
+    );
+}
+
 // ── fields naming no real date ─────────────────────────────────────────
 
 #[test]
